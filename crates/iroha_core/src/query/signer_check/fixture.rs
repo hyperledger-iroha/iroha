@@ -1,48 +1,41 @@
-//! Shared exact signed native execution with fixed three-of-four BLS / RS16 test finality.
+//! Shared exact signed native execution on a certified test chain ([`CertifiedTestChain`]): a
+//! signed genesis with a fixed four-validator committee, blocks built, executed and applied
+//! through the node's block path, each certified by a real BLS `CommitQC`.
 //!
-//! Test-only World/frontier helpers do not prove a production consensus application-state root.
-//! Closed native custody instructions execute through Core's initial executor; results are never
-//! forged. Ordinary admission, fee settlement and genesis authentication are outside this fixture.
-use crate::{smartcontracts::isi::triggers::set::SetReadOnly, state::State};
-use iroha_crypto::{Algorithm, Hash, KeyPair};
-use iroha_data_model::{
-    account::Account,
-    block::{
-        BlockHeader,
-        builder::BlockBuilder,
-        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
-    },
-    isi::{
-        Log, Register, RegisterBox, Revoke, RevokeBox, Unregister, UnregisterBox,
-        sorafs::{
-            InitializeSorafsProviderAdmissionV1, MutateSorafsFinalPromotionAccountCustody,
-            MutateSorafsFinalPromotionAuthority, MutateSorafsReleaseManifestAuthority,
-            MutateSorafsStreamTokenAuthority, MutateSorafsStreamTokenCustody,
-            MutateSorafsTopologyAuthority,
-        },
-    },
-    permission::Permission,
-    role::{Role, RoleId},
-    transaction::{
-        DataTriggerSequence, Executable, SignedTransaction, error::TransactionRejectionReason,
-        signed::TransactionResult,
-    },
+//! Test-only World setup (accounts, permissions, owners) is part of the initial World, not of
+//! genesis or finalized history. Transactions go through ordinary acceptance and execution;
+//! results are never forged.
+use crate::{
+    state::{State, World},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
-#[cfg(test)]
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
-    transaction::{FeePaymentIntent, TransactionBuilder},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
-use iroha_sccp::{SccpFinalizedBlockTestFixtureV1, sccp_finalize_taira_block_test_fixture_v1};
-use std::sync::Arc;
-#[cfg(test)]
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+
+/// Creation time of the fixture chains' first genesis transaction (milliseconds).
+pub(crate) const GENESIS_TIME_MS: u64 = 1;
 
 pub(crate) fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
 }
-#[cfg(test)]
+
+/// A certified chain over `world` (genesis at [`GENESIS_TIME_MS`]).
+///
+/// # Panics
+/// Genesis does not apply.
+pub(crate) fn chain(world: World) -> CertifiedTestChain {
+    CertifiedTestChain::start(TestChainConfig::new(world, GENESIS_TIME_MS))
+        .map_err(|failure| failure.error)
+        .expect("fixture chain starts")
+}
+
+/// `instruction` signed by `key(seed)` on `state`'s network, created one millisecond before
+/// `now` so that a block committed at `now` carries it.
 pub(crate) fn sign(
     state: &Arc<State>,
     instruction: InstructionBox,
@@ -55,246 +48,48 @@ pub(crate) fn sign(
         AccountId::new(key.public_key().clone()),
         FeePaymentIntent::authority(Vec::new(), None),
     );
-    builder.set_creation_time(Duration::from_millis(now));
+    builder.set_creation_time(Duration::from_millis(now.saturating_sub(1)));
     builder
         .with_instructions([instruction])
         .try_sign(key.private_key())
         .unwrap()
 }
 
-// Execute actual typed instructions, then bind precisely their signed envelopes/results to
-// the real deterministic test roster. Frontier/world helpers are explicitly test-only.
+/// Commit `transactions` in one certified block at time `now`; whether each executed.
 pub(crate) fn commit(
-    state: &Arc<State>,
-    finalized_blocks: &mut Vec<SccpFinalizedBlockTestFixtureV1>,
+    chain: &mut CertifiedTestChain,
     now: u64,
     transactions: Vec<SignedTransaction>,
-    membership: bool,
-    finality: bool,
 ) -> Vec<bool> {
-    commit_with_schedule(
-        state,
-        finalized_blocks,
-        now,
-        transactions,
-        membership,
-        finality,
-        false,
-        false,
-    )
+    chain.commit_at(now, transactions)
 }
 
-pub(crate) fn commit_native_operation(
-    state: &Arc<State>,
-    finalized_blocks: &mut Vec<SccpFinalizedBlockTestFixtureV1>,
-    now: u64,
-    transactions: Vec<SignedTransaction>,
-    membership: bool,
-    finality: bool,
-) -> Vec<bool> {
-    commit_with_schedule(
-        state,
-        finalized_blocks,
-        now,
-        transactions,
-        membership,
-        finality,
-        true,
-        false,
-    )
-}
-
+/// [`commit`] with a local `CommitQC` of two of four signers: the block is committed and
+/// applied, but its certificate does not verify (signer finality is unavailable for it).
 #[cfg(test)]
-pub(crate) fn commit_genesis_admission(
-    state: &Arc<State>,
-    blocks: &mut Vec<SccpFinalizedBlockTestFixtureV1>,
+pub(crate) fn commit_uncertified(
+    chain: &mut CertifiedTestChain,
     now: u64,
     transactions: Vec<SignedTransaction>,
-    finality: bool,
 ) -> Vec<bool> {
-    commit_with_schedule(state, blocks, now, transactions, true, finality, true, true)
+    chain.commit_with(
+        Some(now),
+        transactions,
+        crate::sumeragi::test_chain::Signers::BelowQuorum,
+    )
 }
 
-fn commit_with_schedule(
-    state: &Arc<State>,
-    finalized_blocks: &mut Vec<SccpFinalizedBlockTestFixtureV1>,
-    now: u64,
-    transactions: Vec<SignedTransaction>,
-    membership: bool,
-    finality: bool,
-    native_operations: bool,
-    derive_genesis_network: bool,
-) -> Vec<bool> {
-    // These fixtures exercise exactly the closed native custody and topology transitions,
-    // with no callback or arbitrary executor capable of producing omitted output.
-    // They intentionally do not stand in for genesis or ordinary admission.
-    let limits = {
-        let view = state.view();
-        assert!(matches!(
-            &*view.world.executor,
-            crate::executor::Executor::Initial
-        ));
-        assert!(view.world.triggers.triggers_iter().next().is_none());
-        view.world
-            .parameters
-            .get()
-            .block()
-            .execution_output()
-            .limits()
-    };
-    for transaction in &transactions {
-        transaction.verify_signature().unwrap();
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            panic!("native fixture");
-        };
-        assert!(
-            instructions.iter().all(|instruction| {
-                let instruction = instruction.as_any();
-                instruction.is::<MutateSorafsFinalPromotionAuthority>()
-                    || instruction.is::<InitializeSorafsProviderAdmissionV1>()
-                    || instruction.is::<MutateSorafsFinalPromotionAccountCustody>()
-                    || instruction.is::<MutateSorafsReleaseManifestAuthority>()
-                    || instruction.is::<MutateSorafsTopologyAuthority>()
-                    || instruction.is::<MutateSorafsStreamTokenAuthority>()
-                    || instruction.is::<MutateSorafsStreamTokenCustody>()
-                    || instruction.is::<Log>()
-                    // Existing adversarial cases execute observer/operator
-                    // permission and account removal in the exact native cut.
-                    || instruction.is::<Register<Role>>()
-                    || matches!(instruction.downcast_ref::<RegisterBox>(), Some(RegisterBox::Role(_)))
-                    || instruction.is::<Revoke<Permission, Account>>()
-                    || instruction.is::<Revoke<RoleId, Account>>()
-                    || instruction.is::<Revoke<Permission, Role>>()
-                    || instruction.is::<RevokeBox>()
-                    || instruction.is::<Unregister<Account>>()
-                    || matches!(instruction.downcast_ref::<UnregisterBox>(), Some(UnregisterBox::Account(_)))
-            }),
-            "native fixture cannot omit callback or unrelated execution outputs"
-        );
+/// Corrupt the State's entrypoint index: the committed `transactions` are indexed at genesis
+/// instead of their block (a State whose membership does not match its blocks).
+#[cfg(test)]
+pub(crate) fn misplace_membership(chain: &CertifiedTestChain, transactions: &[SignedTransaction]) {
+    for transaction in transactions {
+        chain
+            .state()
+            .transactions
+            .overwrite_committed_entrypoint_membership_for_tests(
+                transaction.hash_as_entrypoint(),
+                core::num::NonZeroUsize::MIN,
+            );
     }
-    let header = BlockHeader::new(
-        ((finalized_blocks.len() + 1) as u64).try_into().unwrap(),
-        state.view().latest_block_hash(),
-        None,
-        now,
-        0,
-    );
-    let mut builder = BlockBuilder::new(header.clone());
-    let hashes = transactions
-        .iter()
-        .map(SignedTransaction::hash_as_entrypoint)
-        .collect::<Vec<_>>();
-    let mut state_block = state.block(header);
-    let mut outcomes = Vec::new();
-    let mut outputs = Vec::new();
-    for (entry_index, transaction) in transactions.into_iter().enumerate() {
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            panic!("native fixture");
-        };
-        let mut tx = state_block.transaction();
-        let outer = transaction.hash_as_entrypoint();
-        tx.current_network_entrypoint_hash = Some(outer);
-        tx.tx_call_hash = Some(Hash::from(outer));
-        tx.current_tx_hash = Some(transaction.hash());
-        tx.current_entrypoint_index = Some(entry_index as u64);
-        let executor = tx.world.executor.clone();
-        let result = instructions
-            .iter()
-            .enumerate()
-            .try_for_each(|(index, instruction)| {
-                tx.current_direct_sorafs_admission_initialization =
-                    crate::executor::Executor::direct_sorafs_admission_initialization(
-                        &tx,
-                        &transaction,
-                        instruction,
-                        index,
-                        true,
-                    );
-                tx.current_direct_final_promotion_operation_origin =
-                    crate::executor::Executor::direct_final_promotion_operation_origin(
-                        &tx,
-                        &transaction,
-                        instruction,
-                        true,
-                    );
-                let result = executor.execute_instruction(
-                    &mut tx,
-                    transaction.authority(),
-                    instruction.clone(),
-                );
-                tx.current_direct_final_promotion_operation_origin = None;
-                tx.current_direct_sorafs_admission_initialization = false;
-                result
-            });
-        outcomes.push(result.is_ok());
-        let result = match result {
-            Ok(()) => {
-                tx.apply();
-                Ok(DataTriggerSequence::default())
-            }
-            Err(error) => {
-                drop(tx);
-                Err(TransactionRejectionReason::Validation(error))
-            }
-        };
-        let input_index = builder.push_transaction(transaction).try_into().unwrap();
-        outputs.push(ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-            input_index,
-            result: TransactionResult::new(result),
-            completions: Vec::new(),
-        }));
-    }
-    let fragments = state_block.committed_fragment_count().try_into().unwrap();
-    let mut signed = builder
-        .try_build_with_signature(0, key(0xFE).private_key())
-        .unwrap();
-    signed
-        .set_execution_outputs(
-            outputs,
-            fragments,
-            Default::default(),
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            Vec::new(),
-            &limits,
-        )
-        .unwrap();
-    state_block.commit_world_overlay_for_testing().unwrap();
-    let finalized = if derive_genesis_network {
-        iroha_sccp::sccp_finalize_native_genesis_network_block_test_fixture_v1(
-            &signed,
-            finalized_blocks.last(),
-        )
-    } else if native_operations {
-        iroha_sccp::sccp_finalize_taira_native_operation_block_test_fixture_v1(
-            &signed,
-            finalized_blocks.last(),
-        )
-    } else {
-        sccp_finalize_taira_block_test_fixture_v1(&signed, finalized_blocks.last())
-    };
-    let proof = &finalized.proof().finality_artifact;
-    assert_eq!(proof.height_context.roster.len(), 4);
-    assert_eq!(proof.commit_qc.signers.len(), 3);
-    assert_eq!(
-        proof.height_context.da_layout.encoding,
-        iroha_data_model::block::consensus_v2::PayloadEncoding::ReedSolomon16
-    );
-    proof.verify().unwrap();
-    state.kura().store_block(Arc::new(signed.clone())).unwrap();
-    state.append_committed_block_header_for_tests(signed.header());
-    if membership {
-        state.record_committed_entrypoints_for_tests(
-            hashes,
-            (proof.height as usize).try_into().unwrap(),
-        );
-    }
-    if finality {
-        let receipt = state.kura().store_v2_finality_artifact(proof).unwrap();
-        assert_eq!(receipt.height(), proof.height);
-        assert_eq!(receipt.block_hash(), signed.hash());
-    }
-    finalized_blocks.push(finalized);
-    outcomes
 }

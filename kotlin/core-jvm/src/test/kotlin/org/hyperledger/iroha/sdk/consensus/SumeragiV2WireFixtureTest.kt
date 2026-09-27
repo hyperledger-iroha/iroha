@@ -92,6 +92,61 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
+    fun `execution commitments carry exact mandatory transaction tree options`() {
+        fun hash(seed: Int) =
+            SumeragiV2Wire.Hash32(
+                ByteArray(32) { seed.toByte() }.also {
+                    it[31] = (it[31].toInt() or 1).toByte()
+                },
+            )
+        val base = SumeragiV2Wire.ExecutionCommitment.withoutKagemushaTopUps(
+            hash(0x21), hash(0x23), hash(0x25), 123, hash(0x27),
+        )
+        fun withTrees(
+            inputs: SumeragiV2Wire.TransactionTreeCommitment?,
+            outputs: SumeragiV2Wire.TransactionTreeCommitment?,
+        ) = SumeragiV2Wire.ExecutionCommitment(
+            base.parentStateRoot,
+            base.postStateRoot,
+            base.ordinaryWritesRoot,
+            base.kagemushaTopUpRoot,
+            base.kagemushaTopUpCount,
+            base.nativeAmxApplicationManifestVersion,
+            base.nativeAmxApplicationManifestRoot,
+            base.nativeAmxApplicationManifestCount,
+            base.laneFinalityManifest,
+            base.mergeCarrier,
+            base.executedBlockWireLen,
+            base.executedBlockWireHash,
+            inputs,
+            outputs,
+        )
+        val inputs = SumeragiV2Wire.TransactionTreeCommitment(hash(0x2d), 2)
+        val outputs = SumeragiV2Wire.TransactionTreeCommitment(hash(0x2f), 3)
+        val carried = withTrees(inputs, outputs)
+        val decoded = SumeragiV2Wire.ExecutionCommitment.decode(carried.encode())
+        assertEquals(inputs, decoded.transactionInputCommitment)
+        assertEquals(outputs, decoded.transactionOutputCommitment)
+        assertEquals(carried, decoded)
+        val decodedBase = SumeragiV2Wire.ExecutionCommitment.decode(base.encode())
+        assertEquals(null, decodedBase.transactionInputCommitment)
+        assertEquals(null, decodedBase.transactionOutputCommitment)
+        assertEquals(outputs, withTrees(null, outputs).transactionOutputCommitment)
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.TransactionTreeCommitment(hash(0x2d), 0)
+        }
+        assertFailsWith<IllegalArgumentException> { withTrees(inputs, null) }
+        assertFailsWith<IllegalArgumentException> {
+            withTrees(outputs, SumeragiV2Wire.TransactionTreeCommitment(hash(0x2f), 1))
+        }
+        // The two options are mandatory trailing fields of the canonical wire.
+        val truncated = base.encode().copyOf(base.encode().size - 2)
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment.decode(truncated)
+        }
+    }
+
+    @Test
     fun `unsafe proposal ignore reason decodes wire discriminant eleven`() {
         assertEquals(
             SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL,
@@ -854,6 +909,12 @@ class SumeragiV2WireFixtureTest {
         assertEquals(1, decoded.liveness.queues.size)
         assertEquals(SumeragiV2Wire.QueueKind.EFFECT_DISPATCH, decoded.liveness.queues.single().queue)
         assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING, decoded.liveness.blocker)
+        val horizon = requireNotNull(decoded.beaconHorizon)
+        assertEquals(100L, horizon.epochLengthBlocks)
+        assertEquals(99L, horizon.nextRequiredPulseHeight)
+        assertContentEquals(ByteArray(32) { 0x5B }, requireNotNull(horizon.activeSessionId).bytes())
+        assertEquals(true, horizon.sessionCoversNextPulse)
+        assertEquals(false, horizon.localProviderReady)
 
         // The fifth struct field follows four fixed-width fields and is the
         // canonical one-byte `restart_required` boolean.

@@ -46,8 +46,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             return XCTFail("active row lost its complete committed activation")
         }
         XCTAssertEqual(activation.protocolId, .zkAcePqAuthorizationV1)
-        XCTAssertEqual(activation.proofSystemId, .starkFriPoseidonX7Goldilocks6x64V1)
-        XCTAssertEqual(activation.engineId, .nativeGoldilocksPoseidonX7StarkFri6x64V1)
+        XCTAssertEqual(activation.proofSystemId, .starkFriSha3_384Goldilocks)
+        XCTAssertEqual(activation.engineId, .nativeGoldilocksSha3_384StarkFri)
         XCTAssertEqual(activation.parameterId, Data(repeating: 0x31, count: 32))
         XCTAssertEqual(activation.parameterDigest, Data(repeating: 0x31, count: 32))
         XCTAssertEqual(activation.verifierDigest, Data(repeating: 0x31, count: 32))

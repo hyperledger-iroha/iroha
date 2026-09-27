@@ -580,6 +580,27 @@ impl SignedBlock {
             .encode_wire()
             .map(|wire| Hash::new(&wire))
     }
+    /// The byte length and hash of this exact canonical block wire without the node-local
+    /// commit certificate (the pair a certified execution result commits to), computed by
+    /// borrowing the block instead of copying it.
+    ///
+    /// # Errors
+    /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
+    pub fn executed_block_wire_identity(&self) -> Result<(u64, Hash), NoritoFrameError> {
+        let candidate = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: self.result.as_ref().map(OutputFieldRef),
+            commit_certificate: None,
+        };
+        let payload = encode_signed_block_payload(&candidate);
+        let mut prefix = Vec::with_capacity(1 + norito::core::Header::SIZE);
+        prefix.push(self.version());
+        write_signed_block_header(&payload, &mut prefix)?;
+        let len = u64::try_from(prefix.len().saturating_add(payload.len()))
+            .map_err(|_| NoritoFrameError::LengthMismatch)?;
+        Ok((len, Hash::new_from_chunks(&[&prefix, &payload])))
+    }
     #[inline]
     pub(crate) fn result_ref(&self) -> &BlockResult {
         self.result
@@ -3233,6 +3254,22 @@ mod tests {
             matches!(err, iroha_crypto::Error::Signing(ref message) if message.contains("Genesis block must have transactions")),
             "unexpected error: {err}"
         );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn executed_block_wire_identity_is_the_certificate_free_wire() {
+        let mut executed = fixture::proposal(0);
+        fixture::install(&mut executed, vec![], 0).unwrap();
+        for block in [fixture::proposal(0), executed] {
+            let wire = block.encode_wire().expect("wire");
+            let expected = (u64::try_from(wire.len()).unwrap(), Hash::new(&wire));
+            assert_eq!(block.executed_block_wire_identity().unwrap(), expected);
+            let certified = block
+                .clone()
+                .with_commit_certificate(Some(CommitCertificate::new(vec![1], vec![2], vec![3])));
+            assert_eq!(certified.executed_block_wire_identity().unwrap(), expected);
+            assert_eq!(certified.executed_block_wire_hash().unwrap(), expected.1);
+        }
     }
     #[cfg(feature = "transparent_api")]
     #[test]

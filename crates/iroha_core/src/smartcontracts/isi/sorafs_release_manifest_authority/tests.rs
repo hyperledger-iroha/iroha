@@ -43,11 +43,9 @@ struct Fixture {
     observer: AccountId,
     foreign: AccountId,
 }
-fn fixture() -> Fixture {
-    let manager = account(1);
-    let operator = account(2);
-    let observer = account(3);
-    let foreign = account(4);
+/// The fixture's role accounts and their scoped permissions.
+fn fixture_world() -> World {
+    let (manager, operator, observer, foreign) = (account(1), account(2), account(3), account(4));
     let mut world = World::new();
     for id in [&manager, &operator, &observer, &foreign] {
         let (key, value) = Account::new(id.clone()).build(&manager).into_key_value();
@@ -83,18 +81,21 @@ fn fixture() -> Fixture {
         permissions.insert(token);
         world.account_permissions.insert(id.clone(), permissions);
     }
+    world
+}
+fn fixture() -> Fixture {
     Fixture {
         state: State::new_with_chain_and_network_id_for_testing(
-            world,
+            fixture_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
             sccp_taira_finality_network_id_v1(),
         ),
-        manager,
-        operator,
-        observer,
-        foreign,
+        manager: account(1),
+        operator: account(2),
+        observer: account(3),
+        foreign: account(4),
     }
 }
 

@@ -184,7 +184,7 @@ impl PublicationAuthorityFixture {
             body: material.advert_body.clone(),
             signature: AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
-                public_key: key.public_key().try_to_bytes()?.1,
+                public_key: key.public_key().try_to_bytes()?.1.to_vec(),
                 signature: Vec::new(),
             },
             signature_strict: true,

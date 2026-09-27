@@ -11997,6 +11997,58 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal("operator" in status, false);
 });
 
+test("getSumeragiStatusTyped parses and validates the signed beacon horizon", async () => {
+  const absent = await sumeragiClientForPayload(
+    createSumeragiV2StatusPayload(),
+  ).getSumeragiStatusTyped();
+  assert.equal(absent.beacon_horizon, null);
+  const horizon = {
+    epoch_length_blocks: 0,
+    next_required_pulse_height: 15,
+    active_session_id: "AB".repeat(32),
+    session_covers_next_pulse: true,
+    local_provider_ready: true,
+  };
+  const payload = createSumeragiV2StatusPayload();
+  payload.beacon_horizon = { ...horizon };
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+  assert.deepEqual(status.beacon_horizon, horizon);
+  for (const [field, value, pattern] of [
+    ["epoch_length_blocks", 64, /must be zero in permissioned mode/u],
+    ["next_required_pulse_height", 9, /must not precede the active height/u],
+    ["active_session_id", null, /coverage requires an active session/u],
+    ["active_session_id", "ab".repeat(32), /canonical uppercase 32-byte hex/u],
+    ["unexpected", true, /contains unknown field unexpected/u],
+  ]) {
+    const broken = createSumeragiV2StatusPayload();
+    broken.beacon_horizon = { ...horizon, [field]: value };
+    await assert.rejects(
+      sumeragiClientForPayload(broken).getSumeragiStatusTyped(),
+      pattern,
+    );
+  }
+  const npos = createSumeragiV2StatusPayload();
+  npos.height_context.mode = { mode: "npos", details: null };
+  npos.beacon_horizon = { ...horizon, epoch_length_blocks: 64 };
+  assert.equal(
+    (await sumeragiClientForPayload(npos).getSumeragiStatusTyped()).beacon_horizon
+      .epoch_length_blocks,
+    64,
+  );
+  npos.beacon_horizon = { ...horizon, epoch_length_blocks: 0 };
+  await assert.rejects(
+    sumeragiClientForPayload(npos).getSumeragiStatusTyped(),
+    /must be positive in NPoS mode/u,
+  );
+  const missing = createSumeragiV2StatusPayload();
+  const { local_provider_ready: _omitted, ...partial } = horizon;
+  missing.beacon_horizon = partial;
+  await assert.rejects(
+    sumeragiClientForPayload(missing).getSumeragiStatusTyped(),
+    /missing field local_provider_ready/u,
+  );
+});
+
 test("getSumeragiStatusTyped rejects sent as an outbound intent stage", async () => {
   const payload = createSumeragiV2StatusPayload();
   payload.liveness.outbound_intents[0].stage = { stage: "sent", details: null };

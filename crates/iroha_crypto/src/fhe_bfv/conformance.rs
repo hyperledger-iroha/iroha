@@ -28,10 +28,7 @@ fn sample_bfv_full_bootstrap_linear_transform_artifact_payload(
     encode_bfv_full_bootstrap_linear_transform_artifact_v1(params, 1, role, &transform)
         .expect("encode full-bootstrap linear transform artifact")
 }
-fn sample_bfv_full_bootstrap_artifacts_for_secret(
-    params: &BfvParameters,
-    secret_key: &BfvSecretKey,
-) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+fn sample_bfv_full_bootstrap_accumulator_artifact(params: &BfvParameters) -> Vec<u8> {
     let accumulator = BfvFullBootstrapAccumulatorV1 {
         slot_count: params.polynomial_degree,
         test_vector: encode_packed_plaintext_slots(
@@ -40,41 +37,28 @@ fn sample_bfv_full_bootstrap_artifacts_for_secret(
         )
         .expect("encode full-bootstrap accumulator"),
     };
-    let accumulator = encode_bfv_full_bootstrap_accumulator_artifact_v1(params, 1, &accumulator)
-        .expect("encode accumulator artifact");
-    let accumulator_digest = Hash::new(&accumulator);
-    let proof_public_input_schema =
-        encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
-            params,
-            1,
-            &bfv_full_bootstrap_proof_public_input_schema_v1(),
-        )
-        .expect("encode proof public-input schema artifact");
-    let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
-    let arithmetic_air_constraint_system =
-        encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
-            params,
-            1,
-            &bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
-        )
-        .expect("encode arithmetic AIR artifact");
-    let coefficient_to_slot_key = sample_bfv_full_bootstrap_linear_transform_artifact_payload(
-        params,
-        BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
-    );
-    let slot_to_coefficient_key = sample_bfv_full_bootstrap_linear_transform_artifact_payload(
-        params,
-        BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
-    );
+    encode_bfv_full_bootstrap_accumulator_artifact_v1(params, 1, &accumulator)
+        .expect("encode accumulator artifact")
+}
+
+fn sample_bfv_full_bootstrap_blind_rotation_artifact(
+    params: &BfvParameters,
+    accumulator_digest: Hash,
+) -> Vec<u8> {
     let blind_rotation_key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
         params,
         accumulator_digest,
         1,
     )
     .expect("build blind-rotation key");
-    let blind_rotation_key =
-        encode_bfv_full_bootstrap_blind_rotation_artifact_v1(params, 1, &blind_rotation_key)
-            .expect("encode blind-rotation artifact");
+    encode_bfv_full_bootstrap_blind_rotation_artifact_v1(params, 1, &blind_rotation_key)
+        .expect("encode blind-rotation artifact")
+}
+
+fn sample_bfv_full_bootstrap_sample_extraction_artifact(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+) -> Vec<u8> {
     let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
         source_slot_count: params.polynomial_degree,
         source_ciphertext_component_count: 2,
@@ -88,24 +72,20 @@ fn sample_bfv_full_bootstrap_artifacts_for_secret(
         b"zk-stark-bfv-full-bootstrap-sample-switch",
     )
     .expect("build sample-extraction switch key");
-    let sample_extraction_key = encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+    encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
         params,
         1,
         &sample_extraction_key,
     )
-    .expect("encode sample-extraction switch key artifact");
-    let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
-        params,
-        1,
-        &coefficient_to_slot_key,
-        &slot_to_coefficient_key,
-        &blind_rotation_key,
-        &sample_extraction_key,
-        &accumulator,
-        &proof_public_input_schema,
-        &arithmetic_air_constraint_system,
-    )
-    .expect("derive evaluator artifact-set digest");
+    .expect("encode sample-extraction switch key artifact")
+}
+
+/// Encode the native prover and verifier key artifacts bound to both digests.
+fn sample_bfv_full_bootstrap_proof_key_artifacts(
+    params: &BfvParameters,
+    proof_public_input_schema_digest: Hash,
+    evaluator_artifact_set_digest: Hash,
+) -> (Vec<u8>, Vec<u8>) {
     let prover_key_material = encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
         BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
     )
@@ -138,6 +118,57 @@ fn sample_bfv_full_bootstrap_artifacts_for_secret(
         &verifier_key,
     )
     .expect("encode verifier-key artifact");
+    (prover_key, verifier_key)
+}
+
+fn sample_bfv_full_bootstrap_artifacts_for_secret(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+    let accumulator = sample_bfv_full_bootstrap_accumulator_artifact(params);
+    let proof_public_input_schema =
+        encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+            params,
+            1,
+            &bfv_full_bootstrap_proof_public_input_schema_v1(),
+        )
+        .expect("encode proof public-input schema artifact");
+    let arithmetic_air_constraint_system =
+        encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+            params,
+            1,
+            &bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
+        )
+        .expect("encode arithmetic AIR artifact");
+    let coefficient_to_slot_key = sample_bfv_full_bootstrap_linear_transform_artifact_payload(
+        params,
+        BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+    );
+    let slot_to_coefficient_key = sample_bfv_full_bootstrap_linear_transform_artifact_payload(
+        params,
+        BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
+    );
+    let blind_rotation_key =
+        sample_bfv_full_bootstrap_blind_rotation_artifact(params, Hash::new(&accumulator));
+    let sample_extraction_key =
+        sample_bfv_full_bootstrap_sample_extraction_artifact(params, secret_key);
+    let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+        params,
+        1,
+        &coefficient_to_slot_key,
+        &slot_to_coefficient_key,
+        &blind_rotation_key,
+        &sample_extraction_key,
+        &accumulator,
+        &proof_public_input_schema,
+        &arithmetic_air_constraint_system,
+    )
+    .expect("derive evaluator artifact-set digest");
+    let (prover_key, verifier_key) = sample_bfv_full_bootstrap_proof_key_artifacts(
+        params,
+        Hash::new(&proof_public_input_schema),
+        evaluator_artifact_set_digest,
+    );
     BfvFullBootstrapCircuitArtifactBundleV1 {
         coefficient_to_slot_key,
         slot_to_coefficient_key,
@@ -150,6 +181,7 @@ fn sample_bfv_full_bootstrap_artifacts_for_secret(
         verifier_key,
     }
 }
+
 fn local_signed_test_package_and_digest(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -200,6 +232,93 @@ fn local_signed_test_package_and_digest(
     )
     .expect("sample external-review full-bootstrap release audit package and digest")
 }
+fn sample_packed_input(params: &BfvParameters, public_key: &BfvPublicKey) -> BfvCiphertext {
+    let plaintext = encode_packed_plaintext_slots(
+        params,
+        &(0..usize::from(params.polynomial_degree))
+            .map(|slot| u64::try_from((slot * 13 + 11) % 257).expect("slot fits"))
+            .collect::<Vec<_>>(),
+    )
+    .expect("encode packed BFV plaintext");
+    encrypt_from_seed(
+        params,
+        public_key,
+        &plaintext,
+        b"zk-stark-bfv-full-bootstrap-input",
+    )
+    .expect("encrypt BFV input")
+}
+
+/// Derive one Galois key for each blind-rotation step, in step order.
+fn sample_galois_keys(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    blind_rotation: &BfvFullBootstrapBlindRotationKeyV1,
+) -> Vec<BfvGaloisKey> {
+    blind_rotation
+        .steps
+        .iter()
+        .map(|step| {
+            galois_key_from_seed(
+                params,
+                secret_key,
+                step.automorphism_power,
+                b"zk-stark-bfv-full-bootstrap-galois",
+            )
+            .expect("Galois key")
+        })
+        .collect()
+}
+
+/// A locally signed test package must not qualify production execution or noise bounds.
+fn assert_local_package_cannot_qualify(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    input: &BfvCiphertext,
+    input_bound: u128,
+) {
+    let reviewer_key_pair = KeyPair::try_from_seed(vec![0xC3; 32], Algorithm::Ed25519)
+        .expect("fixture seed derives release reviewer keypair");
+    let (release_audit_package, release_audit_package_digest) =
+        local_signed_test_package_and_digest(params, material, artifacts, &reviewer_key_pair);
+    let missing_qualification = BfvError::ProductionQualificationUnavailable(
+        BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+    );
+    assert_eq!(
+        full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+            params,
+            bootstrap_key,
+            artifacts,
+            galois_keys,
+            input,
+            &release_audit_package,
+            release_audit_package_digest,
+            "local-conformance-signer-2026",
+            reviewer_key_pair.public_key(),
+        ),
+        Err(missing_qualification.clone()),
+        "a locally signed test package cannot qualify production execution",
+    );
+    assert_eq!(
+        bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+            params,
+            bootstrap_key,
+            artifacts,
+            galois_keys,
+            input_bound,
+            &release_audit_package,
+            release_audit_package_digest,
+            "local-conformance-signer-2026",
+            reviewer_key_pair.public_key(),
+        ),
+        Err(missing_qualification),
+        "a locally signed test package cannot qualify a production noise bound",
+    );
+}
+
 fn build_conformance_materials() -> [BfvFullBootstrapExecutionProverInputMaterialV1; 2] {
     let params = ram_lfe_bfv_parameters_v1();
     let (secret_key, public_key, _relinearization_key) =
@@ -220,71 +339,18 @@ fn build_conformance_materials() -> [BfvFullBootstrapExecutionProverInputMateria
         material.clone(),
     )
     .expect("full-bootstrap key");
-    let plaintext = encode_packed_plaintext_slots(
-        &params,
-        &(0..usize::from(params.polynomial_degree))
-            .map(|slot| u64::try_from((slot * 13 + 11) % 257).expect("slot fits"))
-            .collect::<Vec<_>>(),
-    )
-    .expect("encode packed BFV plaintext");
-    let input = encrypt_from_seed(
-        &params,
-        &public_key,
-        &plaintext,
-        b"zk-stark-bfv-full-bootstrap-input",
-    )
-    .expect("encrypt BFV input");
-    let galois_keys = blind_rotation
-        .steps
-        .iter()
-        .map(|step| {
-            galois_key_from_seed(
-                &params,
-                &secret_key,
-                step.automorphism_power,
-                b"zk-stark-bfv-full-bootstrap-galois",
-            )
-            .expect("Galois key")
-        })
-        .collect::<Vec<_>>();
-    let reviewer_key_pair = KeyPair::try_from_seed(vec![0xC3; 32], Algorithm::Ed25519)
-        .expect("fixture seed derives release reviewer keypair");
-    let (release_audit_package, release_audit_package_digest) =
-        local_signed_test_package_and_digest(&params, &material, &artifacts, &reviewer_key_pair);
+    let input = sample_packed_input(&params, &public_key);
+    let galois_keys = sample_galois_keys(&params, &secret_key, &blind_rotation);
     let input_bound =
         bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input residual bound");
-    let missing_qualification = BfvError::ProductionQualificationUnavailable(
-        BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
-    );
-    assert_eq!(
-        full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            &input,
-            &release_audit_package,
-            release_audit_package_digest,
-            "local-conformance-signer-2026",
-            reviewer_key_pair.public_key(),
-        ),
-        Err(missing_qualification.clone()),
-        "a locally signed test package cannot qualify production execution",
-    );
-    assert_eq!(
-        bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            input_bound,
-            &release_audit_package,
-            release_audit_package_digest,
-            "local-conformance-signer-2026",
-            reviewer_key_pair.public_key(),
-        ),
-        Err(missing_qualification),
-        "a locally signed test package cannot qualify a production noise bound",
+    assert_local_package_cannot_qualify(
+        &params,
+        &material,
+        &bootstrap_key,
+        &artifacts,
+        &galois_keys,
+        &input,
+        input_bound,
     );
     let output = full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
         &params,
@@ -361,8 +427,8 @@ fn local_signed_package_cannot_qualify_arithmetic_conformance_material() {
     let materials = conformance_materials();
     for (slot, material) in materials.iter().enumerate() {
         assert_eq!(
-            material.proof_input_material.witness_material.slot_index,
-            slot as u32
+            usize::try_from(material.proof_input_material.witness_material.slot_index),
+            Ok(slot)
         );
         validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)
             .expect("complete arithmetic relation validates");

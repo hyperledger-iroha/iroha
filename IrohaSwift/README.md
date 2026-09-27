@@ -1296,6 +1296,13 @@ the application owns reconciliation and any later explicit submission.
 
 ### Native privacy bridge
 
+The four Goldilocks STARK/FRI protocols bind
+`PrivacyProofSystemIdV1.starkFriSha3_384Goldilocks` and
+`PrivacyEngineIdV1.nativeGoldilocksSha3_384StarkFri`, each at Norito tag 0.
+These identities correspond to the native canonical labels
+`stark-fri-sha3-384-goldilocks-v1` and
+`native-goldilocks-sha3-384-stark-fri-v1`: SHA3-384 owns the outer byte suite.
+
 `PrivacyNativeBridge` is selector-free.
 `compiledProfileCatalogV1()` returns this binary's canonical typed
 `PrivacyCompiledProfileCatalogV1` Norito archive, while `protocolsV1` exposes

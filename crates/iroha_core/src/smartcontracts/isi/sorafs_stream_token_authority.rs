@@ -7,7 +7,6 @@ use super::Execute;
 use crate::query::stream_token_authority::eligibility::{authorized, eligible_custody};
 use crate::{
     query::{
-        signer_finality::verify_signer_finality_v1,
         stream_token_authority::{
             self as journal, Error, OperationHeadV1, OperationRecordV1,
             STREAM_TOKEN_NATIVE_MAX_OPERATIONS_V1, STREAM_TOKEN_NATIVE_RESERVATION_MS_V1,
@@ -17,6 +16,7 @@ use crate::{
         },
     },
     state::{StateReadOnly, StateTransaction},
+    sumeragi::certified_chain::committed_block,
 };
 use iroha_crypto::{Hash, HashOf};
 #[cfg(test)]
@@ -111,8 +111,12 @@ fn current_custody(
     if committed.anchor.state_digest != current.index.digest || committed.state != current.state {
         return Err(Error::Custody);
     }
-    verify_signer_finality_v1(tx, parent, committed.anchor.block_hash)
-        .map_err(|_| Error::Custody)?;
+    // Consensus-visible data only (certificates are per node): the committed frame of the
+    // parent is the anchored block.
+    let parent_block = committed_block(tx, parent).map_err(|_| Error::Custody)?;
+    if *parent_block.block_hash().as_ref() != committed.anchor.block_hash {
+        return Err(Error::Custody);
+    }
     Ok(current)
 }
 

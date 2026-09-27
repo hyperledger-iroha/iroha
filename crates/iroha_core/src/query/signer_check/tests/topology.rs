@@ -153,7 +153,7 @@ fn finalized_role16_check_with_closed_core_result_cannot_authenticate() {
         1_000,
     );
     fixture.commit(1_000, vec![anchor]);
-    let (height, block_hash, context_id) = fixture.finalized_floor().unwrap();
+    let (height, block_hash, context_id) = fixture.finalized_floor();
     let floor = NativeCheckFloorV1 {
         height,
         block_hash,

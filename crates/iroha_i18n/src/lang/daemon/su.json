@@ -5,6 +5,7 @@
   "error.logger": "Logger teu bisa dimimitian",
   "error.start": "Gagal ngamimitian Iroha",
   "error.run": "Kasalahan lumangsung nalika ngajalankeun Iroha",
+  "error.check_storage": "Kura (block storage) gagal dina pamariksaan panyimpenan ukur-maca",
   "error.start_p2p": "Teu bisa ngamimitian jaringan peer-to-peer",
   "error.init_kura": "Teu bisa inisialisasi Kura (block storage)",
   "error.start_dev_telemetry": "Teu bisa ngamimitian layanan telemetry dev",

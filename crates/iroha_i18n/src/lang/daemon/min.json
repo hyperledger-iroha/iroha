@@ -5,6 +5,7 @@
   "error.logger": "Indak dapek manjalankan sistem log",
   "error.start": "Iroha indak dapek dimulai",
   "error.run": "Kesalahan terjadi pas Iroha dijalankan",
+  "error.check_storage": "Kura (penyimpanan blok) gagal dalam pamariksaan penyimpanan nan hanyo dibaco",
   "error.start_p2p": "Jaringan P2P indak bisa dimulai",
   "error.init_kura": "Kura (penyimpanan blok) indak bisa dimulai",
   "error.start_dev_telemetry": "Layanan telemetri pengembangan indak bisa dimulai",

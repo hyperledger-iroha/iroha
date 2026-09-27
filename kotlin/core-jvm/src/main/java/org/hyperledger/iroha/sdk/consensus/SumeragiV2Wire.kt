@@ -1822,6 +1822,55 @@ object SumeragiV2Wire {
         }
     }
 
+    /** Local global-beacon horizon published by serialized height activation. */
+    class BeaconHorizonStatus(
+        @JvmField val epochLengthBlocks: Long,
+        @JvmField val nextRequiredPulseHeight: Long?,
+        @JvmField val activeSessionId: Bytes32?,
+        @JvmField val sessionCoversNextPulse: Boolean,
+        @JvmField val localProviderReady: Boolean,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            u64(epochLengthBlocks),
+            option(nextRequiredPulseHeight?.let(::u64)),
+            option(activeSessionId?.bytes()?.let(::byteArrayElements)),
+            bool(sessionCoversNextPulse),
+            bool(localProviderReady),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): BeaconHorizonStatus = decodeStruct(bytes) { reader ->
+                BeaconHorizonStatus(
+                    reader.field("status.beacon_horizon.epoch_length_blocks") {
+                        it.u64Only("status.beacon_horizon.epoch_length_blocks")
+                    },
+                    reader.field("status.beacon_horizon.next_required_pulse_height") {
+                        optionDecode(it, "status.beacon_horizon.next_required_pulse_height") { payload ->
+                            Reader(payload).u64Only("status.beacon_horizon.next_required_pulse_height.value")
+                        }
+                    },
+                    reader.field("status.beacon_horizon.active_session_id") {
+                        optionDecode(it, "status.beacon_horizon.active_session_id") { payload ->
+                            Bytes32(
+                                decodeByteArrayElements(
+                                    payload,
+                                    32,
+                                    "status.beacon_horizon.active_session_id.value",
+                                ),
+                            )
+                        }
+                    },
+                    reader.field("status.beacon_horizon.session_covers_next_pulse") {
+                        it.boolOnly("status.beacon_horizon.session_covers_next_pulse")
+                    },
+                    reader.field("status.beacon_horizon.local_provider_ready") {
+                        it.boolOnly("status.beacon_horizon.local_provider_ready")
+                    },
+                )
+            }
+        }
+    }
+
     /** Compact, protocol-v2-only `/v1/sumeragi/status` payload. */
     class SumeragiV2Status(
         @JvmField val protocolVersion: Int,
@@ -1844,6 +1893,7 @@ object SumeragiV2Wire {
         @JvmField val heightContext: HeightContextStatus,
         @JvmField val lastCommitQc: CommitQcStatus?,
         @JvmField val liveness: LivenessStatus,
+        @JvmField val beaconHorizon: BeaconHorizonStatus?,
     ) : WireValue() {
         init {
             require(protocolVersion == PROTOCOL_VERSION) {
@@ -1872,6 +1922,7 @@ object SumeragiV2Wire {
             heightContext.encode(),
             option(lastCommitQc?.encode()),
             liveness.encode(),
+            option(beaconHorizon?.encode()),
         )
 
         companion object {
@@ -1920,6 +1971,9 @@ object SumeragiV2Wire {
                             optionDecode(it, "status.last_commit_qc") { CommitQcStatus.decode(it) }
                         },
                         reader.field("status.liveness") { LivenessStatus.decode(it.remainingBytes()) },
+                        reader.field("status.beacon_horizon") {
+                            optionDecode(it, "status.beacon_horizon") { BeaconHorizonStatus.decode(it) }
+                        },
                     )
                 }
                 require(decoded.encode().contentEquals(bytes)) {
@@ -2155,6 +2209,28 @@ object SumeragiV2Wire {
         }
         out.write(remaining.toInt())
         return out.toByteArray()
+    }
+
+    /**
+     * Generic Norito fixed byte array (for example `Option<[u8; 32]>`): every element is its
+     * own compact-length-prefixed field, unlike a hash or a direct `[u8; 32]` struct field.
+     */
+    private fun byteArrayElements(bytes: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        for (byte in bytes) {
+            out.write(varint(1))
+            out.write(byte.toInt() and 0xff)
+        }
+        return out.toByteArray()
+    }
+
+    private fun decodeByteArrayElements(payload: ByteArray, count: Int, label: String): ByteArray {
+        val reader = Reader(payload)
+        val bytes = ByteArray(count) { index ->
+            reader.field("$label[$index]") { it.u8("$label[$index]").toByte() }
+        }
+        reader.finish(label)
+        return bytes
     }
 
     private fun optionHash(reader: Reader): Hash32? =

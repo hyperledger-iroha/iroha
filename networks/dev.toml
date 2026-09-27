@@ -1,0 +1,13 @@
+[network]
+name = "dev"
+profile = "sora-nexus-v1-qual"   # Taira policy; 64-block epochs so verify --full crosses a pulse in ~1 min
+# chain_id omitted: fresh per generation
+
+[[node]]
+name = "n0"
+[[node]]
+name = "n1"
+[[node]]
+name = "n2"
+[[node]]
+name = "n3"

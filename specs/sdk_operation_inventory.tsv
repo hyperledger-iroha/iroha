@@ -202,6 +202,7 @@ assets.alias.resolve	POST	/v1/assets/aliases/resolve	public	torii_default	public
 assets.assets_transfer_post	POST	/v1/assets/transfer	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 blocks.stream_websocket	GET	/v1/blocks/stream	protocol	canonical_account_signature	authenticated_account	stream	websocket	feature(app_api)	false	true	false	true
 bridge.finality_attestation.read	GET	/v1/bridge/finality/attestation/{height}	public	torii_default	public	read	http	always	false	true	false	false
+bridge.finality_attestation.read_latest	GET	/v1/bridge/finality/attestation/latest	public	torii_default	public	read	http	always	false	true	false	false
 bridge.finality_bundle.read	GET	/v1/bridge/finality/bundle/{height}	public	torii_default	public	read	http	always	true	true	true	false
 bridge.finality_proof.read	GET	/v1/bridge/finality/{height}	public	torii_default	public	read	http	always	true	true	true	false
 connect.session.create	POST	/v1/connect/session	protocol	protocol_handshake	authenticated_protocol_principal	mutation	http	feature(connect)	true	true	false	true

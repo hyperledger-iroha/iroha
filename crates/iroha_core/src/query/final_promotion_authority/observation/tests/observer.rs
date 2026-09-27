@@ -33,7 +33,7 @@ fn receipt_check_retains_distinct_observer_and_operator_through_real_finality() 
         panic!("Check")
     };
     assert_eq!(check.expected_operator, operator);
-    assert_eq!(verified.check_height(), 3);
+    assert_eq!(verified.check_height(), 4);
     assert_eq!(verified.snapshot(), &f.snapshot());
 }
 
@@ -72,7 +72,7 @@ fn receipt_check_rejects_self_observation_and_substituted_operator_or_observer()
             Some(Error::Transaction)
         );
     }
-    assert_eq!(f.state.view().height(), 2);
+    assert_eq!(f.state.view().height(), 3);
 }
 
 #[test]

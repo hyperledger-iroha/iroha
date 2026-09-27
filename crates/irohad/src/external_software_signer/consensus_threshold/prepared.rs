@@ -61,16 +61,17 @@ pub fn prepare_global_beacon_transition_credential_v1(
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
-    let dkg_session = &pending.public_session.adaptive_dkg.session;
+    let pending_session = pending.public_session();
+    let dkg_session = &pending_session.adaptive_dkg.session;
     let preparation_cutoff = transition
         .preparation
         .first_height
         .checked_sub(1)
         .ok_or(Rejected)?;
-    if pending.signer_index != index
-        || pending.public_session.network_id != network_id
-        || pending.public_session.session_id != credentials.beacon.session_id
-        || pending.public_session.transcript_hash != credentials.beacon.transcript_hash
+    if pending.signer_index() != index
+        || pending_session.network_id != network_id
+        || pending_session.session_id != credentials.beacon.session_id
+        || pending_session.transcript_hash != credentials.beacon.transcript_hash
         || dkg_session.attempt_id
             != transition
                 .preparation
@@ -78,10 +79,10 @@ pub fn prepare_global_beacon_transition_credential_v1(
                 .map_err(|_| Rejected)?
         || dkg_session.authority_generation != transition.preparation.authority_generation
         || dkg_session.start_height <= transition.preparation.selection_height
-        || pending.public_session.adaptive_dkg.finalized_at_height >= preparation_cutoff
-        || pending.public_session.roster_hash
+        || pending_session.adaptive_dkg.finalized_at_height >= preparation_cutoff
+        || pending_session.roster_hash
             != iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&peers)
-        || usize::from(pending.public_session.committee_size) != peers.len()
+        || usize::from(pending_session.committee_size) != peers.len()
     {
         return Err(Rejected);
     }
@@ -91,29 +92,16 @@ pub fn prepare_global_beacon_transition_credential_v1(
         {
             return Err(Rejected);
         }
-        // Validate the complete canonical envelope, public policy and every actual held share
-        // before extracting its zeroizing secret owners for the new complete envelope.
-        let validated = decode_global_beacon_credential_v1(bytes, &network_id, configured)?;
-        drop(validated);
-        let wire: RuntimeGlobalBeaconSignerCredentialWireV1 = norito::decode_canonical_with_limits(
-            bytes,
-            CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-        )
-        .map_err(|_| Rejected)?;
-        if wire
-            .sessions
+        // Core validates the complete canonical envelope, public policy and every actual held
+        // share before handing out its zeroizing secret owners for the new complete envelope.
+        let retained = decode_global_beacon_credential_shares_v1(bytes, &network_id, configured)?;
+        if retained
             .iter()
-            .any(|entry| entry.public_session.session_id == pending.public_session.session_id)
+            .any(|entry| entry.public_session().session_id == pending_session.session_id)
         {
             return Err(Rejected);
         }
-        for entry in wire.sessions {
-            provisioning.push(RuntimeGlobalBeaconShareProvisioningV1::new(
-                entry.public_session,
-                entry.signer_index,
-                entry.components.into_zeroizing(),
-            ));
-        }
+        provisioning.extend(retained);
     }
     provisioning.push(pending);
     let policy_digest =

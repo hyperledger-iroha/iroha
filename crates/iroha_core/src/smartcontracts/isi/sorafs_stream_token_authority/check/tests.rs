@@ -10,7 +10,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::Account,
-    block::{BlockHeader, builder::BlockBuilder, consensus_v2::HeightContextId},
+    block::{BlockHeader, consensus_v2::HeightContextId},
     permission::Permissions,
     sorafs::{
         stream_token_authority::{StreamTokenAuthorityRequestV1, StreamTokenOperationV1},
@@ -19,10 +19,6 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanCheckSorafsStreamToken, CanOperateSorafsStreamToken,
-};
-use iroha_sccp::{
-    SCCP_TAIRA_CHAIN_ID_V1, sccp_finalize_taira_block_test_fixture_v1,
-    sccp_taira_finality_network_id_v1,
 };
 use sorafs_manifest::signer::{
     custody::{
@@ -37,7 +33,6 @@ use sorafs_manifest::signer::{
     },
     stream_token::SignerStreamTokenRequestV1,
 };
-use std::sync::Arc;
 
 fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixture key")
@@ -193,74 +188,109 @@ fn check_mut(instruction: &mut MutateSorafsStreamTokenAuthority) -> &mut StreamT
     check
 }
 
-#[test]
-fn signed_floor_requires_exact_state_hash_and_kura_context() {
-    let chain_id = SCCP_TAIRA_CHAIN_ID_V1.parse().unwrap();
-    let mut state = State::new_with_chain_and_network_id_for_testing(
-        World::new(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        chain_id,
-        sccp_taira_finality_network_id_v1(),
-    );
-    let header = BlockHeader::new(1_u64.try_into().unwrap(), None, None, 1_500, 0);
-    let mut block = BlockBuilder::new(header)
-        .try_build_with_signature(0, key(20).private_key())
-        .unwrap();
-    block
-        .set_execution_outputs(
-            Vec::new(),
-            0,
-            Default::default(),
-            Vec::new(),
-            Default::default(),
-            Default::default(),
-            Vec::new(),
-            &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
-        )
-        .unwrap();
-    let finalized = sccp_finalize_taira_block_test_fixture_v1(&block, None);
-    state
-        .kura()
-        .store_block(Arc::new(finalized.block().clone()))
-        .unwrap();
-    state.push_block_hash_for_testing(finalized.block().hash());
-    let receipt = state
-        .kura()
-        .store_v2_finality_artifact(&finalized.proof().finality_artifact)
-        .unwrap();
-    assert_eq!(
-        receipt.context_id(),
-        finalized.proof().finality_artifact.context_id()
-    );
-    let actual = StreamTokenFinalityFloorV1 {
-        height: 1,
-        block_hash: *finalized.block().hash().as_ref(),
-        context_id: finalized.proof().finality_artifact.context_id(),
+/// A certified chain with one block after genesis, committed with the local `CommitQC` of
+/// `signers`, and the floor of that block.
+fn certified_floor(
+    signers: crate::sumeragi::test_chain::Signers,
+) -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    StreamTokenFinalityFloorV1,
+) {
+    let mut chain = crate::query::signer_check::fixture::chain(World::new());
+    chain.commit_with(Some(1_500), Vec::new(), signers);
+    let committed = chain.committed(2);
+    let floor = StreamTokenFinalityFloorV1 {
+        height: 2,
+        block_hash: *committed.block_hash().as_ref(),
+        context_id: committed.id(),
     };
+    (chain, floor)
+}
+
+/// The check of `floor` inside the next block's transaction.
+fn check_next(
+    chain: &crate::sumeragi::test_chain::CertifiedTestChain,
+    floor: StreamTokenFinalityFloorV1,
+    challenge: [u8; 32],
+    execution_height: u64,
+) -> Result<(), Error> {
+    let state = chain.state();
     let mut block = state.block(BlockHeader::new(
-        2_u64.try_into().unwrap(),
-        Some(finalized.block().hash()),
+        3_u64.try_into().unwrap(),
+        state.view().latest_block_hash(),
         None,
         2_000,
         0,
     ));
     let tx = block.transaction();
-    assert_eq!(check_floor(&tx, actual, [1; 32], 2), Ok(()));
+    check_floor(&tx, floor, challenge, execution_height)
+}
+
+#[test]
+fn signed_floor_requires_exact_state_hash_and_committed_block_id() {
+    use crate::sumeragi::test_chain::Signers;
+    let (chain, actual) = certified_floor(Signers::Quorum);
+    assert_eq!(check_next(&chain, actual, [1; 32], 3), Ok(()));
     let mut changed = actual;
     changed.block_hash = [0x99; 32];
-    assert_eq!(check_floor(&tx, changed, [1; 32], 2), Err(Error::Finality));
+    assert_eq!(
+        check_next(&chain, changed, [1; 32], 3),
+        Err(Error::Finality)
+    );
     changed = actual;
     changed.context_id = floor().context_id;
-    assert_eq!(check_floor(&tx, changed, [1; 32], 2), Err(Error::Finality));
     assert_eq!(
-        check_floor(&tx, actual, [0; 32], 2),
+        check_next(&chain, changed, [1; 32], 3),
+        Err(Error::Finality)
+    );
+    // The height of another committed block.
+    changed = actual;
+    changed.height = 1;
+    assert_eq!(
+        check_next(&chain, changed, [1; 32], 3),
+        Err(Error::Finality)
+    );
+    assert_eq!(
+        check_next(&chain, actual, [0; 32], 3),
         Err(Error::BindingMismatch)
     );
     assert_eq!(
-        check_floor(&tx, actual, [1; 32], 1),
+        check_next(&chain, actual, [1; 32], 2),
         Err(Error::BindingMismatch)
     );
+    // Without the committed frame the floor is not a committed block.
+    chain
+        .kura()
+        .force_hash_only_block_for_testing(std::num::NonZeroUsize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(check_next(&chain, actual, [1; 32], 3), Err(Error::Finality));
+}
+
+/// Certificates are per node: nodes that stored different valid `CommitQC`s for the floor
+/// block (other signers), or even a local certificate that does not verify, execute the Check
+/// identically. The instruction reads the committed header and result preimage only.
+#[test]
+fn floor_check_is_independent_of_the_local_commit_certificate() {
+    use crate::sumeragi::test_chain::Signers;
+    let (quorum, floor) = certified_floor(Signers::Quorum);
+    for signers in [Signers::LastThree, Signers::All, Signers::BelowQuorum] {
+        let (other, other_floor) = certified_floor(signers);
+        assert_eq!(
+            other_floor, floor,
+            "the same block and certified id on every node"
+        );
+        assert_ne!(
+            other.committed(2).block().commit_certificate(),
+            quorum.committed(2).block().commit_certificate(),
+            "the local certificates differ"
+        );
+        for (challenge, height) in [([1; 32], 3), ([0; 32], 3), ([1; 32], 2)] {
+            assert_eq!(
+                check_next(&other, floor, challenge, height),
+                check_next(&quorum, floor, challenge, height)
+            );
+        }
+    }
 }
 
 #[test]

@@ -147,7 +147,7 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         let view = self.state.view();
         check_registered_provider(&view, &self.pins)?;
         // All endpoints belong to one immutable committed history; a larger unsigned height or a
-        // block-hash cache entry alone cannot establish ancestry or revision-4 finality.
+        // block-hash cache entry alone cannot establish ancestry or certified finality.
         check_anchor(&view, &self.pins, minimum)?;
         check_block(&view, floor.height, floor.block_hash)?;
         let current = check_anchor(&view, &self.pins, candidate)?;

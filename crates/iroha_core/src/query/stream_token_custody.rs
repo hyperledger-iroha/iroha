@@ -81,7 +81,7 @@ impl StreamTokenCustodyBlockFinalityV1 {
         &self.custody
     }
 
-    /// Exact same-State durable block and revision-4 Kura/QC finality.
+    /// Exact same-State durable block and its certified Kura/QC finality.
     #[must_use]
     pub const fn block_finality(&self) -> VerifiedSignerFinalityV1 {
         self.block_finality

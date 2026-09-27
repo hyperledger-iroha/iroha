@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import ast
+import functools
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import textwrap
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -52,46 +54,258 @@ REQUIRED_NUMERIC_TEST_COMMANDS = (
 )
 
 
-ISOLATED_FETCH_PYTHON = """\
-import os
-from pathlib import Path
-import subprocess
-import sys
+NEXTEST_CONFIG = ROOT / ".config" / "nextest.toml"
+NEXTEST_INSTALL_ACTION = (
+    "uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88"
+)
+RELEASE_GATE_FETCH = "cargo fetch --locked"
+RELEASE_GATE_COMMAND = (
+    "cargo nextest run --profile release-gate --locked --offline --no-tests=fail"
+)
+RELEASE_GATE_BUILD = "cargo build --locked --offline --workspace"
+RELEASE_GATE_BUILD_STEP = "- name: Build the full workspace"
+RETIRED_CENSUS_MARKERS = (
+    "taira_release",
+    "taira-native-checks",
+    "python3",
+    "setup-python",
+)
 
-root = Path.cwd().resolve(strict=True)
-sys.path.insert(0, str(root / "scripts"))
-import taira_release as release
 
-target = root / "target/taira-native-checks"
-with release.cargo_lane(root, target, "development") as lock_fd:
-    env = release.child_environment(dict(os.environ), target)
-    env, _ = release.isolated_cargo_environment(root, root, env)
-    env["CARGO_NET_OFFLINE"] = "false"
-    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "fetch",
-               "--manifest-path", str(root / "Cargo.toml"), "--locked"]
-    subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
-                   check=True, pass_fds=(lock_fd,))
-"""
-ISOLATED_BUILD_PYTHON = """\
-import os
-from pathlib import Path
-import subprocess
-import sys
+def _release_gate_packages(build_job: str) -> list[str]:
+    """Return the `-p` package list of the build job's release-gate command."""
 
-root = Path.cwd().resolve(strict=True)
-sys.path.insert(0, str(root / "scripts"))
-import taira_release as release
+    normalized = _normalized(build_job)
+    start = normalized.find("cargo nextest run ")
+    if start < 0:
+        return []
+    end = normalized.find(RELEASE_GATE_BUILD_STEP, start)
+    command = normalized[start:] if end < 0 else normalized[start:end]
+    return re.findall(r"(?:^|\s)-p\s+([A-Za-z0-9_-]+)", command)
 
-target = root / "target/taira-native-checks"
-with release.cargo_lane(root, target, "development") as lock_fd:
-    env = release.child_environment(dict(os.environ), target)
-    env, _ = release.isolated_cargo_environment(root, root, env)
-    env["CARGO_INCREMENTAL"] = "0"
-    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
-               "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline", "--workspace"]
-    subprocess.run(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
-                   check=True, pass_fds=(lock_fd,))
-"""
+
+def _filter_packages(default_filter: str) -> list[str]:
+    """Return the package names that a nextest filterset selects."""
+
+    return re.findall(r"\bpackage\(([A-Za-z0-9_-]+)\)", default_filter)
+
+
+@functools.cache
+def _workspace_packages() -> dict[str, Path]:
+    """Return the workspace member packages by name: root `members` globs minus `exclude`."""
+
+    workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]
+    excluded = {(ROOT / path).resolve() for path in workspace.get("exclude", [])}
+    packages = {}
+    for pattern in workspace.get("members", []):
+        for directory in sorted(ROOT.glob(pattern)):
+            manifest = directory / "Cargo.toml"
+            if directory.resolve() in excluded or not manifest.is_file():
+                continue
+            package = tomllib.loads(manifest.read_text(encoding="utf-8")).get("package", {})
+            if isinstance(package.get("name"), str):
+                packages[package["name"]] = directory
+    return packages
+
+
+def _workspace_package_names() -> set[str]:
+    """Return every workspace member package name."""
+
+    return set(_workspace_packages())
+
+
+# No leading `\b`: a literal prefix keeps this fast over large crates, and
+# `_module_names` checks the word boundary itself.
+MODULE_DECLARATION = re.compile(r"mod\s+(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*[;{]")
+
+
+@functools.cache
+def _module_names(directory: Path) -> frozenset[str]:
+    """Return every module name a package's `src/` and `tests/` sources declare.
+
+    Names come from `mod` declarations (inline, file or `#[path]`) and module file
+    names. Nesting and target kind are not resolved: the release-gate check only
+    needs to see that each module it names still exists in the package.
+    """
+
+    names = set()
+    for sources in (directory / "src", directory / "tests"):
+        for source in sorted(sources.rglob("*.rs")):
+            names.add(source.parent.name if source.stem == "mod" else source.stem)
+            text = source.read_text(encoding="utf-8", errors="replace")
+            for match in MODULE_DECLARATION.finditer(text):
+                before = text[match.start() - 1:match.start()]
+                if not (before.isalnum() or before == "_"):
+                    names.add(match.group(1))
+    return frozenset(names)
+
+
+FILTER_TOKEN = re.compile(
+    r"(?P<op>[()|&!])|(?P<not>not)\b|(?P<matcher>package|kind|test)"
+    r"\((?P<argument>/(?:[^/\\]|\\.)*/|[A-Za-z0-9_-]+)\)"
+)
+
+
+def _parse_filter(text: str) -> tuple:
+    """Parse the nextest filterset subset the release gate may use.
+
+    `expr := term ("|" term)*`, `term := factor ("&" factor)*` and
+    `factor := ("not" | "!") factor | "(" expr ")" | package(name) | kind(name)
+    | test(/regex/)`. Anything else raises `ValueError`.
+    """
+
+    tokens = []
+    position = 0
+    while True:
+        while position < len(text) and text[position].isspace():
+            position += 1
+        if position == len(text):
+            break
+        match = FILTER_TOKEN.match(text, position)
+        if match is None:
+            raise ValueError(f"unexpected text at {text[position:position + 24]!r}")
+        tokens.append(match)
+        position = match.end()
+    index = 0
+
+    def peek(op: str) -> bool:
+        return index < len(tokens) and tokens[index].group("op") == op
+
+    def expression() -> tuple:
+        nonlocal index
+        node = term()
+        while peek("|"):
+            index += 1
+            node = ("or", node, term())
+        return node
+
+    def term() -> tuple:
+        nonlocal index
+        node = factor()
+        while peek("&"):
+            index += 1
+            node = ("and", node, factor())
+        return node
+
+    def factor() -> tuple:
+        nonlocal index
+        if index == len(tokens):
+            raise ValueError("unexpected end of filter")
+        token = tokens[index]
+        index += 1
+        if token.group("not") or token.group("op") == "!":
+            return ("not", factor())
+        if token.group("op") == "(":
+            node = expression()
+            if not peek(")"):
+                raise ValueError("unclosed `(`")
+            index += 1
+            return node
+        if token.group("matcher"):
+            argument = token.group("argument")
+            if token.group("matcher") == "test" and not argument.startswith("/"):
+                raise ValueError(f"test() needs a /regex/: {argument}")
+            if token.group("matcher") != "test" and argument.startswith("/"):
+                raise ValueError(f"{token.group('matcher')}() needs a name: {argument}")
+            return (token.group("matcher"), argument)
+        raise ValueError(f"unexpected `{token.group(0)}`")
+
+    tree = expression()
+    if index != len(tokens):
+        raise ValueError(f"unexpected `{tokens[index].group(0)}`")
+    return tree
+
+
+def _filter_matches(tree: tuple, package: str, kind: str, name: str) -> bool:
+    """Evaluate a parsed filter for one test, as nextest does."""
+
+    operator = tree[0]
+    if operator == "or":
+        return any(_filter_matches(side, package, kind, name) for side in tree[1:])
+    if operator == "and":
+        return all(_filter_matches(side, package, kind, name) for side in tree[1:])
+    if operator == "not":
+        return not _filter_matches(tree[1], package, kind, name)
+    if operator == "package":
+        return tree[1] == package
+    if operator == "kind":
+        return tree[1] == kind
+    return re.search(tree[1][1:-1], name) is not None
+
+
+def _flatten(tree: tuple, operator: str) -> list[tuple]:
+    """Return the operands of a chain of one binary operator."""
+
+    if tree[0] != operator:
+        return [tree]
+    return [operand for side in tree[1:] for operand in _flatten(side, operator)]
+
+
+def _filter_groups(tree: tuple) -> list[tuple[list[str], list[str]]]:
+    """Return each union term's packages and positive (not negated) test regexes."""
+
+    groups = []
+    for term in _flatten(tree, "or"):
+        factors = _flatten(term, "and")
+        packages = [factor[1] for factor in factors if factor[0] == "package"]
+        tests = [factor[1] for factor in factors if factor[0] == "test"]
+        groups.append((packages, tests))
+    return groups
+
+
+def _split_alternation(text: str) -> list[str]:
+    """Split a regex at its top-level `|`."""
+
+    parts, current, depth, in_class = [], "", 0, False
+    for char in text:
+        if in_class:
+            in_class = char != "]"
+        elif char == "[":
+            in_class = True
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "|" and depth == 0:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    return parts
+
+
+def _expand_alternatives(text: str) -> list[str]:
+    """Expand every parenthesized alternation: `a::(b|c)` gives `a::b` and `a::c`."""
+
+    depth, start, in_class = 0, -1, False
+    for index, char in enumerate(text):
+        if in_class:
+            in_class = char != "]"
+        elif char == "[":
+            in_class = True
+        elif char == "(":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                inner = text[start + 1:index].removeprefix("?:")
+                return [
+                    expanded
+                    for choice in _split_alternation(inner)
+                    for expanded in _expand_alternatives(text[:start] + choice + text[index + 1:])
+                ]
+    return [text]
+
+
+def _module_path_alternatives(pattern: str) -> list[str]:
+    """Return the module paths a `/^path::/` release-gate pattern selects."""
+
+    body = pattern[1:-1].removeprefix("^").removesuffix("::")
+    return _expand_alternatives(body)
+
 
 def _job_block(workflow: str, name: str) -> str:
     """Return one top-level job block from a GitHub Actions workflow."""
@@ -192,9 +406,104 @@ def test_required_aggregate_rejects_unselected_jobs_that_ran(name: str, result: 
     assert _aggregate_results(environment).returncode != 0
 
 
-def _validate_release_workflow(workflow: str) -> list[str]:
+def _validate_release_gate_profile(config: str) -> list[str]:
+    """Return errors when the nextest release gate is missing or name-based."""
+
+    try:
+        profiles = tomllib.loads(config).get("profile", {})
+    except tomllib.TOMLDecodeError as error:
+        return [f"nextest config must parse: {error}"]
+    gate = profiles.get("release-gate")
+    if not isinstance(gate, dict):
+        return ["nextest config must define profile.release-gate"]
+    default_filter = gate.get("default-filter")
+    if not isinstance(default_filter, str) or not default_filter.strip():
+        return ["release-gate must select tests with a default-filter"]
+
+    errors: list[str] = []
+    ci = profiles.get("ci", {})
+    if gate.get("fail-fast") is not False:
+        errors.append("release-gate must report every failure (fail-fast = false)")
+    for key in ("failure-output", "slow-timeout"):
+        if key not in ci or gate.get(key) != ci.get(key):
+            errors.append(f"release-gate {key} must match profile.ci")
+    if re.search(r"\bbinary(_id)?\(", default_filter):
+        errors.append("release-gate must not name test binaries")
+    matchers = re.findall(r"(\bnot\s+|[!-]\s*)?\btest\(([^/][^)]*|/.*?/)\)", default_filter)
+    for negated, pattern in matchers:
+        if not pattern.startswith("/"):
+            errors.append(f"release-gate test matchers must be regex groups: {pattern}")
+        elif not negated and not re.fullmatch(r"/\^[A-Za-z0-9_:|()\[\]+*-]+::/", pattern):
+            # A module path ends at `::`, so a test name cannot pose as one.
+            errors.append(f"release-gate must select tests by module path: {pattern}")
+    unknown = sorted(set(_filter_packages(default_filter)) - _workspace_package_names())
+    if unknown:
+        errors.append(f"release-gate names unknown packages: {', '.join(unknown)}")
+        return errors
+    try:
+        tree = _parse_filter(default_filter)
+    except ValueError as error:
+        return [*errors, f"release-gate default-filter must parse: {error}"]
+    packages = _workspace_packages()
+    for group_packages, tests in _filter_groups(tree):
+        if len(group_packages) != 1:
+            errors.append(
+                f"each release-gate group must name exactly one package: {group_packages}"
+            )
+            continue
+        # Nextest accepts a module path that selects nothing; require each named
+        # module to exist so a rename cannot silently drop a group from the gate.
+        names = _module_names(packages[group_packages[0]])
+        for pattern in tests:
+            if pattern.startswith("/^") and pattern.endswith("::/"):
+                for path in _module_path_alternatives(pattern):
+                    if not all(
+                        any(re.fullmatch(component, name) for name in names)
+                        for component in path.split("::")
+                    ):
+                        errors.append(
+                            f"release-gate module path matches no module in "
+                            f"{group_packages[0]}: {path}"
+                        )
+    return errors
+
+
+def _validate_release_gate_job(job: str, config: str) -> list[str]:
+    """Return errors when the build job does not run the nextest release gate."""
+
+    errors: list[str] = []
+    for marker in RETIRED_CENSUS_MARKERS:
+        if marker in job:
+            errors.append(f"build must not run the retired Python release census: {marker}")
+    normalized = _normalized(job)
+    positions = [
+        normalized.find(marker)
+        for marker in (
+            NEXTEST_INSTALL_ACTION, RELEASE_GATE_FETCH, RELEASE_GATE_COMMAND, RELEASE_GATE_BUILD,
+        )
+    ]
+    if not all(position >= 0 for position in positions) or positions != sorted(positions):
+        errors.append(
+            "build must install nextest, fetch, run the release gate, then build offline"
+        )
+    packages = _release_gate_packages(job)
+    try:
+        default_filter = tomllib.loads(config)["profile"]["release-gate"]["default-filter"]
+    except (tomllib.TOMLDecodeError, KeyError, TypeError):
+        default_filter = ""
+    expected = _filter_packages(default_filter)
+    if len(packages) != len(set(packages)) or set(packages) != set(expected):
+        errors.append(
+            "build release-gate packages must equal the release-gate default-filter packages"
+        )
+    return errors
+
+
+def _validate_release_workflow(workflow: str, nextest_config: str | None = None) -> list[str]:
     """Return deterministic errors for weakened release-workflow semantics."""
 
+    if nextest_config is None:
+        nextest_config = NEXTEST_CONFIG.read_text(encoding="utf-8")
     errors: list[str] = []
     global_requirements = (
         (
@@ -242,7 +551,13 @@ def _validate_release_workflow(workflow: str) -> list[str]:
             "cargo metadata --locked --no-deps --format-version 1 > /dev/null",
             "cargo fmt --all -- --check",
         ),
-        "build": ('python3 scripts/taira_release_check.py --target-dir "$GITHUB_WORKSPACE/target/taira-native-checks"',),
+        "build": (
+            f"shared-key: workspace-release-build-{PINNED_RUST}",
+            NEXTEST_INSTALL_ACTION,
+            RELEASE_GATE_FETCH,
+            RELEASE_GATE_COMMAND,
+            RELEASE_GATE_BUILD,
+        ),
         "doc": ("cargo doc --locked --workspace --no-deps --all-features",),
         "test": (
             COMPILE_UNIT_GUARD_COMMAND,
@@ -293,20 +608,7 @@ def _validate_release_workflow(workflow: str) -> list[str]:
             errors.append(f"{job_name} must pin Rust {PINNED_RUST}")
 
         if job_name == "build":
-            snippets = re.findall(r"(?ms)^          python3 - <<'PY'\n(.*?)^          PY\n", job)
-            try:
-                parsed = [ast.dump(ast.parse(textwrap.dedent(code)), include_attributes=False) for code in snippets]
-            except (SyntaxError, ValueError):
-                parsed = []
-            expected = [ast.dump(ast.parse(code), include_attributes=False)
-                        for code in (ISOLATED_FETCH_PYTHON, ISOLATED_BUILD_PYTHON)]
-            if parsed != expected:
-                errors.append("build must retain the isolated fetch and locked offline full-workspace runners")
-            fetch_position = job.find('"fetch"')
-            check_position = job.find("python3 scripts/taira_release_check.py")
-            full_position = job.find("- name: Build the full workspace")
-            if not 0 <= fetch_position < check_position < full_position:
-                errors.append("build must fetch dependencies before the offline gate and full workspace build")
+            errors.extend(_validate_release_gate_job(job, nextest_config))
 
         normalized_job = _normalized(job)
         for command in commands[job_name]:
@@ -521,33 +823,293 @@ def test_workspace_release_workflow_is_exact_sha_and_complete() -> None:
     assert _validate_release_workflow(workflow) == []
 
 
-@pytest.mark.parametrize("old,new", (
-    ('"--locked", "--offline", "--workspace"', '"--locked", "--offline", "-p", "iroha_cli"'),
-    ('"--locked", "--offline", "--workspace"', '"--locked", "--workspace"'),
-    ('env["CARGO_INCREMENTAL"] = "0"', 'env["CARGO_INCREMENTAL"] = "1"'),
-    ('env["CARGO_NET_OFFLINE"] = "false"', 'env["CARGO_NET_OFFLINE"] = "true"'),
-    ('target = root / "target/taira-native-checks"', 'target = root / "target"'),
-    ('env, _ = release.isolated_cargo_environment(root, root, env)', 'env = dict(os.environ)'),
-    ('command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "fetch",', 'command = ["cargo", "fetch",'),
-    ('subprocess.run(command, cwd="/", env=env', 'subprocess.run(command, cwd=root, env=env'),
-    ('check=True, pass_fds=(lock_fd,)', 'check=True, pass_fds=()'),
+@pytest.mark.parametrize(("old", "new", "expected_error"), (
+    (
+        "--profile release-gate --locked --offline",
+        "--profile ci --locked --offline",
+        f"build is missing required command: {RELEASE_GATE_COMMAND}",
+    ),
+    (
+        "--profile release-gate --locked --offline",
+        "--profile release-gate --offline",
+        f"build is missing required command: {RELEASE_GATE_COMMAND}",
+    ),
+    (
+        "--no-tests=fail",
+        "--no-tests=pass",
+        f"build is missing required command: {RELEASE_GATE_COMMAND}",
+    ),
+    (
+        RELEASE_GATE_BUILD,
+        "cargo build --locked --workspace",
+        f"build is missing required command: {RELEASE_GATE_BUILD}",
+    ),
+    (
+        RELEASE_GATE_BUILD,
+        "cargo build --locked --offline -p iroha_cli",
+        f"build is missing required command: {RELEASE_GATE_BUILD}",
+    ),
+    (
+        "run: cargo fetch --locked",
+        "run: cargo fetch",
+        f"build is missing required command: {RELEASE_GATE_FETCH}",
+    ),
+    (
+        NEXTEST_INSTALL_ACTION,
+        "uses: taiki-e/install-action@nextest",
+        f"build is missing required command: {NEXTEST_INSTALL_ACTION}",
+    ),
+    (
+        "-p fastpq_prover -p iroha_core",
+        "-p fastpq_prover",
+        "build release-gate packages must equal the release-gate default-filter packages",
+    ),
+    (
+        "-p iroha_test_network",
+        "-p iroha_test_network -p integration_tests",
+        "build release-gate packages must equal the release-gate default-filter packages",
+    ),
+    (
+        "-p iroha_test_network",
+        "-p iroha_test_network -p mv",
+        "build release-gate packages must equal the release-gate default-filter packages",
+    ),
+    (
+        "run: cargo fetch --locked",
+        "run: cargo fetch --locked && python3 scripts/taira_release_check.py",
+        "build must not run the retired Python release census: taira_release",
+    ),
 ))
-def test_release_workflow_guard_rejects_isolation_or_workspace_drift(old: str, new: str) -> None:
-    """CI cannot silently change its cache namespace, source config, mode or scope."""
+def test_release_workflow_guard_rejects_release_gate_drift(
+    old: str, new: str, expected_error: str
+) -> None:
+    """CI cannot weaken, narrow or replace the nextest release gate."""
+
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     changed = _replace_once_in_job(workflow, "build", old, new)
-    assert "build must retain the isolated fetch and locked offline full-workspace runners" in _validate_release_workflow(changed)
+    assert expected_error in _validate_release_workflow(changed)
 
 
-def test_release_workflow_guard_rejects_missing_or_reordered_isolated_fetch() -> None:
+def test_release_workflow_guard_rejects_reordered_release_gate() -> None:
+    """The offline gate and workspace build must follow the locked fetch."""
+
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     job = _job_block(workflow, "build")
-    fetch = re.search(r"(?ms)^          python3 - <<'PY'\n.*?^          PY\n", job)
+    fetch = re.search(r"(?ms)^      - name: Fetch locked dependencies\n.*?(?=^      - )", job)
     assert fetch is not None
     changed = job[:fetch.start()] + job[fetch.end():] + fetch.group(0)
     errors = _validate_release_workflow(workflow.replace(job, changed))
-    assert "build must retain the isolated fetch and locked offline full-workspace runners" in errors
-    assert "build must fetch dependencies before the offline gate and full workspace build" in errors
+    assert "build must install nextest, fetch, run the release gate, then build offline" in errors
+
+
+def test_release_workflow_build_job_imports_no_taira_release_tooling() -> None:
+    """The release gate runs Cargo directly; no Python census or lane helper remains."""
+
+    job = _job_block(RELEASE_WORKFLOW.read_text(encoding="utf-8"), "build")
+    assert job
+    for marker in RETIRED_CENSUS_MARKERS:
+        assert marker not in job
+    assert _release_gate_packages(job)
+
+
+def test_release_gate_profile_parses_and_matches_the_workflow() -> None:
+    """The nextest profile exists, parses, and names only workspace packages."""
+
+    config = NEXTEST_CONFIG.read_text(encoding="utf-8")
+    assert _validate_release_gate_profile(config) == []
+    gate = tomllib.loads(config)["profile"]["release-gate"]
+    packages = _filter_packages(gate["default-filter"])
+    job = _job_block(RELEASE_WORKFLOW.read_text(encoding="utf-8"), "build")
+    assert sorted(_release_gate_packages(job)) == sorted(set(packages))
+
+
+GATE_SETTINGS = (
+    "'''\nfail-fast = false\nfailure-output = \"immediate-final\"\n"
+    "slow-timeout = { period = \"30s\", terminate-after = 4 }"
+)
+
+
+@pytest.mark.parametrize(("old", "new", "expected_error"), (
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | binary(taira_app_contracts)\n",
+        "release-gate must not name test binaries",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | (package(iroha_core) & test(=state::tests::exact_name))\n",
+        "release-gate test matchers must be regex groups: =state::tests::exact_name",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | (package(iroha_core) & test(/^state::tests::exact_name$/))\n",
+        "release-gate must select tests by module path: /^state::tests::exact_name$/",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | (package(iroha_core) & test(/exact_name/))\n",
+        "release-gate must select tests by module path: /exact_name/",
+    ),
+    (
+        "package(iroha_wallet)",
+        "package(iroha_wallet_renamed)",
+        "release-gate names unknown packages: iroha_wallet_renamed",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | package(halo2-axiom)\n",
+        "release-gate names unknown packages: halo2-axiom",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | package(iroha_sumeragi_core)\n",
+        "release-gate names unknown packages: iroha_sumeragi_core",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | | package(iroha_deploy)\n",
+        "release-gate default-filter must parse",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | (package(mv) & kind(lib)\n",
+        "release-gate default-filter must parse",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    - package(iroha_deploy)\n",
+        "release-gate default-filter must parse",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | (package(iroha_core) & test(/^state::tests::some_exact_test_name/))\n",
+        "release-gate must select tests by module path: /^state::tests::some_exact_test_name/",
+    ),
+    (
+        "test(/^proof::tests::/)",
+        "test(/^proof::tests::.*(limit|resource_profile)/)",
+        "release-gate must select tests by module path",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | (package(iroha_core) & test(/^state::tests::some_exact_test_name::/))\n",
+        "release-gate module path matches no module in iroha_core: "
+        "state::tests::some_exact_test_name",
+    ),
+    (
+        "|nexus_lifecycle_endpoint)",
+        "|nexus_lifecycle_endpoints)",
+        "release-gate module path matches no module in iroha_torii: nexus_lifecycle_endpoints",
+    ),
+    (
+        "smartcontracts::isi::(domain|",
+        "smartcontracts::isi::(domains|",
+        "release-gate module path matches no module in iroha_core: smartcontracts::isi::domains",
+    ),
+    (
+        "    package(mv)\n",
+        "    package(mv)\n    | (package(iroha_core) | package(iroha_p2p)) & test(/^state::/)\n",
+        "each release-gate group must name exactly one package",
+    ),
+    (
+        "[profile.release-gate]\n",
+        "[profile.release-gate]\n[profile.release-gate]\n",
+        "nextest config must parse",
+    ),
+    (
+        GATE_SETTINGS,
+        GATE_SETTINGS.replace("fail-fast = false", "fail-fast = true"),
+        "release-gate must report every failure (fail-fast = false)",
+    ),
+    (
+        GATE_SETTINGS,
+        GATE_SETTINGS.replace('period = "30s"', 'period = "300s"'),
+        "release-gate slow-timeout must match profile.ci",
+    ),
+    (
+        GATE_SETTINGS,
+        GATE_SETTINGS.replace('"immediate-final"', '"never"'),
+        "release-gate failure-output must match profile.ci",
+    ),
+    (
+        "[profile.release-gate]",
+        "[profile.release-gate-disabled]",
+        "nextest config must define profile.release-gate",
+    ),
+))
+def test_release_gate_profile_guard_rejects_name_lists_and_drift(
+    old: str, new: str, expected_error: str
+) -> None:
+    """The gate cannot regress to exact names, binary names, or weaker runner settings."""
+
+    config = NEXTEST_CONFIG.read_text(encoding="utf-8")
+    errors = _validate_release_gate_profile(_replace_once(config, old, new))
+    assert any(error.startswith(expected_error) for error in errors), errors
+
+
+def test_release_gate_filter_parser_and_evaluator_follow_nextest_semantics() -> None:
+    """`&` binds tighter than `|`, `not` negates one factor, and regexes search."""
+
+    tree = _parse_filter(
+        "package(a) | (package(b) & kind(lib) & test(/^m::/)) & not test(/slow/)"
+    )
+    assert _filter_matches(tree, "a", "test", "anything")
+    assert _filter_matches(tree, "b", "lib", "m::fast")
+    assert not _filter_matches(tree, "b", "lib", "m::slow")
+    assert not _filter_matches(tree, "b", "test", "m::fast")
+    assert not _filter_matches(tree, "b", "lib", "other::m::fast")
+    assert _filter_groups(tree) == [(["a"], []), (["b"], ["/^m::/"])]
+    for broken in ("", "package(a) |", "(package(a)", "package(a) package(b)",
+                   "test(=exact)", "package(/a/)", "binary(a)", "package(a) + package(b)"):
+        with pytest.raises(ValueError):
+            _parse_filter(broken)
+
+
+def test_release_gate_module_paths_expand_every_alternative() -> None:
+    assert _module_path_alternatives("/^(a|b::(c|d)|e_[a-z]+)::/") == [
+        "a", "b::c", "b::d", "e_[a-z]+",
+    ]
+    assert _module_path_alternatives("/^proof::tests::/") == ["proof::tests"]
+    assert _split_alternation("a|(b|c)|[|]") == ["a", "(b|c)", "[|]"]
+    packages = _workspace_packages()
+    assert "iroha_core" in packages and "concread" in packages
+    assert "iroha_sumeragi_core" not in packages
+    assert "halo2-axiom" not in packages
+    assert {"sumeragi", "tests", "world"} <= _module_names(packages["iroha_core"])
+
+
+def _load_census():
+    """Load the frozen Python census without running it."""
+
+    spec = importlib.util.spec_from_file_location(
+        "_release_gate_census", ROOT / "scripts" / "taira_release_check.py"
+    )
+    assert spec and spec.loader
+    census = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(census)
+    return census
+
+
+# TODO(P8): delete with `scripts/taira_release_check.py`.
+def test_release_gate_selects_every_basic_census_test_except_the_four_peer_fixture() -> None:
+    """The nextest gate replaces the census without dropping its basic-scope tests."""
+
+    census = _load_census()
+    config = tomllib.loads(NEXTEST_CONFIG.read_text(encoding="utf-8"))
+    tree = _parse_filter(config["profile"]["release-gate"]["default-filter"])
+    missing = set()
+    total = 0
+    for harness, stages in census.qualification_stages("basic").items():
+        _, _, kind, selection = census.HARNESS_TARGETS[harness]
+        package = selection[selection.index("-p") + 1]
+        for _, names in stages:
+            for name in names:
+                total += 1
+                if not _filter_matches(tree, package, kind, name):
+                    missing.add((package, name))
+    assert total > 1000
+    # The live four-peer fixture moves to the engine self-test (TODO(P4)).
+    assert missing == {("iroha_test_network", census.BEACON_NETWORK_TEST)}
 
 
 def test_pr_workflow_retains_locked_workspace_and_numeric_parity() -> None:

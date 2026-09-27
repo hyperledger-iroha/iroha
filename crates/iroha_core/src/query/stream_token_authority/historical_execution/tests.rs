@@ -234,15 +234,22 @@ fn expiry_source_keeps_original_slot_under_new_current_custody() {
         ),
         Ok(()),
     );
+    // A certified block at the terminal's height that does not carry the terminal entry.
+    let mut chain = crate::query::signer_check::fixture::chain(World::new());
+    chain.commit_at(1_050, Vec::new());
+    let view = chain.state().view();
+    let target = CertifiedChain::new(&view)
+        .unwrap()
+        .certified(2)
+        .expect("certified height 2");
     assert_eq!(
-        authenticate_target(
-            &state.view(),
-            &terminal,
-            TargetKind::Terminal,
-            HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"no finalized block"
-            ))),
-        ),
+        authenticate_target(&view, &terminal, TargetKind::Terminal, &target),
+        Err(Error::Execution),
+    );
+    // A target of another height than the recorded execution.
+    let genesis = CertifiedChain::new(&view).unwrap().certified(1).unwrap();
+    assert_eq!(
+        authenticate_target(&view, &terminal, TargetKind::Terminal, &genesis),
         Err(Error::Execution),
     );
 }

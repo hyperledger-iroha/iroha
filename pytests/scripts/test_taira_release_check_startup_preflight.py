@@ -5,12 +5,12 @@ import hashlib
 import io
 import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import test_taira_release_check as existing
+from taira_fake_libtest import executable
 
 gate = existing.gate
 
@@ -38,14 +38,7 @@ class StartupPreflightTests(unittest.TestCase):
             for selection, stages in selections.items():
                 names = [name for _, names in stages for name in names]
                 path = output / selection
-                path.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
-                    f"if '--list' in sys.argv: print({chr(10).join(name + ': test' for name in names)!r}); sys.exit(0)\n"
-                    "name = sys.argv[1]\n"
-                    f"with Path({str(executed)!r}).open('a') as stream: stream.write(name + '\\n')\n"
-                    f"failed = name in {failed!r}\nignored = name in {ignored!r}\n"
-                    "print('test ' + name + (' ... FAILED' if failed else ' ... ignored' if ignored else ' ... ok'))\n"
-                    "print('fixture failure' if failed else 'test result: ok. 0 passed; 0 failed; 1 ignored;' if ignored else 'test result: ok. 1 passed; 0 failed; 0 ignored;')\n"
-                    "sys.exit(101 if failed else 0)\n")
+                path.write_text(executable(names, executed, failed=failed, ignored=ignored))
                 path.chmod(0o500)
                 info = path.stat()
                 paths[selection] = str(path)
@@ -70,7 +63,8 @@ class StartupPreflightTests(unittest.TestCase):
                 stack.enter_context(patch.object(gate, "CORE_STARTUP_STAGES", core_startup))
                 stack.enter_context(patch.object(gate, "DAEMON_STARTUP_STAGES", daemon_startup))
                 stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=()))
-                for function in ("run_lifecycle_source_checks", "require_network_fixture_capacity"):
+                for function in ("run_lifecycle_source_checks", "require_network_fixture_capacity",
+                                 "check_test_harnesses"):
                     stack.enter_context(patch.object(gate, function))
                 batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
                 network = stack.enter_context(patch.object(gate, "run_network_checks"))

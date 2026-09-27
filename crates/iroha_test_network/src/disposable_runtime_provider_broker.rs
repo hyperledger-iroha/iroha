@@ -98,8 +98,10 @@ fn create_private_directory() -> Result<Arc<TempDir>> {
         ));
     }
     verify_trusted_directory_chain(&owner.dir, uid.as_raw())?;
+    // Created owner-private: without explicit permissions the directory gets the process umask.
     let directory = tempfile::Builder::new()
         .prefix(".iroha-b-")
+        .permissions(Permissions::from_mode(0o700))
         .tempdir_in(owner.dir)?;
     verify_trusted_directory_chain(directory.path(), uid.as_raw())?;
     if fs::symlink_metadata(directory.path())?.permissions().mode() & 0o7777 != 0o700 {

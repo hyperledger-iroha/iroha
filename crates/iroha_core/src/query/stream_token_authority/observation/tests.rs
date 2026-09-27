@@ -1,14 +1,11 @@
-//! Actual native custody, operation and Check execution under three-of-four RS16 test finality.
+//! Actual native custody, operation and Check execution on a certified test chain.
 //!
-//! The shared fixture executes typed instructions and their real outcomes. Its test-only State
-//! publication is not a four-process consensus or production application-state-root qualification.
+//! The shared fixture executes signed transactions through the node's block path; every block is
+//! certified by a real three-of-four BLS `CommitQC` (height 1 is the signed genesis). It is not a
+//! four-process consensus or production application-state-root qualification.
 
 use super::*;
-use crate::{
-    kura::Kura,
-    query::{signer_check::fixture, store::LiveQueryStore},
-    state::World,
-};
+use crate::{query::signer_check::fixture, state::World, sumeragi::test_chain::CertifiedTestChain};
 use iroha_crypto::Signature;
 use iroha_data_model::{
     IntoKeyValue, Registrable,
@@ -22,9 +19,6 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanCheckSorafsStreamToken, CanManageSorafsStreamTokenCustody, CanOperateSorafsStreamToken,
-};
-use iroha_sccp::{
-    SCCP_TAIRA_CHAIN_ID_V1, SccpFinalizedBlockTestFixtureV1, sccp_taira_finality_network_id_v1,
 };
 use sorafs_manifest::signer::{
     custody::{
@@ -47,10 +41,10 @@ fn account(seed: u8) -> AccountId {
 }
 
 struct Fixture {
+    chain: CertifiedTestChain,
     state: Arc<State>,
     provider: ProviderId,
     policy: SignerCustodyPolicyV1,
-    finalized: Vec<SccpFinalizedBlockTestFixtureV1>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -87,16 +81,11 @@ impl Fixture {
             permissions.insert(permission);
             world.account_permissions.insert(account(seed), permissions);
         }
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            SCCP_TAIRA_CHAIN_ID_V1.parse().unwrap(),
-            sccp_taira_finality_network_id_v1(),
-        ));
+        let chain = fixture::chain(world);
+        let state = Arc::clone(chain.state());
         let policy = SignerCustodyPolicyV1 {
             binding: SignerCustodyBindingV1 {
-                chain_id: SCCP_TAIRA_CHAIN_ID_V1.into(),
+                chain_id: state.view().chain_id().to_string(),
                 network_id: *state.network_id_ref().as_bytes(),
                 runtime_handle: "software://sorafs/stream-token/primary".into(),
                 key_handle: "software://sorafs/stream-token/key-1".into(),
@@ -126,10 +115,10 @@ impl Fixture {
             max_anchor_age_ms: 60_000,
         };
         let mut fixture = Self {
+            chain,
             state,
             provider,
             policy,
-            finalized: Vec::new(),
         };
         let configure = MutateSorafsStreamTokenCustody {
             provider_id: provider,
@@ -143,7 +132,7 @@ impl Fixture {
         let current = read_stream_token_custody_control_at_v1(
             &fixture.state.view(),
             &fixture.policy.binding,
-            1,
+            2,
         )
         .unwrap()
         .unwrap();
@@ -182,17 +171,7 @@ impl Fixture {
     }
     fn execute(&mut self, instruction: InstructionBox, seed: u8, now: u64) {
         let signed = fixture::sign(&self.state, instruction, seed, now);
-        assert_eq!(
-            fixture::commit(
-                &self.state,
-                &mut self.finalized,
-                now,
-                vec![signed],
-                true,
-                true
-            ),
-            [true]
-        );
+        assert_eq!(fixture::commit(&mut self.chain, now, vec![signed]), [true]);
     }
     fn expected(&self) -> StreamTokenCheckExpectedV1 {
         let control = read_active(self.state.view().world(), self.provider)
@@ -223,7 +202,7 @@ impl Fixture {
                 previous_audit: audit,
             },
         };
-        let artifact = &self.finalized.last().unwrap().proof().finality_artifact;
+        let tip = self.chain.committed(self.chain.height());
         StreamTokenCheckExpectedV1 {
             binding: self.policy.binding.clone(),
             observer: account(3),
@@ -233,9 +212,9 @@ impl Fixture {
             reviewed,
             phase: Phase::Current(audit),
             floor: StreamTokenFinalityFloorV1 {
-                height: artifact.height,
-                block_hash: *artifact.block_hash.as_ref(),
-                context_id: artifact.context_id(),
+                height: tip.height(),
+                block_hash: *tip.block_hash().as_ref(),
+                context_id: tip.id(),
             },
         }
     }
@@ -246,18 +225,15 @@ impl Fixture {
         let signed = fixture::sign(&self.state, prepared.instruction().clone().into(), 3, NOW);
         prepared.bind_signed_transaction(signed).unwrap()
     }
+    /// Apply the Check in a block whose local `CommitQC` verifies (`finality`) or does not.
     fn apply(&mut self, pending: &PendingStreamTokenCheckV1, finality: bool) {
-        assert_eq!(
-            fixture::commit(
-                &self.state,
-                &mut self.finalized,
-                NOW,
-                vec![pending.signed_transaction().clone()],
-                true,
-                finality,
-            ),
-            [true]
-        );
+        let transactions = vec![pending.signed_transaction().clone()];
+        let outcomes = if finality {
+            fixture::commit(&mut self.chain, NOW, transactions)
+        } else {
+            fixture::commit_uncertified(&mut self.chain, NOW, transactions)
+        };
+        assert_eq!(outcomes, [true]);
     }
     fn complete(&mut self) -> StreamTokenCheckExpectedV1 {
         let initial = self.expected();
@@ -337,8 +313,8 @@ fn current_check_requires_actual_application_and_accepts_exact_native_finality()
     fixture.apply(&pending, true);
     let verified = pending.verify_finalized(now).unwrap();
     assert!(verified.snapshot().operation().is_none());
-    assert_eq!(verified.snapshot().anchor().height, 3);
-    assert_eq!(verified.applied_floor().height, 3);
+    assert_eq!(verified.snapshot().anchor().height, 4);
+    assert_eq!(verified.applied_floor().height, 4);
     assert!(!verified.canonical_external().is_empty());
     assert_eq!(verified.time_interval(), now().unwrap());
     verified.ensure_live().unwrap();
@@ -370,14 +346,14 @@ fn completed_check_authenticates_original_reserve_complete_and_current_authority
     fixture.apply(&pending, true);
     let verified = pending.verify_finalized(now).unwrap();
     let operation = &verified.snapshot().operation().unwrap().operation;
-    assert_eq!(operation.reserved_execution.height, 3);
-    assert_eq!(operation.terminal_execution.as_ref().unwrap().height, 4);
-    assert_eq!(verified.snapshot().anchor().height, 5);
+    assert_eq!(operation.reserved_execution.height, 4);
+    assert_eq!(operation.terminal_execution.as_ref().unwrap().height, 5);
+    assert_eq!(verified.snapshot().anchor().height, 6);
     let completed = verified.snapshot().completed_operation().unwrap();
-    assert_eq!(completed.anchor.height, 4);
+    assert_eq!(completed.anchor.height, 5);
     assert_eq!(
         completed.anchor.block_hash,
-        *fixture.state.view().block_hashes().get(3).unwrap().as_ref()
+        *fixture.state.view().block_hashes().get(4).unwrap().as_ref()
     );
     assert_eq!(
         completed.anchor.operation_state_digest,
@@ -416,7 +392,7 @@ fn current_operator_permission_is_rechecked_after_successful_completed_check() {
             account(2),
         )
         .into(),
-        1,
+        2,
         NOW + 1,
     );
     assert_eq!(pending.verify_finalized(now).err(), Some(Error::Authority));

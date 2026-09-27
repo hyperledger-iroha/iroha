@@ -3,8 +3,10 @@
 //! These types bundle the carrier identity, leaf hash, canonical audit path, and exact root/count
 //! commitments required to verify inclusion without depending on internal structures. Block proof
 //! responses use distinct complete network-input and typed-output trees. Internal invocations have
-//! no synthetic input leaves. A fully verified Sumeragi-v2 `CommitQC` authenticates
-//! the exact executed block wire and therefore both trees and their explicit source join. `BlockHeader::merkle_root` is checked as
+//! no synthetic input leaves. The exact executed block wire, and therefore both trees and their
+//! explicit source join, is authenticated either by the certified execution result of a committed
+//! Sumeragi block (its commit certificate's result preimage, read by `iroha_core`'s certified-chain
+//! reader) or by a fully verified Sumeragi-v2 `CommitQC`. `BlockHeader::merkle_root` is checked as
 //! proposal metadata, but is never selected as the entry-proof anchor.
 #[cfg(test)]
 use crate::block::consensus_v2::ExecutionCommitment;
@@ -168,9 +170,10 @@ pub struct BlockProofs {
 /// [`BlockProofs`].
 ///
 /// This capability is intentionally not serializable and its fields are private. Its public
-/// constructor requires an independently trusted target height context and verifies untrusted
-/// Sumeragi-v2 finality, exact header association, and executed-wire binding before recomputing
-/// the Merkle commitments.
+/// constructors require either the executed-wire identity a certified-chain reader authenticated
+/// for a committed block, or an independently trusted target height context and untrusted
+/// Sumeragi-v2 finality; both bind the exact executed wire before recomputing the Merkle
+/// commitments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustedBlockProofAnchor {
     block_height: NonZeroU64,
@@ -268,8 +271,40 @@ impl TrustedBlockProofAnchor {
         expected_context_id: HeightContextId,
         entry_hash: &HashOf<TransactionEntrypoint>,
     ) -> Result<Self, TrustedBlockProofAnchorError> {
-        let (executed_block_wire_hash, output_commitment) =
-            authenticate_execution_outputs(block, artifact, expected_context_id)?;
+        let authenticated = authenticate_execution_outputs(block, artifact, expected_context_id)?;
+        Self::from_authenticated_outputs(block, authenticated, entry_hash)
+    }
+    /// Derive a target-specific anchor for a committed block whose executed-wire identity was
+    /// already authenticated by a certified-chain reader.
+    ///
+    /// `committed_wire_len` and `committed_wire_hash` must come from the block's certified
+    /// execution result (the result preimage of its commit certificate, which the certified
+    /// header chain or a verified `CommitQC` binds), never from the block itself. This binds
+    /// the exact block to that identity (ignoring the node-local commit certificate the block may
+    /// carry), validates the output cache in place and locates `entry_hash` in authenticated
+    /// network-input order, as [`Self::from_untrusted_finality_artifact`] does.
+    ///
+    /// # Errors
+    /// Returns [`TrustedBlockProofAnchorError`] when the block is not the committed wire or its
+    /// Merkle material is missing or inconsistent, or the entry is absent.
+    pub fn from_committed_execution(
+        block: &SignedBlock,
+        committed_wire_len: u64,
+        committed_wire_hash: Hash,
+        entry_hash: &HashOf<TransactionEntrypoint>,
+    ) -> Result<Self, TrustedBlockProofAnchorError> {
+        let authenticated =
+            authenticate_executed_wire(block, committed_wire_len, committed_wire_hash)?;
+        Self::from_authenticated_outputs(block, authenticated, entry_hash)
+    }
+    fn from_authenticated_outputs(
+        block: &SignedBlock,
+        (executed_block_wire_hash, output_commitment): (
+            Hash,
+            MerkleTreeCommitment<ExecutionOutputV1>,
+        ),
+        entry_hash: &HashOf<TransactionEntrypoint>,
+    ) -> Result<Self, TrustedBlockProofAnchorError> {
         let full_entry_commitment = block
             .network_input_merkle_commitment()
             .ok_or(TrustedBlockProofAnchorError::MissingEntrypoints)?;
@@ -374,8 +409,33 @@ impl TrustedExecutionOutputAnchor {
         expected_context_id: HeightContextId,
         output_index: u32,
     ) -> Result<Self, TrustedBlockProofAnchorError> {
-        let (executed_block_wire_hash, output_commitment) =
-            authenticate_execution_outputs(block, artifact, expected_context_id)?;
+        let authenticated = authenticate_execution_outputs(block, artifact, expected_context_id)?;
+        Self::from_authenticated_outputs(block, authenticated, output_index)
+    }
+    /// Authenticate the output at `output_index` of a committed block whose executed-wire
+    /// identity a certified-chain reader already authenticated (see
+    /// [`TrustedBlockProofAnchor::from_committed_execution`]).
+    ///
+    /// # Errors
+    /// Returns an error for wire or cache mismatches, or an absent output.
+    pub fn from_committed_execution(
+        block: &SignedBlock,
+        committed_wire_len: u64,
+        committed_wire_hash: Hash,
+        output_index: u32,
+    ) -> Result<Self, TrustedBlockProofAnchorError> {
+        let authenticated =
+            authenticate_executed_wire(block, committed_wire_len, committed_wire_hash)?;
+        Self::from_authenticated_outputs(block, authenticated, output_index)
+    }
+    fn from_authenticated_outputs(
+        block: &SignedBlock,
+        (executed_block_wire_hash, output_commitment): (
+            Hash,
+            MerkleTreeCommitment<ExecutionOutputV1>,
+        ),
+        output_index: u32,
+    ) -> Result<Self, TrustedBlockProofAnchorError> {
         let output = block
             .execution_outputs()
             .get(output_index as usize)
@@ -442,14 +502,25 @@ fn authenticate_execution_outputs(
     artifact
         .validate_for_header(&block.header())
         .map_err(TrustedBlockProofAnchorError::FinalityHeaderMismatch)?;
-    let wire = block
-        .canonical_wire()
-        .map_err(|_| TrustedBlockProofAnchorError::ExecutedBlockWireEncoding)?;
-    let executed_block_wire_hash = Hash::new(wire.as_framed());
     let commitment = &artifact.commit_qc.execution_commitment;
-    if executed_block_wire_hash != commitment.executed_block_wire_hash
-        || u64::try_from(wire.as_framed().len()).ok() != Some(commitment.executed_block_wire_len)
-    {
+    authenticate_executed_wire(
+        block,
+        commitment.executed_block_wire_len,
+        commitment.executed_block_wire_hash,
+    )
+}
+
+/// Bind `block` to the executed-wire identity its certified result commits to, then return its
+/// wire hash and validated output commitment.
+fn authenticate_executed_wire(
+    block: &SignedBlock,
+    committed_len: u64,
+    committed_hash: Hash,
+) -> Result<(Hash, MerkleTreeCommitment<ExecutionOutputV1>), TrustedBlockProofAnchorError> {
+    let (wire_len, executed_block_wire_hash) = block
+        .executed_block_wire_identity()
+        .map_err(|_| TrustedBlockProofAnchorError::ExecutedBlockWireEncoding)?;
+    if executed_block_wire_hash != committed_hash || wire_len != committed_len {
         return Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch);
     }
     if !block.has_results() {
@@ -1099,6 +1170,73 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn committed_execution_anchors_bind_the_certificate_free_executed_wire() {
+        let (block, _, external_hash, internal_index) = authenticated_block_with_internal_output();
+        let wire = block.encode_wire().expect("fixture wire");
+        let (len, hash) = (wire.len() as u64, Hash::new(&wire));
+        // A node-local commit certificate does not change the committed identity.
+        let stored =
+            block
+                .clone()
+                .with_commit_certificate(Some(crate::block::CommitCertificate::new(
+                    vec![1],
+                    vec![2],
+                    vec![3],
+                )));
+        for candidate in [&block, &stored] {
+            let anchor = TrustedBlockProofAnchor::from_committed_execution(
+                candidate,
+                len,
+                hash,
+                &external_hash,
+            )
+            .expect("committed anchor");
+            assert_eq!(anchor.executed_block_wire_hash(), hash);
+            assert_eq!(anchor.entry_index(), 0);
+            assert!(
+                block
+                    .network_execution_proof(&external_hash)
+                    .expect("proof")
+                    .verify(&anchor)
+            );
+            let output = TrustedExecutionOutputAnchor::from_committed_execution(
+                candidate,
+                len,
+                hash,
+                internal_index,
+            )
+            .expect("committed output anchor");
+            assert_eq!(output.output_index(), internal_index);
+        }
+        for (bad_len, bad_hash) in [(len + 1, hash), (len, Hash::new(b"another executed wire"))] {
+            assert_eq!(
+                TrustedBlockProofAnchor::from_committed_execution(
+                    &block,
+                    bad_len,
+                    bad_hash,
+                    &external_hash
+                ),
+                Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+            );
+            assert_eq!(
+                TrustedExecutionOutputAnchor::from_committed_execution(
+                    &block, bad_len, bad_hash, 0
+                ),
+                Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+            );
+        }
+        assert!(matches!(
+            TrustedBlockProofAnchor::from_committed_execution(
+                &block,
+                len,
+                hash,
+                &sample_entrypoint_hash()
+            ),
+            Err(TrustedBlockProofAnchorError::EntrypointNotFound { .. })
+        ));
+    }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn trusted_anchor_accepts_real_finality_with_distinct_input_and_output_counts() {

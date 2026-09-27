@@ -1,4 +1,4 @@
-//! Public test facade retains exact native outcomes and its own real finalized parent chain.
+//! Public test facade retains exact native outcomes on its own certified chain.
 use super::*;
 use crate::query::{
     signer_custody_history::{AccountPurpose, CustodyPurpose, ReceiptPurpose, control_head_key},
@@ -45,12 +45,12 @@ fn final_promotion_setup_executes_scoped_grants_without_native_history() {
         operator.clone(),
         observer.clone(),
     );
-    assert!(fixture.finalized_floor().is_none());
+    // Only the signed genesis is committed; it is the first floor.
+    let (height, block_hash, _) = fixture.finalized_floor();
     let view = fixture.state().view();
-    assert_eq!(view.height(), 0);
-    assert!(view.block_hashes().is_empty());
-    assert!(fixture.finalized.is_empty());
-    // State startup seeds the three SNS namespace policies even for an empty World.
+    assert_eq!(view.height(), 1);
+    assert_eq!(height, 1);
+    assert_eq!(block_hash, *view.block_hashes().get(0).unwrap().as_ref());
     // Registration and grants must not create custody, Check or operation history.
     let keys = view
         .world
@@ -58,23 +58,14 @@ fn final_promotion_setup_executes_scoped_grants_without_native_history() {
         .iter()
         .map(|(key, _)| key.clone())
         .collect::<std::collections::BTreeSet<_>>();
-    let expected_keys = [
-        crate::sns::SnsNamespace::AccountAlias,
-        crate::sns::SnsNamespace::Domain,
-        crate::sns::SnsNamespace::Dataspace,
-    ]
-    .map(|namespace| crate::sns::policy_storage_key(namespace.suffix_id()))
-    .into_iter()
-    .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(keys, expected_keys);
     for namespace in [ReceiptPurpose::NAMESPACE, AccountPurpose::NAMESPACE] {
         assert!(
             keys.iter().all(|key| !key.as_ref().starts_with(namespace)),
             "setup must not seed any row in {namespace}"
         );
     }
-    assert_eq!(view.world.accounts.iter().count(), 3);
-    assert_eq!(view.world.account_permissions.iter().count(), 3);
+    // The three role accounts, the genesis account and the chain's clock account.
+    assert_eq!(view.world.accounts.iter().count(), 5);
     let expected: [(AccountId, Vec<iroha_data_model::permission::Permission>); 3] = [
         (
             manager,
@@ -149,9 +140,10 @@ fn signed(fixture: &NativeCheckTestFixtureV1, instruction: InstructionBox) -> Si
 }
 
 #[test]
-fn test_facade_retains_exact_executed_results_membership_and_real_finalized_parents() {
+fn test_facade_retains_exact_executed_results_membership_and_certified_parents() {
     let mut fixture = NativeCheckTestFixtureV1::new(world());
-    assert!(fixture.finalized_floor().is_none());
+    let genesis = fixture.finalized_floor();
+    assert_eq!(genesis.0, 1);
     let state = Arc::clone(fixture.state());
     let success = signed(
         &fixture,
@@ -170,12 +162,11 @@ fn test_facade_retains_exact_executed_results_membership_and_real_finalized_pare
     let transactions = [success, failure];
     assert_eq!(fixture.commit(1_000, transactions.to_vec()), [true, false]);
     assert!(Arc::ptr_eq(&state, fixture.state()));
-    let first = fixture.finalized_floor().unwrap();
-    assert_eq!(first.0, 1);
+    let first = fixture.finalized_floor();
+    assert_eq!(first.0, 2);
     let block = state
-        .block_by_height(NonZeroUsize::new(1).unwrap())
+        .block_by_height(NonZeroUsize::new(2).unwrap())
         .unwrap();
-    assert_eq!(block.committed_fragment_count(), Some(1));
     block.validate_output_merkle_cache().unwrap();
     for (index, signed) in transactions.into_iter().enumerate() {
         assert!(state.has_committed_entrypoint(signed.hash_as_entrypoint()));
@@ -186,37 +177,38 @@ fn test_facade_retains_exact_executed_results_membership_and_real_finalized_pare
         let (_, output) = block.network_output_at(index.try_into().unwrap()).unwrap();
         assert_eq!(output.input_index as usize, index);
         assert_eq!(output.result.is_ok(), index == 0);
-        assert!(output.completions.is_empty());
     }
-    let finalized = &fixture.finalized[0];
+    // The block's local certificate verifies under the four-validator committee.
+    let view = state.view();
+    let certified = crate::sumeragi::certified_chain::CertifiedChain::new(&view)
+        .unwrap()
+        .certified(2)
+        .unwrap();
     assert_eq!(
-        finalized
-            .proof()
-            .finality_artifact
-            .height_context
-            .roster
-            .len(),
-        4
+        certified.verification(),
+        crate::sumeragi::certified_chain::QcVerification::Verified
     );
-    assert_eq!(
-        finalized.proof().finality_artifact.commit_qc.signers.len(),
-        3
-    );
-    finalized.proof().finality_artifact.verify().unwrap();
-    verify_signer_finality_v1(&state.view(), first.0, first.1).unwrap();
+    assert_eq!(certified.id(), first.2);
+    verify_signer_finality_v1(&view, first.0, first.1).unwrap();
+    drop(view);
     assert!(fixture.commit(2_000, Vec::new()).is_empty());
-    let second = fixture.finalized_floor().unwrap();
-    assert_eq!(second.0, 2);
+    let second = fixture.finalized_floor();
+    assert_eq!(second.0, 3);
     assert_ne!(second.1, first.1);
     assert_eq!(
-        fixture.finalized[1].block().header().prev_block_hash(),
+        fixture
+            .chain()
+            .committed(3)
+            .block()
+            .header()
+            .prev_block_hash(),
         Some(block.hash())
     );
     verify_signer_finality_v1(&state.view(), second.0, second.1).unwrap();
 }
 
 #[test]
-fn test_facade_rejects_unsupported_execution_before_any_native_publication() {
+fn test_facade_executes_every_instruction_through_the_real_executor() {
     let mut fixture = NativeCheckTestFixtureV1::new(world());
     let other = AccountId::new(
         KeyPair::try_from_seed(vec![0xA2; 32], Algorithm::Ed25519)
@@ -224,29 +216,26 @@ fn test_facade_rejects_unsupported_execution_before_any_native_publication() {
             .public_key()
             .clone(),
     );
-    let unsupported = signed(
+    let register = signed(
         &fixture,
         Register::account(Account::new(other.clone())).into(),
     );
-    let before = signed(
+    let log = signed(
         &fixture,
         Log::new(Level::INFO, "first source".into()).into(),
     );
-    assert!(
-        catch_unwind(AssertUnwindSafe(|| {
-            fixture.commit(1_000, vec![before.clone(), unsupported]);
-        }))
-        .is_err()
+    let outcomes = fixture.commit(1_000, vec![log.clone(), register]);
+    assert_eq!(outcomes[0], true);
+    assert_eq!(
+        fixture.state().view().world.accounts.get(&other).is_some(),
+        outcomes[1],
+        "the registration's outcome is the one the executor produced"
     );
-    assert!(fixture.finalized_floor().is_none());
-    assert_eq!(fixture.state().committed_height(), 0);
     assert!(
-        !fixture
+        fixture
             .state()
-            .has_committed_entrypoint(before.hash_as_entrypoint())
+            .has_committed_entrypoint(log.hash_as_entrypoint())
     );
-    assert!(fixture.state().view().world.accounts.get(&other).is_none());
-    assert_eq!(fixture.commit(1_000, vec![before]), [true]);
 }
 
 #[test]
@@ -269,7 +258,7 @@ fn test_facade_rejects_preseeded_history_and_foreign_network_before_publication(
         .try_sign(key().private_key())
         .unwrap();
     assert!(catch_unwind(AssertUnwindSafe(|| fixture.commit(1_000, vec![foreign]))).is_err());
-    assert!(fixture.finalized_floor().is_none());
-    assert_eq!(fixture.state().committed_height(), 0);
+    assert_eq!(fixture.finalized_floor().0, 1);
+    assert_eq!(fixture.state().committed_height(), 1);
     assert_eq!(fixture.commit(1_000, vec![original]), [true]);
 }

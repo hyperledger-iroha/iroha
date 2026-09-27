@@ -5,6 +5,7 @@
   "error.logger": "Das Protokollsystem konnte nicht initialisiert werden",
   "error.start": "Iroha konnte nicht gestartet werden",
   "error.run": "Beim Ausführen von Iroha ist ein Fehler aufgetreten",
+  "error.check_storage": "Kura (Blockspeicher) hat die schreibgeschützte Speicherprüfung nicht bestanden",
   "error.start_p2p": "Das P2P-Netzwerk konnte nicht gestartet werden",
   "error.init_kura": "Kura (Blockspeicher) konnte nicht initialisiert werden",
   "error.start_dev_telemetry": "Der Entwicklungs-Telemetriedienst konnte nicht gestartet werden",

@@ -58,6 +58,10 @@ mod statements {
 }
 const DEPLOYMENT: &str = "promotion-primary";
 const NOW: u64 = 3_000;
+/// The observers' clock: after every fixture block. Transactions are created at `NOW` and each
+/// certified block is strictly after its parent and its transactions, so the fixture's blocks
+/// occupy `NOW + 1`, `NOW + 2`, … and an observation must not precede them.
+const OBSERVED: u64 = NOW + 1_000;
 fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
 }
@@ -70,12 +74,12 @@ fn times() -> (
 ) {
     (
         FinalPromotionEligibilityTimeIntervalV1 {
-            earliest_unix_ms: NOW,
-            latest_unix_ms: NOW,
+            earliest_unix_ms: OBSERVED,
+            latest_unix_ms: OBSERVED,
         },
         FinalPromotionAccountEligibilityTimeIntervalV1 {
-            earliest_unix_ms: NOW,
-            latest_unix_ms: NOW,
+            earliest_unix_ms: OBSERVED,
+            latest_unix_ms: OBSERVED,
         },
     )
 }
@@ -207,11 +211,11 @@ impl Fixture {
         );
         let view = f.native.state().view();
         let receipt =
-            read_final_promotion_authority_at_v1(&view, &f.receipt_policy.binding, 1, None)
+            read_final_promotion_authority_at_v1(&view, &f.receipt_policy.binding, 2, None)
                 .unwrap()
                 .unwrap();
         let account =
-            read_final_promotion_account_custody_at_v1(&view, &f.account_policy.binding, 1)
+            read_final_promotion_account_custody_at_v1(&view, &f.account_policy.binding, 2)
                 .unwrap()
                 .unwrap();
         let enrollment = |policy: &SignerCustodyPolicyV1, anchor, attester| {
@@ -309,8 +313,8 @@ impl Fixture {
             &self.receipt_policy.binding,
             &self.receipt_policy.custody_trust(),
             &SignerCustodyUseContextV1 {
-                now_unix_ms: NOW,
-                anchor_observed_at_unix_ms: NOW,
+                now_unix_ms: OBSERVED,
+                anchor_observed_at_unix_ms: OBSERVED,
                 current_anchor: snapshot.custody_anchor,
                 active_head: snapshot.control.active_head.unwrap(),
                 signer_revoked: false,
@@ -323,7 +327,7 @@ impl Fixture {
                 .unwrap();
         let request =
             SignerFinalPromotionRequestV1::new(&custody, &self.expected, &statement).unwrap();
-        let (height, block_hash, context_id) = self.native.finalized_floor().unwrap();
+        let (height, block_hash, context_id) = self.native.finalized_floor();
         let floor = if matches!(
             &subject,
             Some(
@@ -563,8 +567,8 @@ fn account_transaction_signing_retains_exact_native_authority_and_payload_throug
         signed
             .for_submission(
                 FinalPromotionEligibilityTimeIntervalV1 {
-                    earliest_unix_ms: NOW - 1,
-                    latest_unix_ms: NOW
+                    earliest_unix_ms: OBSERVED - 1,
+                    latest_unix_ms: OBSERVED
                 },
                 times().1
             )
@@ -788,7 +792,7 @@ fn account_signing_rejects_substituted_key_without_issuing_post_key_challenge() 
     let authorized = prepared
         .authorize(account_check, times().0, times().1)
         .unwrap();
-    let before = f.native.finalized_floor().unwrap();
+    let before = f.native.finalized_floor();
     assert!(matches!(
         authorized.sign_with(
             Arc::clone(f.native.state()),
@@ -801,5 +805,5 @@ fn account_signing_rejects_substituted_key_without_issuing_post_key_challenge() 
         ),
         Err(Error::Provider)
     ));
-    assert_eq!(f.native.finalized_floor().unwrap(), before);
+    assert_eq!(f.native.finalized_floor(), before);
 }

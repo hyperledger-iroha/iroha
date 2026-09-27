@@ -133,13 +133,27 @@ fn prepared_beacon_credential_append_retains_incumbent_and_pending_across_restar
     for invalid in 0..4 {
         let mut changed = transition.clone();
         let revision = if invalid == 0 { REVISION } else { REVISION + 1 };
-        let mut share = pending_share();
-        match invalid {
-            0 => {}
-            1 => changed.credentials.as_mut().unwrap().beacon.transcript_hash[0] ^= 1,
-            2 => share.signer_index = if pending_seat == 1 { 2 } else { 1 },
-            _ => share.components[0] = [0; 32],
-        }
+        let share = match invalid {
+            0 => pending_share(),
+            1 => {
+                changed.credentials.as_mut().unwrap().beacon.transcript_hash[0] ^= 1;
+                pending_share()
+            }
+            2 => RuntimeGlobalBeaconShareProvisioningV1::new(
+                pending.record.clone(),
+                if pending_seat == 1 { 2 } else { 1 },
+                Zeroizing::new(*pending.components),
+            ),
+            _ => {
+                let mut components = Zeroizing::new(*pending.components);
+                components[0] = [0; 32];
+                RuntimeGlobalBeaconShareProvisioningV1::new(
+                    pending.record.clone(),
+                    pending_seat,
+                    components,
+                )
+            }
+        };
         assert!(
             prepare_global_beacon_transition_credential_v1(
                 Some((&old, binding)),

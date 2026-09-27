@@ -76,5 +76,6 @@
     "no_progress_age_ms": 0,
     "blocker": null,
     "ignore_counts": []
-  }
+  },
+  "beacon_horizon": null
 }

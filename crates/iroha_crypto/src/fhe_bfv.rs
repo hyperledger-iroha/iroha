@@ -39125,8 +39125,10 @@ mod first_release_hard_cut_tests {
         assert_eq!(profile.max_instruction_count, 256);
         assert_eq!(profile.max_multiplicative_depth, 16);
         assert_eq!(profile.max_full_bootstraps_per_job, 1);
-        assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 >= 64);
-        assert_eq!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 % 8, 0);
+        const {
+            assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 >= 64);
+            assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1.is_multiple_of(8));
+        }
 
         let mut altered = profile.clone();
         altered.profile_id = "ram_lfe_bfv".to_owned();

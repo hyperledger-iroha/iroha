@@ -2302,6 +2302,11 @@ pub(super) fn run_non_pending_lifecycle_loop(
             local_validator,
             global_beacon_partial_signer.as_deref(),
         );
+        // The signed status carries the same height-bound observation, so
+        // operators can check the pulse horizon over public attestation routes.
+        if let Some(horizon) = beacon_readiness.horizon(context.id()) {
+            super::super::v2_status::set_v2_beacon_horizon(context.id(), context.height, horizon);
+        }
         let mut npos_beacon = V2GlobalBeaconLifecycle::open_deferred(
             &context,
             Arc::clone(&state),

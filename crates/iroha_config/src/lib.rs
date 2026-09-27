@@ -4,7 +4,9 @@ use log::LevelFilter;
 use thiserror::Error;
 pub mod kura;
 pub mod logger;
+pub mod node_config;
 pub mod parameters;
+pub mod profile;
 pub mod snapshot;
 mod torii;
 /// Enables verbose tracing of configuration loading.

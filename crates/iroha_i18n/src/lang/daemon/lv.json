@@ -5,6 +5,7 @@
   "error.logger": "Nevarēja inicializēt reģistrētāju",
   "error.start": "Neizdevās startēt Iroha",
   "error.run": "Palaižot Iroha, radās kļūda",
+  "error.check_storage": "Kura (bloku krātuve) neizturēja tikai lasāmas krātuves pārbaudi",
   "error.start_p2p": "Nevar startēt vienādranga tīklu",
   "error.init_kura": "Nevar inicializēt Kura (bloku krātuve)",
   "error.start_dev_telemetry": "Nevar palaist dev telemetrijas pakalpojumu",

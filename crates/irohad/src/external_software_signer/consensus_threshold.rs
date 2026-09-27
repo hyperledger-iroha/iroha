@@ -5,6 +5,9 @@
 //! bind the exact provider qualification and genesis-derived network identity
 //! to complete public DKG transcripts plus zeroizing scalar triples. Startup
 //! replays Core's cryptographic import checks before exposing either backend.
+//! Core owns the global-beacon credential codec and the shared credential
+//! framing (`iroha_core::beacon::credential`); this module owns the Parliament
+//! timed-release codec, the launchd bundle, and broker backend resolution.
 //!
 //! This is ordinary process-local software custody. It does not claim
 //! proactive refresh, post-quantum security, or tolerance of process-memory
@@ -35,8 +38,23 @@ use crate::{
 };
 use iroha_core::{
     beacon::{
-        GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconSessionBindingV1,
-        RuntimeGlobalThresholdBeaconShareCustodyV1, ValidatedGlobalThresholdBeaconSessionV1,
+        GlobalThresholdBeaconPartialSignerV1 as _, RuntimeGlobalThresholdBeaconShareCustodyV1,
+        ValidatedGlobalThresholdBeaconSessionV1,
+        credential::{
+            CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1, ConsensusThresholdCredentialErrorV1,
+            ConsensusThresholdCredentialHeaderV1, ConsensusThresholdSecretScalarTripleV1,
+            GLOBAL_BEACON_PARTIAL_SIGNER_SLOT_WIRE_ID_V1,
+            MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1, RuntimeGlobalBeaconShareProvisioningV1,
+            consensus_threshold_public_inventory_digest_v1,
+            decode_consensus_threshold_credential_v1,
+            decode_global_beacon_partial_signer_credential_shares_v1,
+            decode_global_beacon_partial_signer_credential_v1,
+            encode_consensus_threshold_secret_credential_v1,
+            encode_global_beacon_partial_signer_credential_v1,
+            global_beacon_partial_signer_inventory_digest_v1,
+            validate_consensus_threshold_provisioning_v1,
+            validate_consensus_threshold_session_count_v1,
+        },
     },
     tle_release::{
         RuntimeTleReleaseShareCustodyV1, TleKeySessionPublicStateV1, TlePartialReleaseShareV1,
@@ -44,13 +62,9 @@ use iroha_core::{
         ValidatedTleReleaseProjectionV1,
     },
 };
-use iroha_crypto::sha256_reader_bounded;
-use iroha_data_model::{
-    NetworkId,
-    consensus::{GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureV1},
-};
-use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
-use std::{fmt, io::Read as _, path::Path, sync::Arc};
+use iroha_data_model::{NetworkId, consensus::GlobalThresholdBeaconPartialSignatureV1};
+use norito::{NoritoDeserialize, NoritoSerialize};
+use std::{fmt, path::Path, sync::Arc};
 use zeroize::{Zeroize as _, Zeroizing};
 
 /// Fixed supervisor credential containing global-beacon software shares.
@@ -60,8 +74,12 @@ pub const GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1: &str =
 pub const PARLIAMENT_TLE_PARTIAL_RELEASE_SIGNER_CREDENTIAL_NAME_V1: &str =
     "iroha-parliament-tle-partial-release-signer-v1.norito";
 
-const CONSENSUS_THRESHOLD_CREDENTIAL_MAGIC_V1: [u8; 8] = *b"IRTHR001";
-const CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1: u16 = 1;
+// Core's credential codec binds the same stable slot identifier.
+const _: () = assert!(
+    IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+        == GLOBAL_BEACON_PARTIAL_SIGNER_SLOT_WIRE_ID_V1
+);
+
 const CONSENSUS_THRESHOLD_CREDENTIAL_BUNDLE_MAGIC_V1: [u8; 8] = *b"IRTHB001";
 const CONSENSUS_THRESHOLD_CREDENTIAL_BUNDLE_HEADER_BYTES_V1: usize = 28;
 const CONSENSUS_THRESHOLD_CREDENTIAL_BUNDLE_GLOBAL_BEACON_V1: u16 = 1 << 0;
@@ -69,29 +87,12 @@ const CONSENSUS_THRESHOLD_CREDENTIAL_BUNDLE_PARLIAMENT_TLE_V1: u16 = 1 << 1;
 const CONSENSUS_THRESHOLD_CREDENTIAL_BUNDLE_KNOWN_FLAGS_V1: u16 =
     CONSENSUS_THRESHOLD_CREDENTIAL_BUNDLE_GLOBAL_BEACON_V1
         | CONSENSUS_THRESHOLD_CREDENTIAL_BUNDLE_PARLIAMENT_TLE_V1;
-const CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1: &[u8] =
-    b"iroha.runtime-consensus-threshold.public-inventory.v1";
-#[cfg(test)]
-const GLOBAL_BEACON_SIGNER_CREDENTIAL_SCHEMA_NAME_V1: &str =
-    "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_signer_credential";
 #[cfg(test)]
 const PARLIAMENT_TLE_SIGNER_CREDENTIAL_SCHEMA_NAME_V1: &str =
     "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_signer_credential";
 #[cfg(test)]
-const GLOBAL_BEACON_PUBLIC_INVENTORY_SCHEMA_NAME_V1: &str =
-    "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory";
-#[cfg(test)]
 const PARLIAMENT_TLE_PUBLIC_INVENTORY_SCHEMA_NAME_V1: &str =
     "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory";
-pub(crate) const MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1: usize = 16 * 1024 * 1024;
-const MAX_CONSENSUS_THRESHOLD_CREDENTIAL_SESSIONS_V1: usize = 64;
-const CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
-    16_384,
-    MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
-    2_000_000,
-    MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
-    64,
-);
 
 /// Payload-free runtime threshold-signer credential failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,29 +118,13 @@ impl fmt::Display for RuntimeConsensusThresholdSignerCredentialErrorV1 {
 
 impl std::error::Error for RuntimeConsensusThresholdSignerCredentialErrorV1 {}
 
-/// One global-beacon share supplied by an authenticated DKG provisioning path.
-///
-/// The type has no serialization, cloning, or debug surface. Use
-/// [`encode_global_beacon_partial_signer_credential_v1`] to produce the
-/// zeroizing bytes handed directly to a supervisor credential facility.
-pub struct RuntimeGlobalBeaconShareProvisioningV1 {
-    public_session: GlobalThresholdBeaconKeySessionV1,
-    signer_index: u16,
-    components: Zeroizing<[[u8; 32]; 3]>,
-}
-
-impl RuntimeGlobalBeaconShareProvisioningV1 {
-    /// Consume one public transcript and its zeroizing aggregate share.
-    #[must_use]
-    pub fn new(
-        public_session: GlobalThresholdBeaconKeySessionV1,
-        signer_index: u16,
-        components: Zeroizing<[[u8; 32]; 3]>,
-    ) -> Self {
-        Self {
-            public_session,
-            signer_index,
-            components,
+impl From<ConsensusThresholdCredentialErrorV1>
+    for RuntimeConsensusThresholdSignerCredentialErrorV1
+{
+    fn from(error: ConsensusThresholdCredentialErrorV1) -> Self {
+        match error {
+            ConsensusThresholdCredentialErrorV1::Encoding => Self::Encoding,
+            _ => Self::Rejected,
         }
     }
 }
@@ -172,57 +157,10 @@ impl RuntimeParliamentTleShareProvisioningV1 {
 }
 
 #[derive(NoritoSerialize, NoritoDeserialize)]
-struct RuntimeConsensusThresholdCredentialHeaderWireV1 {
-    magic: [u8; 8],
-    version: u16,
-    slot: u16,
-    network_id: NetworkId,
-    handle: String,
-    revision: u64,
-    policy_digest: [u8; 32],
-}
-
-#[derive(NoritoSerialize, NoritoDeserialize)]
-struct RuntimeSecretScalarTripleWireV1([[u8; 32]; 3]);
-
-impl RuntimeSecretScalarTripleWireV1 {
-    fn from_zeroizing(mut components: Zeroizing<[[u8; 32]; 3]>) -> Self {
-        Self(std::mem::take(&mut *components))
-    }
-
-    fn into_zeroizing(mut self) -> Zeroizing<[[u8; 32]; 3]> {
-        Zeroizing::new(std::mem::take(&mut self.0))
-    }
-}
-
-impl Drop for RuntimeSecretScalarTripleWireV1 {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
-
-#[derive(NoritoSerialize, NoritoDeserialize)]
-struct RuntimeGlobalBeaconShareCredentialWireV1 {
-    public_session: GlobalThresholdBeaconKeySessionV1,
-    signer_index: u16,
-    components: RuntimeSecretScalarTripleWireV1,
-}
-
-#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "irohad::external_software_signer::consensus_threshold::RuntimeGlobalBeaconSignerCredentialWireV1",
-    frame = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_signer_credential"
-)]
-struct RuntimeGlobalBeaconSignerCredentialWireV1 {
-    header: RuntimeConsensusThresholdCredentialHeaderWireV1,
-    sessions: Vec<RuntimeGlobalBeaconShareCredentialWireV1>,
-}
-
-#[derive(NoritoSerialize, NoritoDeserialize)]
 struct RuntimeParliamentTleShareCredentialWireV1 {
     public_session: TleKeySessionPublicStateV1,
     participant_index: u16,
-    components: RuntimeSecretScalarTripleWireV1,
+    components: ConsensusThresholdSecretScalarTripleV1,
 }
 
 #[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
@@ -231,26 +169,8 @@ struct RuntimeParliamentTleShareCredentialWireV1 {
     frame = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_signer_credential"
 )]
 struct RuntimeParliamentTleSignerCredentialWireV1 {
-    header: RuntimeConsensusThresholdCredentialHeaderWireV1,
+    header: ConsensusThresholdCredentialHeaderV1,
     sessions: Vec<RuntimeParliamentTleShareCredentialWireV1>,
-}
-
-#[derive(NoritoSerialize)]
-struct RuntimeGlobalBeaconPublicInventoryEntryWireV1 {
-    public_session: GlobalThresholdBeaconKeySessionV1,
-    signer_index: u16,
-}
-
-#[derive(NoritoSerialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "irohad::external_software_signer::consensus_threshold::RuntimeGlobalBeaconPublicInventoryWireV1",
-    frame = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory"
-)]
-struct RuntimeGlobalBeaconPublicInventoryWireV1 {
-    version: u16,
-    slot: u16,
-    network_id: NetworkId,
-    sessions: Vec<RuntimeGlobalBeaconPublicInventoryEntryWireV1>,
 }
 
 #[derive(NoritoSerialize)]
@@ -269,73 +189,6 @@ struct RuntimeParliamentTlePublicInventoryWireV1 {
     slot: u16,
     network_id: NetworkId,
     sessions: Vec<RuntimeParliamentTlePublicInventoryEntryWireV1>,
-}
-
-fn canonical_public_inventory_digest_v1<T: NoritoSerialize>(
-    inventory: &T,
-) -> Result<[u8; 32], RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    let encoded = norito::encode_canonical(inventory)
-        .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
-    if encoded.is_empty() || encoded.len() > MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1 {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding);
-    }
-    let encoded_len = u64::try_from(encoded.len())
-        .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
-    let encoded_len_bytes = encoded_len.to_be_bytes();
-    let digest_input_len = CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1
-        .len()
-        .checked_add(encoded_len_bytes.len())
-        .and_then(|len| len.checked_add(encoded.len()))
-        .and_then(|len| u64::try_from(len).ok())
-        .ok_or(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
-    let (digest, observed_len) = sha256_reader_bounded(
-        CONSENSUS_THRESHOLD_PUBLIC_INVENTORY_DOMAIN_V1
-            .chain(encoded_len_bytes.as_slice())
-            .chain(encoded.as_slice()),
-        digest_input_len,
-    )
-    .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?;
-    if observed_len != digest_input_len {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding);
-    }
-    if digest == [0; 32] {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    Ok(digest)
-}
-
-fn global_beacon_public_inventory_wire_v1(
-    network_id: NetworkId,
-    sessions: impl IntoIterator<Item = (GlobalThresholdBeaconKeySessionV1, u16)>,
-) -> Result<
-    RuntimeGlobalBeaconPublicInventoryWireV1,
-    RuntimeConsensusThresholdSignerCredentialErrorV1,
-> {
-    let mut sessions = sessions
-        .into_iter()
-        .map(|(public_session, signer_index)| {
-            if public_session.network_id != network_id {
-                return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-            }
-            Ok(RuntimeGlobalBeaconPublicInventoryEntryWireV1 {
-                public_session,
-                signer_index,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    validate_session_count_v1(sessions.len())?;
-    sessions.sort_by(|left, right| {
-        left.public_session
-            .session_id
-            .cmp(&right.public_session.session_id)
-            .then_with(|| left.signer_index.cmp(&right.signer_index))
-    });
-    Ok(RuntimeGlobalBeaconPublicInventoryWireV1 {
-        version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
-        slot: IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id(),
-        network_id,
-        sessions,
-    })
 }
 
 fn parliament_tle_public_inventory_wire_v1(
@@ -357,7 +210,7 @@ fn parliament_tle_public_inventory_wire_v1(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    validate_session_count_v1(sessions.len())?;
+    validate_consensus_threshold_session_count_v1(sessions.len())?;
     sessions.sort_by(|left, right| {
         left.public_session
             .key_session_id
@@ -370,45 +223,6 @@ fn parliament_tle_public_inventory_wire_v1(
         network_id,
         sessions,
     })
-}
-
-/// Compute the canonical public global-beacon session-and-seat inventory digest.
-///
-/// This digest is the exact value configured as the provider policy digest. It
-/// commits to the complete public DKG transcript for every provisioned session
-/// and to the local signer seat, but never serializes or hashes private share
-/// components. V1 computes
-/// `SHA-256(domain || u64_be(encoded_len) || canonical_norito(inventory))`,
-/// where the inventory contains version 1, the role slot, the exact network,
-/// and entries sorted by session identifier then signer index.
-///
-/// # Errors
-///
-/// Rejects empty, excessive, or cross-network inventories and encoding failure.
-pub fn global_beacon_partial_signer_inventory_digest_v1(
-    network_id: NetworkId,
-    sessions: &[RuntimeGlobalBeaconShareProvisioningV1],
-) -> Result<[u8; 32], RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    let inventory = global_beacon_public_inventory_wire_v1(
-        network_id,
-        sessions
-            .iter()
-            .map(|session| (session.public_session.clone(), session.signer_index)),
-    )?;
-    canonical_public_inventory_digest_v1(&inventory)
-}
-
-/// Compute the same beacon inventory binding from public sessions and seats only.
-///
-/// # Errors
-///
-/// Rejects empty, excessive, or cross-network inventories and encoding failure.
-pub fn global_beacon_partial_signer_public_inventory_digest_v1(
-    network_id: NetworkId,
-    sessions: &[(GlobalThresholdBeaconKeySessionV1, u16)],
-) -> Result<[u8; 32], RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    let inventory = global_beacon_public_inventory_wire_v1(network_id, sessions.iter().cloned())?;
-    canonical_public_inventory_digest_v1(&inventory)
 }
 
 /// Compute the canonical public Parliament-TLE session-and-seat inventory digest.
@@ -433,7 +247,7 @@ pub fn parliament_tle_partial_release_signer_inventory_digest_v1(
             .iter()
             .map(|session| (session.public_session.clone(), session.participant_index)),
     )?;
-    canonical_public_inventory_digest_v1(&inventory)
+    consensus_threshold_public_inventory_digest_v1(&inventory).map_err(Into::into)
 }
 
 /// Frame the two optional threshold credentials for one launchd stdin handoff.
@@ -504,84 +318,6 @@ pub fn encode_consensus_threshold_credential_bundle_v1(
     Ok(encoded)
 }
 
-/// Canonically encode a cryptographically validated global-beacon share inventory.
-///
-/// The returned allocation scrubs itself on drop and is intended to be passed
-/// directly to the supervisor credential facility. This function performs no
-/// file I/O and never writes private material to configuration or ledger state.
-///
-/// # Errors
-///
-/// Rejects invalid production qualification, empty or excessive inventories,
-/// cross-network transcripts, duplicate sessions, and shares that do not match
-/// the complete public DKG transcript and signer seat.
-pub fn encode_global_beacon_partial_signer_credential_v1(
-    network_id: NetworkId,
-    handle: impl Into<String>,
-    revision: u64,
-    policy_digest: [u8; 32],
-    sessions: Vec<RuntimeGlobalBeaconShareProvisioningV1>,
-) -> Result<Zeroizing<Vec<u8>>, RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    let handle = handle.into();
-    if global_beacon_partial_signer_inventory_digest_v1(network_id, &sessions)? != policy_digest {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    validate_provisioning_header_v1(&network_id, &handle, revision, policy_digest, |handle| {
-        let header = credential_header_v1(
-            IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
-            network_id,
-            handle,
-            revision,
-            policy_digest,
-        );
-        let sessions = encode_global_beacon_sessions_v1(&network_id, sessions)?;
-        encode_secret_credential_v1(&RuntimeGlobalBeaconSignerCredentialWireV1 { header, sessions })
-    })
-}
-
-fn encode_global_beacon_sessions_v1(
-    network_id: &NetworkId,
-    mut sessions: Vec<RuntimeGlobalBeaconShareProvisioningV1>,
-) -> Result<
-    Vec<RuntimeGlobalBeaconShareCredentialWireV1>,
-    RuntimeConsensusThresholdSignerCredentialErrorV1,
-> {
-    validate_session_count_v1(sessions.len())?;
-    sessions.sort_by(|left, right| {
-        left.public_session
-            .session_id
-            .cmp(&right.public_session.session_id)
-            .then_with(|| left.signer_index.cmp(&right.signer_index))
-    });
-    let validation_custody = RuntimeGlobalThresholdBeaconShareCustodyV1::new();
-    let mut encoded = Vec::with_capacity(sessions.len());
-    for session in sessions {
-        let RuntimeGlobalBeaconShareProvisioningV1 {
-            public_session,
-            signer_index,
-            components,
-        } = session;
-        if public_session.network_id != *network_id {
-            return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-        }
-        let binding = beacon_binding_v1(&public_session);
-        validation_custody
-            .import_components(
-                public_session.clone(),
-                &binding,
-                signer_index,
-                Zeroizing::new(*components),
-            )
-            .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
-        encoded.push(RuntimeGlobalBeaconShareCredentialWireV1 {
-            public_session,
-            signer_index,
-            components: RuntimeSecretScalarTripleWireV1::from_zeroizing(components),
-        });
-    }
-    Ok(encoded)
-}
-
 /// Canonically encode a cryptographically validated Parliament TLE share inventory.
 ///
 /// The returned allocation scrubs itself on drop and is intended to be passed
@@ -606,20 +342,20 @@ pub fn encode_parliament_tle_partial_release_signer_credential_v1(
     {
         return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
     }
-    validate_provisioning_header_v1(&network_id, &handle, revision, policy_digest, |handle| {
-        let header = credential_header_v1(
-            IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
-            network_id,
-            handle,
-            revision,
-            policy_digest,
-        );
-        let sessions = encode_parliament_tle_sessions_v1(&network_id, sessions)?;
-        encode_secret_credential_v1(&RuntimeParliamentTleSignerCredentialWireV1 {
-            header,
-            sessions,
-        })
+    validate_consensus_threshold_provisioning_v1(&network_id, &handle, revision, policy_digest)?;
+    let header = ConsensusThresholdCredentialHeaderV1::new(
+        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id(),
+        network_id,
+        handle,
+        revision,
+        policy_digest,
+    );
+    let sessions = encode_parliament_tle_sessions_v1(&network_id, sessions)?;
+    encode_consensus_threshold_secret_credential_v1(&RuntimeParliamentTleSignerCredentialWireV1 {
+        header,
+        sessions,
     })
+    .map_err(Into::into)
 }
 
 fn encode_parliament_tle_sessions_v1(
@@ -629,7 +365,7 @@ fn encode_parliament_tle_sessions_v1(
     Vec<RuntimeParliamentTleShareCredentialWireV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
 > {
-    validate_session_count_v1(sessions.len())?;
+    validate_consensus_threshold_session_count_v1(sessions.len())?;
     sessions.sort_by(|left, right| {
         left.public_session
             .key_session_id
@@ -657,80 +393,10 @@ fn encode_parliament_tle_sessions_v1(
         encoded.push(RuntimeParliamentTleShareCredentialWireV1 {
             public_session,
             participant_index,
-            components: RuntimeSecretScalarTripleWireV1::from_zeroizing(components),
+            components: ConsensusThresholdSecretScalarTripleV1::from_zeroizing(components),
         });
     }
     Ok(encoded)
-}
-
-fn validate_provisioning_header_v1<T>(
-    network_id: &NetworkId,
-    handle: &str,
-    revision: u64,
-    policy_digest: [u8; 32],
-    build: impl FnOnce(String) -> Result<T, RuntimeConsensusThresholdSignerCredentialErrorV1>,
-) -> Result<T, RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    if network_id.as_bytes().iter().all(|byte| *byte == 0)
-        || iroha_config::parameters::validate_production_runtime_handle(handle).is_err()
-        || revision == 0
-        || policy_digest == [0; 32]
-    {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    build(handle.to_owned())
-}
-
-fn credential_header_v1(
-    slot: IrohaRuntimeProviderSlotV1,
-    network_id: NetworkId,
-    handle: String,
-    revision: u64,
-    policy_digest: [u8; 32],
-) -> RuntimeConsensusThresholdCredentialHeaderWireV1 {
-    RuntimeConsensusThresholdCredentialHeaderWireV1 {
-        magic: CONSENSUS_THRESHOLD_CREDENTIAL_MAGIC_V1,
-        version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
-        slot: slot.wire_id(),
-        network_id,
-        handle,
-        revision,
-        policy_digest,
-    }
-}
-
-fn encode_secret_credential_v1<T: NoritoSerialize>(
-    wire: &T,
-) -> Result<Zeroizing<Vec<u8>>, RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    let _canonical_flags =
-        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let encoded = Zeroizing::new(
-        norito::core::to_bytes_bounded(wire, MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1)
-            .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding)?,
-    );
-    if encoded.is_empty() {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Encoding);
-    }
-    Ok(encoded)
-}
-
-fn validate_session_count_v1(
-    count: usize,
-) -> Result<(), RuntimeConsensusThresholdSignerCredentialErrorV1> {
-    if count == 0 || count > MAX_CONSENSUS_THRESHOLD_CREDENTIAL_SESSIONS_V1 {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    Ok(())
-}
-
-fn beacon_binding_v1(
-    record: &GlobalThresholdBeaconKeySessionV1,
-) -> GlobalThresholdBeaconSessionBindingV1 {
-    GlobalThresholdBeaconSessionBindingV1 {
-        network_id: record.network_id,
-        session_id: record.session_id,
-        roster_hash: record.roster_hash,
-        transcript_hash: record.transcript_hash,
-    }
 }
 
 /// Exact two-slot backend registry populated from runtime credentials.
@@ -947,57 +613,48 @@ fn decode_global_beacon_credential_v1(
     Arc<RuntimeGlobalBeaconPartialSignerBackendV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
 > {
-    let wire: RuntimeGlobalBeaconSignerCredentialWireV1 = norito::decode_canonical_with_limits(
-        bytes,
-        CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
-    let qualification = validate_credential_header_v1(
-        &wire.header,
-        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
-        network_id,
+    let qualification = configured_qualification_v1(
         configured,
+        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
     )?;
-    validate_session_count_v1(wire.sessions.len())?;
-    if wire.sessions.windows(2).any(|pair| {
-        pair[0]
-            .public_session
-            .session_id
-            .cmp(&pair[1].public_session.session_id)
-            .then_with(|| pair[0].signer_index.cmp(&pair[1].signer_index))
-            .is_ge()
-    }) {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    let public_inventory = global_beacon_public_inventory_wire_v1(
-        *network_id,
-        wire.sessions
-            .iter()
-            .map(|session| (session.public_session.clone(), session.signer_index)),
+    let custody = decode_global_beacon_partial_signer_credential_v1(
+        bytes,
+        network_id,
+        configured.handle(),
+        qualification.revision,
+        qualification.policy_digest,
     )?;
-    if canonical_public_inventory_digest_v1(&public_inventory)? != qualification.policy_digest {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    let custody = Arc::new(RuntimeGlobalThresholdBeaconShareCustodyV1::new());
-    for session in wire.sessions {
-        if session.public_session.network_id != *network_id {
-            return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-        }
-        let binding = beacon_binding_v1(&session.public_session);
-        custody
-            .import_components(
-                session.public_session,
-                &binding,
-                session.signer_index,
-                session.components.into_zeroizing(),
-            )
-            .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
-    }
     Ok(Arc::new(RuntimeGlobalBeaconPartialSignerBackendV1 {
-        handle: wire.header.handle,
+        handle: configured.handle().to_owned(),
         qualification,
-        custody,
+        custody: Arc::new(custody),
     }))
+}
+
+/// Decode a global-beacon credential for its exact configured binding and return its shares.
+///
+/// Core validates the complete credential, including every share against its public transcript
+/// and seat, before any share is returned.
+fn decode_global_beacon_credential_shares_v1(
+    bytes: &[u8],
+    network_id: &NetworkId,
+    configured: &IrohaRuntimeProviderBindingV1,
+) -> Result<
+    Vec<RuntimeGlobalBeaconShareProvisioningV1>,
+    RuntimeConsensusThresholdSignerCredentialErrorV1,
+> {
+    let qualification = configured_qualification_v1(
+        configured,
+        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+    )?;
+    decode_global_beacon_partial_signer_credential_shares_v1(
+        bytes,
+        network_id,
+        configured.handle(),
+        qualification.revision,
+        qualification.policy_digest,
+    )
+    .map_err(Into::into)
 }
 
 /// Resolve consumed launcher bytes through the complete native credential validator.
@@ -1021,18 +678,16 @@ fn decode_parliament_tle_credential_v1(
     Arc<RuntimeParliamentTlePartialReleaseSignerBackendV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
 > {
-    let wire: RuntimeParliamentTleSignerCredentialWireV1 = norito::decode_canonical_with_limits(
-        bytes,
-        CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
+    let wire: RuntimeParliamentTleSignerCredentialWireV1 =
+        decode_consensus_threshold_credential_v1(bytes)
+            .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
     let qualification = validate_credential_header_v1(
         &wire.header,
         IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
         network_id,
         configured,
     )?;
-    validate_session_count_v1(wire.sessions.len())?;
+    validate_consensus_threshold_session_count_v1(wire.sessions.len())?;
     if wire.sessions.windows(2).any(|pair| {
         pair[0]
             .public_session
@@ -1049,7 +704,9 @@ fn decode_parliament_tle_credential_v1(
             .iter()
             .map(|session| (session.public_session.clone(), session.participant_index)),
     )?;
-    if canonical_public_inventory_digest_v1(&public_inventory)? != qualification.policy_digest {
+    if consensus_threshold_public_inventory_digest_v1(&public_inventory)?
+        != qualification.policy_digest
+    {
         return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
     }
     let custody = Arc::new(RuntimeTleReleaseShareCustodyV1::new());
@@ -1074,31 +731,39 @@ fn decode_parliament_tle_credential_v1(
     ))
 }
 
+fn configured_qualification_v1(
+    configured: &IrohaRuntimeProviderBindingV1,
+    slot: IrohaRuntimeProviderSlotV1,
+) -> Result<ConsensusSignerProviderQualificationV1, RuntimeConsensusThresholdSignerCredentialErrorV1>
+{
+    match (
+        configured.slot() == slot,
+        configured.revision(),
+        configured.policy_digest(),
+    ) {
+        (true, Some(revision), Some(policy_digest)) => Ok(
+            ConsensusSignerProviderQualificationV1::new(revision, policy_digest, false),
+        ),
+        _ => Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected),
+    }
+}
+
 fn validate_credential_header_v1(
-    header: &RuntimeConsensusThresholdCredentialHeaderWireV1,
+    header: &ConsensusThresholdCredentialHeaderV1,
     slot: IrohaRuntimeProviderSlotV1,
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
 ) -> Result<ConsensusSignerProviderQualificationV1, RuntimeConsensusThresholdSignerCredentialErrorV1>
 {
-    if header.magic != CONSENSUS_THRESHOLD_CREDENTIAL_MAGIC_V1
-        || header.version != CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1
-        || header.slot != slot.wire_id()
-        || header.network_id != *network_id
-        || configured.slot() != slot
-        || configured.handle() != header.handle
-        || configured.revision() != Some(header.revision)
-        || configured.policy_digest() != Some(header.policy_digest)
-        || header.revision == 0
-        || header.policy_digest == [0; 32]
-    {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    Ok(ConsensusSignerProviderQualificationV1::new(
-        header.revision,
-        header.policy_digest,
-        false,
-    ))
+    let qualification = configured_qualification_v1(configured, slot)?;
+    header.validate(
+        slot.wire_id(),
+        network_id,
+        configured.handle(),
+        qualification.revision,
+        qualification.policy_digest,
+    )?;
+    Ok(qualification)
 }
 
 struct RuntimeGlobalBeaconPartialSignerBackendV1 {
@@ -1284,8 +949,8 @@ pub(crate) mod tests {
     use iroha_config_base::toml::TomlSource;
     use iroha_core::{
         beacon::{
-            GlobalThresholdBeaconPulseAggregatorV1, complete_beacon_dkg_fixture_for_seat_v1,
-            validate_global_threshold_beacon_session_v1,
+            GlobalThresholdBeaconPulseAggregatorV1, GlobalThresholdBeaconSessionBindingV1,
+            complete_beacon_dkg_fixture_for_seat_v1, validate_global_threshold_beacon_session_v1,
         },
         governance::timed_ovn::TimedOvnReleaseIdentityPublicV1,
         tle_release::{
@@ -1302,7 +967,8 @@ pub(crate) mod tests {
         tle::TleReleaseIdentityV1,
     };
     use iroha_data_model::{
-        block::BlockHeader, consensus::GlobalThresholdBeaconChainAnchorV1,
+        block::BlockHeader,
+        consensus::{GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconKeySessionV1},
         governance::types::BallotAttemptId,
     };
     use rand::{SeedableRng as _, rngs::StdRng};
@@ -1403,6 +1069,18 @@ pub(crate) mod tests {
     ) {
         for (total_component, contribution_component) in total.iter_mut().zip(contribution.iter()) {
             accumulate_canonical_scalar_v1(total_component, contribution_component);
+        }
+    }
+
+    /// Public session binding of a beacon record; Core's credential codec derives the same one.
+    fn beacon_binding_v1(
+        record: &GlobalThresholdBeaconKeySessionV1,
+    ) -> GlobalThresholdBeaconSessionBindingV1 {
+        GlobalThresholdBeaconSessionBindingV1 {
+            network_id: record.network_id,
+            session_id: record.session_id,
+            roster_hash: record.roster_hash,
+            transcript_hash: record.transcript_hash,
         }
     }
 
@@ -2374,16 +2052,20 @@ pub(crate) mod tests {
             .expect("verify restarted successor TLE partial");
     }
 
+    fn tle_header_v1() -> ConsensusThresholdCredentialHeaderV1 {
+        ConsensusThresholdCredentialHeaderV1::new(
+            IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id(),
+            network_id_v1(0xC1),
+            HANDLE.to_owned(),
+            REVISION,
+            POLICY_DIGEST,
+        )
+    }
+
     #[test]
     fn secret_credential_encoding_ignores_ambient_layout_flags() {
-        let wire = RuntimeGlobalBeaconSignerCredentialWireV1 {
-            header: credential_header_v1(
-                IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
-                network_id_v1(0xC1),
-                HANDLE.to_owned(),
-                REVISION,
-                POLICY_DIGEST,
-            ),
+        let wire = RuntimeParliamentTleSignerCredentialWireV1 {
+            header: tle_header_v1(),
             sessions: Vec::new(),
         };
         let canonical =
@@ -2398,7 +2080,7 @@ pub(crate) mod tests {
 
         let encoded = {
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            encode_secret_credential_v1(&wire)
+            encode_consensus_threshold_secret_credential_v1(&wire)
                 .expect("bounded secret credential encoding must force canonical layout")
         };
         assert_eq!(encoded.as_slice(), canonical.as_slice());
@@ -2406,96 +2088,77 @@ pub(crate) mod tests {
 
     #[test]
     fn consensus_threshold_frames_separate_credentials_and_public_inventories() {
-        let header = || {
-            credential_header_v1(
-                IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
-                network_id_v1(0xC1),
-                HANDLE.to_owned(),
-                REVISION,
-                POLICY_DIGEST,
-            )
-        };
-        // Equal field payloads still belong to distinct signer credential roots.
-        let beacon = RuntimeGlobalBeaconSignerCredentialWireV1 {
-            header: header(),
-            sessions: Vec::new(),
-        };
         let tle = RuntimeParliamentTleSignerCredentialWireV1 {
-            header: header(),
+            header: tle_header_v1(),
             sessions: Vec::new(),
         };
-        let beacon_bytes = crate::frame_test_support::assert_current_frame(
-            &beacon,
-            "irohad::external_software_signer::consensus_threshold::RuntimeGlobalBeaconSignerCredentialWireV1",
-            GLOBAL_BEACON_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
-        );
         let tle_bytes = crate::frame_test_support::assert_current_frame(
             &tle,
             "irohad::external_software_signer::consensus_threshold::RuntimeParliamentTleSignerCredentialWireV1",
             PARLIAMENT_TLE_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
         );
+        // A real Core-encoded beacon credential is a distinct signer credential root.
+        let network_id = network_id_v1(0xC1);
+        let fixture = beacon_fixture_v1(network_id, 0x78);
+        let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
+            fixture.record,
+            1,
+            fixture.components,
+        )];
+        let policy_digest =
+            global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning)
+                .expect("derive beacon inventory digest");
+        let beacon_bytes = encode_global_beacon_partial_signer_credential_v1(
+            network_id,
+            HANDLE,
+            REVISION,
+            policy_digest,
+            provisioning,
+        )
+        .expect("encode Core beacon credential");
         assert!(matches!(
             norito::decode_canonical::<RuntimeParliamentTleSignerCredentialWireV1>(&beacon_bytes),
             Err(norito::Error::SchemaMismatch)
         ));
+        let beacon_catalog = beacon_catalog_v1(policy_digest);
         assert!(matches!(
-            norito::decode_canonical::<RuntimeGlobalBeaconSignerCredentialWireV1>(&tle_bytes),
-            Err(norito::Error::SchemaMismatch)
+            decode_global_beacon_credential_v1(
+                &tle_bytes,
+                beacon_catalog.network_id(),
+                beacon_catalog.iter().next().expect("one beacon binding"),
+            ),
+            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
-        let beacon_inventory = RuntimeGlobalBeaconPublicInventoryWireV1 {
-            version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
-            slot: beacon.header.slot,
-            network_id: network_id_v1(0xC1),
-            sessions: Vec::new(),
-        };
         let tle_inventory = RuntimeParliamentTlePublicInventoryWireV1 {
             version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
             slot: tle.header.slot,
-            network_id: network_id_v1(0xC1),
+            network_id,
             sessions: Vec::new(),
         };
-        let beacon_public = crate::frame_test_support::assert_frame_encoding(
-            &beacon_inventory,
-            "irohad::external_software_signer::consensus_threshold::RuntimeGlobalBeaconPublicInventoryWireV1",
-            GLOBAL_BEACON_PUBLIC_INVENTORY_SCHEMA_NAME_V1,
-        );
-        let tle_public = crate::frame_test_support::assert_frame_encoding(
+        crate::frame_test_support::assert_frame_encoding(
             &tle_inventory,
             "irohad::external_software_signer::consensus_threshold::RuntimeParliamentTlePublicInventoryWireV1",
             PARLIAMENT_TLE_PUBLIC_INVENTORY_SCHEMA_NAME_V1,
         );
-        assert!(beacon_public.as_slice() != tle_public.as_slice());
         assert_ne!(
-            canonical_public_inventory_digest_v1(&beacon_inventory).expect("beacon digest"),
-            canonical_public_inventory_digest_v1(&tle_inventory).expect("TLE digest")
+            norito::schema::identity::frame_hash::<RuntimeParliamentTlePublicInventoryWireV1>(),
+            norito::core::schema_hash_for_name(
+                "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory"
+            )
+        );
+        assert_ne!(
+            consensus_threshold_public_inventory_digest_v1(&tle_inventory).expect("TLE digest"),
+            policy_digest
         );
 
         // Containers compose the Rust nominal child, not its root projection.
         crate::frame_test_support::assert_nominal_container_frames(
-            || RuntimeGlobalBeaconSignerCredentialWireV1 {
-                header: header(),
-                sessions: Vec::new(),
-            },
-            "irohad::external_software_signer::consensus_threshold::RuntimeGlobalBeaconSignerCredentialWireV1",
-            GLOBAL_BEACON_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
-        );
-        crate::frame_test_support::assert_nominal_container_frames(
             || RuntimeParliamentTleSignerCredentialWireV1 {
-                header: header(),
+                header: tle_header_v1(),
                 sessions: Vec::new(),
             },
             "irohad::external_software_signer::consensus_threshold::RuntimeParliamentTleSignerCredentialWireV1",
             PARLIAMENT_TLE_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
-        );
-        crate::frame_test_support::assert_nominal_container_frames(
-            || RuntimeGlobalBeaconPublicInventoryWireV1 {
-                version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
-                slot: beacon.header.slot,
-                network_id: network_id_v1(0xC1),
-                sessions: Vec::new(),
-            },
-            "irohad::external_software_signer::consensus_threshold::RuntimeGlobalBeaconPublicInventoryWireV1",
-            GLOBAL_BEACON_PUBLIC_INVENTORY_SCHEMA_NAME_V1,
         );
         crate::frame_test_support::assert_nominal_container_frames(
             || RuntimeParliamentTlePublicInventoryWireV1 {
@@ -2514,22 +2177,13 @@ pub(crate) mod tests {
         fn decoder_frame_hash<T: for<'de> NoritoDeserialize<'de>>() -> [u8; 16] {
             norito::schema::identity::frame_hash::<T>()
         }
+        // Core owns and pins the global-beacon credential and inventory frames.
         for (name, expected_hash_hex, actual_hash) in [
-            (
-                GLOBAL_BEACON_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
-                "0b311f1a10d971b693860f8fb160ed1c",
-                norito::schema::identity::frame_hash::<RuntimeGlobalBeaconSignerCredentialWireV1>(),
-            ),
             (
                 PARLIAMENT_TLE_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
                 "4071e4e5876f8a71466b3e94581b710b",
                 norito::schema::identity::frame_hash::<RuntimeParliamentTleSignerCredentialWireV1>(
                 ),
-            ),
-            (
-                GLOBAL_BEACON_PUBLIC_INVENTORY_SCHEMA_NAME_V1,
-                "ea71fde9b50685c39f6977c4f472ac39",
-                norito::schema::identity::frame_hash::<RuntimeGlobalBeaconPublicInventoryWireV1>(),
             ),
             (
                 PARLIAMENT_TLE_PUBLIC_INVENTORY_SCHEMA_NAME_V1,
@@ -2544,10 +2198,6 @@ pub(crate) mod tests {
                 "derived schema hash drifted for {name}"
             );
         }
-        assert_eq!(
-            decoder_frame_hash::<RuntimeGlobalBeaconSignerCredentialWireV1>(),
-            norito::schema::identity::frame_hash::<RuntimeGlobalBeaconSignerCredentialWireV1>(),
-        );
         assert_eq!(
             decoder_frame_hash::<RuntimeParliamentTleSignerCredentialWireV1>(),
             norito::schema::identity::frame_hash::<RuntimeParliamentTleSignerCredentialWireV1>(),
@@ -2594,23 +2244,12 @@ pub(crate) mod tests {
         .expect("encode forward-ordered beacon inventory");
         assert_eq!(&*forward_credential, &*reverse_credential);
         let beacon_catalog = beacon_catalog_v1(beacon_forward);
-        let mut reordered_wire: RuntimeGlobalBeaconSignerCredentialWireV1 =
-            norito::decode_canonical_with_limits(
-                &forward_credential,
-                CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-            )
-            .expect("decode canonical beacon credential for order substitution");
-        reordered_wire.sessions.reverse();
-        let reordered_credential = encode_secret_credential_v1(&reordered_wire)
-            .expect("encode noncanonical beacon session order");
-        assert!(matches!(
-            decode_global_beacon_credential_v1(
-                &reordered_credential,
-                beacon_catalog.network_id(),
-                beacon_catalog.iter().next().expect("one beacon binding"),
-            ),
-            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
-        ));
+        decode_global_beacon_credential_v1(
+            &forward_credential,
+            beacon_catalog.network_id(),
+            beacon_catalog.iter().next().expect("one beacon binding"),
+        )
+        .expect("decode canonical two-session beacon inventory");
 
         let seat_fixture = beacon_fixture_v1(network_id, 0x83);
         let seat_one = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
@@ -2684,13 +2323,10 @@ pub(crate) mod tests {
         assert_eq!(&*forward_credential, &*reverse_credential);
         let tle_catalog = tle_catalog_v1(tle_forward);
         let mut reordered_wire: RuntimeParliamentTleSignerCredentialWireV1 =
-            norito::decode_canonical_with_limits(
-                &forward_credential,
-                CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-            )
-            .expect("decode canonical TLE credential for order substitution");
+            decode_consensus_threshold_credential_v1(&forward_credential)
+                .expect("decode canonical TLE credential for order substitution");
         reordered_wire.sessions.reverse();
-        let reordered_credential = encode_secret_credential_v1(&reordered_wire)
+        let reordered_credential = encode_consensus_threshold_secret_credential_v1(&reordered_wire)
             .expect("encode noncanonical TLE session order");
         assert!(matches!(
             decode_parliament_tle_credential_v1(
@@ -2722,55 +2358,8 @@ pub(crate) mod tests {
 
     #[test]
     fn same_revision_public_inventory_substitution_fails_closed() {
+        // Core owns the global-beacon wire; its substitution test lives beside the codec.
         let network_id = network_id_v1(0xC1);
-        let expected = beacon_fixture_v1(network_id, 0x87);
-        let expected_inventory = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            expected.record,
-            1,
-            expected.components,
-        )];
-        let expected_digest =
-            global_beacon_partial_signer_inventory_digest_v1(network_id, &expected_inventory)
-                .expect("derive expected beacon inventory digest");
-        let catalog = beacon_catalog_v1(expected_digest);
-        drop(expected_inventory);
-
-        let substituted = beacon_fixture_v1(network_id, 0x88);
-        let substituted_inventory = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            substituted.record,
-            1,
-            substituted.components,
-        )];
-        let substituted_digest =
-            global_beacon_partial_signer_inventory_digest_v1(network_id, &substituted_inventory)
-                .expect("derive substituted beacon inventory digest");
-        assert_ne!(expected_digest, substituted_digest);
-        let credential = encode_global_beacon_partial_signer_credential_v1(
-            network_id,
-            HANDLE,
-            REVISION,
-            substituted_digest,
-            substituted_inventory,
-        )
-        .expect("encode substituted beacon inventory");
-        let mut wire: RuntimeGlobalBeaconSignerCredentialWireV1 =
-            norito::decode_canonical_with_limits(
-                &credential,
-                CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-            )
-            .expect("decode substituted beacon inventory");
-        wire.header.policy_digest = expected_digest;
-        let rebound = encode_secret_credential_v1(&wire)
-            .expect("rebind substituted beacon header to expected policy digest");
-        assert!(matches!(
-            decode_global_beacon_credential_v1(
-                &rebound,
-                catalog.network_id(),
-                catalog.iter().next().expect("one beacon binding"),
-            ),
-            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
-        ));
-
         let expected = tle_fixture_v1(network_id, 0x89);
         let expected_inventory = vec![RuntimeParliamentTleShareProvisioningV1::new(
             expected.validated.public_state().clone(),
@@ -2806,13 +2395,10 @@ pub(crate) mod tests {
         )
         .expect("encode substituted TLE inventory");
         let mut wire: RuntimeParliamentTleSignerCredentialWireV1 =
-            norito::decode_canonical_with_limits(
-                &credential,
-                CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-            )
-            .expect("decode substituted TLE inventory");
+            decode_consensus_threshold_credential_v1(&credential)
+                .expect("decode substituted TLE inventory");
         wire.header.policy_digest = expected_digest;
-        let rebound = encode_secret_credential_v1(&wire)
+        let rebound = encode_consensus_threshold_secret_credential_v1(&wire)
             .expect("rebind substituted TLE header to expected policy digest");
         assert!(matches!(
             decode_parliament_tle_credential_v1(
@@ -2845,36 +2431,41 @@ pub(crate) mod tests {
             provisioning,
         )
         .expect("encode valid beacon credential");
-        for substitution in 0..5 {
-            let mut wire: RuntimeGlobalBeaconSignerCredentialWireV1 =
-                norito::decode_canonical_with_limits(
-                    &credential,
-                    CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-                )
-                .expect("decode valid credential for adversarial mutation");
-            match substitution {
-                0 => wire.header.network_id = network_id_v1(0x91),
-                1 => wire.header.handle = "software://iroha/consensus-threshold/other".to_owned(),
-                2 => wire.header.revision += 1,
-                3 => wire.header.policy_digest = [0xA8; 32],
-                4 => {
-                    wire.header.slot =
-                        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id();
-                }
-                _ => unreachable!(),
-            }
-            let substituted = encode_secret_credential_v1(&wire)
-                .expect("encode structurally canonical substituted credential");
+        decode_global_beacon_credential_v1(
+            &credential,
+            catalog.network_id(),
+            catalog.iter().next().expect("one binding"),
+        )
+        .expect("exact catalog binding");
+        // Every configured qualification field is bound to the Core credential header.
+        let foreign_handle = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+            "consensus-threshold-credential-test",
+            IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+            "software://iroha/consensus-threshold/other",
+            REVISION,
+            policy_digest,
+        )
+        .with_network_id_for_test(network_id);
+        let tle_slot = tle_catalog_v1(policy_digest);
+        for (network, catalog) in [
+            (network_id_v1(0x91), beacon_catalog_v1(policy_digest)),
+            (network_id, foreign_handle),
+            (
+                network_id,
+                beacon_catalog_with_revision_v1(REVISION + 1, policy_digest),
+            ),
+            (network_id, beacon_catalog_v1([0xA8; 32])),
+            (network_id, tle_slot),
+        ] {
             assert!(matches!(
                 decode_global_beacon_credential_v1(
-                    &substituted,
-                    catalog.network_id(),
+                    &credential,
+                    &network,
                     catalog.iter().next().expect("one binding"),
                 ),
                 Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
             ));
         }
-
         let mut noncanonical = Zeroizing::new(credential.to_vec());
         noncanonical.push(0);
         assert!(matches!(
@@ -2888,6 +2479,56 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn tle_credential_header_substitution_fails_closed() {
+        // The broker-owned TLE codec validates the same shared Core header.
+        let network_id = network_id_v1(0xC1);
+        let fixture = tle_fixture_v1(network_id, 0x7F);
+        let provisioning = vec![RuntimeParliamentTleShareProvisioningV1::new(
+            fixture.validated.public_state().clone(),
+            1,
+            fixture.components,
+        )];
+        let policy_digest =
+            parliament_tle_partial_release_signer_inventory_digest_v1(network_id, &provisioning)
+                .expect("derive TLE inventory digest");
+        let catalog = tle_catalog_v1(policy_digest);
+        let credential = encode_parliament_tle_partial_release_signer_credential_v1(
+            network_id,
+            HANDLE,
+            REVISION,
+            policy_digest,
+            provisioning,
+        )
+        .expect("encode valid TLE credential");
+        for substitution in 0..5 {
+            let mut wire: RuntimeParliamentTleSignerCredentialWireV1 =
+                decode_consensus_threshold_credential_v1(&credential)
+                    .expect("decode valid credential for adversarial mutation");
+            match substitution {
+                0 => wire.header.network_id = network_id_v1(0x91),
+                1 => wire.header.handle = "software://iroha/consensus-threshold/other".to_owned(),
+                2 => wire.header.revision += 1,
+                3 => wire.header.policy_digest = [0xA8; 32],
+                4 => {
+                    wire.header.slot =
+                        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id();
+                }
+                _ => unreachable!(),
+            }
+            let substituted = encode_consensus_threshold_secret_credential_v1(&wire)
+                .expect("encode structurally canonical substituted credential");
+            assert!(matches!(
+                decode_parliament_tle_credential_v1(
+                    &substituted,
+                    catalog.network_id(),
+                    catalog.iter().next().expect("one binding"),
+                ),
+                Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
+            ));
+        }
+    }
+
+    #[test]
     fn duplicate_empty_and_invalid_session_inventories_fail_closed() {
         let network_id = network_id_v1(0xC1);
         assert!(matches!(
@@ -2898,7 +2539,7 @@ pub(crate) mod tests {
                 POLICY_DIGEST,
                 Vec::new(),
             ),
-            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
+            Err(ConsensusThresholdCredentialErrorV1::Rejected)
         ));
 
         let fixture = beacon_fixture_v1(network_id, 0x74);
@@ -2918,7 +2559,7 @@ pub(crate) mod tests {
                 duplicate_policy_digest,
                 duplicate_provisioning,
             ),
-            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
+            Err(ConsensusThresholdCredentialErrorV1::Rejected)
         ));
 
         let fixture = tle_fixture_v1(network_id, 0x75);

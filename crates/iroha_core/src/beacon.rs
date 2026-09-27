@@ -10,6 +10,10 @@
 //! The first-release module exposes only this threshold-beacon construction;
 //! retired per-validator VRF constructions are deliberately absent.
 
+/// Signed all-edge DKG ceremony, seat credentials and install certificates.
+pub mod ceremony;
+/// Runtime credential codec for global-beacon seat shares.
+pub mod credential;
 /// Height-bound production readiness, separate from consensus admission.
 pub mod readiness;
 

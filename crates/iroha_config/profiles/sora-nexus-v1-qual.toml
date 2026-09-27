@@ -1,0 +1,19 @@
+# Compiled network profile `sora-nexus-v1-qual`: `sora-nexus-v1` for qualification runs.
+#
+# It overrides only the genesis cadence and epoch length (so a short run crosses a mandatory
+# beacon pulse and an epoch boundary), the snapshot interval, and the storage budget (so four
+# local nodes fit a CI runner). Everything else comes from the base profile.
+
+[profile]
+id = "sora-nexus-v1-qual"
+extends = "sora-nexus-v1"
+
+[genesis_recipe]
+block_cadence_ms = 1000
+epoch_length_blocks = 64
+
+[policy.snapshot]
+create_every_ms = 30000
+
+[policy.nexus.storage]
+local_budget_bytes = 536870912

@@ -1,0 +1,98 @@
+# Compiled network profile `iroha-dev-v1`: permissioned developer defaults.
+#
+# A single-lane permissioned network with the default I105 discriminant (753), no SoraFS
+# provider, no Soracloud production posture and loopback-friendly ingress. It follows the
+# intent of the `iroha3-dev` Kagami bundle (`defaults/kagami/iroha3-dev`).
+
+[profile]
+id = "iroha-dev-v1"
+version = 1
+chain_discriminant = 753
+node_tunable = ["logger.level", "logger.filter"]
+
+[genesis_recipe]
+consensus_mode = "permissioned"
+block_cadence_ms = 1000
+epoch_length_blocks = 3600
+block_max_transactions = 512
+ivm_gas_limit_per_block = 50000000
+npos_seat_band_pct = 100
+npos_min_self_bond = 1
+
+[static]
+
+[static.sumeragi.block]
+max_payload_bytes = 16777216
+proposal_queue_scan_multiplier = 4
+
+[static.sumeragi.queues]
+body_source_bytes = 35651584
+
+[static.sumeragi.keys]
+allowed_algorithms = ["bls_normal"]
+
+[static.crypto]
+allowed_signing = ["ed25519", "secp256k1", "bls_normal"]
+
+# Empty: parsing derives the curve ids from `allowed_signing` (ed25519 1, bls_normal 3,
+# secp256k1 4). Omitting the section would keep the code default, which omits bls_normal.
+[static.crypto.curves]
+allowed_curve_ids = []
+
+[derive]
+authenticated_non_validator_sources = 2
+max_external_committee_peers = 0
+queue_commands = 1024
+queue_bodies = 1024
+
+[policy]
+telemetry_profile = "extended"
+
+[policy.kura]
+fsync_mode = "batched"
+
+[policy.logger]
+format = "compact"
+level = "info"
+
+[policy.snapshot]
+mode = "read_write"
+create_every_ms = 60000
+
+[policy.torii]
+preauth_allow_cidrs = ["127.0.0.0/8", "::1/128"]
+preauth_rate_per_ip_per_sec = 1000000
+preauth_burst_per_ip = 2000000
+tx_rate_per_authority_per_sec = 1000000
+tx_burst_per_authority = 2000000
+api_rate_limit_bypass_cidrs = ["127.0.0.0/8", "::1/128"]
+
+[policy.torii.operator_signatures]
+enabled = true
+
+[policy.nexus.storage]
+local_budget_bytes = 1073741824
+
+[host]
+systemd_memory_max = "2G"
+systemd_cpu_quota = "100%"
+p2p_port = 1337
+torii_port = 8080
+
+[role.validator.sumeragi]
+role = "validator"
+
+[role.validator.soracloud_runtime]
+production_mode = false
+
+[role.lane_validator.sumeragi]
+role = "validator"
+
+[role.lane_validator.soracloud_runtime]
+production_mode = false
+
+[role.observer.sumeragi]
+role = "observer"
+
+[role.observer.soracloud_runtime]
+production_mode = false

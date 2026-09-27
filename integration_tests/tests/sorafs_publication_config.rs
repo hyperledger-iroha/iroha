@@ -274,7 +274,8 @@ fn software_fixture_writes_distinct_owner_only_runtime_custody() -> Result<()> {
         ensure!(publics.insert(key.public_key().to_string()));
     }
     for entry in fs::read_dir(&provider.credential_dir)? {
-        ensure!(entry?.metadata()?.permissions().mode() & 0o777 == 0o600);
+        let mode = entry?.metadata()?.permissions().mode() & 0o777;
+        ensure!(mode == 0o600);
     }
     Ok(())
 }

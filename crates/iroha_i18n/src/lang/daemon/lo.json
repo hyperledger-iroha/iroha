@@ -5,6 +5,7 @@
   "error.logger": "ບໍ່ສາມາດເລີ່ມລະບົບບັນທຶກຂໍ້ມູນໄດ້",
   "error.start": "ບໍ່ສາມາດເລີ່ມ Iroha ໄດ້",
   "error.run": "ເກີດຄວາມຜິດພາດໃນຂະນະເຮັດວຽກ Iroha",
+  "error.check_storage": "Kura (ຄັງບລັອກ) ບໍ່ຜ່ານການກວດສອບບ່ອນເກັບແບບອ່ານຢ່າງດຽວ",
   "error.start_p2p": "ບໍ່ສາມາດເລີ່ມເຄືອຂ່າຍ P2P ໄດ້",
   "error.init_kura": "ບໍ່ສາມາດເລີ່ມ Kura (ຄັງບລັອກ) ໄດ້",
   "error.start_dev_telemetry": "ບໍ່ສາມາດເລີ່ມບໍລິການ telemetry ສໍາລັບການພັດທະນາໄດ້",

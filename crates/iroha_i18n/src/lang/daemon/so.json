@@ -5,6 +5,7 @@
   "error.logger": "Habka diiwaangelinta lama bilaabin",
   "error.start": "Iroha lama bilaabin",
   "error.run": "Khalad ayaa dhacay intii lagu jiray socodsiinta Iroha",
+  "error.check_storage": "Kura (kaydsiga blocks) kuma guuleysan hubinta kaydka akhris-kaliya",
   "error.start_p2p": "Shabakadda P2P lama bilaabin",
   "error.init_kura": "Kura (kaydsiga blocks) lama bilaabin",
   "error.start_dev_telemetry": "Adeegga telemetry ee horumarinta lama bilaabin",

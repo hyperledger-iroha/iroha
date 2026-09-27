@@ -310,6 +310,7 @@ impl Fixture {
                 total_power: 4,
             }),
             liveness: SumeragiV2LivenessStatus::default(),
+            beacon_horizon: None,
         };
         let body = BridgeFinalityAttestationBodyV1 {
             version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,

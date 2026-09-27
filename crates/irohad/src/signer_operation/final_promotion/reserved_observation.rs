@@ -26,7 +26,7 @@ use iroha_core::{
         },
         signer_finality::verify_signer_finality_v1,
     },
-    state::{State, StateReadOnly, StateView},
+    state::{State, StateView},
 };
 use iroha_data_model::{
     account::AccountId,
@@ -260,20 +260,11 @@ fn authenticate_pre_reserve_floor_at_v1(
     if floor.height == 0 || floor.height > u64::try_from(view.height()).map_err(|_| Error::Floor)? {
         return Err(Error::Floor);
     }
-    verify_signer_finality_v1(view, floor.height, floor.block_hash).map_err(|_| Error::Floor)?;
-    let (artifact, receipt) = view
-        .kura()
-        .v2_finality_artifact_with_receipt(floor.height)
-        .map_err(|_| Error::Floor)?
-        .ok_or(Error::Floor)?;
-    if artifact.height != floor.height
-        || *artifact.block_hash.as_ref() != floor.block_hash
-        || artifact.context_id() != floor.context_id
-        || artifact.height_context.network_id != *view.network_id()
-        || receipt.height() != floor.height
-        || *receipt.block_hash().as_ref() != floor.block_hash
-        || receipt.context_id() != floor.context_id
-    {
+    // The floor must be this view's certified block at its height (network, hash and the
+    // certified block id of its header and result).
+    let finality = verify_signer_finality_v1(view, floor.height, floor.block_hash)
+        .map_err(|_| Error::Floor)?;
+    if finality.context_id() != floor.context_id {
         return Err(Error::Floor);
     }
     Ok(())
@@ -287,7 +278,7 @@ impl FinalPromotionSubmittedReserveV1 {
     ///
     /// The original pre-Reserve floor must still be the independently retained floor. Neither a
     /// transport acknowledgement nor the decoded row authorizes the phase. The floor advances
-    /// only after Core proves both exact signed entries, successful execution and RS16 finality.
+    /// only after Core proves both exact signed entries, successful execution and certified finality.
     ///
     /// # Errors
     /// Rejects missing/substituted Reserve, post-Reserve floor, stale Check, unqualified time,

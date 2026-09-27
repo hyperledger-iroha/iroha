@@ -300,7 +300,10 @@ impl TokenBucket {
         }
         let elapsed = now.saturating_duration_since(self.last_refill);
         if !elapsed.is_zero() {
-            self.tokens = (self.tokens + elapsed.as_secs_f64() * self.rate_per_sec).min(self.capacity);
+            self.tokens = elapsed
+                .as_secs_f64()
+                .mul_add(self.rate_per_sec, self.tokens)
+                .min(self.capacity);
             self.last_refill = now;
         }
         if cost > self.capacity || self.tokens < cost {

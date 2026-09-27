@@ -24,7 +24,7 @@ pub(crate) mod signer_check;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub mod signer_check_test_fixture;
 pub(crate) mod signer_custody_history;
-/// Same-State durable block and revision-4 finality verification for signer consumers.
+/// Same-State certified-chain block finality verification for signer consumers.
 pub mod signer_finality;
 /// Finalized governed provider-admission authority.
 pub mod provider_admission;

@@ -1,16 +1,17 @@
-//! Actual genesis-domain signatures, derived network identity and durable native admission.
+//! Actual signed genesis, derived network identity and durable native admission, on certified
+//! test chains whose genesis carries the initializer.
 use super::*;
 use crate::{
     kura::Kura,
-    query::{signer_check::fixture as execution, store::LiveQueryStore},
+    query::store::LiveQueryStore,
     smartcontracts::isi::sorafs_provider_admission::test_fixture::{
         NOW, ProviderAdmissionTestFixtureV1 as Fixture, key,
     },
     state::{State, World},
+    sumeragi::test_chain::{CertifiedTestChain, StartFailure, TestChainConfig},
 };
 use iroha_data_model::{
     IntoKeyValue, NetworkId, Registrable,
-    account::Account,
     block::{BlockHeader, builder::BlockBuilder},
     isi::InstructionBox,
     sorafs::provider_admission::governance::{
@@ -20,8 +21,7 @@ use iroha_data_model::{
 };
 use std::{sync::Arc, time::Duration};
 
-fn initializer() -> InitializeSorafsProviderAdmissionV1 {
-    let fixture = Fixture::new();
+fn initializer(fixture: &Fixture) -> InitializeSorafsProviderAdmissionV1 {
     InitializeSorafsProviderAdmissionV1 {
         council: InitialProviderAdmissionCouncilV1 {
             policy_id: fixture.policy.policy_id,
@@ -40,81 +40,53 @@ fn initializer() -> InitializeSorafsProviderAdmissionV1 {
         }],
     }
 }
-fn signed(
+
+/// A chain whose genesis (authorized by `key(1)`'s account, at `NOW`) carries `instructions`.
+fn chain(
     instructions: Vec<InstructionBox>,
-    network: Option<NetworkId>,
-    now: u64,
-) -> SignedTransaction {
+    existing_owner: Option<(ProviderId, AccountId)>,
+) -> Result<CertifiedTestChain, StartFailure> {
+    let mut world = World::new();
+    if let Some((provider, owner)) = existing_owner {
+        world.provider_owners.insert(provider, owner);
+    }
+    let mut config = TestChainConfig::new(world, NOW * 1000);
+    config.genesis_key = key(1);
+    config.genesis_instructions = instructions;
+    CertifiedTestChain::start(config)
+}
+
+fn signed(instructions: Vec<InstructionBox>, network: NetworkId, now: u64) -> SignedTransaction {
     let owner = AccountId::new(key(1).public_key().clone());
-    let fee = FeePaymentIntent::authority(Vec::new(), None);
-    let mut builder = match network {
-        Some(network) => TransactionBuilder::new(network, owner, fee),
-        None => TransactionBuilder::new_genesis(owner, fee),
-    };
+    let mut builder = TransactionBuilder::new(
+        network,
+        owner,
+        FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(Duration::from_millis(now));
     builder
         .with_instructions(instructions)
         .try_sign(key(1).private_key())
         .unwrap()
 }
-fn state_for_genesis(
-    transaction: &SignedTransaction,
-    existing_owner: Option<AccountId>,
-) -> Arc<State> {
-    let mut builder = BlockBuilder::new(BlockHeader::new(
-        1.try_into().unwrap(),
-        None,
-        None,
-        NOW * 1000,
-        0,
-    ));
-    builder.push_transaction(transaction.clone());
-    let signed = builder
-        .try_build_with_signature(0, key(0xfe).private_key())
-        .unwrap();
-    let network = NetworkId::from_genesis_hash(signed.hash());
-    let owner = AccountId::new(key(1).public_key().clone());
-    let mut world = World::new();
-    let (id, account) = Account::new(owner.clone()).build(&owner).into_key_value();
-    world.accounts.insert(id, account);
-    if let Some(owner) = existing_owner {
-        world
-            .provider_owners
-            .insert(Fixture::new().provider(), owner);
-    }
-    Arc::new(State::new_with_chain_and_network_id_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        "genesis-admission-test".parse().unwrap(),
-        network,
-    ))
-}
 
 #[test]
 fn signed_genesis_templates_bind_the_actual_genesis_hash_and_canonical_journal() {
+    let fixture = Fixture::new();
+    let provider = fixture.provider();
     for existing in [false, true] {
-        let initialize = initializer();
+        let initialize = initializer(&fixture);
         let owner = initialize.providers[0].owner.clone();
-        let transaction = signed(vec![initialize.clone().into()], None, NOW * 1000);
-        assert!(transaction.network_id().is_none());
-        let state = state_for_genesis(&transaction, existing.then_some(owner));
-        let mut blocks = Vec::new();
-        assert_eq!(
-            execution::commit_genesis_admission(
-                &state,
-                &mut blocks,
-                NOW * 1000,
-                vec![transaction],
-                true
-            ),
-            [true]
-        );
+        let mut chain = chain(
+            vec![initialize.clone().into()],
+            existing.then_some((provider, owner)),
+        )
+        .expect("genesis applies");
+        let state = Arc::clone(chain.state());
         assert_eq!(
             state.network_id_ref().as_bytes(),
-            blocks[0].block().hash().as_ref()
+            chain.genesis().hash().as_ref()
         );
-        let provider = Fixture::new().provider();
         let actual = native::read_finalized_provider_admission_v1(&state.view(), provider, NOW)
             .unwrap()
             .unwrap();
@@ -136,61 +108,39 @@ fn signed_genesis_templates_bind_the_actual_genesis_hash_and_canonical_journal()
             1
         );
         let original = native::read_head(state.view().world(), Some(provider)).unwrap();
+        // The same initializer in an ordinary network-scoped transaction initializes nothing.
         let replay = signed(
             vec![initialize.into()],
-            Some(*state.network_id_ref()),
-            (NOW + 1) * 1000,
+            *state.network_id_ref(),
+            NOW * 1000 + 500,
         );
-        assert_eq!(
-            execution::commit_genesis_admission(
-                &state,
-                &mut blocks,
-                (NOW + 1) * 1000,
-                vec![replay],
-                true
-            ),
-            [false]
-        );
+        assert_eq!(chain.commit_at((NOW + 1) * 1000, vec![replay]), [false]);
         assert_eq!(
             native::read_head(state.view().world(), Some(provider)).unwrap(),
             original
         );
     }
 }
+
 #[test]
 fn finalized_genesis_admission_expiry_rejects_a_lagging_local_clock() {
-    let mut initialize = initializer();
+    let fixture = Fixture::new();
+    let provider = fixture.provider();
+    let mut initialize = initializer(&fixture);
     let mut material: ProviderAdmissionGenesisMaterialV1 =
         decode_frame(&initialize.providers[0].material).unwrap();
     material.retention_epoch = NOW + 2;
     initialize.providers[0].material = norito::encode_canonical(&material).unwrap();
-    let transaction = signed(vec![initialize.into()], None, NOW * 1000);
-    let state = state_for_genesis(&transaction, None);
-    let mut blocks = Vec::new();
-    assert_eq!(
-        execution::commit_genesis_admission(
-            &state,
-            &mut blocks,
-            NOW * 1000,
-            vec![transaction],
-            true
-        ),
-        [true]
-    );
-    let provider = Fixture::new().provider();
+    let mut chain = chain(vec![initialize.into()], None).expect("genesis applies");
+    let state = Arc::clone(chain.state());
     assert!(
         native::read_finalized_provider_admission_v1(&state.view(), provider, NOW - 1).is_err()
     );
     for (offset, valid) in [(1, true), (2, false)] {
         assert!(
-            execution::commit_genesis_admission(
-                &state,
-                &mut blocks,
-                (NOW + offset) * 1000,
-                Vec::new(),
-                true
-            )
-            .is_empty()
+            chain
+                .commit_at((NOW + offset) * 1000, Vec::new())
+                .is_empty()
         );
         let result = native::read_finalized_provider_admission_v1(&state.view(), provider, NOW);
         if valid {
@@ -205,45 +155,43 @@ fn finalized_genesis_admission_expiry_rejects_a_lagging_local_clock() {
 }
 
 #[test]
-fn applied_genesis_without_its_exact_durable_qc_cannot_admit() {
-    let transaction = signed(vec![initializer().into()], None, NOW * 1000);
-    let state = state_for_genesis(&transaction, None);
-    let mut blocks = Vec::new();
-    assert_eq!(
-        execution::commit_genesis_admission(
-            &state,
-            &mut blocks,
-            NOW * 1000,
-            vec![transaction],
-            false
-        ),
-        [true]
-    );
+fn applied_genesis_without_its_durable_frame_cannot_admit() {
+    let fixture = Fixture::new();
+    let provider = fixture.provider();
+    let mut chain = chain(vec![initializer(&fixture).into()], None).expect("genesis applies");
+    chain.commit_at((NOW + 1) * 1000, Vec::new());
+    let state = Arc::clone(chain.state());
     assert!(
-        native::read_finalized_provider_admission_v1(&state.view(), Fixture::new().provider(), NOW)
-            .is_err()
-    );
-    state
-        .kura()
-        .store_v2_finality_artifact(&blocks[0].proof().finality_artifact)
-        .unwrap();
-    assert!(
-        native::read_finalized_provider_admission_v1(&state.view(), Fixture::new().provider(), NOW)
+        native::read_finalized_provider_admission_v1(&state.view(), provider, NOW)
             .unwrap()
             .is_some()
     );
+    // Without the genesis frame and its result certificate, the initializer is not
+    // authenticated (the signed genesis is the trust root of the admission).
+    state
+        .kura()
+        .force_hash_only_block_for_testing(std::num::NonZeroUsize::MIN)
+        .unwrap();
+    assert!(native::read_finalized_provider_admission_v1(&state.view(), provider, NOW).is_err());
 }
+
 #[test]
 fn malformed_templates_and_owner_conflicts_leave_no_genesis_journal() {
+    let fixture = Fixture::new();
     for malformed in 0..6 {
-        let mut initialize = initializer();
+        let mut initialize = initializer(&fixture);
         let mut existing = None;
         match malformed {
             0 => initialize.providers.push(initialize.providers[0].clone()),
             1 => initialize.providers[0].owner = AccountId::new(key(2).public_key().clone()),
             2 => initialize.council.signature_threshold = 2,
             3 => initialize.providers[0].material.push(0),
-            4 => existing = Some(AccountId::new(key(2).public_key().clone())),
+            4 => {
+                existing = Some((
+                    fixture.provider(),
+                    AccountId::new(key(2).public_key().clone()),
+                ));
+            }
             5 => {
                 let mut material: ProviderAdmissionGenesisMaterialV1 =
                     decode_frame(&initialize.providers[0].material).unwrap();
@@ -252,18 +200,11 @@ fn malformed_templates_and_owner_conflicts_leave_no_genesis_journal() {
             }
             _ => unreachable!(),
         }
-        let transaction = signed(vec![initialize.into()], None, NOW * 1000);
-        let state = state_for_genesis(&transaction, existing);
-        assert_eq!(
-            execution::commit_genesis_admission(
-                &state,
-                &mut Vec::new(),
-                NOW * 1000,
-                vec![transaction],
-                true
-            ),
-            [false]
-        );
+        // A failing genesis instruction makes the whole genesis invalid.
+        let state = chain(vec![initialize.into()], existing)
+            .err()
+            .unwrap_or_else(|| panic!("malformed genesis {malformed} applied"))
+            .state;
         assert!(
             native::read_head(state.view().world(), None)
                 .unwrap()
@@ -271,43 +212,60 @@ fn malformed_templates_and_owner_conflicts_leave_no_genesis_journal() {
         );
     }
 }
+
 #[test]
 fn second_initializer_in_one_genesis_transaction_rolls_back_the_first() {
-    let initialize = initializer();
-    let transaction = signed(
-        vec![initialize.clone().into(), initialize.into()],
-        None,
-        NOW * 1000,
-    );
-    let state = state_for_genesis(&transaction, None);
-    assert_eq!(
-        execution::commit_genesis_admission(
-            &state,
-            &mut Vec::new(),
-            NOW * 1000,
-            vec![transaction],
-            true
-        ),
-        [false]
-    );
+    let fixture = Fixture::new();
+    let initialize = initializer(&fixture);
+    let state = chain(vec![initialize.clone().into(), initialize.into()], None)
+        .err()
+        .expect("a second initializer fails genesis")
+        .state;
     assert!(
         native::read_head(state.view().world(), None)
             .unwrap()
             .is_none()
     );
 }
+
 #[test]
 fn indirect_or_network_scoped_execution_cannot_acquire_genesis_authority() {
-    let initialize = initializer();
-    let transaction = signed(vec![initialize.clone().into()], None, NOW * 1000);
-    let state = state_for_genesis(&transaction, None);
-    let mut block = state.block(BlockHeader::new(
+    let fixture = Fixture::new();
+    let initialize = initializer(&fixture);
+    let owner = AccountId::new(key(1).public_key().clone());
+    let mut transaction = TransactionBuilder::new_genesis(
+        owner.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    );
+    transaction.set_creation_time(Duration::from_millis(NOW * 1000));
+    let transaction = transaction
+        .with_instructions([InstructionBox::from(initialize.clone())])
+        .try_sign(key(1).private_key())
+        .unwrap();
+    let mut genesis = BlockBuilder::new(BlockHeader::new(
         1.try_into().unwrap(),
         None,
         None,
         NOW * 1000,
         0,
     ));
+    genesis.push_transaction(transaction.clone());
+    let genesis = genesis
+        .try_build_with_signature(0, key(0xfe).private_key())
+        .unwrap();
+    let mut world = World::new();
+    let (id, account) = iroha_data_model::account::Account::new(owner.clone())
+        .build(&owner)
+        .into_key_value();
+    world.accounts.insert(id, account);
+    let state = State::new_with_chain_and_network_id_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        "genesis-admission-test".parse().unwrap(),
+        NetworkId::from_genesis_hash(genesis.hash()),
+    );
+    let mut block = state.block(genesis.header());
     let mut tx = block.transaction();
     tx.current_network_entrypoint_hash = Some(transaction.hash_as_entrypoint());
     tx.current_tx_hash = Some(transaction.hash());
@@ -340,20 +298,17 @@ fn indirect_or_network_scoped_execution_cannot_acquire_genesis_authority() {
     assert!(native::read_head(tx.world(), None).unwrap().is_none());
     drop(tx);
     drop(block);
+    // After genesis, a network-scoped initializer is an ordinary transaction and fails.
+    let mut chain = chain(Vec::new(), None).expect("genesis applies");
     let ordinary = signed(
         vec![initialize.into()],
-        Some(*state.network_id_ref()),
-        NOW * 1000,
+        chain.network_id(),
+        NOW * 1000 + 500,
     );
-    let state = state_for_genesis(&ordinary, None);
-    assert_eq!(
-        execution::commit_genesis_admission(
-            &state,
-            &mut Vec::new(),
-            NOW * 1000,
-            vec![ordinary],
-            true
-        ),
-        [false]
+    assert_eq!(chain.commit_at((NOW + 1) * 1000, vec![ordinary]), [false]);
+    assert!(
+        native::read_head(chain.state().view().world(), None)
+            .unwrap()
+            .is_none()
     );
 }

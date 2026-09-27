@@ -5,6 +5,7 @@
   "error.logger": "Nije moguće inicijalizovati систем евидентирања",
   "error.start": "Pokretanje Irohe nije uspelo",
   "error.run": "Došlo je do greške prilikom pokretanja Irohe",
+  "error.check_storage": "Kura (blok skladištenje) nije prošla proveru skladišta samo za čitanje",
   "error.start_p2p": "Nije moguće pokrenuti peer-to-peer mrežu",
   "error.init_kura": "Nije moguće inicijalizovati Kura (blok skladištenje)",
   "error.start_dev_telemetry": "Nije moguće pokrenuti telemetriju za razvoj",

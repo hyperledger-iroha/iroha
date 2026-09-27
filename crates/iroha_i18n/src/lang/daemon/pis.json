@@ -5,6 +5,7 @@
   "error.logger": "No save statem logger",
   "error.start": "Fail long statem Iroha",
   "error.run": "Mistek happen taem Iroha i ran",
+  "error.check_storage": "Kura (block storage) no pas long read-only storage check",
   "error.start_p2p": "No save statem peer-to-peer network",
   "error.init_kura": "No save statem Kura (block storage)",
   "error.start_dev_telemetry": "No save statem dev telemetry service",

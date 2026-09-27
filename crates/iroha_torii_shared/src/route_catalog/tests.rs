@@ -740,10 +740,25 @@ mod tests {
         for route in [
             sumeragi::BRIDGE_FINALITY,
             sumeragi::BRIDGE_FINALITY_ATTESTATION,
+            sumeragi::BRIDGE_FINALITY_ATTESTATION_LATEST,
             sumeragi::BRIDGE_FINALITY_BUNDLE,
         ] {
             assert_eq!(route.feature_gate(), FeatureGate::Always);
         }
+    }
+    #[test]
+    fn latest_finality_attestation_shares_the_public_height_contract() {
+        let height = sumeragi::BRIDGE_FINALITY_ATTESTATION;
+        let latest = sumeragi::BRIDGE_FINALITY_ATTESTATION_LATEST;
+        assert_eq!(latest.path(), "/v1/bridge/finality/attestation/latest");
+        assert_eq!(latest.method(), height.method());
+        assert_eq!(latest.surface(), ApiSurface::Public);
+        assert_eq!(latest.surface(), height.surface());
+        assert_eq!(latest.authentication(), height.authentication());
+        assert_eq!(latest.projections(), height.projections());
+        assert!(latest.projections().openapi());
+        assert!(!latest.projections().sdk());
+        assert!(sumeragi::ROUTES.contains(&latest));
     }
     #[test]
     fn canonical_websocket_streams_are_openapi_projected() {

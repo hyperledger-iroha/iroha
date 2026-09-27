@@ -212,6 +212,8 @@ pub mod validator;
 pub mod verification;
 /// Visitor traits for traversing data-model structures.
 pub mod visit;
+/// Compiled consensus and block wire-schema identity.
+pub mod wire_schema;
 /// Zero-knowledge proof payload types.
 pub mod zk;
 /// Helpers for constructing and accessing instruction registries used by the IVM.
@@ -268,6 +270,7 @@ pub use errors::{
 pub use executor::ValidationFail;
 pub use id::{IdBox, NetworkId};
 pub use level::Level;
+pub use wire_schema::wire_schema_hash;
 /// Uniquely identifiable entity ([`domain::Domain`], [`account::Account`], etc.).
 /// This trait should always be derived with `IdEqOrdHash`.
 pub trait Identifiable: Ord + Eq {
