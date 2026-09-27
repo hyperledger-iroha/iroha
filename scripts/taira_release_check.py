@@ -496,7 +496,8 @@ CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair",
     "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
     "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
-    "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
+    "fastpq::lane::tests::statement_expectations_are_canonical_and_bind_every_ambient_layout",
+    "fastpq::lane::tests::real_engine_enforces_artifact_output_limit_before_proof_work",
 )),)
 
 CORE_STAGES += (("descriptor-bound storage namespace identity", (
@@ -653,7 +654,8 @@ DAEMON_STAGES = (("offline final genesis deployment authority", (
     "tests::manifest_crypto_checks::check_config_qualifies_the_fixed_moderation_strict_ingress",
     "tests::manifest_crypto_checks::check_config_offline_rejects_genesis_instruction_failure",
     "tests::manifest_crypto_checks::consensus_config_caps_use_canonical_v2_fields",
-    "tests::manifest_crypto_checks::consensus_caps_use_frozen_height_context_mode",
+    "authenticated_sumeragi_ingress_geometry_tests::permissioned_capacity_uses_the_frozen_roster",
+    "authenticated_sumeragi_ingress_geometry_tests::npos_capacity_uses_the_signed_ceiling",
     "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_consensus_mode_mismatch",
     "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_fingerprint_mismatch",
     "tests::cli_args::inrou_deployment_authority_requires_offline_check_config",
@@ -676,7 +678,7 @@ TORII_STARTUP_STAGES = (("configured initial catalog and explicit network identi
     "tests_runtime_handlers::configured_catalog_fixture_binds_initial_geometry_and_explicit_network",
 )), ("HTTP admission waits for Queue startup reconciliation", (
     "tests_runtime_handlers::readiness_rejects_empty_queue_startup_reconciliation",
-    "tests_runtime_handlers::readiness_rejects_closed_consensus_ingress",
+    "tests_runtime_handlers::readyz_rejects_stopped_consensus_driver",
 )), ("actual public MCP catalogue and response bounds", (
     "mcp::tests::tools_list_writer_catalog_roundtrips_through_modern_http_byte_limit",
     "mcp::tests::tools_list_byte_budget_includes_envelope_and_rejects_oversized_single_tool",
@@ -771,17 +773,17 @@ TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact rece
     "queue_plan_capacity_wait::tests::only_inactive_is_waited_and_terminal_change_is_immediate",
     "queue_plan_capacity_wait::tests::original_monotonic_and_wire_deadlines_are_not_renewed",
     "queue_plan_capacity_wait::tests::cancellation_drops_wait_without_detached_checks",
-    "tests_runtime_handlers::incoming_queue_plan_handoff_waits_without_claim_then_attests_exact_request",
-    "tests_runtime_handlers::ingress_queue_plan_handoff_cancellation_releases_memory_without_claim",
-    "tests_runtime_handlers::forwarded_queue_plan_handoff_preflight_preserves_request_and_deadline",
-    "tests_runtime_handlers::incoming_queue_plan_handoff_expiry_never_creates_journal_claim",
-    "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_certificate_and_times_out_indeterminate",
-    "tests_runtime_handlers::incoming_queue_plan_handoff_partial_journal_retry_preserves_uncertainty",
-    "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_exact_input_until_canonical_carrier",
-    "tests_runtime_handlers::queue_plan_handoff_expiry_before_aggregation_preserves_partial_journal_uncertainty",
-    "tests_runtime_handlers::incoming_queue_plan_expired_retry_preserves_partial_journal_uncertainty",
-    "tests_runtime_handlers::incoming_queue_plan_capacity_unavailable_never_creates_a_journal_claim",
-    "tests_runtime_handlers::queue_plan_native_capacity_refuses_direct_and_ingress_promises_before_journal",
+    "tests_runtime_handlers::incoming_submit_queue_plan_synced_succeeds_with_installed_journal",
+    "tests_runtime_handlers::queue_plan_synced_attempt_window_is_parallel_bounded_and_released_at_quorum",
+    "tests_runtime_handlers::queue_plan_synced_capacity_retry_requires_exact_bounded_rejection",
+    "tests_runtime_handlers::incoming_queue_plan_synced_future_context_defers_without_queue_ownership",
+    "tests_runtime_handlers::queue_plan_quorum_is_not_publicly_accepted_before_registry_application",
+    "tests_runtime_handlers::incoming_queue_plan_synced_exact_retry_survives_height_advance",
+    "tests_runtime_handlers::strict_proxy_finalization_keeps_w_through_canonical_admission_wait",
+    "tests_runtime_handlers::queue_plan_synced_capacity_exhaustion_preserves_original_deadline_and_partial_claim",
+    "tests_runtime_handlers::queue_plan_synced_capacity_recovery_retains_distinct_claim_and_physical_permit",
+    "tests_runtime_handlers::incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable",
+    "tests_runtime_handlers::late_physical_admission_preserves_durability_and_reports_reconciliation",
     "tests_runtime_handlers::queue_plan_capacity_loss_after_quorum_remains_indeterminate",
     "tests_runtime_handlers::queue_plan_synced_future_authority_retries_same_request_until_quorum",
     "tests_runtime_handlers::queue_plan_synced_persistent_future_preserves_partial_claim_at_deadline",
@@ -1213,6 +1215,8 @@ CORE_ADMISSION_STARTUP_STAGES = CORE_READ_BOUNDARY_STAGES + (("bounded open pref
 )), ) + CORE_ADMISSION_STARTUP_STAGES
 
 PROOF_STAGES = (("canonical proof resource bounds", (
+    "axt_binding::tests::compact_artifact_decoder_enforces_canonical_bytes_and_restores_layout",
+    "backend::compact_quantity_producer::tests::artifact_byte_preflight_and_final_encoding_keep_inclusive_bounds",
     "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
     "proof::tests::raw_fixture_verifier_preserves_explicit_admission_limits",
     "proof::tests::enforce_verify_limits_allows_values_at_exact_boundaries",
@@ -1612,7 +1616,6 @@ CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
     'sumeragi::emergency_fast_handle_tests::missing_beacon_readiness_preserves_bootstrap_ingress',
 )), )
 DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credential custody', (
-    'taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity',
     'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',
     'taira_runtime_signer::tests::disposable_broker_rejects_catalog_and_credential_substitution',
     'taira_runtime_signer::tests::disposable_broker_rejects_unsupported_slots_before_reading_credentials',
@@ -1633,15 +1636,19 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'taira_runtime_signer::tests::offline_introspection_never_requires_the_runtime_signer',
     'taira_runtime_signer::tests::mint_seed_loader_consumes_exact_private_record_and_preserves_restart_source',
     'taira_runtime_signer::tests::descriptor_loader_accepts_only_canonical_owner_only_ed25519',
-    'beacon_bootstrap::tests::fresh_four_seat_bootstrap_roundtrips_native_custody_and_lifecycle_quorum',
-    'beacon_bootstrap::tests::bootstrap_rejects_foreign_genesis_rosters_transcripts_and_lifecycle_substitution',
-    'beacon_bootstrap::tests::bootstrap_phase_eof_and_deadline_abort_without_fabricated_height',
-    'beacon_bootstrap::tests::bootstrap_output_custody_is_exclusive_and_lifecycle_key_is_consumed',
-    'beacon_bootstrap::tests::bootstrap_config_descriptor_uses_only_exact_native_consensus_identity',
-    'beacon_bootstrap::tests::bootstrap_records_observed_height_jumps_and_rejects_pulse_collision',
+    'beacon_bootstrap::tests::each_seat_credential_binds_exact_public_session_and_private_share',
+    'beacon_bootstrap::tests::genesis_session_rejects_mutated_identity_under_same_attempt',
+    'beacon_bootstrap::tests::rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs',
+    'beacon_bootstrap::tests::one_shot_attempt_directory_cannot_reroll_after_restart',
+    'beacon_bootstrap::tests::rotation_config_descriptor_uses_only_exact_native_consensus_identity',
+    'beacon_bootstrap::tests::rotation_phase_rejects_replay_gap_header_mismatch_and_cutoff',
+    'beacon_bootstrap::tests::bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame',
+    'beacon_bootstrap::tests::rotation_seat_parser_requires_independent_pins_and_private_identity',
+    'beacon_bootstrap::tests::genesis_seat_parser_requires_signed_anchor_and_one_private_identity',
+    'beacon_bootstrap::tests::genesis_public_assembly_requires_exact_proof_and_provider_inputs',
 )), )
-TORII_BEACON_STAGES = (('production beacon readiness leaves setup ingress open', (
-    'tests_runtime_handlers::readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress',
+TORII_BEACON_STAGES = (('current consensus readiness leaves setup ingress open', (
+    'tests_runtime_handlers::readyz_tracks_live_consensus_without_gating_beacon_setup',
 )), )
 STAGES += (("exact-height native lifecycle installation", (
     'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
@@ -1778,14 +1785,14 @@ STAGES += (("native beacon reset authority, bounded recovery and public input as
     'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
     'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
     'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
-    'taira_public_reset::host::beacon::tests::beacon_owned_child_deadline_retains_private_attempt',
+    'taira_public_reset::host::beacon::relay::tests::public_frame_rejects_empty_and_oversized_payloads',
     'taira_public_reset::host::tests::beacon_activation_barrier_preserves_pre_ready_bootstrap_and_blocks_later_mutations',
     'taira_public_reset::executor_model::tests::beacon_submitted_continuation_retains_exact_host_cursor_and_excludes_ledger_work',
     'taira_public_reset::executor_model::tests::beacon_continuation_outcome_cannot_reclassify_submitted_ledger_transaction',
-    'taira_public_reset::host::beacon::tests::beacon_successful_early_child_exit_cannot_authorize_another_operation',
+    'taira_public_reset::host::beacon::relay::tests::malformed_public_snapshot_never_becomes_a_signed_edge',
     'taira_public_reset::host::beacon::tests::beacon_unit_publication_preserves_completed_inode_and_rejects_substitution',
     'taira_public_reset::inputs::tests::topology_intent_forbids_generated_pins_and_plans',
-    'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
+    'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_network_bound_seats_and_rejects_substitution',
     'taira_public_reset::public_inputs::tests::public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback',
     'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_topology_intent_without_key_file',
     'taira_public_reset::host::tests::recovery_intent_exposes_every_ordered_child_mutation',
@@ -2252,7 +2259,7 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::carrier_preparation::journals::tests::carrier_journal_shell_plan_precedes_execution_and_survives_capture',
     )),
     ('scoped original World storage publication', (
-        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_missing_and_foreign_scope_before_writers',
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_foreign_owned_scope_before_writers',
         'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publish',
         'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values',
     )),
@@ -4163,7 +4170,8 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
 
     This is an early lexical guard, not a substitute for the executable's exact
     ``--list`` inventory. The latter remains authoritative for module paths,
-    cfg expansion, macro expansion, and test registration.
+    cfg expansion, macro expansion, and test registration. Report every missing
+    selector so one source preflight identifies the complete refactor drift.
     """
     selected_by_package: dict[str, list[tuple[str, str]]] = {}
     for harness, stages in scoped_stages.items():
@@ -4214,8 +4222,7 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
                            if name.rsplit("::", 1)[-1] not in found)
         if missing:
             raise ValueError(f"{len(missing)} selected test declarations absent from captured source: "
-                             + "; ".join(missing[:20])
-                             + (f"; and {len(missing) - 20} more" if len(missing) > 20 else ""))
+                             + "; ".join(missing))
     except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
         raise CheckError("selected source test inventory failed: " + str(error)) from error
 
@@ -4990,12 +4997,18 @@ def main() -> int:
     return 0
 
 
-STAGES += (("generic deployment ownership and retired worker rejection", (
+STAGES += (("authenticated terminal inventory custody", (
+    'taira_public_reset::history::tests::terminal_custody_does_not_admit_an_opaque_execution_payload',
+    'taira_public_reset::history::tests::terminal_custody_still_binds_exact_raw_bytes_claims_and_signer',
+    'taira_public_reset::history::tests::terminal_custody_rejects_wrong_chain_roles_artifacts_and_unknown_metadata',
+)), )
+
+
+# Current owner admission, exact terminal replay and closed authorization schema
+# are already selected in the deployment ownership and native reset schema groups.
+STAGES += (("retired worker path rejection", (
     'taira_public_reset::host::tests::retired_epoch_worker_paths_reject_existing_state_and_service_without_mutation',
     'taira_public_reset::host::tests::retired_epoch_worker_broken_symlink_blocks_reset',
-    'taira_public_reset::host::deployment::tests::terminal_evidence_permits_only_exact_terminal_replays',
-    'taira_public_reset::host::deployment::tests::reset_owner_requires_exact_authorization_without_worker_policy',
-    'taira_public_reset::inputs::tests::retired_worker_authorization_and_inventory_fields_are_rejected',
 )),)
 
 

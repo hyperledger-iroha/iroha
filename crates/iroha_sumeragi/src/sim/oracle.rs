@@ -278,7 +278,7 @@ impl World {
         let x = if loaded {
             params.block_time
         } else {
-            params.idle_block_interval
+            params.payload_retry_interval
         };
         let exec = profile.exec_base + profile.exec_per_kib * 8;
         let g_norm = x + exec + 5 * delta + 4 * small_delta;
@@ -286,7 +286,7 @@ impl World {
         let cap = level_cap(local.t_base, t_max);
         let fetch = u64::from(ceil_log2(f + 1)) * local.fetch_retry;
         let b_view = t_max
-            + params.idle_block_interval
+            + params.payload_retry_interval
             + 2 * local.build_timeout
             + 2 * local.rebroadcast_interval
             + 4 * delta
@@ -294,9 +294,9 @@ impl World {
         let b_live = (f + 2 + u64::from(cap)) * b_view;
         let batch = u64::from(local.sync_batch);
         let per_batch = local.sync_retry + 2 * delta + batch * (params.a_max + params.e_max);
-        // The view-0 anchor allowance `P(0) = idle_block_interval + build_timeout` (§9.1): no
+        // The view-0 anchor allowance `P(0) = payload_retry_interval + build_timeout` (§9.1): no
         // timer depends on a node's own queue.
-        let p0 = params.idle_block_interval + local.build_timeout;
+        let p0 = params.payload_retry_interval + local.build_timeout;
         let sigma = local.rebroadcast_interval + delta;
         let t_req = 2
             * (sigma + local.build_timeout + 3 * delta + fetch + params.a_max + params.e_max)
@@ -689,7 +689,7 @@ impl World {
         let views: Millis = (level..=level.max(k_star))
             .map(|l| view_timeout(local.t_base, t_max, l) + b.delta)
             .sum();
-        let p0 = params.idle_block_interval + local.build_timeout;
+        let p0 = params.payload_retry_interval + local.build_timeout;
         let bound = p0 + views + 2 * b.sigma + b.fetch + b.exec + 5 * b.delta;
         self.oracle.p5[r] = Some(self.heal_at + bound * 103 / 100);
     }

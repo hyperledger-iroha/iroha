@@ -14056,7 +14056,7 @@ async fn handler_health(
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
 /// probe. Queue startup and consensus admission must be available. Beacon setup
-/// additionally gates this production probe while leaving installation ingress open.
+/// is installed through that admission path and does not gate this probe.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
         return (

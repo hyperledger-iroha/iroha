@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1612 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1776 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1618 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1783 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -682,7 +682,7 @@ class BeaconGateTests(unittest.TestCase):
                 'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
             ),
             'daemon': (
-                'beacon_bootstrap::tests::bootstrap_records_observed_height_jumps_and_rejects_pulse_collision',
+                'beacon_bootstrap::tests::rotation_phase_rejects_replay_gap_header_mismatch_and_cutoff',
             ),
             'torii-unit': (
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
@@ -724,14 +724,14 @@ class BeaconGateTests(unittest.TestCase):
             'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
             'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
             'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
-            'taira_public_reset::host::beacon::tests::beacon_owned_child_deadline_retains_private_attempt',
+            'taira_public_reset::host::beacon::relay::tests::public_frame_rejects_empty_and_oversized_payloads',
             'taira_public_reset::host::tests::beacon_activation_barrier_preserves_pre_ready_bootstrap_and_blocks_later_mutations',
             'taira_public_reset::executor_model::tests::beacon_submitted_continuation_retains_exact_host_cursor_and_excludes_ledger_work',
             'taira_public_reset::executor_model::tests::beacon_continuation_outcome_cannot_reclassify_submitted_ledger_transaction',
-            'taira_public_reset::host::beacon::tests::beacon_successful_early_child_exit_cannot_authorize_another_operation',
+            'taira_public_reset::host::beacon::relay::tests::malformed_public_snapshot_never_becomes_a_signed_edge',
             'taira_public_reset::host::beacon::tests::beacon_unit_publication_preserves_completed_inode_and_rejects_substitution',
             'taira_public_reset::inputs::tests::topology_intent_forbids_generated_pins_and_plans',
-            'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
+            'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_network_bound_seats_and_rejects_substitution',
             'taira_public_reset::public_inputs::tests::public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback',
             'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_topology_intent_without_key_file',
             'taira_public_reset::host::tests::host_receipt_names_cover_every_action_and_artifact_role',
@@ -769,7 +769,7 @@ class BeaconGateTests(unittest.TestCase):
             "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
             "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
         )
-        seam = "taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity"
+        seam = "taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs"
         fixture_root = SCRIPT.resolve().parents[1] / "crates/iroha_test_network/tests"
         self.assertRegex((fixture_root / "taira_consensus_contracts.rs").read_text(),
                          r'#\[path = "support/production_beacon_bootstrap\.rs"\]\s*mod production_beacon_bootstrap;')
@@ -1539,7 +1539,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             'taira_public_reset::inputs::context_release::tests::reset_context_artifact_derives_real_bytes_and_retains_drift_custody',
             'taira_public_reset::inputs::context_release::tests::reset_context_artifact_rejects_wrong_mode_and_symlink_before_projection',
             'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
-            'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
+            'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_network_bound_seats_and_rejects_substitution',
         )
         stale = (
             'taira_public_reset::inputs::tests::unsigned_inventory_draft_forbids_generated_beacon_authority',

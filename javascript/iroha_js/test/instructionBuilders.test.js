@@ -92,6 +92,7 @@ import {
 } from "./helpers/native.js";
 import {
   assertNativeInstructionAdapterParity,
+  assertPublicInstructionProjection,
   normalizedHashHex,
   toByteArray,
   withNativeInstructionCodec,
@@ -138,7 +139,9 @@ baseTest("governance V1 selectors share the exact bounded unreserved grammar", (
 baseTest("all governance instruction builders reject selector aliases", () => {
   const cases = [
     () => buildCastZkBallotInstruction({ electionId: "a/b", proof: "AA==" }),
-    () => buildCastPlainBallotInstruction({ referendumId: ".hidden" }),
+    () => buildCastPlainBallotInstruction({
+      referendumId: ".hidden", owner: ACCOUNT_ID, amount: "1", durationBlocks: 50, direction: "aye",
+    }),
     () => buildCreateElectionInstruction({ electionId: "a%2Fb" }),
     () => buildSubmitBallotInstruction({ electionId: "a".repeat(129) }),
     () => buildFinalizeElectionInstruction({ electionId: "..", tally: [0, 0] }),
@@ -3827,7 +3830,7 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
     }), /must contain exactly/u);
   }
   const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, expected);
+  assertPublicInstructionProjection(decoded, expected);
 });
 
 test("buildUpdatePlainConvictionInstruction retains no choice field", () => {
@@ -3984,7 +3987,7 @@ baseTest("UpdatePlainConviction uses the registered native Norito frame", () => 
   );
   assert.equal(encoded[39], 0x02);
   withNativeInstructionCodec(({ noritoDecodeInstruction }) => {
-    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
+    assertPublicInstructionProjection(noritoDecodeInstruction(encoded, 753), instruction);
   });
 });
 
@@ -4010,8 +4013,8 @@ baseTest("UpdatePlainConviction matches the Rust direct-instruction golden", () 
   const boxed = validateNoritoFrame(boxedFrame, { requireNonEmptyPayload: true });
   assert.equal(boxed.flags, fixture.header_flags);
   assert.deepEqual(boxed.payload, pair);
-  assert.deepEqual(noritoDecodeInstruction(boxedFrame, 753), instruction);
-  assert.deepEqual(noritoDecodeInstructionBoxArchive(pair, 753), instruction);
+  assertPublicInstructionProjection(noritoDecodeInstruction(boxedFrame, 753), instruction);
+  assertPublicInstructionProjection(noritoDecodeInstructionBoxArchive(pair, 753), instruction);
 
   const concreteFrame = Buffer.from(fixture.concrete_frame_hex, "hex");
   assert.equal(fixture.concrete_schema_name,
@@ -4118,7 +4121,7 @@ baseTest("CastPlainBallot native Norito adapter preserves strict fractional Quan
       .subarray(0, 16);
     assert.equal(expectedSchemaHash.toString("hex"), "62b23313103064bc2c9d528ac3548949");
     assert.deepEqual(validatedInner.schemaHash, expectedSchemaHash);
-    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
+    assertPublicInstructionProjection(noritoDecodeInstruction(encoded, 753), instruction);
 
     for (const amount of [
       1,

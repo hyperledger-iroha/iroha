@@ -29,8 +29,8 @@ fn statuses(actions: &[Action]) -> usize {
 fn det_l1_levels_grow() {
     let mut h = H::new(4, pick::set_b(0));
     let t_base = h.local.t_base;
-    // View 0: anchor = t_enter + idle_block_interval + build_timeout.
-    let expected0 = h.params.idle_block_interval + h.local.build_timeout + t_base;
+    // View 0: anchor = t_enter + payload_retry_interval + build_timeout.
+    let expected0 = h.params.payload_retry_interval + h.local.build_timeout + t_base;
     assert_eq!(h.core.view_deadline(), Some(expected0));
     let mut timeouts_at = Vec::new();
     for view in 0..4u64 {
@@ -171,7 +171,7 @@ fn det_l4_stage2_timing() {
 
     // (b) backstop anchor + φ·T for a node that never became ready.
     let mut h = H::new(4, pick::set_a(0));
-    let backstop = h.params.idle_block_interval + h.local.build_timeout + h.local.t_base / 2;
+    let backstop = h.params.payload_retry_interval + h.local.build_timeout + h.local.t_base / 2;
     h.run_until(backstop - 1);
     assert!(h.core.stage < 2);
     h.run_until(backstop);
@@ -884,10 +884,10 @@ fn det_l26_raise_only_on_slow_commit_or_exec() {
     qc_msg(&mut h, cqc);
     assert_eq!(start(&h), 1, "slow view 1");
 
-    // (g) The heartbeat: the view-0 proposal arrives `idle_block_interval` after the entry
+    // (g) The heartbeat: the view-0 proposal arrives `payload_retry_interval` after the entry
     // and commits at once → unchanged (the anchor is the proposal, not the entry).
     let mut h = H::new(4, pick::set_b(0));
-    h.now += h.params.idle_block_interval;
+    h.now += h.params.payload_retry_interval;
     let blk = h.block(0, b"");
     prop(&mut h, 0, &blk, None);
     h.now += 100;
@@ -1032,7 +1032,7 @@ fn det_l29_late_leader_does_not_raise() {
 
     // (a) View 0: the proposal arrives after the anchor `t_enter + P(0)`.
     let mut h = H::new(4, pick::set_b(0));
-    let p0 = h.params.idle_block_interval + h.local.build_timeout;
+    let p0 = h.params.payload_retry_interval + h.local.build_timeout;
     let late = h.core.t_enter + p0 + half + 100;
     h.run_until(late);
     assert_eq!(h.core.timeout_view, None, "the view is still open");

@@ -3,6 +3,7 @@ use super::super::{admission, storage};
 use super::*;
 use crate::taira_public_reset as reset;
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use reset::history::TerminalInventory;
 use reset::{
     BUILD_PROFILE, BUILD_TARGET, CHAIN_ID, EdgeInitialStateV1, FaucetPolicyV1, FeeIntentV1,
     RevisionV1, SourceManifestV1, ValidatorClientV1, ValidatorInitialStateV1,
@@ -72,7 +73,7 @@ fn artifact(
     })
 }
 
-fn bind_predecessor(old: &InventoryV1, runtime: &CurrentRuntime, plan: &Plan) -> Result<()> {
+fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Plan) -> Result<()> {
     need(
         old.validators.len() == 4
             && old.validator_clients.len() == 4
@@ -158,9 +159,9 @@ fn bind_predecessor(old: &InventoryV1, runtime: &CurrentRuntime, plan: &Plan) ->
 /// the failed reset's candidate revision, genesis or client identities as the
 /// source of the successor topology.
 fn bind_selected_inventory(
-    selected: &InventoryV1,
+    selected: &TerminalInventory,
     selected_sha256: &str,
-    predecessor: &InventoryV1,
+    predecessor: &TerminalInventory,
     runtime: &CurrentRuntime,
     plan: &Plan,
 ) -> Result<()> {
@@ -176,9 +177,9 @@ fn bind_selected_inventory(
 }
 
 fn bind_inventory_lineage(
-    selected: &InventoryV1,
+    selected: &TerminalInventory,
     selected_sha256: &str,
-    predecessor: &InventoryV1,
+    predecessor: &TerminalInventory,
     runtime: &CurrentRuntime,
     predecessor_sha256: &str,
     rolled_back: bool,
@@ -213,7 +214,7 @@ fn bind_inventory_lineage(
 }
 
 fn distinct_new_clients(
-    old: &InventoryV1,
+    old: &TerminalInventory,
     new: &[ValidatorClientV1],
     faucet: &FaucetPolicyV1,
     new_canary: &str,
@@ -254,8 +255,13 @@ fn distinct_new_clients(
 mod tests {
     use super::*;
 
-    fn lineage_fixture() -> (InventoryV1, InventoryV1, CurrentRuntime) {
-        let mut selected = reset::sample_inventory_fixture();
+    fn terminal_fixture() -> TerminalInventory {
+        let bytes = reset::canonical_inventory_bytes(&reset::sample_inventory_fixture()).unwrap();
+        reset::history::decode(&bytes, "fixture").unwrap().0
+    }
+
+    fn lineage_fixture() -> (TerminalInventory, TerminalInventory, CurrentRuntime) {
+        let mut selected = terminal_fixture();
         selected.revision.commit = "4".repeat(40);
         selected.revision.build_id = selected.revision.commit.clone();
         let mut predecessor = selected.clone();
@@ -485,7 +491,7 @@ mod tests {
 
     #[test]
     fn topology_candidate_rejects_reused_or_duplicate_account_peer_and_faucet_identities() {
-        let old = reset::sample_inventory_fixture();
+        let old = terminal_fixture();
         let mut clients = old.validator_clients.clone();
         for (index, client) in clients.iter_mut().enumerate() {
             client.account_id = format!("new-account-{index}");
@@ -673,29 +679,21 @@ impl PrepareTopologyIntent {
             )?;
             let inventory_bytes = admission::read(&inventory_pin)?;
             let (predecessor, _chain_guard) =
-                reset::decode_inventory(&inventory_bytes, "retained inventory")?;
-            reset::validate_inventory_for_controller(
-                &predecessor,
-                reset::ControllerAdmission::AbandonOriginalTarget,
-            )?;
+                reset::history::decode(&inventory_bytes, "retained inventory")?;
             let selected_pin = observed.pin(&self.selected_inventory, None, MAX_PROOF)?;
             need(
                 selected_pin.sha256 == self.expected_selected_inventory_sha256,
                 "selected inventory digest differs",
             )?;
             let (old, _selected_chain_guard) =
-                reset::decode_inventory(&admission::read(&selected_pin)?, "selected inventory")?;
-            reset::validate_inventory_for_controller(
-                &old,
-                reset::ControllerAdmission::AbandonOriginalTarget,
-            )?;
+                reset::history::decode(&admission::read(&selected_pin)?, "selected inventory")?;
             let selected_authorization_pin =
                 observed.pin(&self.selected_authorization, Some(0o600), MAX_PROOF)?;
             let selected_authorization: reset::AuthorizationEnvelopeV1 =
                 json::from_slice(&admission::read(&selected_authorization_pin)?)?;
             let trusted: reset::TrustedKeyV1 =
                 json::from_slice(&admission::read(&plan.trusted_public_key)?)?;
-            reset::verify_authorization_at_signed_instant(
+            reset::history::verify_authorization(
                 &old,
                 &selected_pin.sha256,
                 &selected_authorization,

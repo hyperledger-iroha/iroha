@@ -461,7 +461,7 @@ mod tests {
                 ..params
             },
             ChainParams {
-                idle_block_interval: params.idle_block_interval + 1,
+                payload_retry_interval: params.payload_retry_interval + 1,
                 ..params
             },
             ChainParams {

@@ -494,7 +494,7 @@ fn heartbeat_idle_wait_and_payload_ready() {
 
     // Nothing arrives: the heartbeat is an EMPTY block at t_enter + idle (+ build timeout).
     let mut h = H::new(4, pick::leader(0));
-    let out = h.run_until(h.params.idle_block_interval + h.local.build_timeout);
+    let out = h.run_until(h.params.payload_retry_interval + h.local.build_timeout);
     let sent = proposals(&out);
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].header.payload_len, 0);
@@ -519,7 +519,7 @@ fn oversized_payload_is_replaced_by_empty() {
     let mut h = H::with(4, local, params, pick::leader(0));
     h.run_until(1_000);
     h.built(&[1; 9]);
-    let out = h.run_until(h.params.idle_block_interval + h.local.build_timeout);
+    let out = h.run_until(h.params.payload_retry_interval + h.local.build_timeout);
     assert!(proposals(&out).iter().all(|p| p.header.payload_len == 0));
 }
 
@@ -531,7 +531,7 @@ fn det_r4_payload_ready_moves_no_timer() {
     let before = h.core.view_deadline();
     h.now = 100;
     h.fire(Event::PayloadReady { req: 0 });
-    let expected = h.params.idle_block_interval + h.local.build_timeout + h.local.t_base;
+    let expected = h.params.payload_retry_interval + h.local.build_timeout + h.local.t_base;
     assert_eq!(before, Some(expected));
     assert_eq!(h.core.view_deadline(), Some(expected));
 }

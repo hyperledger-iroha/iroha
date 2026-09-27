@@ -1,4 +1,4 @@
-//! Proposing and the heartbeat (§6.10): a leader can always propose; empty blocks are valid.
+//! Work-driven proposing (§6.10): empty builds wait and never become blocks.
 
 use super::{Build, Core, Me};
 use crate::{
@@ -28,7 +28,7 @@ impl Core {
     /// `propose` (§6.10) on round entry: nothing if a proposal is recorded at `(h, view)` (rule
     /// 0: after a restart only the recorded one is re-sent); at view 0 schedule the build at
     /// `t_propose` (rule 1); after `TC(view − 1)` propose at once (rule 2): `Q`'s block unchanged
-    /// if the TC carries `Q`, else a fresh block (`EMPTY` from `empty_after_views` on).
+    /// if the TC carries `Q`, else build fresh nonempty work at every view.
     pub(super) fn propose(&mut self) {
         if self.leader_eligible().is_none() {
             return;
@@ -62,18 +62,16 @@ impl Core {
                     self.want(q.block_hash, self.height, sources);
                 }
             }
-            None if self.view >= self.cfg.params.empty_after_views
-                && !cfg!(sumeragi_mutation = "ML13") =>
-            {
-                self.propose_fresh(Vec::new(), false);
-            }
-            None => self.request_build(true),
+            None => self.request_build(),
         }
     }
 
-    /// Push `BuildPayload{req}` with a fresh request id; `second`: no idle wait follows
-    /// (heartbeat retry or view > 0).
-    fn request_build(&mut self, second: bool) {
+    /// Push `BuildPayload{req}` with a fresh request id.
+    fn request_build(&mut self) {
+        if self.leader_eligible().is_none() {
+            self.build = Build::Idle;
+            return;
+        }
         let budget = self.pm.exec_budget(self.cfg.params.e_max);
         let req = self.next_req;
         self.next_req = self.next_req.saturating_add(1);
@@ -87,7 +85,6 @@ impl Core {
         self.build = Build::Requested {
             req,
             deadline: self.now.saturating_add(self.local.build_timeout),
-            second,
             ready: false,
         };
     }
@@ -95,17 +92,17 @@ impl Core {
     /// Fire a due build deadline (`Tick`, §6.11 first).
     pub(super) fn build_tick(&mut self) {
         match self.build {
-            Build::Scheduled(at) if self.now >= at => self.request_build(false),
+            Build::Scheduled(at) if self.now >= at => self.request_build(),
             Build::Requested {
                 req,
                 deadline,
-                second,
                 ready,
             } if self.now >= deadline => {
-                // No answer by `t_propose + build_timeout`: use `EMPTY` (unflagged).
-                self.payload_ready(req, (Vec::new(), false), second, ready);
+                // A missed build deadline is not a block. Keep the request wakeup
+                // and retry on the bounded interval or newly available work.
+                self.payload_ready(req, (Vec::new(), false), ready);
             }
-            Build::IdleWait { until, .. } if self.now >= until => self.request_build(true),
+            Build::IdleWait { until, .. } if self.now >= until => self.request_build(),
             _ => {}
         }
     }
@@ -124,14 +121,13 @@ impl Core {
     pub(super) fn on_payload_built(&mut self, req: u64, payload: Vec<u8>, attest: bool) {
         if let Build::Requested {
             req: outstanding,
-            second,
             ready,
             ..
         } = self.build
             && req == outstanding
             && !self.awaiting
         {
-            self.payload_ready(req, (payload, attest), second, ready);
+            self.payload_ready(req, (payload, attest), ready);
         }
     }
 
@@ -139,30 +135,20 @@ impl Core {
         &mut self,
         req: u64,
         (payload, attest): (Vec<u8>, bool),
-        second: bool,
         ready: bool,
     ) {
-        // SPEC: a payload above `max_block_bytes` would be a signed defect; it is replaced by
-        // `EMPTY` (unflagged) rather than proposed (Appendix E, E20).
+        // Invalid or absent work never substitutes a heartbeat block.
         let too_large =
             u32::try_from(payload.len()).map_or(true, |len| len > self.cfg.params.max_block_bytes);
-        let (payload, attest) = if too_large {
-            (Vec::new(), false)
-        } else {
-            (payload, attest)
-        };
-        let idle_until = self
-            .t_enter
-            .saturating_add(self.cfg.params.idle_block_interval);
-        if self.view == 0 && !second && payload.is_empty() && self.now < idle_until {
-            if ready {
+        if payload.is_empty() || too_large {
+            if ready && !too_large {
                 // `PayloadReady{req}` already arrived: a transaction came in after the builder
                 // answered `EMPTY`.
-                self.request_build(true);
+                self.request_build();
             } else {
                 self.build = Build::IdleWait {
                     req,
-                    until: idle_until,
+                    until: self.now.saturating_add(self.cfg.params.payload_retry_interval),
                 };
             }
             return;
@@ -171,8 +157,8 @@ impl Core {
         self.propose_fresh(payload, attest);
     }
 
-    /// On `PayloadReady{req}` (§6.10): it only ends the view-0 leader's heartbeat wait for the
-    /// request `req` that was answered `EMPTY`. No timer depends on it (§9.1).
+    /// On `PayloadReady{req}` (§6.10): wake the eligible leader's empty-build wait at any
+    /// view. Consensus view timers do not depend on its local queue (§9.1).
     pub(super) fn on_payload_ready(&mut self, req: u64) {
         if self.awaiting {
             return;
@@ -185,11 +171,11 @@ impl Core {
             self.t_prop = Some(self.t_prop.map_or(t, |x| x.min(t)));
         }
         match &mut self.build {
-            Build::IdleWait { req: waiting, .. } if *waiting == req => self.request_build(true),
+            Build::IdleWait { req: waiting, .. } if *waiting == req => self.request_build(),
             // SPEC: the driver sends `PayloadReady{req}` after answering `BuildPayload{req}`
             // with `EMPTY`; that answer may still be queued behind it. The readiness is kept,
             // and the `EMPTY` answer then requests again at once instead of idling until
-            // `idle_block_interval` (found by the simulator: F2 seed 115, an honest leader
+            // `payload_retry_interval` (found by the simulator: F2 seed 115, an honest leader
             // demoted for idling; Appendix E, E4).
             #[cfg(not(sumeragi_mutation = "ME4"))]
             Build::Requested {
@@ -208,17 +194,9 @@ impl Core {
             self.build = Build::Idle;
             return;
         };
-        // SPEC: the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh
-        // payload, also a built one at view 0: with `empty_after_views = 0` (a chain parameter
-        // the application must reject, §9.4) it would otherwise propose a payload that every
-        // voter reports as a signed defect (Appendix E, E38).
-        let (payload, attest) = if self.view >= self.cfg.params.empty_after_views
-            && !cfg!(sumeragi_mutation = "ML13")
-        {
-            (Vec::new(), false)
-        } else {
-            (payload, attest)
-        };
+        if payload.is_empty() {
+            return;
+        }
         // MA7: the builder's flag is dropped.
         let attest = attest && !cfg!(sumeragi_mutation = "MA7");
         let justify = if self.view == 0 {

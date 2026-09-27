@@ -9,6 +9,9 @@ The public boundary parses and renders account addresses, and encodes/decodes
 both public instruction frames and the compact `InstructionBox` archives used
 inside transaction payloads. These encodings are distinct. Archive admission
 requires exact consumption and canonical native re-encoding.
+Public frame admission accepts only the canonical `InstructionBox` frame. A
+concrete instruction frame, including a validation-fee policy proposal, cannot
+substitute for that envelope and is not retried through another decoder.
 
 All four instruction encode/decode operations require an explicit `network_prefix:
 u16`. The caller's transaction or network profile owns this value; it is never
@@ -22,6 +25,11 @@ helper consumers must similarly enter their explicitly selected network scope.
 The instruction JSON catalog supports every browser transaction allowlist family:
 smart-contract deployment, game, NFT market and Kagemusha top-up. Typed native
 owners validate payloads; unsupported envelopes do not fall back to generic JSON.
+
+`CastPlainBallot` and `UpdatePlainConviction` use one closed native adapter. It
+retains the registered model and exact u64 duration in both frame and archive
+operations; missing, extra, renamed and choice fields on conviction updates are
+rejected before generic instruction admission. Decoding rechecks that contract.
 
 Native bindings convert buffers and error categories only. They also reuse the
 typed helper operations for their existing transaction builders and inspection

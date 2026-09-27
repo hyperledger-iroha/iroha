@@ -101,8 +101,8 @@ pub enum ConfigError {
     FetchRetryTooLong,
     /// A timer interval is zero.
     ZeroInterval(&'static str),
-    /// Chain parameters: `block_time > idle_block_interval`.
-    BlockTimeAboveIdle,
+    /// Chain parameters: `block_time > payload_retry_interval`.
+    BlockTimeAbovePayloadRetry,
     /// Chain parameters: `empty_after_views < 1`.
     EmptyAfterViewsZero,
     /// `Init.demotion_window < 1` (`W` is a genesis constant, §9.4).

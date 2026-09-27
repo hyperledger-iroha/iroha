@@ -39,10 +39,11 @@ genesis-anchored finality chains verify that certified scheduling transitions
 retain original validator keys and the authenticated beacon session, alongside
 a fresh verified pulse and exact fee-paid deployment effects.
 
-Both scopes qualify production beacon capability against the exact public session
-and validator seat, consumed runtime credentials, genesis-bound bootstrap and
-readiness before network fixtures. An uninitialized signer fails readiness while
-bootstrap ingress remains available. Setup uses real committed transactions to
+Both scopes check Core beacon capability against the exact public session and
+validator seat, consumed runtime credentials, and genesis-bound bootstrap before
+network fixtures. Torii readiness exercises the running consensus driver's actual
+state and leaves beacon setup ingress available; the separate Core capability
+checks reject an uninitialized signer. Setup uses real committed transactions to
 advance DKG phases; it never creates empty blocks or invents committed heights.
 The shipping Taira bootstrap executable is a separately authenticated artifact.
 The real four-peer fixture uses fresh native DKG custody and crosses the mandatory
@@ -55,8 +56,8 @@ assume one block per operation. Pulse verification derives its height and parent
 anchor from the signed genesis and accepts only a nonempty canonical carrier.
 One fresh ceremony serves this complete sequence in both scopes. Its generated custody lives only in a validated owner-only
 runtime directory outside Git; the isolated shipping Kagami and Taira launcher
-are explicit inputs, and a separate message-control daemon exercises the exact
-Core-only seam. The full launcher’s Linux/Inrou requirements remain enforced.
+are explicit inputs. The fixture's configured runtime-provider broker supplies
+the exact signer custody. The full launcher's Linux/Inrou requirements remain enforced.
 
 Both Core startup selections check the fixed-domain IPA parameter cache with
 concurrent cold initialization, canonical bytes/fingerprints, owned clone
@@ -264,6 +265,18 @@ complete native census from its required test selections. The configuration targ
 warm target, profile and inherited locks; it retains all package defaults in the
 same Cargo graph as the other harnesses. No first-run or total runtime improvement
 is claimed without measurement.
+
+The source inventory preflight rejects every selected declaration absent from the
+captured packages and reports the complete missing list before Cargo. The native
+harness `--list` remains authoritative for exact module paths and compiled test
+registration. Run the lightweight current-checkout guard after test refactors:
+`python3 -B -m unittest discover -s pytests/scripts -p test_taira_release_check_source_inventory.py`.
+It scans both qualification scopes and checks that every current per-seat beacon
+bootstrap test remains selected. The current census covers authenticated genesis
+and rotation seats, bounded proof frames, one-shot attempt custody, exact provider
+inputs, and consumed configuration descriptors. QueuePlan controls exercise
+durable receipts, partial-claim deadlines, physical capacity, and canonical
+publication; they do not require the retired consensus capacity-handoff API.
 
 The combined native test build selects the exact `iroha_cli --bin iroha`
 and `irohad --lib` test harnesses. The daemon cases execute signed genesis

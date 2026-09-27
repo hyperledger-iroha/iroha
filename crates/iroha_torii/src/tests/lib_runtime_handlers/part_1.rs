@@ -250,6 +250,141 @@ async fn readiness_rejects_empty_queue_startup_reconciliation() {
     );
 }
 
+
+/// A real production consensus instance for the HTTP readiness boundary. The
+/// transport is disconnected; the driver, genesis execution, Kura and safety
+/// records use the node's normal startup path. This observer cannot manufacture
+/// a quorum or a committed block merely to make readiness pass.
+struct ReadinessNode {
+    app: SharedAppState,
+    node: Option<iroha_core::sumeragi::node::RunningNode>,
+    _directory: tempfile::TempDir,
+}
+
+impl ReadinessNode {
+    fn start() -> Self {
+        use iroha_core::{
+            governance::manifest::LaneManifestRegistry,
+            sumeragi::{
+                driver::traits::{Frame, Net, NoObserver},
+                node::{NodeConfig, NodeInputs},
+                test_chain::{CertifiedTestChain, TestChainConfig},
+            },
+        };
+        struct DisconnectedTransport;
+        impl Net for DisconnectedTransport {
+            fn send(&self, _: &iroha_sumeragi::types::PublicKey, _: &Frame) {}
+        }
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+            .expect("signed genesis fixture");
+        let genesis_account = chain.genesis_account().clone();
+        let world = World::with(
+            [Domain::new("genesis".parse().unwrap()).build(&genesis_account)],
+            [Account::new(genesis_account.clone()).build(&genesis_account)],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(IrohaState::new_with_chain_and_network_id_for_testing(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            chain.state().chain_id_ref().clone(),
+            chain.network_id(),
+        ));
+        let nexus = state.nexus_snapshot();
+        state.install_lane_manifests(&Arc::new(
+            LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+        ));
+        let mut app = mk_app_state_for_tests();
+        let directory = tempfile::tempdir().expect("production readiness node files");
+        let node = iroha_core::sumeragi::node::start(NodeInputs {
+            state: Arc::clone(&state),
+            kura: Arc::clone(&kura),
+            queue: Arc::clone(&app.queue),
+            events: tokio::sync::broadcast::channel(16).0,
+            net: Arc::new(DisconnectedTransport),
+            key_pair: KeyPair::from_seed(vec![0xD9; 32], Algorithm::BlsNormal),
+            chain_id: state.chain_id_ref().to_string(),
+            genesis: Some(chain.genesis().clone()),
+            genesis_account,
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+            config: NodeConfig {
+                records_dir: directory.path().join("records"),
+                installation_log: directory.path().join("keys/installation.log"),
+                bodies_dir: directory.path().join("bodies"),
+                local: Default::default(),
+                assert_fresh_key: true,
+                retired_keys: Vec::new(),
+            },
+            observer: Arc::new(NoObserver),
+            driver: Default::default(),
+        })
+        .expect("production driver startup");
+        let app_mut = Arc::get_mut(&mut app).expect("exclusive app fixture");
+        app_mut.state = state;
+        app_mut.kura = kura;
+        app_mut.sumeragi = Some(node.handle());
+        Self { app, node: Some(node), _directory: directory }
+    }
+
+    fn stop(&mut self) {
+        if let Some(node) = self.node.take() {
+            node.driver.shutdown();
+        }
+    }
+
+    async fn response(&self) -> AxResponse {
+        axum::Router::new()
+            .route("/readyz", axum::routing::get(handler_readyz))
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+            .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+            .with_state(Arc::clone(&self.app))
+            .oneshot(axum::http::Request::builder()
+                .uri("/readyz")
+                .header(axum::http::header::ACCEPT, "text/plain, application/json")
+                .body(Body::empty()).unwrap())
+            .await.expect("HTTP readiness response")
+    }
+}
+
+impl Drop for ReadinessNode {
+    fn drop(&mut self) { self.stop(); }
+}
+
+#[tokio::test]
+async fn readyz_rejects_stopped_consensus_driver() {
+    let mut fixture = ReadinessNode::start();
+    assert_eq!(fixture.response().await.status(), StatusCode::OK);
+    fixture.stop();
+    assert!(!fixture.app.sumeragi.as_ref().unwrap().ready());
+    let response = fixture.response().await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8");
+    let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+    let envelope: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(envelope.get("code").and_then(norito::json::Value::as_str),
+        Some("service_unavailable"));
+}
+
+#[tokio::test]
+async fn readyz_tracks_live_consensus_without_gating_beacon_setup() {
+    use iroha_core::state::WorldReadOnly as _;
+    let fixture = ReadinessNode::start();
+    assert!(fixture.app.state.view().world().active_global_beacon_key_session().is_none());
+    let handle = fixture.app.sumeragi.as_ref().unwrap();
+    assert!(handle.ready());
+    assert_eq!(handle.status().unwrap().committed_height, 1);
+    let response = fixture.response().await;
+    assert_eq!(response.status(), StatusCode::OK,
+        "beacon installation must be reachable through a live consensus driver");
+    assert_eq!(response.headers()[axum::http::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8");
+    assert_eq!(axum::body::to_bytes(response.into_body(), 4096).await.unwrap().as_ref(), b"Ready");
+}
+
 fn mk_app_state_for_tests_with_chain_id(chain_id: ChainId) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_chain_id(
         World::default(),

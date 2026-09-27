@@ -270,7 +270,7 @@ fn det_r4_own_messages_through_insertion() {
     let mut h = H::new(1, |_| 0);
     h.auto_exec = true;
     // The harness never answers builds: the heartbeat (EMPTY) is proposed at idle + build.
-    h.run_until(h.params.idle_block_interval + h.local.build_timeout);
+    h.run_until(h.params.payload_retry_interval + h.local.build_timeout);
     assert_eq!(h.core.tip.height, 1, "n = 1 commits through its own votes");
     assert!(votes(&h.all).is_empty(), "nothing is routed to itself");
     // Its own timeout forms the TC of the view.

@@ -84,6 +84,8 @@ const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-inten
 
 #[path = "taira_public_reset_config.rs"]
 mod config;
+#[path = "taira_public_reset_history.rs"]
+mod history;
 #[path = "taira_public_reset_host.rs"]
 mod host;
 #[path = "taira_public_reset_validator_config.rs"]
@@ -803,9 +805,11 @@ impl JsonDeserialize for QualificationScopeV1 {
     }
 }
 
+type InventoryV1 = InventoryRecordV1<host::beacon::BeaconBootstrapPlanV1>;
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct InventoryV1 {
+#[norito(deny_unknown_fields, no_fast_from_json)]
+struct InventoryRecordV1<Beacon> {
     schema: String,
     qualification_scope: QualificationScopeV1,
     deployment_id: String,
@@ -826,7 +830,7 @@ struct InventoryV1 {
     faucet_policy: FaucetPolicyV1,
     fee_intent: FeeIntentV1,
     /// Exact fresh ceremony and final provider units authorized before execution.
-    beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1,
+    beacon_bootstrap: Beacon,
     cleanup: CleanupV1,
     timeouts: TimeoutsV1,
     artifact_closure_sha256: String,
@@ -837,7 +841,7 @@ struct InventoryV1 {
     inrou_stage_tree_sha256: Option<String>,
 }
 
-impl InventoryV1 {
+impl<Beacon> InventoryRecordV1<Beacon> {
     fn validate_inrou_scope(&self) -> Result<()> {
         match (
             self.qualification_scope,
@@ -1584,6 +1588,37 @@ fn verify_authorization_window(
     now_ms: u64,
     admission_window: bool,
 ) -> Result<()> {
+    verify_authorization_claims(inventory, inventory_sha256, envelope, trusted)?;
+    let claims = &envelope.claims;
+    let required_execution_expiry = claims
+        .issued_at_unix_ms
+        .checked_add(execution_lifetime_ms(inventory)?)
+        .ok_or_else(|| eyre!("authorization execution expiry overflow"))?;
+    if claims.execution_expires_at_unix_ms != required_execution_expiry {
+        return Err(eyre!(
+            "authorization execution lease does not exactly cover the bounded execution plan"
+        ));
+    }
+    let active_expiry = if admission_window {
+        claims.expires_at_unix_ms
+    } else {
+        claims.execution_expires_at_unix_ms
+    };
+    if now_ms.saturating_add(MAX_CLOCK_SKEW_MS) < claims.not_before_unix_ms
+        || now_ms > active_expiry.saturating_add(MAX_CLOCK_SKEW_MS)
+    {
+        return Err(eyre!("authorization is not currently valid"));
+    }
+    verify_authorization_signature(envelope, trusted)
+}
+
+/// Verify signed custody metadata independently of the candidate's execution schema.
+fn verify_authorization_claims<Beacon>(
+    inventory: &InventoryRecordV1<Beacon>,
+    inventory_sha256: &str,
+    envelope: &AuthorizationEnvelopeV1,
+    trusted: &TrustedKeyV1,
+) -> Result<()> {
     if envelope.schema != AUTHORIZATION_SCHEMA_V1 {
         return Err(eyre!(
             "authorization schema must be `{AUTHORIZATION_SCHEMA_V1}`"
@@ -1642,28 +1677,21 @@ fn verify_authorization_window(
             "authorization time window is invalid or exceeds 15 minutes"
         ));
     }
-    let required_execution_expiry = claims
-        .issued_at_unix_ms
-        .checked_add(execution_lifetime_ms(inventory)?)
-        .ok_or_else(|| eyre!("authorization execution expiry overflow"))?;
-    if claims.execution_expires_at_unix_ms != required_execution_expiry
+    if claims.execution_expires_at_unix_ms < claims.expires_at_unix_ms
         || claims.execution_expires_at_unix_ms - claims.issued_at_unix_ms
             > MAX_EXECUTION_LIFETIME_MS
     {
         return Err(eyre!(
-            "authorization execution lease does not exactly cover the bounded execution plan"
+            "authorization execution lease does not cover admission within its finite bound"
         ));
     }
-    let active_expiry = if admission_window {
-        claims.expires_at_unix_ms
-    } else {
-        claims.execution_expires_at_unix_ms
-    };
-    if now_ms.saturating_add(MAX_CLOCK_SKEW_MS) < claims.not_before_unix_ms
-        || now_ms > active_expiry.saturating_add(MAX_CLOCK_SKEW_MS)
-    {
-        return Err(eyre!("authorization is not currently valid"));
-    }
+    Ok(())
+}
+
+fn verify_authorization_signature(
+    envelope: &AuthorizationEnvelopeV1,
+    trusted: &TrustedKeyV1,
+) -> Result<()> {
     validate_lower_hex("authorization signature", &envelope.signature_hex, 128)?;
     let signature_bytes = hex::decode(&envelope.signature_hex)
         .wrap_err("authorization signature is not lowercase hexadecimal")?;
@@ -1678,7 +1706,7 @@ fn verify_authorization_window(
     {
         return Err(eyre!("trusted authorization public key must be Ed25519"));
     }
-    let message = authorization_message(claims)?;
+    let message = authorization_message(&envelope.claims)?;
     verify_signature_for_admission(&signature, &public_key, &message)
         .wrap_err("public-reset authorization signature verification failed")
 }
@@ -1800,6 +1828,17 @@ fn validate_inventory_with_revision(
     inventory: &InventoryV1,
     validate_revision: impl FnOnce(&RevisionV1) -> Result<()>,
 ) -> Result<()> {
+    let _chain_guard = enter_inventory_chain_discriminant(inventory)?;
+    validate_inventory_custody_with_revision(inventory, validate_revision)?;
+    host::beacon::validate_plan(inventory)?;
+    validate_timeout_policy(inventory)
+}
+
+/// Common topology and custody checks; this never admits an execution payload.
+fn validate_inventory_custody_with_revision<Beacon>(
+    inventory: &InventoryRecordV1<Beacon>,
+    validate_revision: impl FnOnce(&RevisionV1) -> Result<()>,
+) -> Result<()> {
     if inventory.schema != INVENTORY_SCHEMA_V1 {
         return Err(eyre!("inventory schema must be `{INVENTORY_SCHEMA_V1}`"));
     }
@@ -1823,7 +1862,6 @@ fn validate_inventory_with_revision(
         validate_lower_hex(label, value, 64)?;
     }
     inventory.validate_inrou_scope()?;
-    host::beacon::validate_plan(inventory)?;
     for (label, value) in [
         (
             "previous genesis hash",
@@ -1840,7 +1878,7 @@ fn validate_inventory_with_revision(
     }
     validate_nonce(&inventory.authorization_nonce)?;
     validate_revision(&inventory.revision)?;
-    validate_timeout_policy(inventory)?;
+    validate_timeouts(&inventory.timeouts)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
     validate_faucet_policy(&inventory.faucet_policy)?;
     validate_fee_intent(&inventory.fee_intent)?;
@@ -1968,7 +2006,7 @@ fn validate_inventory_with_revision(
     Ok(())
 }
 
-fn validate_inventory_chain_identity(inventory: &InventoryV1) -> Result<()> {
+fn validate_inventory_chain_identity<Beacon>(inventory: &InventoryRecordV1<Beacon>) -> Result<()> {
     if inventory.chain_id != CHAIN_ID || inventory.chain_discriminant != CHAIN_DISCRIMINANT {
         return Err(eyre!(
             "inventory must target the canonical Taira V1 chain identity"
@@ -1977,7 +2015,9 @@ fn validate_inventory_chain_identity(inventory: &InventoryV1) -> Result<()> {
     Ok(())
 }
 
-fn enter_inventory_chain_discriminant(inventory: &InventoryV1) -> Result<ChainDiscriminantGuard> {
+fn enter_inventory_chain_discriminant<Beacon>(
+    inventory: &InventoryRecordV1<Beacon>,
+) -> Result<ChainDiscriminantGuard> {
     validate_inventory_chain_identity(inventory)?;
     Ok(ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT))
 }
@@ -3313,7 +3353,7 @@ fn validate_timeouts(timeouts: &TimeoutsV1) -> Result<()> {
     Ok(())
 }
 
-fn artifact_closure_sha256(inventory: &InventoryV1) -> String {
+fn artifact_closure_sha256<Beacon>(inventory: &InventoryRecordV1<Beacon>) -> String {
     let mut digest = Sha256::new();
     digest.update(b"iroha:taira:public-reset:artifact-closure:v1\0");
     for value in [

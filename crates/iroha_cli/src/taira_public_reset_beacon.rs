@@ -2498,7 +2498,7 @@ mod tests {
         .unwrap()
         {
             assert_eq!(
-                client.account_client().unwrap().account_id(),
+                client.account_client().unwrap().authority(),
                 &config.account
             );
             assert_eq!(

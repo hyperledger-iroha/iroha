@@ -296,29 +296,17 @@ impl Worker<'_> {
             self.results.remove(&previous.block_hash);
         }
         let height = block.header.height;
-        let Some(parent) = self.state.view().latest_block() else {
-            return ExecOutcome::Failed("the applied parent block is not available".into());
+        let iroha_block = match payload::decode(&block.payload) {
+            Ok(block) => block,
+            Err(error) => return invalid(height, &error),
         };
+        if self.state.view().latest_block().is_none() {
+            return ExecOutcome::Failed("the applied parent block is not available".into());
+        }
         let Some(scheduled) = self.scheduled(height) else {
             return ExecOutcome::Failed(format!("no scheduled configuration for height {height}"));
         };
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
-        let assembly = Assembly {
-            parent: &parent,
-            view: block.header.origin_view,
-            cadence,
-        };
-        let iroha_block = if block.payload.is_empty() {
-            match payload::empty_block(self.state, assembly) {
-                Ok(block) => block,
-                Err(error) => return ExecOutcome::Failed(error.to_string()),
-            }
-        } else {
-            match payload::decode(&block.payload) {
-                Ok(block) => block,
-                Err(error) => return invalid(height, &error),
-            }
-        };
         if !proposal_matches_header(iroha_block.header(), block) {
             return invalid(height, &"the payload's height or view differs from the header");
         }
@@ -616,7 +604,7 @@ impl Worker<'_> {
     }
 }
 
-/// The iroha header of a decoded or synthesized payload must match the certified core header.
+/// The iroha header of a decoded payload must match the certified core header.
 fn proposal_matches_header(header: IrohaHeader, block: &Block) -> bool {
     header.height().get() == block.header.height
         && header.view_change_index() == block.header.origin_view

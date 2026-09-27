@@ -21440,7 +21440,7 @@ pub mod isi {
             }
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-                Sumeragi(sumeragi.idle_block_interval_ms) => SumeragiParameter::IdleBlockIntervalMs,
+                Sumeragi(sumeragi.payload_retry_interval_ms) => SumeragiParameter::PayloadRetryIntervalMs,
                 Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
                 Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
                 Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
@@ -40113,20 +40113,20 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let idle = |ms: u64| {
-                SetParameter(Parameter::Sumeragi(SumeragiParameter::IdleBlockIntervalMs(
+                SetParameter(Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
                     NonZeroU64::new(ms).expect("non-zero"),
                 )))
             };
             idle(7_000).expect_execute(&ALICE_ID, &mut stx, "a valid chain parameter change");
             assert_eq!(
-                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                stx.world.parameters.get().sumeragi().payload_retry_interval_ms.get(),
                 7_000
             );
             // Below the block time: §9.4 validation fails and nothing changes.
             let error = idle(999).expect_execute_err(&ALICE_ID, &mut stx, "idle below block time");
             assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
             assert_eq!(
-                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                stx.world.parameters.get().sumeragi().payload_retry_interval_ms.get(),
                 7_000
             );
             // The demotion window is a genesis constant.

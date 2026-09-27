@@ -828,7 +828,7 @@ pub fn f22_heights(seed: u64, heights: u64) -> Scenario {
     let n = pick(seed, &[4, 7, 5]);
     let mut sc = Scenario::base("F22", seed, n);
     sc.workload = None;
-    sc.duration = heights * (sc.params.idle_block_interval + 400);
+    sc.duration = heights * (sc.params.payload_retry_interval + 400);
     sc.checks.perf = Perf::P1;
     sc.checks.progress = heights / 2;
     sc
