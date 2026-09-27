@@ -41,7 +41,13 @@ and prover `Debug` output is redacted; returned public proof material is inspect
 
 ### Deterministic Fixtures
 
-Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
+The Swift wallet's encrypted-payload codec uses the deterministic fixture at
+`fixtures/confidential/encrypted_payload_v1.json`. Its positive envelope and
+malformed samples are checked by
+`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift` for
+exact serialization, round trips, and decode errors. The Rust data model tests
+the current exact-eight-slot `ConfidentialMemoEnvelopeV1` separately in
+`crates/iroha_data_model/tests/confidential_memo_envelope_v1.rs`.
 
 The generic proofless `zk::Shield` instruction is not part of the first-release
 wire surface. KAGEMUSHA V1 is a separate aggregate-balance protocol: its
@@ -534,23 +540,23 @@ Each phase updates roadmap milestones and associated tests to maintain determini
 
 ### SDK & Fixture Coverage (Phase M1)
 
-Encrypted payload v1 ships with canonical fixtures so every SDK produces the
-same Norito memo envelope. KAGEMUSHA transaction parity is exercised by its
-dedicated V1 suite; there is deliberately no generic confidential wallet-flow
-fixture or encoder:
+The local Swift encrypted-payload codec has an exact-byte fixture. Rust tests
+the exact-eight-slot confidential memo envelope. KAGEMUSHA transaction parity
+is exercised by its dedicated V1 suite; the first-release surface has no
+generic confidential wallet-flow fixture or encoder:
 
 ```bash
-# Rust memo-envelope parity
-cargo test -p iroha_data_model --test confidential_encrypted_payload_vectors
+# Rust exact-eight-slot memo envelope
+cargo test -p iroha_data_model --test confidential_memo_envelope_v1
 
-# Swift memo-envelope parity
+# Swift encrypted-payload fixture
 cd IrohaSwift && swift test --filter ConfidentialEncryptedPayloadTests
 ```
 
 The release-surface guards reject the retired generic and anonymous-escrow type
 names and wire fingerprints while retaining only the KAGEMUSHA V1
-instructions. Updating the encrypted-payload fixture without bumping its format
-version fails parity suites, keeping the SDKs and Rust codec in lock-step.
+instructions. The Swift fixture test checks exact bytes and malformed-input
+behavior; the Rust memo-envelope test checks its current wire shape.
 
 #### Wallet and SDK builders
 

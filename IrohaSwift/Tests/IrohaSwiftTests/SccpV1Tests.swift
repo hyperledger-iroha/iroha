@@ -43,7 +43,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertNil(SccpNetworkV1.fromTag(0))
         XCTAssertNil(SccpNetworkV1(rawValue: "sora-nexus"))
         XCTAssertNil(SccpNetworkV1(rawValue: "sora_nexus"))
-        XCTAssertEqual(SccpCodecV1.allCases.map(\.rawValue), [0, 1, 2, 3])
+        XCTAssertEqual(SccpCodecV1.allCases.map(\.rawValue), [1, 2, 5, 7])
         XCTAssertNil(SccpNetworkV1(rawValue: "solana-mainnet-beta"))
         XCTAssertEqual(SccpNetworkV1.allCases.map(\.tag), [0x40, 0x41, 0x42, 0x43, 0x44])
         XCTAssertEqual(SccpNetworkV1.allCases.map(\.domainId), [0, 1, 2, 5, 4])
@@ -57,10 +57,10 @@ final class SccpV1Tests: XCTestCase {
         ] {
             XCTAssertNil(SccpNetworkV1(rawValue: retired))
         }
+        XCTAssertNil(SccpCodecV1(rawValue: 0))
+        XCTAssertNil(SccpCodecV1(rawValue: 3))
         XCTAssertNil(SccpCodecV1(rawValue: 4))
-        XCTAssertNil(SccpCodecV1(rawValue: 5))
         XCTAssertNil(SccpCodecV1(rawValue: 6))
-        XCTAssertNil(SccpCodecV1(rawValue: 7))
         XCTAssertEqual(SccpPayloadKindV1.allCases, [.transfer])
     }
 
@@ -206,10 +206,7 @@ final class SccpV1Tests: XCTestCase {
             typeName: "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1",
             payload: Data([1])
         ).base64EncodedString()
-        let replayWitnessArtifact = noritoEncode(
-            typeName: SccpSubmitValidation.replayWitnessTypeName,
-            payload: Data([1])
-        ).base64EncodedString()
+        let replayWitnessArtifact = canonicalEmptyReplayWitness().base64EncodedString()
         let signature = try privateKey.signature(for: Data(repeating: 7, count: 32)).base64EncodedString()
         let transactionPayload = try canonicalSccpTransactionPayload(
             authority: authority,
@@ -595,10 +592,7 @@ final class SccpV1Tests: XCTestCase {
             typeName: "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1",
             payload: Data([1])
         ).base64EncodedString()
-        let replayWitnessArtifact = noritoEncode(
-            typeName: SccpSubmitValidation.replayWitnessTypeName,
-            payload: Data([1])
-        ).base64EncodedString()
+        let replayWitnessArtifact = canonicalEmptyReplayWitness().base64EncodedString()
         XCTAssertEqual(SccpV1.tairaI105DiscriminantV1, 369)
         XCTAssertTrue(authority.hasPrefix("test"))
         XCTAssertNoThrow(try ToriiBridgeProofSubmitRequest(
@@ -651,10 +645,7 @@ final class SccpV1Tests: XCTestCase {
             typeName: SccpSubmitValidation.nativeInboundProofTypeName,
             payload: Data([1, 2, 3])
         )
-        let replayWitness = noritoEncode(
-            typeName: SccpSubmitValidation.replayWitnessTypeName,
-            payload: Data([1, 2, 3])
-        )
+        let replayWitness = canonicalEmptyReplayWitness()
         let legacyBn254Artifact = noritoEncode(
             typeName: "iroha_sccp::SccpGroth16Bn254ProofArtifactV1",
             payload: Data([1, 2, 3])
@@ -684,6 +675,16 @@ final class SccpV1Tests: XCTestCase {
             authority: authority,
             nativeProofB64: destination.base64EncodedString(),
             replayWitnessB64: replayWitness.base64EncodedString(),
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+        ))
+        let nonCompactWitness = noritoEncode(
+            typeName: SccpSubmitValidation.replayWitnessTypeName,
+            payload: try XCTUnwrap(noritoDecodeFrame(replayWitness)?.payload)
+        )
+        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
+            authority: authority,
+            nativeProofB64: native.base64EncodedString(),
+            replayWitnessB64: nonCompactWitness.base64EncodedString(),
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         for frame in [destination, native] {
@@ -1403,6 +1404,38 @@ final class SccpV1Tests: XCTestCase {
 
         let bundle = bundleJSON(messageId: String(repeating: "11", count: 32))
         XCTAssertEqual(try SccpMessageBundleV1.parse(bundle).targetDomain, 2)
+        var tronAssetHome = try jsonObject(bundle, mutableContainers: true)
+        var tronAssetPayload = tronAssetHome["payload"] as! [String: Any]
+        var tronAssetTransfer = tronAssetPayload["Transfer"] as! [String: Any]
+        tronAssetTransfer["asset_home_domain"] = 5
+        tronAssetPayload["Transfer"] = tronAssetTransfer
+        tronAssetHome["payload"] = tronAssetPayload
+        XCTAssertNoThrow(try SccpMessageBundleV1.parse(jsonData(tronAssetHome)))
+        for (profile, domain, codec, recipient, route) in [
+            ("tron-mainnet", 5, 5, "0x41" + String(repeating: "11", count: 20), "taira_tron_xor"),
+            ("ton-mainnet", 4, 7, "0x00000000" + String(repeating: "11", count: 32), "taira_ton_xor"),
+        ] {
+            var externalBundle = try jsonObject(bundle, mutableContainers: true)
+            var commitment = externalBundle["commitment"] as! [String: Any]
+            var context = commitment["context"] as! [String: Any]
+            context["lane"] = lane("sora-taira", profile)
+            commitment["context"] = context
+            externalBundle["commitment"] = commitment
+            var payload = externalBundle["payload"] as! [String: Any]
+            var transfer = payload["Transfer"] as! [String: Any]
+            transfer["dest_domain"] = domain
+            transfer["recipient_codec"] = codec
+            transfer["recipient"] = recipient
+            transfer["route_id"] = "0x" + Data(route.utf8).hexEncodedString()
+            payload["Transfer"] = transfer
+            externalBundle["payload"] = payload
+            XCTAssertEqual(try SccpMessageBundleV1.parse(jsonData(externalBundle)).targetDomain, UInt32(domain))
+
+            transfer["recipient_codec"] = 3
+            payload["Transfer"] = transfer
+            externalBundle["payload"] = payload
+            XCTAssertThrowsError(try SccpMessageBundleV1.parse(jsonData(externalBundle)))
+        }
         var retiredPayload = try jsonObject(bundle)
         retiredPayload["payload"] = ["Burn": [:]]
         XCTAssertThrowsError(try SccpMessageBundleV1.parse(jsonData(retiredPayload)))
@@ -1410,9 +1443,9 @@ final class SccpV1Tests: XCTestCase {
         oldSelector["network"] = "bsc-mainnet"
         XCTAssertThrowsError(try SccpMessageBundleV1.parse(jsonData(oldSelector)))
         let invalidTransferFields: [(String, Any)] = [
-            ("sender_codec", 1),
-            ("recipient_codec", 2),
-            ("asset_home_domain", 5),
+            ("sender_codec", 2),
+            ("recipient_codec", 5),
+            ("asset_home_domain", 3),
             ("amount", ""),
             ("amount", "340282366920938463463374607431768211456"),
             ("amount", "١"),
@@ -1437,9 +1470,9 @@ final class SccpV1Tests: XCTestCase {
 
         var tron = first
         tron["target_profile"] = "tron-mainnet"
-        tron["target_domain"] = 3
+        tron["target_domain"] = 5
         tron["route_id"] = "taira_tron_xor"
-        tron["payload_projection"] = transferProjection(destinationDomain: 3)
+        tron["payload_projection"] = transferProjection(destinationDomain: 5)
         XCTAssertNoThrow(try SccpRecentMessages.parse(jsonData(["items": [tron]])))
 
         let exactUInt128Amount = "18446744073709551616000000000"
@@ -1851,7 +1884,7 @@ final class SccpV1Tests: XCTestCase {
         for backend in ["tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1"] {
             var tron = try jsonObject(valid, mutableContainers: true)
             tron["backend"] = backend
-            tron["counterparty_domain"] = 3
+            tron["counterparty_domain"] = 5
             tron["counterparty_chain"] = "tron-mainnet"
             XCTAssertNoThrow(try SccpBridgeSubmitResponse.parse(jsonData(tron)))
         }
@@ -1877,6 +1910,21 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertNoThrow(try SccpBridgeSubmitResponse.parse(jsonData(tron)))
         tron["counterparty_domain"] = 3
         XCTAssertThrowsError(try SccpBridgeSubmitResponse.parse(jsonData(tron)))
+    }
+
+    private func canonicalEmptyReplayWitness() -> Data {
+        var siblings = CompactNoritoWriter()
+        siblings.writeUInt64LE(0)
+        var witness = CompactNoritoWriter()
+        witness.writeField(SccpReplayV1.emptyHashes()[SccpReplayV1.depth])
+        witness.writeField(Data(repeating: 0, count: 32))
+        witness.writeField(Data(repeating: 0, count: 32))
+        witness.writeField(siblings.data)
+        return noritoEncode(
+            typeName: SccpSubmitValidation.replayWitnessTypeName,
+            payload: witness.data,
+            flags: NoritoHeader.compactLen
+        )
     }
 
     private func capabilitiesJSON() -> Data {
@@ -2190,10 +2238,10 @@ final class SccpV1Tests: XCTestCase {
         [
             "version": 1, "source_domain": 0, "dest_domain": 2, "nonce": "7",
             "route_revision": 1, "asset_home_domain": 0,
-            "asset_id_codec": 0, "asset_id": "0x786f72", "amount": "1000",
-            "sender_codec": 0, "sender": "0x616c696365407461697261",
-            "recipient_codec": 1, "recipient": "0x" + String(repeating: "11", count: 20),
-            "route_id_codec": 0, "route_id": "0x74616972615f6273635f786f72",
+            "asset_id_codec": 1, "asset_id": "0x786f72", "amount": "1000",
+            "sender_codec": 1, "sender": "0x616c696365407461697261",
+            "recipient_codec": 2, "recipient": "0x" + String(repeating: "11", count: 20),
+            "route_id_codec": 1, "route_id": "0x74616972615f6273635f786f72",
         ]
     }
 
@@ -2207,7 +2255,7 @@ final class SccpV1Tests: XCTestCase {
         case 2:
             route = "taira_bsc_xor"
             recipient = ["EvmAddress20": ["bytes": "0x" + String(repeating: "11", count: 20)]]
-        case 3:
+        case 5:
             route = "taira_tron_xor"
             recipient = ["TronAddress21": ["bytes": "0x41" + String(repeating: "11", count: 20)]]
         case 4:

@@ -192,6 +192,7 @@ mod tests {
             PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
             PublicLaneMonetarySlashV1,
         },
+        parameter::system::SumeragiNposParameters,
     };
     use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
@@ -226,6 +227,7 @@ mod tests {
     }
 
     fn instructions(peers: &[finality::PeerV1]) -> Vec<InstructionBox> {
+        let xor = SumeragiNposParameters::default().xor_asset_definition_id;
         peers
             .iter()
             .zip(130..134)
@@ -429,11 +431,26 @@ mod tests {
             .as_any()
             .downcast_ref::<RegisterPublicLaneValidator>()
             .unwrap();
+        let rebind_key = KeyPair::try_from_seed(vec![0x99; 32], Algorithm::BlsNormal)
+            .expect("rebind fixture key");
+        let rebind_consent =
+            iroha_data_model::isi::staking::PublicLanePeerBindingAuthorization::new(
+                NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"taira-manifest-rebind-fixture"),
+                )),
+                LaneId::SINGLE,
+                register.validator.clone(),
+                trust.peers[1].peer_id.clone(),
+                1,
+                register.peer_id.clone(),
+            );
         let changes: Vec<InstructionBox> = vec![
             RebindPublicLaneValidatorPeer::new(
                 LaneId::SINGLE,
                 register.validator.clone(),
                 trust.peers[1].peer_id.clone(),
+                iroha_crypto::SignatureOf::try_new(rebind_key.private_key(), &rebind_consent)
+                    .expect("rebind fixture consent"),
             )
             .into(),
             ExitPublicLaneValidator {

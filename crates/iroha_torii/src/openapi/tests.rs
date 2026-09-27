@@ -2118,6 +2118,27 @@ fn public_lane_staking_schema_closes_status_variants_and_unbond_cutoff() {
     }
     assert_eq!(observed, expected);
 
+    for name in [
+        "PublicLaneValidatorRecord",
+        "PublicLaneManifestValidatorRecord",
+    ] {
+        let validator = schemas[name]
+            .as_object()
+            .expect("validator projection schema");
+        let fields = validator["properties"].as_object().unwrap();
+        assert!(
+            fields.contains_key("election_exit_height"),
+            "{name} must distinguish election eligibility"
+        );
+        assert!(
+            validator["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field.as_str() == Some("election_exit_height"))
+        );
+    }
+
     let unbonding = schemas["PublicLaneUnbonding"]
         .as_object()
         .expect("public-lane unbonding schema");
@@ -3167,3 +3188,6 @@ fn openapi_uint64_bounds_keep_exact_integer_tokens_recursively() {
 
 #[path = "tests/privacy_release_qualification.rs"]
 mod privacy_release_qualification;
+
+#[path = "tests/validator_committee_contract.rs"]
+mod validator_committee_contract;

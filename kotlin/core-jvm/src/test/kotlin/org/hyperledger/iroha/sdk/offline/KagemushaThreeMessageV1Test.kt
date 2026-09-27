@@ -6,20 +6,40 @@ import java.nio.file.Paths
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import org.hyperledger.iroha.sdk.norito.NoritoHeader
-import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
 class KagemushaThreeMessageV1Test {
     @Test
-    fun `payment request text accepts the new bounded canonical size`() {
-        val request = ByteArray(1_024) { it.toByte() }
-        val text = KagemushaWireV1.encodeText(KagemushaWirePayloadKindV1.PAYMENT_REQUEST, request)
-        assertEquals(1_371, text.length)
-        assertContentEquals(request, KagemushaWireV1.decodeText(KagemushaWirePayloadKindV1.PAYMENT_REQUEST, text))
+    fun `governed request cap is exact and fits the complete exchange`() {
+        val kind = KagemushaWirePayloadKindV1.PAYMENT_REQUEST
+        val maximum = KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES
+        assertEquals(1_024, maximum)
+        assertEquals(1_371, KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_TEXT_BYTES)
+        val payload = ByteArray(maximum) { 1 }
+        val text = KagemushaWireV1.encodeText(kind, payload)
+        assertEquals(KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_TEXT_BYTES, text.length)
+        assertContentEquals(payload, KagemushaWireV1.decodeText(kind, text))
         assertFailsWith<IllegalArgumentException> {
-            KagemushaWireV1.encodeText(KagemushaWirePayloadKindV1.PAYMENT_REQUEST, ByteArray(1_025))
+            KagemushaWireV1.encodeText(kind, ByteArray(maximum + 1))
         }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaWireV1.decodeText(kind, text + "A")
+        }
+        assertEquals(
+            true,
+            maximum + KagemushaWireV1.MAXIMUM_PAYMENT_BYTES +
+                KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_BYTES <=
+                KagemushaWireV1.MAXIMUM_COMPLETE_EXCHANGE_RAW_BYTES,
+        )
+        assertEquals(
+            true,
+            KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_TEXT_BYTES +
+                KagemushaWireV1.MAXIMUM_PAYMENT_TEXT_BYTES +
+                KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_TEXT_BYTES <=
+                KagemushaWireV1.MAXIMUM_COMPLETE_EXCHANGE_TEXT_BYTES,
+        )
     }
 
     @Test

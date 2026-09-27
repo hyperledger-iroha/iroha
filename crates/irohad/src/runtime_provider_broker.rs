@@ -1,4 +1,4 @@
-//! Platform-fixed local runtime-provider broker for the stock daemon launcher.
+//! Authenticated local runtime-provider broker for the stock daemon launcher.
 //!
 //! The broker carries only public provider bindings and operation payloads over
 //! a service-UID-owned local Unix socket. Broker and clients must run under the
@@ -53,6 +53,11 @@ pub use api::{
     serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
 };
+#[cfg(all(
+    feature = "test-network-disposable-broker",
+    any(target_os = "linux", target_os = "macos")
+))]
+pub use launcher::load_owner_private_runtime_provider_broker_catalog_file_v1;
 pub use launcher::{
     RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerDeploymentV1,
     RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableErrorV1,

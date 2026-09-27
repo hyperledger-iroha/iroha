@@ -44,13 +44,10 @@ struct PreparedPristineConsensusEffects<'state> {
     roster: Vec<PeerId>,
 }
 fn classify_pristine_npos_application_error(error: eyre::Report) -> BlockValidationError {
-    if let Some(local) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
-        BlockValidationError::EvidencePreparation(local.clone())
-    } else {
-        ValidBlock::npos_effects_error(format!(
-            "NPoS consensus effects are not applicable to pristine parent state: {error}"
-        ))
-    }
+    BlockValidationError::from_npos_application_error(
+        error,
+        "NPoS consensus effects are not applicable to pristine parent state",
+    )
 }
 impl PreparedPristineConsensusEffects<'_> {
     fn apply(self, state_block: &mut StateBlock<'_>) -> Result<(), BlockValidationError> {

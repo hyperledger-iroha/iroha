@@ -67,6 +67,24 @@ pub(crate) struct PublishedNativeApply<'published> {
 }
 
 impl PublishedNativeApply<'_> {
+    /// Return distinct original instances from the published Native source.
+    pub(crate) fn original_instance_ids(
+        &self,
+    ) -> Result<Vec<iroha_data_model::block::consensus_v2::HeightContextId>, String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut ids = Vec::new();
+        for id in self.instance_ids() {
+            if !seen.insert(id) {
+                return Err("published Native source contains a duplicate instance".into());
+            }
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            return Err("published Native source contains no original instance".into());
+        }
+        Ok(ids)
+    }
+
     /// Enumerate only original authenticated instances from the published source.
     pub(crate) fn instance_ids(
         &self,
@@ -178,6 +196,39 @@ impl PublishedNativeApply<'_> {
 }
 
 impl<A> PublishedCarrier<A> {
+    /// Reauthenticate the original State family, Kura checkpoint and finality.
+    pub(crate) fn reauthenticate_exact_publication(
+        &self,
+        state: &State,
+        kura: &std::sync::Arc<crate::kura::Kura>,
+        finality: &crate::block::VerifiedV2FinalityArtifact,
+    ) -> Result<crate::kura::KuraV2CommitReceipt, String> {
+        if !self.state_owner.matches_state(state)
+            || !state.matches_kura_instance(kura)
+            || usize::try_from(self.block().header().height().get()).ok()
+                != Some(state.committed_height())
+            || state.latest_block_hash_fast() != Some(self.block().hash())
+            || self.native_apply().is_none()
+        {
+            return Err(
+                "published carrier differs from its original State or Native source".into(),
+            );
+        }
+        finality
+            .artifact()
+            .validate_for_header(&self.block().header())
+            .map_err(|error| error.to_string())?;
+        let state_hash = crate::snapshot::canonical_state_snapshot_hash(state)
+            .map_err(|error| error.to_string())?;
+        kura.reauthenticate_wsv_checkpoint_receipt(
+            &self.checkpoint,
+            finality.artifact(),
+            state_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(self.checkpoint.finality_receipt().clone())
+    }
+
     /// Match the physical State family that consumed the original journals.
     pub(crate) fn matches_state(&self, state: &crate::state::State) -> bool {
         self.state_owner.matches_state(state)
@@ -220,6 +271,19 @@ impl<A> PublishedCarrier<A> {
     /// Inspect events only after complete State publication and writer release.
     pub(crate) fn events(&self) -> &[EventBox] {
         &self.events
+    }
+
+    /// Move the terminal event batch only after every fallible durable repair.
+    pub(crate) fn take_completion_events(
+        &mut self,
+    ) -> (
+        iroha_data_model::events::pipeline::BlockEvent,
+        Vec<EventBox>,
+    ) {
+        (
+            self.committed_event.clone(),
+            std::mem::take(&mut self.events),
+        )
     }
 }
 
@@ -436,7 +500,9 @@ impl<A> PhysicallyPreparedCarrier<'_, A> {
         publication_events.append(&mut extra_events);
         drop(commit);
         if !effects.verified_lane_relay_records.is_empty() {
-            target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records);
+            target.hydrate_verified_lane_relay_records(std::mem::take(
+                &mut effects.verified_lane_relay_records,
+            ));
         }
         drop(membership_retirement);
         drop(runtime_retirement);

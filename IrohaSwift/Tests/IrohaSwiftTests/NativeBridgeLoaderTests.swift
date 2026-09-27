@@ -452,9 +452,6 @@ final class BridgePolicyHintTests: XCTestCase {
 #if canImport(Darwin)
 final class BridgeAvailabilitySurfaceTests: XCTestCase {
     func testTransferEncodingFailsWhenBridgeUnavailable() throws {
-        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
-        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
-
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 7, count: 32))
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(networkId: TestNetworkIds.canonical,
@@ -465,6 +462,9 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
                                       description: nil,
                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: nil)
+
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
 
         XCTAssertThrowsError(try SwiftTransactionEncoder.encodeTransfer(transfer: request,
                                                                         keypair: keypair,

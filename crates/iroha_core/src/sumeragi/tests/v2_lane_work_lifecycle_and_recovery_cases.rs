@@ -793,6 +793,7 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
             [0x73; 32],
         );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation: None,
         epoch: next_epoch,
         kagemusha_mint_finality_authorization,
         kagemusha_mint_finality_authority,

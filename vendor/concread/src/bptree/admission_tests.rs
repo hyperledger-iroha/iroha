@@ -287,7 +287,7 @@ fn initial_node_admission_refusal_constructs_no_root_or_reader() {
     let result = without_allocations(|| {
         BptreeMap::<usize, usize, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|demand| {
             assert!(demand.bytes() > 0);
-            assert_eq!(demand.allocations(), 3);
+            assert_eq!(demand.allocations(), 4);
             Err::<ScalarPolicy, _>(17)
         })
     });
@@ -1142,6 +1142,7 @@ fn writer_and_clear_generation_exhaustion_refuse_before_admission_or_allocation(
         inner: LinCowCell::new_charged(
             source,
             InitialCharges {
+                notification: crate::release::ReleaseNotification::default(),
                 root: Untracked,
                 reader: Untracked,
             },
@@ -1887,6 +1888,9 @@ fn observed_current_footprint<P: ClonePlanning<usize, usize>>(
         .add_layout(MapCell::<usize, usize, Prepaid<P>>::initial_allocation_layouts().root)
         .unwrap();
     expected
+        .add_layout(MapCell::<usize, usize, Prepaid<P>>::initial_allocation_layouts().notification)
+        .unwrap();
+    expected
         .add_layout(MapCell::<usize, usize, Prepaid<P>>::reader_allocation_layout())
         .unwrap();
     unsafe {
@@ -1929,7 +1933,7 @@ fn prepaid_current_footprint_tracks_original_split_merge_overwrite_and_clear_nod
     })
     .unwrap();
     let initial = checked_current_footprint(&map).0;
-    assert_eq!(initial.allocations(), 3);
+    assert_eq!(initial.allocations(), 4);
     for key in 0..192 {
         let expected = observed_current_footprint(&map);
         let (owner, _) = map
@@ -2064,7 +2068,7 @@ fn prepaid_current_footprint_preserves_parent_through_checkpoint_and_publication
         .unwrap_or_else(|_| panic!("retry exact owner"))
         .commit();
     let current = checked_current_footprint(&map).0;
-    assert_eq!(current.allocations(), 3);
+    assert_eq!(current.allocations(), 4);
     assert_eq!(map.read().get(&1000), Some(&77));
 }
 
@@ -2107,7 +2111,7 @@ fn prepaid_current_footprint_distinguishes_resident_floor_from_refundable_old_cu
     let with_old = checked_current_footprint(&map).0;
     drop(old);
     assert_eq!(checked_current_footprint(&map).0, with_old);
-    assert_eq!(with_old.allocations(), 3);
+    assert_eq!(with_old.allocations(), 4);
 }
 
 #[test]
@@ -2347,6 +2351,7 @@ mod writer_start {
             inner: LinCowCell::new_charged(
                 source,
                 InitialCharges {
+                    notification: crate::release::ReleaseNotification::default(),
                     root: Untracked,
                     reader: Untracked,
                 },

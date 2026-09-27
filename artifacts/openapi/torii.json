@@ -4101,6 +4101,48 @@
         },
         "type": "object"
       },
+      "BeaconEpochBindingV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "bootstrap"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "installed"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/InstalledBeaconEpochBindingV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "BfvCiphertextBoundModeV1": {
         "oneOf": [
           {
@@ -12072,6 +12114,695 @@
         ],
         "type": "object"
       },
+      "GlobalThresholdBeaconDkgComplaintReasonV1": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "type": "null"
+          },
+          "reason": {
+            "enum": [
+              "missing_private_share",
+              "invalid_private_share"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "detail"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconDkgComplaintResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "complaint_id": {
+            "description": "Exact complaint being answered.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "dealer_index": {
+            "description": "Accused dealer index copied from the complaint.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "r_share": {
+            "description": "Canonical scalar `r_i(recipient)`.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "recipient_index": {
+            "description": "Recipient index copied from the complaint.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "s_share": {
+            "description": "Canonical scalar `s_i(recipient)`.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "u_share": {
+            "description": "Canonical scalar `u_i(recipient)`.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "complaint_id",
+          "dealer_index",
+          "recipient_index",
+          "s_share",
+          "r_share",
+          "u_share"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconDkgComplaintV1": {
+        "additionalProperties": false,
+        "properties": {
+          "complainant_index": {
+            "description": "Recipient which raised the complaint.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complaint_id": {
+            "description": "Canonical complaint ID recomputed from this record and session bindings.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "dealer_commitment_hash": {
+            "description": "Hash of the exact canonical dealer commitment under dispute.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "dealer_index": {
+            "description": "Dealer accused by the complaint.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/GlobalThresholdBeaconDkgComplaintReasonV1",
+            "description": "Stable complaint classification."
+          }
+        },
+        "required": [
+          "dealer_index",
+          "complainant_index",
+          "dealer_commitment_hash",
+          "reason",
+          "complaint_id"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconDkgConstantProofV1": {
+        "additionalProperties": false,
+        "properties": {
+          "commitment": {
+            "description": "Canonical compressed G2 Schnorr nonce commitment.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          },
+          "response": {
+            "description": "Canonical big-endian scalar response.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "commitment",
+          "response"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconDkgDealerCommitmentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "coefficient_commitments": {
+            "description": "`C_k = g^s_k h^r_k v^u_k` in ascending coefficient order.     /// The list length must equal the reconstruction threshold. `C_0` is exactly `g^s_0` because both zero-polynomials have zero constant term.",
+            "items": {
+              "items": {
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 96,
+              "minItems": 96,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "constant_term_proof": {
+            "$ref": "#/components/schemas/GlobalThresholdBeaconDkgConstantProofV1",
+            "description": "Fiat-Shamir Schnorr proof of knowledge for the constant coefficient."
+          },
+          "dealer_index": {
+            "description": "Dealer's canonical one-based participant index.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dealer_index",
+          "coefficient_commitments",
+          "constant_term_proof"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconDkgSessionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "committee_size": {
+            "description": "Exact `3f + 1` participant count.",
+            "enum": [
+              4,
+              7,
+              10,
+              13,
+              16,
+              19,
+              22,
+              25,
+              28,
+              31
+            ],
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complaints_end_height": {
+            "description": "Exclusive end of the complaint window.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact deployment identity derived from genesis."
+          },
+          "responses_end_height": {
+            "description": "Exclusive end of the complaint-response window.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "roster_hash": {
+            "description": "Hash of the frozen ordered DKG participant roster.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "session_id": {
+            "description": "Unique threshold-beacon session identifier.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "sharing_end_height": {
+            "description": "Exclusive end of the dealer-commitment window.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_height": {
+            "description": "First height at which dealer commitments are accepted.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threshold": {
+            "description": "Exact `f + 1` reconstruction threshold (and coefficient count).",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Fixed first-release beacon protocol version.",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "session_id",
+          "roster_hash",
+          "committee_size",
+          "threshold",
+          "start_height",
+          "sharing_end_height",
+          "complaints_end_height",
+          "responses_end_height"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconDkgTranscriptV1": {
+        "additionalProperties": false,
+        "properties": {
+          "complaint_responses": {
+            "description": "Valid public responses in canonical `(dealer, recipient)` order.",
+            "items": {
+              "$ref": "#/components/schemas/GlobalThresholdBeaconDkgComplaintResponseV1"
+            },
+            "type": "array"
+          },
+          "complaints": {
+            "description": "Complaints in canonical `(dealer, complainant)` order.",
+            "items": {
+              "$ref": "#/components/schemas/GlobalThresholdBeaconDkgComplaintV1"
+            },
+            "type": "array"
+          },
+          "dealer_commitments": {
+            "description": "Valid dealer broadcasts in strictly ascending dealer order.",
+            "items": {
+              "$ref": "#/components/schemas/GlobalThresholdBeaconDkgDealerCommitmentV1"
+            },
+            "type": "array"
+          },
+          "event_hash": {
+            "description": "Hash of the complete canonical DKG event transcript above.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "finalized_at_height": {
+            "description": "Height at which qualification and the public key were finalized.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "generator_h": {
+            "description": "Independently domain-derived compressed G2 generator `h`.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          },
+          "generator_v": {
+            "description": "Independently domain-derived compressed G2 generator `v`.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          },
+          "qualified_dealers": {
+            "description": "Locally derived qualified dealer indices in strictly ascending order.",
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "session": {
+            "$ref": "#/components/schemas/GlobalThresholdBeaconDkgSessionV1",
+            "description": "Immutable session and height-window bindings."
+          }
+        },
+        "required": [
+          "session",
+          "generator_h",
+          "generator_v",
+          "dealer_commitments",
+          "complaints",
+          "complaint_responses",
+          "qualified_dealers",
+          "event_hash",
+          "finalized_at_height"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconKeySessionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "adaptive_dkg": {
+            "$ref": "#/components/schemas/GlobalThresholdBeaconDkgTranscriptV1",
+            "description": "Complete augmented JF/Pedersen DKG audit transcript."
+          },
+          "committee_size": {
+            "description": "Exact `3f + 1` committee size.",
+            "enum": [
+              4,
+              7,
+              10,
+              13,
+              16,
+              19,
+              22,
+              25,
+              28,
+              31
+            ],
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dkg_contribution_hash": {
+            "description": "Non-zero commitment to all qualified DKG contributions.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "group_public_key": {
+            "description": "Canonical compressed BLS12-381 G2 group public key.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact deployment identity derived from the genesis header."
+          },
+          "public_shares": {
+            "description": "Complete verification-share list in exact one-based index order.",
+            "items": {
+              "$ref": "#/components/schemas/GlobalThresholdBeaconPublicShareV1"
+            },
+            "maxItems": 31,
+            "minItems": 4,
+            "type": "array"
+          },
+          "roster_hash": {
+            "description": "Hash of the frozen ordered validator roster.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "session_id": {
+            "description": "Unique non-zero identifier for this beacon key session.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "threshold": {
+            "description": "Exact `f + 1` reconstruction threshold.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcript_hash": {
+            "description": "Recomputed commitment to the complete typed public transcript.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "version": {
+            "description": "Fixed protocol version; must equal [`GLOBAL_THRESHOLD_BEACON_VERSION_V1`].",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "session_id",
+          "roster_hash",
+          "committee_size",
+          "threshold",
+          "group_public_key",
+          "public_shares",
+          "adaptive_dkg",
+          "dkg_contribution_hash",
+          "transcript_hash"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconPartialSignatureProofV1": {
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "description": "Composite-key Schnorr commitment `x` in compressed G2.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          },
+          "y": {
+            "description": "Partial-signature Schnorr commitment `y` in compressed G1.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 48,
+            "minItems": 48,
+            "type": "array"
+          },
+          "z_r": {
+            "description": "Response for the `r` witness.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "z_s": {
+            "description": "Response for the `s` witness.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "z_u": {
+            "description": "Response for the `u` witness.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z_s",
+          "z_r",
+          "z_u"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconPartialSignatureV1": {
+        "additionalProperties": false,
+        "properties": {
+          "proof": {
+            "$ref": "#/components/schemas/GlobalThresholdBeaconPartialSignatureProofV1",
+            "description": "Three-witness non-interactive proof of correct share construction."
+          },
+          "session_id": {
+            "description": "Typed beacon session identifier.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "signature_share": {
+            "description": "`H0(m)^s(i) H1(m)^r(i)` in compressed G1.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 48,
+            "minItems": 48,
+            "type": "array"
+          },
+          "signer_index": {
+            "description": "Canonical one-based signer index.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "signer_index",
+          "signature_share",
+          "proof"
+        ],
+        "type": "object"
+      },
+      "GlobalThresholdBeaconPublicShareV1": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "description": "Canonical one-based participant index.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "participant_seat_binding": {
+            "description": "Deterministic binding of this one-based seat to the frozen ordered roster.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "public_key_share": {
+            "description": "Canonical compressed BLS12-381 G2 public verification share.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          }
+        },
+        "required": [
+          "index",
+          "participant_seat_binding",
+          "public_key_share"
+        ],
+        "type": "object"
+      },
       "GoldilocksDigest384V1": {
         "description": "Six canonical little-endian Goldilocks field elements (48 bytes total).",
         "items": {
@@ -19056,6 +19787,38 @@
         ],
         "type": "object"
       },
+      "InstalledBeaconEpochBindingV1": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "description": "Non-zero session identifier.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "transcript_hash": {
+            "description": "Recomputed complete transcript commitment.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_id",
+          "transcript_hash"
+        ],
+        "type": "object"
+      },
       "InviteMusubiPackageMaintainerV1": {
         "additionalProperties": false,
         "properties": {
@@ -19601,6 +20364,314 @@
         "minItems": 32,
         "type": "array"
       },
+      "KagemushaMintFinalityAuthorityGenerationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "description": "Monotonic key generation, changed only by an authorized activation.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Network whose certified epoch authorizations may use these keys."
+          },
+          "validators": {
+            "description": "Strictly ordered exact `3f + 1` consensus/Pasta key roster.",
+            "items": {
+              "$ref": "#/components/schemas/KagemushaMintFinalityValidatorKeysV1"
+            },
+            "maxItems": 31,
+            "minItems": 4,
+            "type": "array"
+          },
+          "version": {
+            "description": "Sole first-release layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "generation",
+          "validators"
+        ],
+        "type": "object"
+      },
+      "KagemushaMintFinalityEpochAuthorizationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "authority_generation": {
+            "description": "Generation whose paired-Pasta keys are authorized.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "authority_id": {
+            "description": "Exact immutable ordered authority commitment.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "beacon": {
+            "$ref": "#/components/schemas/BeaconEpochBindingV1",
+            "description": "Exact installed beacon authority, or the explicit genesis bootstrap state."
+          },
+          "decision": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityEpochDecisionV1",
+            "description": "Incumbent-certified disposition of the next scheduling epoch."
+          },
+          "epoch": {
+            "description": "Monotonic scheduling epoch, advanced even when the incumbent is retained.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_height": {
+            "description": "First governed height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_height": {
+            "description": "Last governed height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived network identity."
+          },
+          "previous_authorization_id": {
+            "description": "Previous authorization identity; zero only for genesis.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "transition_id": {
+            "description": "Frozen attempt identity for activation or certified cancellation; otherwise zero.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "version": {
+            "description": "Sole first-release layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "epoch",
+          "first_height",
+          "last_height",
+          "authority_generation",
+          "authority_id",
+          "beacon",
+          "previous_authorization_id",
+          "transition_id",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "KagemushaMintFinalityEpochDecisionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "genesis",
+              "activate",
+              "retain",
+              "retain_and_cancel"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "KagemushaMintFinalityPairedPossessionProofV1": {
+        "additionalProperties": false,
+        "properties": {
+          "ep_proof_signature": {
+            "$ref": "#/components/schemas/KagemushaPastaSchnorrSignatureV1",
+            "description": "Ep/Fq proof under the exact Vesta public key."
+          },
+          "eq_proof_signature": {
+            "$ref": "#/components/schemas/KagemushaPastaSchnorrSignatureV1",
+            "description": "Eq/Fp proof under the exact Pallas public key."
+          }
+        },
+        "required": [
+          "eq_proof_signature",
+          "ep_proof_signature"
+        ],
+        "type": "object"
+      },
+      "KagemushaMintFinalitySeatReadinessContextV1": {
+        "additionalProperties": false,
+        "properties": {
+          "authority_generation": {
+            "description": "Immutable generation whose keys this seat proves it possesses.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "authority_id": {
+            "description": "Exact ordered target committee and paired-public-key commitment.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "beacon": {
+            "$ref": "#/components/schemas/BeaconEpochBindingV1",
+            "description": "Exact installed target beacon session and complete transcript."
+          },
+          "first_height": {
+            "description": "First target height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_height": {
+            "description": "Last target height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived network identity."
+          },
+          "target_epoch": {
+            "description": "Scheduling epoch in which the prepared authority may first activate.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transition_id": {
+            "description": "Unique frozen preparation attempt, including its finalized election context.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "validator_index": {
+            "description": "Exact zero-based position in the target generation.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Sole first-release layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "transition_id",
+          "target_epoch",
+          "authority_generation",
+          "authority_id",
+          "first_height",
+          "last_height",
+          "validator_index",
+          "beacon"
+        ],
+        "type": "object"
+      },
+      "KagemushaMintFinalityValidatorKeysV1": {
+        "additionalProperties": false,
+        "properties": {
+          "ep_proof_public_key": {
+            "description": "Canonical compressed Vesta key verified by the Ep/Fq helper.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "eq_proof_public_key": {
+            "description": "Canonical compressed Pallas key verified by the Eq/Fp helper.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "validator": {
+            "$ref": "#/components/schemas/SumeragiV2BlsValidatorId",
+            "description": "Exact consensus identity occupying this roster position."
+          }
+        },
+        "required": [
+          "validator",
+          "eq_proof_public_key",
+          "ep_proof_public_key"
+        ],
+        "type": "object"
+      },
       "KagemushaOperationKindV1": {
         "enum": [
           "top_up",
@@ -19640,7 +20711,7 @@
       },
       "KagemushaOperationResultV1": {
         "additionalProperties": false,
-        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and—only for top-up—the byte-identical mint credit.",
+        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and\u2014only for top-up\u2014the byte-identical mint credit.",
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/KagemushaOperationKindV1"
@@ -19709,6 +20780,38 @@
           "state",
           "result",
           "rejection"
+        ],
+        "type": "object"
+      },
+      "KagemushaPastaSchnorrSignatureV1": {
+        "additionalProperties": false,
+        "properties": {
+          "nonce_commitment": {
+            "description": "Canonical compressed non-identity nonce point.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "response": {
+            "description": "Canonical non-zero response scalar.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "nonce_commitment",
+          "response"
         ],
         "type": "object"
       },
@@ -32366,6 +33469,25 @@
         ],
         "type": "object"
       },
+      "PublicLaneBondPreconditionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "activation_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peer_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "activation_height",
+          "peer_id"
+        ],
+        "type": "object"
+      },
       "PublicLaneManifestValidatorRecord": {
         "additionalProperties": false,
         "description": "Manifest-backed validator authority projected when the lane has no staking-ledger validator rows.",
@@ -32381,6 +33503,10 @@
           },
           "deactivation_height": {
             "description": "Manifest authority does not define a staking-tenure deactivation height.",
+            "type": "null"
+          },
+          "election_exit_height": {
+            "description": "No staking election-exit request exists for a manifest fallback entry; emitted as null.",
             "type": "null"
           },
           "lane_id": {
@@ -32445,9 +33571,169 @@
           "deactivation_height",
           "metadata",
           "last_reward_epoch",
-          "authority_source"
+          "authority_source",
+          "election_exit_height"
         ],
         "type": "object"
+      },
+      "PublicLaneMonetaryPlanV1": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "destination_asset": {
+            "type": "string"
+          },
+          "network_scope": {
+            "$ref": "#/components/schemas/PublicLaneMonetaryScopeV1"
+          },
+          "precondition": {
+            "$ref": "#/components/schemas/PublicLaneMonetaryPreconditionV1"
+          },
+          "source_asset": {
+            "type": "string"
+          },
+          "valid_until_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "network_scope",
+          "valid_until_height",
+          "source_asset",
+          "destination_asset",
+          "amount",
+          "precondition"
+        ],
+        "type": "object"
+      },
+      "PublicLaneMonetaryPreconditionV1": {
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Registration"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLaneRegistrationPreconditionV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Bond"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLaneBondPreconditionV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Unbond"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLaneUnbondPreconditionV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Slash"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLaneSlashPreconditionV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PublicLaneMonetaryScopeV1": {
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Genesis"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Network"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/Hash"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "PublicLanePendingReward": {
         "additionalProperties": false,
@@ -32524,6 +33810,497 @@
         ],
         "type": "object"
       },
+      "PublicLanePreparationBalanceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "balance": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "rewards_reserved": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "stake_reserved": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "asset",
+          "balance",
+          "stake_reserved",
+          "rewards_reserved"
+        ],
+        "type": "object"
+      },
+      "PublicLanePreparationOperationV1": {
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Registration"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLanePrepareRegistrationV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Bond"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLanePrepareBondV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "FinalizeUnbond"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLanePrepareUnbondV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "ClaimRewards"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLanePrepareClaimV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PublicLanePreparationRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "lane_id": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/PublicLanePreparationOperationV1"
+          },
+          "valid_for_blocks": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "valid_for_blocks",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "PublicLanePreparationV1": {
+        "additionalProperties": false,
+        "description": "One coherent server observation, not an independently authenticated state proof. Execution rechecks exact monetary legs, preconditions, permissions and expiry; election eligibility assumes next-block inclusion.",
+        "properties": {
+          "assumed_execution_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "balances": {
+            "items": {
+              "$ref": "#/components/schemas/PublicLanePreparationBalanceV1"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "observed_block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "observed_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_ledger_time_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PublicLanePreparedPlanV1"
+          },
+          "request": {
+            "$ref": "#/components/schemas/PublicLanePreparationRequestV1"
+          },
+          "xor_asset_definition_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request",
+          "network_id",
+          "observed_height",
+          "observed_block_hash",
+          "observed_ledger_time_ms",
+          "assumed_execution_height",
+          "xor_asset_definition_id",
+          "plan",
+          "balances"
+        ],
+        "type": "object"
+      },
+      "PublicLanePrepareBondV1": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "staker": {
+            "type": "string"
+          },
+          "validator": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator",
+          "staker",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "PublicLanePrepareClaimV1": {
+        "additionalProperties": false,
+        "properties": {
+          "accrued_sources": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "max_records": {
+            "maximum": 64,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "upto_epoch": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "recipient",
+          "upto_epoch",
+          "max_records",
+          "accrued_sources"
+        ],
+        "type": "object"
+      },
+      "PublicLanePrepareRegistrationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "candidate": {
+            "type": "boolean"
+          },
+          "peer_id": {
+            "type": "string"
+          },
+          "validator": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator",
+          "peer_id",
+          "amount",
+          "candidate"
+        ],
+        "type": "object"
+      },
+      "PublicLanePrepareUnbondV1": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "staker": {
+            "type": "string"
+          },
+          "validator": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator",
+          "staker",
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "PublicLanePreparedPlanV1": {
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Monetary"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLaneMonetaryPlanV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "Claim"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/PublicLaneRewardClaimPlanV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PublicLaneRegistrationPreconditionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "activation_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "activation_height"
+        ],
+        "type": "object"
+      },
+      "PublicLaneRewardClaimPlanV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicLaneRewardClaimStateV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_scope": {
+            "$ref": "#/components/schemas/PublicLaneMonetaryScopeV1"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/PublicLaneRewardRecordRefV1"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/PublicLaneRewardClaimSourceV1"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "valid_until_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "network_scope",
+          "valid_until_height",
+          "expected_state",
+          "records",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "PublicLaneRewardClaimSourceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "destination_asset": {
+            "type": "string"
+          },
+          "expected_accrued": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Quantity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payout": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "source_asset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_asset",
+          "destination_asset",
+          "expected_accrued",
+          "payout"
+        ],
+        "type": "object"
+      },
+      "PublicLaneRewardClaimStateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "through_epoch": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "through_epoch"
+        ],
+        "type": "object"
+      },
+      "PublicLaneRewardRecordRefV1": {
+        "additionalProperties": false,
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "record_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "epoch",
+          "record_hash"
+        ],
+        "type": "object"
+      },
+      "PublicLaneSlashPreconditionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "activation_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slashable_exposure": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "activation_height",
+          "slashable_exposure"
+        ],
+        "type": "object"
+      },
       "PublicLaneStakeListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -32591,6 +34368,25 @@
           "bonded",
           "metadata",
           "pending_unbonds"
+        ],
+        "type": "object"
+      },
+      "PublicLaneUnbondPreconditionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "activation_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "activation_height",
+          "request_hash"
         ],
         "type": "object"
       },
@@ -32697,6 +34493,14 @@
               "null"
             ]
           },
+          "election_exit_height": {
+            "description": "Requested exclusion from future elections. Current or frozen committee duties end only after certified replacement.",
+            "format": "uint64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "lane_id": {
             "description": "Lane serviced by the validator.",
             "format": "uint64",
@@ -32750,7 +34554,8 @@
           "deactivation_height",
           "metadata",
           "last_reward_epoch",
-          "authority_source"
+          "authority_source",
+          "election_exit_height"
         ],
         "type": "object"
       },
@@ -49717,7 +51522,7 @@
         "type": "object"
       },
       "SumeragiV2BlsProof": {
-        "description": "Exact 96-byte BLS-normal proof/signature in Norito JSON's byte-array representation.",
+        "description": "Exact 96-byte BLS-normal proof/signature in Norito JSON byte-array representation.",
         "items": {
           "maximum": 255,
           "minimum": 0,
@@ -50196,6 +52001,16 @@
         "additionalProperties": false,
         "description": "Complete parent-CommitQC-authenticated transition into the next epoch, including its end height and immutable validator PoPs.",
         "properties": {
+          "committee_preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorCommitteePreparationV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "epoch": {
             "format": "uint64",
             "maximum": 18446744073709551615,
@@ -50207,6 +52022,12 @@
             "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
+          },
+          "kagemusha_mint_finality_authority": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityAuthorityGenerationV1"
+          },
+          "kagemusha_mint_finality_authorization": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityEpochAuthorizationV1"
           },
           "leader_seed": {
             "$ref": "#/components/schemas/SumeragiV2Bytes32"
@@ -50243,7 +52064,10 @@
           "roster",
           "validator_set_pops",
           "quorum",
-          "leader_seed"
+          "leader_seed",
+          "kagemusha_mint_finality_authority",
+          "kagemusha_mint_finality_authorization",
+          "committee_preparation"
         ],
         "type": "object"
       },
@@ -50306,6 +52130,12 @@
             "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
+          },
+          "kagemusha_mint_finality_authority": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityAuthorityGenerationV1"
+          },
+          "kagemusha_mint_finality_authorization": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityEpochAuthorizationV1"
           },
           "leader_seed": {
             "$ref": "#/components/schemas/SumeragiV2Bytes32"
@@ -50385,7 +52215,9 @@
           "nexus_amx_context_hash",
           "execution_policy_hash",
           "da_layout",
-          "leader_seed"
+          "leader_seed",
+          "kagemusha_mint_finality_authority",
+          "kagemusha_mint_finality_authorization"
         ],
         "type": "object"
       },
@@ -51212,7 +53044,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (±ms) reported by the network time service.",
+            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -51287,7 +53119,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (±ms) reported by the network time service.",
+            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -52596,6 +54428,330 @@
           "ExecutionFailed"
         ],
         "type": "string"
+      },
+      "ValidatorCandidateKeysV1": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "description": "Generation to which both public keys belong.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityValidatorKeysV1",
+            "description": "Consensus peer and both generation-derived Pasta public keys."
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived network identity."
+          },
+          "peer_signature": {
+            "description": "Consent signed by the exact consensus peer over the complete publication challenge.",
+            "maxLength": 192,
+            "minLength": 192,
+            "pattern": "^[0-9A-F]{192}$",
+            "type": "string"
+          },
+          "possession": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityPairedPossessionProofV1",
+            "description": "Proof of actual possession under the candidate-publication challenge."
+          }
+        },
+        "required": [
+          "network_id",
+          "generation",
+          "keys",
+          "possession",
+          "peer_signature"
+        ],
+        "type": "object"
+      },
+      "ValidatorCommitteeCredentialsV1": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityAuthorityGenerationV1",
+            "description": "Complete generation, built only from authenticated candidate key publications."
+          },
+          "beacon": {
+            "$ref": "#/components/schemas/InstalledBeaconEpochBindingV1",
+            "description": "Exact finalized target DKG transcript, retained separately from the incumbent session."
+          }
+        },
+        "required": [
+          "authority",
+          "beacon"
+        ],
+        "type": "object"
+      },
+      "ValidatorCommitteePreparationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "authority_generation": {
+            "description": "Successor generation relative to the authority governing preparation.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "election_seed": {
+            "description": "Independently domain-separated election randomness from the authenticated boundary pulse.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "first_height": {
+            "description": "Inclusive activation height.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_height": {
+            "description": "Inclusive end of the initial target scheduling epoch.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived network identity."
+          },
+          "preparing_authorization_id": {
+            "description": "Exact E+1 authorization, whose current quorum will decide this attempt.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "roster": {
+            "description": "Complete ordered target committee; it cannot be shrunk or rerolled.",
+            "items": {
+              "$ref": "#/components/schemas/SumeragiV2ValidatorPower"
+            },
+            "maxItems": 31,
+            "minItems": 4,
+            "type": "array"
+          },
+          "selection_anchor": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Last committed block before the selecting boundary, never that boundary's own hash."
+          },
+          "selection_epoch": {
+            "description": "Epoch whose final pre-state supplied the election inputs.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "selection_height": {
+            "description": "Boundary height whose exact current quorum freezes this election.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "target_epoch": {
+            "description": "Scheduling epoch after the complete preparation epoch.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "validator_set_pops": {
+            "description": "Exact consensus-key possession proofs in target seat order.",
+            "items": {
+              "items": {
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 96,
+              "minItems": 96,
+              "type": "array"
+            },
+            "maxItems": 31,
+            "minItems": 4,
+            "type": "array"
+          },
+          "version": {
+            "description": "Sole first-release layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "selection_epoch",
+          "selection_height",
+          "selection_anchor",
+          "target_epoch",
+          "first_height",
+          "last_height",
+          "authority_generation",
+          "preparing_authorization_id",
+          "election_seed",
+          "roster",
+          "validator_set_pops"
+        ],
+        "type": "object"
+      },
+      "ValidatorCommitteeSeatReadinessV1": {
+        "additionalProperties": false,
+        "properties": {
+          "beacon": {
+            "$ref": "#/components/schemas/GlobalThresholdBeaconPartialSignatureV1",
+            "description": "Adaptive threshold proof of the exact beacon share under a separate readiness domain."
+          },
+          "pasta": {
+            "$ref": "#/components/schemas/KagemushaMintFinalityPairedPossessionProofV1",
+            "description": "Possession of both Pasta generation keys under the exact attempt context."
+          },
+          "validator_index": {
+            "description": "Zero-based index in the immutable ordered target roster.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "validator_index",
+          "pasta",
+          "beacon"
+        ],
+        "type": "object"
+      },
+      "ValidatorCommitteeSelectionStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "selecting_finality": {
+            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact",
+            "description": "Exact selecting boundary; its snapshot must carry the identical preparation."
+          },
+          "transition": {
+            "$ref": "#/components/schemas/ValidatorCommitteeTransitionV1",
+            "description": "Observed preparation, credentials, possession proofs and optional terminal body."
+          }
+        },
+        "required": [
+          "transition",
+          "selecting_finality"
+        ],
+        "type": "object"
+      },
+      "ValidatorCommitteeStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_keys": {
+            "description": "Published keys for the selected target peers in strict peer order; empty without a selection. Missing publications remain absent.",
+            "items": {
+              "$ref": "#/components/schemas/ValidatorCandidateKeysV1"
+            },
+            "maxItems": 31,
+            "type": "array"
+          },
+          "latest_finality": {
+            "$ref": "#/components/schemas/SumeragiV2FinalityArtifact",
+            "description": "Latest finalized artifact observed by this server, verified against its Kura block."
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived deployment identity."
+          },
+          "pending_beacon_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GlobalThresholdBeaconKeySessionV1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Complete public transcript for the attempt's exact session, when finalized."
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorCommitteeSelectionStatusV1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absence means no frozen attempt exists for the selected target; never readiness."
+          },
+          "target_epoch": {
+            "description": "Explicit requested target, or the current scheduling epoch plus one.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "network_id",
+          "target_epoch",
+          "latest_finality",
+          "selected",
+          "candidate_keys",
+          "pending_beacon_session"
+        ],
+        "type": "object"
+      },
+      "ValidatorCommitteeTransitionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidatorCommitteeCredentialsV1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Once installed, the exact credentials cannot be replaced within this attempt."
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KagemushaMintFinalityEpochAuthorizationV1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authorization body whose boundary certificate activated or cancelled this attempt. This body alone is never accepted as proof of finality."
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/ValidatorCommitteePreparationV1",
+            "description": "Immutable authenticated election; no update may change this value."
+          },
+          "readiness": {
+            "description": "Strictly ordered evidence for distinct target seats; activation requires every seat.",
+            "items": {
+              "$ref": "#/components/schemas/ValidatorCommitteeSeatReadinessV1"
+            },
+            "maxItems": 31,
+            "type": "array"
+          }
+        },
+        "required": [
+          "preparation",
+          "credentials",
+          "readiness",
+          "outcome"
+        ],
+        "type": "object"
       },
       "VerifyingKeyId": {
         "additionalProperties": false,
@@ -82308,6 +84464,216 @@
           "authentication": "torii_default",
           "schemaVersion": 1,
           "stableRouteId": "application.nexus_public_lanes_by_lane_id_validators_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nexus/staking/prepare": {
+      "post": {
+        "description": "Read-only bounded request. Requires explicit account/amount intent and expiry offset within one committed epoch. Claims process at most64 consecutive records and64 exact sources. Returned block identity is observational; signing and execution remain separate.",
+        "operationId": "preparePublicLanePlan",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicLanePreparationRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicLanePreparationV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicLanePreparationV1"
+                }
+              }
+            },
+            "description": "Exact bounded plan and observed balances; no transaction is signed or submitted."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed or unknown query field."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Required API authentication is absent or invalid."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          },
+          "413": {
+            "description": "Request exceeds 65536 bytes."
+          },
+          "415": {
+            "description": "Request must use canonical application/x-norito."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Finality query admission or rate budget is exhausted."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Committed state, selection or durable finality bindings differ."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Prepare exact staking monetary inputs"
+      }
+    },
+    "/v1/nexus/validator-committee": {
+      "get": {
+        "description": "Read public candidate keys, immutable preparation progress and complete beacon transcript with exact latest and selecting finality artifacts. Artifacts require independent chain/context anchoring; preparation/readiness is not activation. Omitted target_epoch selects the current scheduling epoch plus one. Missing or mismatched durable finality fails closed.",
+        "operationId": "getValidatorCommitteeStatus",
+        "parameters": [
+          {
+            "description": "Exact target scheduling epoch; omission selects the next epoch.",
+            "in": "query",
+            "name": "target_epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatorCommitteeStatusV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatorCommitteeStatusV1"
+                }
+              }
+            },
+            "description": "Exact finality attachments and public preparation progress."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed or unknown query field."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Required API authentication is absent or invalid."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The committed finality evidence is unavailable."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Finality query admission or rate budget is exhausted."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Committed state, selection or durable finality bindings differ."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read one frozen validator committee preparation.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "nexus.validator_committee.read"
         },
         "x-iroha-tool-effect": "read"
       }

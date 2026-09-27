@@ -97,7 +97,6 @@ impl Kura {
     /// derived body/finality caches can be populated. The State aggregate
     /// still owes its final exact canonical-boundary fence before publishing.
     /// Do not call while holding `canonical_publication_lease`.
-    #[cfg(test)]
     pub(crate) fn reauthenticate_wsv_checkpoint_receipt(
         &self,
         receipt: &KuraWsvCheckpointReceipt,

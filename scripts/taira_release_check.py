@@ -1125,7 +1125,7 @@ CORE_REWARD_ACCOUNTING_STAGES = (("retained reward cursors, unpaid custody and r
     'smartcontracts::isi::staking::tests::reward_obligation_audit_rejects_corrupt_record_keys',
     'smartcontracts::isi::staking::tests::reward_claim_uses_recorded_custody_after_fee_policy_changes',
     'smartcontracts::isi::staking::tests::reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
-    'smartcontracts::isi::staking::tests::reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+    'smartcontracts::isi::staking::tests::reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback',
     'smartcontracts::isi::staking::tests::claim_rewards_transfers_and_marks_epoch',
     'smartcontracts::isi::staking::tests::claim_rewards_defers_dust_without_marking_paid',
     'smartcontracts::isi::staking::tests::claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
@@ -1290,6 +1290,7 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::genesis_preexecution_preserves_selected_profile_across_threads",
     "tests::validated_genesis_cache_reuses_exact_block_and_network_identity",
     "tests::file_backed_genesis_keeps_fresh_preexecution_validation",
+    "tests::consensus_first_boot_never_reasserts_a_key_after_history_loss",
 )),)
 
 NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure observation", (
@@ -1309,6 +1310,9 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
     "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
 )), ("exact retained-height replay observation", (
     "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
+)), ("native beacon configuration and original signing custody", (
+    "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
+    "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
 )),)
 # Every platform qualifies retained authority generations against the same four
 # independent genesis-anchored chains and full application workload.
@@ -1561,7 +1565,7 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
     "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
     "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
     "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
-    "localnet::tests::generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission",
+    "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
     "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
     "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
     "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
@@ -1571,7 +1575,6 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
 KAGAMI_STAGES += (("retired epoch key derivation commands are rejected", (
     'kagemusha::tests::parser_rejects_epoch_key_derivation_commands',
 )),)
-
 
 KAGAMI_STAGES += (("typed public beacon history candidates and explicit proof limits", (
     'kura::beacon_history::tests::beacon_history_projects_only_typed_public_candidates_and_keeps_proof_limits',
@@ -1608,6 +1611,9 @@ CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
 )), )
 DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credential custody', (
     'taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity',
+    'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',
+    'taira_runtime_signer::tests::disposable_broker_rejects_catalog_and_credential_substitution',
+    'taira_runtime_signer::tests::disposable_broker_rejects_unsupported_slots_before_reading_credentials',
     'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_attestation_round_trips_over_authenticated_broker',
     'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_typed_proxy_requalifies_before_and_after_lookup',
     'runtime_provider_broker::protocol::platform::tests::correlated_wrong_beacon_session_id_is_rejected_by_typed_proxy',
@@ -2163,19 +2169,22 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
         'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
     )),
-    ('native service preparation retains original source and archive owners', (
-        'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
-        'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
-        'state::tests::native_service_preparation_index_busy_precedes_execution',
-        'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
-        'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
-        'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
-        'state::tests::native_service_preparation_recorder_conflict_releases_archives',
-        'state::tests::native_service_single_body_store_retries_reuse_original_execution',
-        'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
+    ('native source and recorded execution retain original custody', (
+        'state::tests::native_consumer_source_custody_moves_original_all_route_owners',
+        'state::tests::native_recorded_execution_retains_sources_results_aliases_and_complete_witness',
+        'state::tests::native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer',
+        'state::tests::native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged',
+        'state::tests::native_consumer_source_preparation_retains_exact_recovery_positions_then_stages',
+        'state::tests::native_consumer_source_refuses_authentically_resigned_first_carrier_substitution',
+        'state::tests::native_recorded_execution_nested_recorder_refuses_without_mutation_or_reset',
+        'state::tests::native_recorded_execution_late_failure_discards_hook_effects_and_recorder',
+        'state::tests::native_completed_history_rejects_reapplication_after_second_economic_commit',
     )),
     ('native failure provenance retains local dependencies', (
-        'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+        'sumeragi::v2_apply::tests::native_preparation_errors::local_admission_retains_original_release_and_runner_through_all_native_origins',
+        'sumeragi::v2_apply::tests::native_preparation_errors::npos_application_semantic_error_remains_a_deterministic_rejection',
+        'sumeragi::v2_apply::tests::native_preparation_errors::evidence_preparation_refusal_is_local_and_keeps_its_original_release',
+        'sumeragi::v2_apply::tests::native_preparation_errors::evidence_decode_scope_refusal_is_local_recovery_without_consensus_rejection',
         'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
         'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
         'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
@@ -2370,7 +2379,8 @@ CORE_NATIVE_CONNECTION_STAGES += (('Native process publication and bootstrap iso
     'state::tests::native_driver_owned_capacity_retry_retains_original_payload_and_fair_evidence',
     'state::tests::native_driver_owned_rejection_returns_original_payload_without_poisoning_output',
     'state::tests::native_driver_owned_ingress_without_original_fair_evidence_fails_closed',
-    'state::tests::native_service_production_shell_pool_refuses_before_execution_and_retries',
+    'state::native_execution_resources::tests::source_layouts_reserve_and_refund_exact_original_bytes',
+    'state::native_execution_resources::tests::final_execution_charge_remains_with_source_admission',
     'state::carrier_preparation::journals::decision_binding::tests::original_capture_pool_remains_reserved_through_decision_binding_and_handoff',
     'state::carrier_preparation::journals::decision_binding::tests::other_signed_context_retains_original_capture_owner_for_retry',
     'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_publication_facade_refuses_foreign_authority_before_io_and_retries_original_checkpoint',
@@ -2386,8 +2396,6 @@ CORE_NATIVE_CONNECTION_STAGES += (('Native retained local-source completion and 
     'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_batch_without_releasing_wait',
     'sumeragi::v2_runner::tests::native_source_barrier_preserves_progress_physical_completion_and_dependency_service',
     'sumeragi::v2_lifecycle_coordinator::work_registry::tests::obsolete_sidecar_outcome_is_refused_and_leaves_waiting_row_original',
-    'state::tests::native_service_postpublication_refusal_retains_original_owner_and_notifies_once',
-    'state::tests::native_service_control_only_admission_retains_one_execution_and_publishes',
     'sumeragi::v2_apply::tests::retained_current_genesis_executes_once_and_publishes_original_owner',
 )), )
 
@@ -2530,6 +2538,7 @@ CONCREAD_STAGES = (
         'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
         'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
         'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
+        'release::tests::charged_notification_retains_original_control_through_observers_and_deferred_releases',
     )),
     ('failed native cursor retains cleanup after unlock', (
         'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
@@ -3616,7 +3625,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
     copies = None
     completed = False
     try:
-        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control", "iroha3d-beacon-custody"} for key in records):
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control", "iroha_test_runtime_provider_broker"} for key in records):
             raise CheckError("native artifact isolation requires known nonempty selections")
         for directory in (root, target):
             info = directory.stat()
@@ -3628,7 +3637,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
         for selection, record in records.items():
             package = {"iroha3d": "irohad", "iroha": "iroha_cli",
                        "iroha3d-message-control": "irohad",
-                       "iroha3d-beacon-custody": "irohad"}.get(selection)
+                       "iroha_test_runtime_provider_broker": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
             if record["manifest_path"] != str(native_package_root(root, package) / "Cargo.toml"):
@@ -3936,16 +3945,19 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
                              *, message_control: bool = False,
-                             beacon_custody: bool = False,
+                             disposable_broker: bool = False,
                              focused_fixture: bool = False) -> NativeArtifactCopies:
     """Copy each build before a separate fixture feature graph can replace Cargo outputs."""
-    if (message_control and beacon_custody) or (focused_fixture and (message_control or beacon_custody)):
-        raise CheckError("feature-isolated daemon codegen cannot use another fixture graph")
-    expected = {"iroha3d": ("iroha3d-message-control", "irohad")} if message_control else (
-        {"iroha3d": ("iroha3d-beacon-custody", "irohad")} if beacon_custody else {
-        "iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
-        "iroha3d_taira": ("taira-launcher", "irohad")})
-    if not message_control and not beacon_custody:
+    if (message_control and disposable_broker) or (focused_fixture and (message_control or disposable_broker)):
+        raise CheckError("feature-isolated codegen cannot use another fixture graph")
+    if message_control:
+        expected = {"iroha3d": ("iroha3d-message-control", "irohad")}
+    elif disposable_broker:
+        expected = {"iroha_test_runtime_provider_broker": ("iroha_test_runtime_provider_broker", "irohad")}
+    else:
+        expected = {"iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
+                    "iroha3d_taira": ("taira-launcher", "irohad")}
+    if not message_control and not disposable_broker:
         # Audit the complete shipping table even in the mutable diagnostic.
         # Only its known four-peer inputs need production codegen there; the
         # immutable release and signed build retain every shipping binary.
@@ -3964,10 +3976,10 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
                *(["--features", "irohad/test-network-message-control"] if message_control else []),
-               *(["--features", "irohad/test-network-production-beacon-custody"] if beacon_custody else []),
+               *(["--features", "irohad/test-network-disposable-broker"] if disposable_broker else []),
                "--message-format=json-render-diagnostics"]
     phase = ("message-control fixture codegen" if message_control else
-             "beacon-custody fixture codegen" if beacon_custody else
+             "disposable broker fixture codegen" if disposable_broker else
              "focused four-peer fixture codegen" if focused_fixture else "shipping codegen")
     print(f"[taira-check] build native network binaries: {phase}", flush=True)
     progress = CargoBuildProgress(phase, {("bin", name) for name in expected},
@@ -3976,7 +3988,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
     production_libraries: set[str] = set()
-    audit_production_graph = not message_control and not beacon_custody and not focused_fixture
+    audit_production_graph = not message_control and not disposable_broker and not focused_fixture
     stream_error: CheckError | None = None
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
@@ -4088,9 +4100,9 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
                 if "kagami" not in binaries:
                     raise CheckError("beacon fixture requires the isolated shipping Kagami artifact")
                 private_fixture_root = beacon_fixture_root()
-                with compile_network_binaries(root, env, lock_fds, beacon_custody=True) as control:
+                with compile_network_binaries(root, env, lock_fds, disposable_broker=True) as broker:
                     beacon_env = network_env | {
-                        "TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY": control["iroha3d-beacon-custody"],
+                        "TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER": broker["iroha_test_runtime_provider_broker"],
                         "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
                         "KAGAMI_BIN": binaries["kagami"],
                     }
@@ -4920,6 +4932,15 @@ def main() -> int:
         print(f"[taira-check] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0
+
+
+STAGES += (("generic deployment ownership and retired worker rejection", (
+    'taira_public_reset::host::tests::retired_epoch_worker_paths_reject_existing_state_and_service_without_mutation',
+    'taira_public_reset::host::tests::retired_epoch_worker_broken_symlink_blocks_reset',
+    'taira_public_reset::host::deployment::tests::terminal_evidence_permits_only_exact_terminal_replays',
+    'taira_public_reset::host::deployment::tests::reset_owner_requires_exact_authorization_without_worker_policy',
+    'taira_public_reset::inputs::tests::retired_worker_authorization_and_inventory_fields_are_rejected',
+)),)
 
 
 if __name__ == "__main__":

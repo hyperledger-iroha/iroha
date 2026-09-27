@@ -185,6 +185,13 @@ pub fn resolve_public_xor_asset_definition_id(
                 "public Taira XOR asset definition id is pinned to `{TAIRA_XOR_ASSET_DEFINITION_ID}`; found `{parsed}`"
             ));
         }
+        if profile == GenesisProfile::Iroha3Nexus
+            && parsed.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID
+        {
+            return Err(eyre!(
+                "public Nexus requires its operator-provisioned mainnet XOR definition; the Taira testnet asset is not a mainnet substitute"
+            ));
+        }
         return Ok(Some(parsed));
     }
     if let Some(default) = default_public_xor_asset_definition_id(profile)? {
@@ -353,6 +360,16 @@ mod tests {
             err.to_string().contains(TAIRA_XOR_ASSET_DEFINITION_ID),
             "unexpected error: {err}"
         );
+    }
+    #[test]
+    fn public_nexus_rejects_taira_xor_substitution() {
+        let error = resolve_public_xor_asset_definition_id(
+            Some(GenesisProfile::Iroha3Nexus),
+            Some(TAIRA_XOR_ASSET_DEFINITION_ID),
+            true,
+        )
+        .expect_err("testnet cannot stand in for mainnet XOR");
+        assert!(error.to_string().contains("Taira"));
     }
     #[test]
     fn known_chain_discriminant_maps_taira_and_nexus() {

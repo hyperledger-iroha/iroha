@@ -443,13 +443,18 @@ the pinned renderer and initial units before rendering these four final mode0644
 units. The native request is not hand-authored JSON.
 
 `public-reset assemble --intent PATH` and `authorize` require the same
-`--public-inputs DIR`, `--beacon-inputs PATH` and four ordered
-`--beacon-validator-unit` paths, along with their runtime client, operator,
-onboarding, service unit and known-host inputs. Native assembly independently
-rederives the source, credential joins, signed genesis, beacon request and seat
-map. Apply uses the admitted runtime inputs. The same-release artifact closure
-includes Kagami. See the [maintained retry caller](taira_retry.md) for the exact
-current path records and preparation order.
+`--public-inputs DIR`, `--beacon-inputs PATH`, four ordered
+`--beacon-validator-unit` paths, runtime client, four validator client configs,
+operator key, onboarding token, initial validator units, edge unit, and known
+hosts. Full scope also requires its Inrou stage. Native assembly independently
+rederives the source, credential joins, signed genesis, beacon request, and seat
+map before signing. Apply receives only admitted runtime inputs.
+
+The same-release artifact closure includes Kagami. Reset installs no epoch
+maintenance worker; old worker state or service files reject host preflight.
+The current production epoch boundary retains the incumbent authority.
+See the [maintained retry caller](taira_retry.md) for the current path records
+and preparation order.
 
 The signed genesis must leave room for onboarding, funding, the canary's real
 QueuePlan admission and execution carriers, real DKG completion, and the
@@ -494,8 +499,8 @@ selector and retained state. Running mode proves the restored old process;
 stopped mode stays stopped and proves absence, without claiming recovery or
 health. Cached and conservative rollback use the same signed state. Cleanup
 protects the selected prior configuration release and every admitted runtime
-artifact root, using authenticated occupied-target records. Proven deployments cannot roll back
-through this workflow, and ambiguous writes require their retained recovery path.
+artifact root using authenticated occupied-target records. Malformed or
+inconsistent prior state cannot authorize cleanup. Proven deployments cannot roll backthrough this workflow, and ambiguous writes require their retained recovery path.
 
 These preparation operations do not authorize replacement of shared network
 state. The reviewed inventory, explicit reset authorization, and independently
@@ -504,12 +509,16 @@ provisioned trusted host dispatcher and reset guard remain prerequisites for
 
 ## Updating an initialized testnet
 
-A routine update preserves validator signing custody and advances the exact
-same-release binaries under the retained deployment and explicit operation.
-Scheduling epochs retain the authenticated incumbent authority generation;
-there is no separate key-renewal worker or supervisor plan.
+`scripts/taira_update.py` updates an existing four-validator deployment from a
+completed maintained artifact preparation. Its deployment record binds the
+approved SSH routes and host-key pins, network, retained directories and
+completed predecessor receipts. Keep that record outside Git and use one
+explicit fresh `update-<32hex>` operation for artifact preparation and apply.
+The update preserves validator signing custody. Scheduling epochs retain the
+incumbent authenticated authority; no separate key-renewal worker is required.
 
-Prepare the exact same-release binaries at that operation's immutable release path:
+Prepare the exact same-release daemon, CLI and Kagami at the operation's immutable
+release path:
 
     python3 scripts/taira_update.py \
       --prepare-artifacts \
@@ -518,7 +527,8 @@ Prepare the exact same-release binaries at that operation's immutable release pa
       --operation update-0123456789abcdef0123456789abcdef \
       --output /absolute/owner-private/taira/artifact-output
 
-Apply the reviewed transition using the same operation:
+Review the deployment plan with `--plan-only`, then apply using the same
+operation and a fresh output path:
 
     python3 scripts/taira_update.py \
       --deployment /absolute/owner-private/taira/deployment.json \
@@ -526,40 +536,39 @@ Apply the reviewed transition using the same operation:
       --operation update-0123456789abcdef0123456789abcdef \
       --output /absolute/owner-private/taira/update-output
 
-The deployment record contains the approved SSH route and public host-key pins,
-network and directory identities, and the exact completed predecessor receipt.
-Keep it outside Git. Artifact preparation creates the exact same-release daemon,
-CLI and Kagami from the maintained four-artifact preparation without overwriting
-existing files. Apply requires all three already provisioned files and rechecks
-their exact native digests, size, source and root-owned mode0755 custody; it never
-creates a missing binary as a fallback. It preserves
-configuration, signer custody and ledger state, and verifies native
-Strict snapshot restoration and public basic health. It does not invoke Cargo.
-All four validators must prove the candidate identity and restore their own stopped
-retained tips. Every overlapping stopped prefix is checked before startup. Two
-fresh samples must each contain at least three Ready validators agreeing on the
-stopped cohort's highest committed block hash. Every sample attempts all four
-validators and records missing, unready, and lagging peers explicitly; stale
-observations never contribute to quorum. After the public health check, the
-updater repeats both quorum samples and checks all four unchanged processes.
-Identity, hash, malformed response, and process failures stop immediately; only
-declared startup transport failures and HTTP 503 are polled. An idle chain does
-not need to create another block to pass.
-
-During guest apply, the coordinator prints the phase, elapsed time and owner-private
-attempt path to stderr at start and every 30 seconds. A failed or timed-out child
-reports that path without printing its captured stderr. The guest command remains
-a single timeout-bound submission.
-
 `--plan-only` writes the concrete plan locally without contacting the host.
-The operation is explicit and determines the immutable candidate binary paths.
-The update and public-reset paths share the root-owned
-`/var/lib/taira-deployment/.deployment.lock`. The native durable
-`.reset-owner.json` excludes updates between reset host invocations, until all
-local targets have passed terminal seal or rollback qualification.
-Ambiguous or partial stops admit reconciliation from retained evidence. After a
-confirmed stop, a pre-start failure leaves validators stopped; after candidate
-start, failure contains the candidate validators and retains their evidence.
+Artifact preparation creates the exact same-release daemon, CLI and Kagami
+without overwriting existing files. Apply requires all three prepared binaries
+and rechecks their native digests, sizes, source and root-owned mode0755
+custody. It never creates missing binaries or invokes Cargo. Configuration,
+validator credentials and ledger state remain under their native owners. The
+updater submits no transactions and accepts no retired worker plan fields.
+During guest apply, it reports the phase, elapsed time and owner-private attempt
+path to stderr at start and every 30 seconds. A failed or timed-out child reports
+that path without printing captured stderr; submission has one bounded timeout.
+
+Artifact transfer, admission and apply share the existing root-owned, mode0600,
+empty, single-link `/var/lib/taira-deployment/.deployment.lock` with reset and
+retry. The containing directory has root ownership and mode0700; a missing lock
+is an error. While holding it, the updater rejects a retained
+`.reset-owner.json`, any `/var/lib/taira-epoch-supervisor` path, and any
+`/etc/systemd/system/iroha-taira-epoch-supervisor.service` path, including
+dangling links. It does not decode or run the retired worker. Retained reset
+ownership and obsolete worker state require operator reconciliation.
+
+All four validators must prove the candidate identity and restore their own
+stopped retained tips. Every overlapping stopped prefix is checked before
+startup. Two fresh samples must each contain at least three Ready validators
+agreeing on the stopped cohort's highest committed block hash. Each sample
+attempts all four validators and records missing, unready and lagging peers;
+stale observations never contribute to quorum. After the public health check,
+the updater repeats both quorum samples and checks all four unchanged
+processes. Identity, hash, malformed response and process failures stop
+immediately; only declared startup transport failures and HTTP 503 are polled.
+An idle chain need not create another block. An ambiguous stop admits read-only
+reconciliation. A pre-start failure leaves the previous cohort stopped; after
+candidate startup, failure contains that cohort without reverting execution
+rules, even if failure-receipt publication fails.
 
 After all four stopped checkpoints are recorded, the matching candidate CLI runs
 `iroha taira stopped-owner-maintenance` once before unit replacement or startup.

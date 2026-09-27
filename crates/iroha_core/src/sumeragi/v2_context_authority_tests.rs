@@ -115,16 +115,29 @@ fn retention_beacon_requires_canonical_active_exact_incumbent_transcript() {
     const BOUNDARY: u64 = 7;
     const SUCCESSOR: u64 = BOUNDARY + 1;
     let (network, roster, authority) = fixture();
-    let peers = roster
-        .iter()
-        .map(|entry| entry.validator.clone())
+    let mut signing_keys = (1_u8..=4)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic incumbent beacon signer")
+        })
         .collect::<Vec<_>>();
+    signing_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    assert_eq!(
+        signing_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>(),
+        roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>()
+    );
     let anchor = GlobalThresholdBeaconChainAnchorV1 {
         height: BOUNDARY - 2,
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32])),
     };
     let (valid, mut pulses) =
-        beacon::signed_pulses_fixture_for_roster_and_anchors(network, &peers, &[anchor]);
+        beacon::signed_pulses_fixture_for_roster_and_anchors(network, &signing_keys, &[anchor]);
     let pulse = pulses.pop().expect("one real signed pre-boundary pulse");
     let link = validate_persisted_global_threshold_beacon_pulse_v1(&pulse).unwrap();
     assert!(valid.is_active_at(pulse.height));

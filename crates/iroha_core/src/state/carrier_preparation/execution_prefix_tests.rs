@@ -209,14 +209,19 @@ fn completed_tail_retains_prefix_under_whole_candidate_admission_and_static_hand
         .expect("post-tail source authentication preserves the original World seal meaning");
     let mut calls = 0;
     let journals = prepared
-        .prepare_journals(None, None, |inputs| {
-            calls += 1;
-            assert_eq!(inputs.prefix.sources().entries().as_ptr() as usize, sources);
-            assert_eq!(inputs.prefix.witness().writes.as_ptr() as usize, writes);
-            assert!(Arc::ptr_eq(inputs.prefix.inventory(), &inventory));
-            assert!(inputs.prefix.retains_closed_state(inputs.state));
-            Ok::<_, std::convert::Infallible>(())
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |inputs| {
+                calls += 1;
+                assert_eq!(inputs.prefix.sources().entries().as_ptr() as usize, sources);
+                assert_eq!(inputs.prefix.witness().writes.as_ptr() as usize, writes);
+                assert!(Arc::ptr_eq(inputs.prefix.inventory(), &inventory));
+                assert!(inputs.prefix.retains_closed_state(inputs.state));
+                Ok::<_, std::convert::Infallible>(())
+            },
+        )
         .unwrap();
     assert_eq!(calls, 1);
     drop(state.world.block());

@@ -36,8 +36,8 @@ fn derive_profile(
 }
 
 // The caller admits either the complete inventory or the native-derived public
-// context. Profile derivation does not require a completed artifact
-// plan, and confers no deployment or owner authorization.
+// context. Profile derivation precedes a completed artifact plan and
+// confers no deployment or owner authorization.
 pub(super) fn derive_admitted_profile(
     next_genesis_hash: &str,
     canary_onboarding_request: &AccountOnboardingPlanRequestV1,

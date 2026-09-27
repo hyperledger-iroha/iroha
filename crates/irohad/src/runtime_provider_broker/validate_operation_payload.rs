@@ -143,6 +143,12 @@ fn validate_operation_payload(
             let _ =
                 decode_global_beacon_partial_sign_request(&request.payload, session_network_id)?;
         }
+        (slot, OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            let _ =
+                decode_global_beacon_seat_readiness_request(&request.payload, session_network_id)?;
+        }
         (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
             if slot == parliament_tle_partial_release_signer_slot =>
         {

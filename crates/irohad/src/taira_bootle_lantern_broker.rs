@@ -10,7 +10,9 @@ use crate::{
     RuntimeProviderBrokerLifecycleV1, serve_runtime_provider_broker_with_lifecycle_v1,
 };
 use clap::{Args, Parser, Subcommand};
-use iroha_config::parameters::validate_production_runtime_handle;
+use iroha_config::parameters::{
+    actual::RuntimeProviderBrokerEndpointPath, validate_production_runtime_handle,
+};
 use iroha_core::privacy_engines::bootle_lantern::issuer::{
     BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceAuthorizationV1,
     BootleLanternIssuanceErrorV1, BootleLanternIssuerKeyPairV1,
@@ -712,7 +714,7 @@ struct BrokerCliV1 {
 enum BrokerCommandV1 {
     /// Emit the complete public policy and registration instruction to stdout.
     ExportPublic(ExportPublicArgsV1),
-    /// Validate expected public digests and serve the stock slot-56 endpoint.
+    /// Validate expected public digests and serve slot 56 at the configured endpoint.
     Serve(ServeArgsV1),
 }
 #[derive(Clone, Args)]
@@ -783,6 +785,9 @@ struct ServeArgsV1 {
     public: PublicArgsV1,
     #[command(flatten)]
     credentials: CredentialPathArgsV1,
+    /// Public absolute path of the authenticated local broker socket.
+    #[arg(long = "broker-endpoint", value_name = "ABSOLUTE_SOCKET_PATH")]
+    broker_endpoint: RuntimeProviderBrokerEndpointPath,
     /// Exact policy-record digest obtained from a reviewed `export-public` run.
     #[arg(long, value_parser = parse_nonzero_digest_hex_v1)]
     expected_policy_record_digest: [u8; 32],
@@ -843,12 +848,13 @@ async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBroker
                 .map_err(|_| TairaBootleLanternBrokerErrorV1::InvalidPublicBinding)?;
             let backends =
                 RuntimeProviderBrokerBackendsV1::new().with_bootle_lantern_issuance(backend);
-            serve_until_termination_v1(bindings, backends).await
+            serve_until_termination_v1(bindings, args.broker_endpoint, backends).await
         }
     }
 }
 async fn serve_until_termination_v1(
     bindings: IrohaRuntimeProviderBindingsV1,
+    endpoint_path: RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), TairaBootleLanternBrokerErrorV1> {
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
@@ -856,6 +862,7 @@ async fn serve_until_termination_v1(
     let mut server = tokio::task::spawn_blocking(move || {
         serve_runtime_provider_broker_with_lifecycle_v1(
             &bindings,
+            &endpoint_path,
             backends,
             server_lifecycle,
             || {},
@@ -2104,6 +2111,37 @@ mod tests {
             "/run/credentials/principal-seed",
         ];
         BrokerCliV1::try_parse_from(base).expect("accept canonical path-only secret CLI");
+        let valid_digest = "0c63367874569862486026c04717783e35546cb6f41a95b34d09d64153f5c5ed";
+        let mut serve = base.to_vec();
+        serve[1] = "serve";
+        serve.extend([
+            "--expected-policy-record-digest",
+            valid_digest,
+            "--expected-qualification-policy-digest",
+            valid_digest,
+        ]);
+        assert!(
+            BrokerCliV1::try_parse_from(serve.clone()).is_err(),
+            "serve requires its public endpoint"
+        );
+        serve.extend([
+            "--broker-endpoint",
+            "/var/iroha/run/runtime-provider-broker-v1.sock",
+        ]);
+        let parsed =
+            BrokerCliV1::try_parse_from(serve.clone()).expect("accept validated serve endpoint");
+        let BrokerCommandV1::Serve(parsed) = parsed.command else {
+            panic!("serve command was parsed");
+        };
+        assert_eq!(
+            parsed.broker_endpoint.as_path(),
+            Path::new("/var/iroha/run/runtime-provider-broker-v1.sock")
+        );
+        *serve.last_mut().expect("endpoint path") = "../runtime-provider-broker-v1.sock";
+        assert!(
+            BrokerCliV1::try_parse_from(serve).is_err(),
+            "relative endpoint fails during CLI parsing"
+        );
         for forbidden in [
             "--issuer-seed",
             "--issuer-seed-hex",
@@ -2121,7 +2159,6 @@ mod tests {
         for bad_revision in ["0", "01", "+1", "-1"] {
             assert!(parse_canonical_nonzero_u64_v1(bad_revision).is_err());
         }
-        let valid_digest = "0c63367874569862486026c04717783e35546cb6f41a95b34d09d64153f5c5ed";
         assert_eq!(
             parse_nonzero_digest_hex_v1(valid_digest).expect("strong lowercase digest"),
             hex::decode(valid_digest).expect("valid hex").as_slice(),

@@ -235,7 +235,7 @@ fn relative_out_dir_paths_are_absolute_in_configs() {
 fn start_and_stop_scripts_are_executable() {
     let temp = tempfile::tempdir().expect("tmp dir");
     let client_account_literal = localnet_client_account_literal(None);
-    let fee_asset_definition_id = localnet_fee_asset_literal();
+    let fee_asset_definition_id = localnet_xor_asset_literal();
     write_scripts(
         temp.path(),
         1,
@@ -302,40 +302,26 @@ fn start_and_stop_scripts_are_executable() {
         start_contents.contains("DEFAULT_IROHA_CLI_RELEASE="),
         "start script should also wire the iroha CLI defaults"
     );
-    assert!(
-        start_contents.contains("FAUCET_RESERVE_TARGET="),
-        "start script should declare a faucet reserve target"
-    );
-    assert!(
-        start_contents.contains("FAUCET_RESERVE_RETRIES="),
-        "start script should make faucet reserve retries configurable"
-    );
-    assert!(
-        start_contents.contains("ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\""),
-        "start script should mint the fee asset back to the faucet when reserve is low"
-    );
-    assert!(
-        start_contents.contains("--fee-payer authority --output-format json"),
-        "start script should explicitly select authority-paid typed fees for faucet reserve top-ups"
-    );
-    assert!(
-        start_contents.contains("$(\"$IROHA_CLI\" --machine"),
-        "faucet reads must preserve an iroha CLI path containing spaces"
-    );
-    assert!(
-        start_contents.contains("      \"$IROHA_CLI\" --machine"),
-        "faucet mints must preserve an iroha CLI path containing spaces"
-    );
-    assert!(!start_contents.contains("$($IROHA_CLI --machine"));
-    assert!(!start_contents.contains("faucet-topup.metadata.json"));
+    assert!(start_contents.contains("explicit genesis allocation"));
+    assert!(!start_contents.contains("ledger asset mint"));
+    assert!(!start_contents.contains("FAUCET_RESERVE_TARGET="));
+    assert!(!start_contents.contains("FAUCET_RESERVE_RETRIES="));
+    assert!(!start_contents.contains("faucet-topup"));
     assert!(!start_contents.contains("gas_asset_id"));
     assert!(
         start_contents.contains("start_new_session=True"),
-        "start script should detach peers into a new session when python3 is available"
+        "start script should detach peers into a new session"
     );
     assert!(
-        start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
-        "start script should keep a nohup fallback for minimal shells"
+        start_contents.contains("launch_ordinary_validator_with_mint_seed(cmd, env)")
+            && start_contents.contains("pass_fds=(_MINT_SEED_FD,)")
+            && start_contents.contains("_mint_erase_launch(launch_fd, launch"),
+        "ordinary peers must receive one consumed owner-private FD 199 copy"
+    );
+    assert!(!start_contents.contains("nohup env SNAPSHOT_STORE_DIR="));
+    assert!(
+        start_contents
+            .contains("python3 is required to stage the validator's one-shot private FD 199")
     );
     assert!(
         start_contents.contains("SNAPSHOT_STORE_DIR=\"$DIR/state/peer${i}/snapshot\""),
@@ -412,6 +398,92 @@ fn start_and_stop_scripts_are_executable() {
 
 #[cfg(unix)]
 #[test]
+fn ordinary_localnet_mint_seed_launcher_consumes_fresh_children_on_two_starts() {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+    let root = tempfile::tempdir().expect("private localnet root");
+    let signer_dir = root.path().join("runtime/mint-finality-signers");
+    fs::create_dir_all(&signer_dir).expect("create private seed directory");
+    fs::set_permissions(
+        root.path().join("runtime"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .expect("protect runtime directory");
+    fs::set_permissions(&signer_dir, fs::Permissions::from_mode(0o700))
+        .expect("protect seed directory");
+    let retained = signer_dir.join("peer0.seed");
+    let mut master = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&retained)
+        .expect("create retained seed");
+    master.write_all(&[0x63; 32]).expect("write retained seed");
+    master.sync_all().expect("sync retained seed");
+    let master_inode = master.metadata().expect("retained metadata").ino();
+    drop(master);
+
+    let mut python = ORDINARY_MINT_FINALITY_LAUNCH_PY.to_owned();
+    python.push_str(
+        r#"
+import sys
+env = os.environ.copy()
+consume = "import os; data=os.read(199,32); assert len(data)==32; print(os.fstat(199).st_ino,flush=True); os.lseek(199,0,0); assert os.write(199,bytes(32))==32; os.fsync(199); os.ftruncate(199,0); os.fsync(199)"
+cmd = [sys.executable, "-c", consume]
+for _ in range(2):
+    process = launch_ordinary_validator_with_mint_seed(cmd, env)
+    if process.wait(timeout=5) != 0:
+        raise RuntimeError("descriptor-consuming child failed")
+    if os.path.exists(os.path.join(env["IROHA_NETWORK_DIR"], "runtime", "mint-finality-signers", "peer0.fd199")):
+        raise RuntimeError("one-shot child path survived startup")
+try:
+    launch_ordinary_validator_with_mint_seed([sys.executable, "-c", "import sys;sys.exit(2)"], env)
+except RuntimeError as error:
+    if "exited before consuming" not in str(error):
+        raise
+else:
+    raise RuntimeError("unconsumed child start unexpectedly succeeded")
+if os.path.exists(os.path.join(env["IROHA_NETWORK_DIR"], "runtime", "mint-finality-signers", "peer0.fd199")):
+    raise RuntimeError("failed child path survived startup")
+source = os.path.join(env["IROHA_NETWORK_DIR"], "runtime", "mint-finality-signers", "peer0.seed")
+os.chmod(source, 0o644)
+try:
+    launch_ordinary_validator_with_mint_seed(cmd, env)
+except RuntimeError as error:
+    if "untrusted localnet mint-finality seed descriptor" not in str(error):
+        raise
+else:
+    raise RuntimeError("world-readable retained seed unexpectedly launched")
+finally:
+    os.chmod(source, 0o600)
+"#,
+    );
+    let log = root.path().join("peer0.log");
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(python)
+        .env("IROHA_NETWORK_DIR", root.path())
+        .env("IROHA_PEER_INDEX", "0")
+        .env("IROHA_PEER_LOG", &log)
+        .output()
+        .expect("run stock ordinary descriptor launcher");
+    assert!(
+        output.status.success(),
+        "two one-shot starts failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let child_inodes = fs::read_to_string(&log)
+        .expect("read non-secret child inode log")
+        .lines()
+        .map(|line| line.parse::<u64>().expect("child inode"))
+        .collect::<Vec<_>>();
+    assert_eq!(child_inodes.len(), 2);
+    assert!(child_inodes.iter().all(|inode| *inode != master_inode));
+    assert_eq!(fs::read(&retained).expect("retained seed"), [0x63; 32]);
+}
+
+#[cfg(unix)]
+#[test]
 fn taira_lifecycle_is_exact_process_record_and_pidfd_only() {
     let temp = tempfile::tempdir().expect("tmp dir");
     write_scripts(
@@ -420,7 +492,7 @@ fn taira_lifecycle_is_exact_process_record_and_pidfd_only() {
         true,
         true,
         &localnet_client_account_literal(Some(369)),
-        &localnet_fee_asset_literal(),
+        &localnet_xor_asset_literal(),
     )
     .expect("write Taira scripts");
 
@@ -495,28 +567,22 @@ fn shell_assignment_quoting_preserves_metacharacters_as_data() {
 
 #[cfg(unix)]
 #[test]
-fn start_script_skips_zero_faucet_retries_before_seq() {
+fn start_script_preserves_explicit_faucet_allocation_without_minting() {
     let temp = tempfile::tempdir().expect("tmp dir");
     write_scripts(
         temp.path(),
-        1,
+        4,
         false,
         false,
         &localnet_client_account_literal(None),
-        &localnet_fee_asset_literal(),
+        &localnet_xor_asset_literal(),
     )
     .expect("write scripts");
     let start = fs::read_to_string(temp.path().join("start.sh")).expect("read start script");
-    let zero_retry_guard = start
-        .find("[ \"$FAUCET_RESERVE_RETRIES\" != \"0\" ] ||")
-        .expect("explicit zero-retry guard");
-    let reserve_loop = start
-        .find("for _ in $(seq 1 \"$FAUCET_RESERVE_RETRIES\"); do")
-        .expect("faucet reserve retry loop");
-    assert!(
-        zero_retry_guard < reserve_loop,
-        "zero retries must return before invoking platform-dependent seq"
-    );
+    assert!(start.contains("startup does not issue assets"));
+    assert!(!start.contains("ledger asset mint"));
+    assert!(!start.contains("IROHA_LOCALNET_FAUCET_RESERVE_RETRIES"));
+    assert!(!start.contains("faucet-topup"));
 }
 
 #[cfg(unix)]
@@ -529,7 +595,7 @@ fn lifecycle_scripts_enforce_exact_peer_selector_grammar() {
         false,
         false,
         &localnet_client_account_literal(None),
-        &localnet_fee_asset_literal(),
+        &localnet_xor_asset_literal(),
     )
     .expect("write scripts");
 

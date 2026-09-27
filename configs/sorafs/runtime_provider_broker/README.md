@@ -8,17 +8,18 @@ network backend registry.
 The installed executable must statically link a reviewed deployment-owned
 implementation of RuntimeProviderBrokerBackendRegistryV1.
 
-The service CLI accepts exactly one public input:
+The service CLI requires two public inputs:
 
-    --catalog ABSOLUTE_PATH
+    --catalog ABSOLUTE_PATH --broker-endpoint ABSOLUTE_SOCKET_PATH
 
 That canonical catalog includes a mandatory genesis-derived `NetworkId` in
 addition to the display chain label. Catalogs exported with the retired
 optional-network schema are rejected; regenerate the artifact for the exact
 deployment and roll broker and clients together.
 
-Do not add credential, private-key, token, plugin, test-provider, or socket
-override arguments. Provider objects retain private material internally.
+Do not add credential, private-key, token, plugin, or test-provider arguments.
+The endpoint argument must match the validated public path configured by every
+stock client. Provider objects retain private material internally.
 
 ## Fixed paths and identity
 
@@ -33,7 +34,7 @@ override arguments. Provider objects retain private material internally.
 
 The broker and every stock client must run with the same effective UID.
 Supplementary-group access is not a substitute for the peer-credential check.
-The broker creates the fixed socket with mode 0660. The macOS catalog path
+The packaged broker creates the configured socket with mode 0660. The macOS catalog path
 names /private/etc explicitly because /etc is a symlink and the process shell
 rejects symlink path components.
 
@@ -135,15 +136,15 @@ Install systemd/iroha-runtime-provider-broker-v1.service as:
     /etc/systemd/system/iroha-runtime-provider-broker-v1.service
 
 The unit creates its dedicated `/run/iroha-runtime-provider-broker-v1`
-directory with the service UID and mode 0700, passes only the fixed public
-catalog path, and gives the process no environment-based provider selector.
+directory with the service UID and mode 0700, passes the packaged public
+catalog and endpoint paths, and gives the process no environment-based provider selector.
 The broker is the sole unit that manages this directory; the validator's
 separate `/run/iroha` directory has an independent lifetime. The broker
 directory is recreated across broker restarts. The unit uses `Type=notify`:
 the deployment-owned binary must call
 `RuntimeProviderBrokerExecutableV1::serve_until_shutdown_signal_with_systemd_notify`.
 That entry resolves systemd's `NOTIFY_SOCKET` before provider qualification and
-sends `READY=1` only after exact backend qualification and fixed-socket
+sends `READY=1` only after exact backend qualification and endpoint
 publication. A missing, malformed, unreachable, or disappearing notification
 socket fails closed and tears down the broker endpoint before accepting a
 client. This makes the consumer `After` ordering a readiness boundary instead
@@ -188,7 +189,7 @@ limits, and restarts only after unsuccessful exit.
 No validator or Governance DAG LaunchDaemon is checked in, so there is no safe
 consumer plist to mutate here. Deployment packaging must bootstrap the broker
 job before its consumer jobs. The consumers still fail closed if the broker
-has not qualified its complete catalog and published the fixed socket.
+has not qualified its complete catalog and published the configured socket.
 
 ## Static installation gate
 

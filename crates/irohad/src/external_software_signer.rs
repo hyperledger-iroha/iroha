@@ -36,6 +36,7 @@ pub use adapter::{
 pub(crate) use consensus_threshold::tests::{
     consensus_threshold_beacon_broker_max_committee_test_fixture_v1,
     consensus_threshold_beacon_broker_test_fixture_v1,
+    consensus_threshold_beacon_readiness_broker_test_fixture_v1,
     consensus_threshold_tle_broker_max_committee_test_fixture_v1,
     consensus_threshold_tle_broker_test_fixture_v1,
 };
@@ -45,16 +46,18 @@ pub use consensus_threshold::{
     PARLIAMENT_TLE_PARTIAL_RELEASE_SIGNER_CREDENTIAL_NAME_V1,
     RuntimeConsensusThresholdSignerBackendsV1, RuntimeConsensusThresholdSignerCredentialErrorV1,
     RuntimeGlobalBeaconShareProvisioningV1, RuntimeParliamentTleShareProvisioningV1,
-    encode_consensus_threshold_credential_bundle_v1,
+    RuntimePreparedGlobalBeaconCredentialV1, encode_consensus_threshold_credential_bundle_v1,
     encode_global_beacon_partial_signer_credential_v1,
     encode_parliament_tle_partial_release_signer_credential_v1,
     global_beacon_partial_signer_inventory_digest_v1,
     global_beacon_partial_signer_public_inventory_digest_v1,
     parliament_tle_partial_release_signer_inventory_digest_v1,
+    prepare_global_beacon_transition_credential_v1,
 };
 #[cfg(unix)]
 pub(crate) use consensus_threshold::{
     MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1, decode_global_beacon_runtime_signer_v1,
+    dispatch_beacon_custody_preparation_if_requested,
 };
 pub use envelope::{
     SoftwareSignerEnvelopeErrorV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,

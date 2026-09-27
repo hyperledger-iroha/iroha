@@ -320,10 +320,10 @@ impl StrictReplayFixture {
         Self::new_with_options(ReplayFixtureOptions::default(), instructions)
     }
     fn staking_asset_definition() -> iroha_data_model::asset::AssetDefinitionId {
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-            "replay_stake".parse().expect("fixture staking asset name"),
+        iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
         )
+        .expect("canonical network XOR identity")
     }
     fn new_with_options(
         options: ReplayFixtureOptions,
@@ -388,7 +388,7 @@ impl StrictReplayFixture {
                 .append_parameter(Parameter::Custom(npos.into_custom_parameter()))
                 .append_instruction(Register::asset_definition(AssetDefinition::numeric(
                     definition.clone(),
-                    "replay stake".to_owned(),
+                    "XOR".to_owned(),
                     AssetBalancePolicy::Global,
                     None,
                 )));

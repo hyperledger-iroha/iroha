@@ -206,8 +206,12 @@ into the output directory.
 - Checked-in `genesis.template.json` files deliberately omit mint-finality
   authority and cannot be validated, signed, or used by a node. Materialize one
   explicitly with `kagami genesis materialize <SOURCE.template.json>
-  --kagemusha-mint-finality-parameters <PUBLIC_PARAMETERS.json>`, or generate a
-  complete profile bundle with the command above.
+  --kagemusha-mint-finality-parameters <PUBLIC_PARAMETERS.json>
+  --xor-asset-definition-id <CANONICAL_XOR_ID>` for NPoS, or generate a
+  complete profile bundle with the command above. The XOR identity is committed
+  in NPoS parameters; Taira uses `6TEAJqbb8oEPmLncoNiMRbLEK6tw`, while Nexus requires
+  its own operator-provisioned identity. Validator allocations must be explicitly
+  supplied in genesis; signing and startup do not mint missing stake or faucet funds.
 - For a disposable four-validator Taira deployment, use
   `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`;
   use its `check` and `down` subcommands

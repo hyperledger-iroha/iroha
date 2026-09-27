@@ -8,7 +8,7 @@ use crate::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     smartcontracts::isi::triggers::set::SetReadOnly,
-    state::{State, TransactionsBlockError, World},
+    state::{State, StateStorageAdmissionError, TransactionsBlockError, World},
 };
 use iroha_data_model::{
     Registrable,
@@ -922,22 +922,33 @@ mod network;
 #[test]
 fn refused_output_apply_keeps_state_witness_and_auxiliary_rollback_armed() {
     let _guard = crate::exec_witness::exec_witness_guard();
-    for poisoned in [false, true] {
+    for refusal in 0..3 {
         crate::exec_witness::start_block();
         let state = state(16_384);
         let mut block = state.block(source(&state, 1).header());
         let before = block.world.parameters.get().clone();
         let events = block.world.external_event_buf.len();
         let fragments = block.committed_fragment_count();
-        let mut attempt = OutputTransaction::new(&mut block);
+        let mut attempt = OutputTransaction::new(&mut block).unwrap();
         let tx = attempt.transaction.as_mut().unwrap();
         write_state(tx, 7);
-        let expected = if poisoned {
-            *tx.block_execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
-            "transaction cannot apply in the current execution-output phase"
-        } else {
-            tx.callback_journal.record_failure();
-            "transaction callback journal does not authorize application"
+        let expected = match refusal {
+            0 => {
+                tx.callback_journal.record_failure();
+                "transaction callback journal does not authorize application"
+            }
+            1 => {
+                *tx.block_execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+                "transaction cannot apply in the current execution-output phase"
+            }
+            _ => {
+                tx.arm_local_storage_refusal(StateStorageAdmissionError::World(
+                    mv::storage::AdmittedStorageError::Allocation(
+                        mv::allocation::AllocationRefusal::DemandOverflow,
+                    ),
+                ));
+                "transaction local State storage admission was refused"
+            }
         };
         assert_eq!(attempt.apply(), Err(expected.into()));
         assert_eq!(*block.world.parameters.get(), before);

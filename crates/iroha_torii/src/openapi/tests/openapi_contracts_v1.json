@@ -180,7 +180,9 @@
         "nexus_amx_context_hash",
         "execution_policy_hash",
         "da_layout",
-        "leader_seed"
+        "leader_seed",
+        "kagemusha_mint_finality_authority",
+        "kagemusha_mint_finality_authorization"
       ]
     },
     {
@@ -258,7 +260,10 @@
         "roster",
         "validator_set_pops",
         "quorum",
-        "leader_seed"
+        "leader_seed",
+        "kagemusha_mint_finality_authority",
+        "kagemusha_mint_finality_authorization",
+        "committee_preparation"
       ]
     },
     {

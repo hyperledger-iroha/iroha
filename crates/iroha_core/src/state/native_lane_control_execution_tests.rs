@@ -388,7 +388,7 @@ state_test! { sync native_recorded_control_suffix_opens_exact_next_context_and_r
         let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
         let files = exact_test_tree_fingerprint(&state.kura.store_root());
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-            .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+            .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("exact original first-source owners"); };
         drop(carrier);
         let recorded = source.record_execution(fixture.applying.clone())
@@ -436,7 +436,7 @@ state_test! { sync native_recorded_control_rejects_changed_opening_and_stale_ver
     for other in [stale, wrong_nexus] {
         let carrier = native_consumer_stage_carrier(&fixture.economic);
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-            .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+            .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("exact original first-source owners"); };
         drop(carrier);
         let error = source.record_execution(other).err().expect("verified foreign context is not applying authority");
@@ -518,7 +518,7 @@ state_test! { sync native_recorded_control_beacon_preserves_complete_snapshot_an
         assert_eq!(native_control_requested_beacon(&fixture), pulse);
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before,
             "reading the requested pulse cannot publish a replacement World undo");
-        let restored = deserialize::KuraSeed {
+        let restored = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             kura: Arc::clone(&state.kura),
             lane_manifests: state.lane_manifests.read().clone(),
             query_handle: LiveQueryStore::start_test(),
@@ -543,7 +543,7 @@ state_test! { sync native_recorded_control_executes_requested_beacon_before_suff
         let mut carrier = native_consumer_stage_carrier(&fixture.economic);
         native_control_attach_beacon(&mut carrier, pulse);
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-            .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+            .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("actual source with mandatory beacon control"); };
         drop(carrier);
         let recorded = source.record_execution(fixture.applying.clone())
@@ -586,7 +586,7 @@ state_test! { sync native_recorded_control_rejects_missing_corrupt_and_foreign_p
             native_control_attach_beacon(&mut carrier, changed);
         }
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-            .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+            .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("first input and Decisions remain authentic independently of controls"); };
         drop(carrier);
         let error = source.record_execution(fixture.applying.clone())
@@ -628,7 +628,7 @@ state_test! { sync native_recorded_control_admits_same_carrier_input_without_exe
     carrier.set_execution_context(Some(context));
     native_control_resign_carrier(&mut carrier);
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("earlier exact source remains independent from the fresh admission"); };
     drop(carrier);
     let recorded = source.record_execution(fixture.applying.clone())

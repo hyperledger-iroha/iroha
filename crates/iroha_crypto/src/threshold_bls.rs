@@ -34,7 +34,7 @@
 //! cumulative budget requires a fresh DKG and a purpose-distinct new session.
 //! Secret buffers are zeroizing defense in depth, not a compiler/OS/hardware
 //! erasure guarantee. The surrounding protocol remains responsible for
-//! authenticated private-share transport, complaint deadlines, qualified-set
+//! authenticated private-share transport, recipient acceptance deadlines, qualified-set
 //! agreement, retirement of dealer contributions and proof nonces, and key
 //! rotation. [`AdaptiveThresholdBlsPublicTranscript::ensure_adaptive_protocol_ready`]
 //! attests only that these public cryptographic checks ran; it is not a theorem
@@ -43,6 +43,11 @@
 use core::{fmt, marker::PhantomData};
 use std::vec::Vec;
 
+#[cfg(feature = "pqc")]
+use crate::{
+    encryption::{ChaCha20Poly1305, SymmetricEncryptor},
+    hybrid::{self, HybridKemCiphertext, HybridPublicKey, HybridSecretKey, HybridSuite},
+};
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Scalar};
 use group::{Curve as _, Group as _, ff::Field as _, prime::PrimeCurveAffine as _};
 use hkdf::Hkdf;
@@ -181,9 +186,17 @@ pub enum ThresholdBlsError {
     /// A dealer's constant-coefficient Schnorr proof failed.
     #[error("adaptive threshold-BLS dealer constant proof failed")]
     InvalidDealerProof,
-    /// A revealed complaint response did not match the dealer polynomial.
-    #[error("adaptive threshold-BLS complaint response failed verification")]
-    InvalidComplaintResponse,
+    /// A private recipient contribution did not match the dealer polynomial.
+    #[error("adaptive threshold-BLS private recipient share failed verification")]
+    InvalidPrivateShare,
+    /// A private dealer contribution could not be sealed for its recipient.
+    #[cfg(feature = "pqc")]
+    #[error("adaptive threshold-BLS private recipient share encryption failed")]
+    PrivateShareEncryption,
+    /// An encrypted private dealer contribution could not be authenticated or opened.
+    #[cfg(feature = "pqc")]
+    #[error("adaptive threshold-BLS private recipient share decryption failed")]
+    PrivateShareDecryption,
     /// Imported aggregate secret components did not match the public share.
     #[error("adaptive threshold-BLS secret share does not match its public commitment")]
     SecretShareMismatch,
@@ -983,65 +996,103 @@ impl<P: ThresholdBlsPurpose> DasRenPrivateShare<P> {
     }
 }
 
-/// Publicly revealed and verified response to one DKG complaint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DasRenRevealedShare<P: ThresholdBlsPurpose> {
-    parameters_digest: [u8; 32],
-    dealer_index: u16,
-    recipient_index: u16,
-    s: [u8; 32],
-    r: [u8; 32],
-    u: [u8; 32],
-    marker: PhantomData<P>,
+/// Fixed nonce, private-share and tag length of the encrypted DKG edge.
+#[cfg(feature = "pqc")]
+pub const DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1: usize = 12 + 96 + 16;
+
+/// Seal one verified private dealer contribution for its exact recipient.
+///
+/// The caller supplies canonical associated data binding the network, transition,
+/// generation, session, roster, dealer, recipient and dealer commitment. Empty
+/// associated data is refused. The returned KEM capsule and AEAD ciphertext are
+/// public; the 96-byte plaintext and derived key remain zeroizing local values.
+///
+/// # Errors
+///
+/// Returns [`ThresholdBlsError::PrivateShareEncryption`] if the binding is
+/// absent or hybrid encapsulation or authenticated encryption fails.
+#[cfg(feature = "pqc")]
+pub fn seal_das_ren_private_share<P: ThresholdBlsPurpose>(
+    share: &DasRenPrivateShare<P>,
+    recipient: &HybridPublicKey,
+    aad: &[u8],
+) -> Result<(HybridKemCiphertext, Vec<u8>), ThresholdBlsError> {
+    if aad.is_empty() {
+        return Err(ThresholdBlsError::PrivateShareEncryption);
+    }
+    let (kem, derived) = hybrid::encapsulate(
+        HybridSuite::X25519MlKem768ChaCha20Poly1305,
+        recipient,
+        &mut OsRng,
+    )
+    .map_err(|_| ThresholdBlsError::PrivateShareEncryption)?;
+    let key = Zeroizing::new(derived.encryption_key());
+    let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key[..])
+        .map_err(|_| ThresholdBlsError::PrivateShareEncryption)?;
+    let components = share.components_for_authenticated_encryption();
+    let mut plaintext = Zeroizing::new([0_u8; 96]);
+    for (offset, component) in components.iter().enumerate() {
+        plaintext[offset * 32..(offset + 1) * 32].copy_from_slice(component);
+    }
+    let ciphertext = encryptor
+        .encrypt_easy(aad, &plaintext[..])
+        .map_err(|_| ThresholdBlsError::PrivateShareEncryption)?;
+    if ciphertext.len() != DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1 {
+        return Err(ThresholdBlsError::PrivateShareEncryption);
+    }
+    Ok((kem, ciphertext))
 }
 
-impl<P: ThresholdBlsPurpose> DasRenRevealedShare<P> {
-    /// Verify `g^s h^r v^u = product(C_k^(recipient^k))`.
-    ///
-    /// These values are public only because this type represents an explicit
-    /// complaint response. Normal private DKG shares must not use this type.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ThresholdBlsError`] for wrong bindings, noncanonical scalars,
-    /// an invalid recipient index, or a failed commitment equation.
-    pub fn verify(
-        parameters: &AdaptiveThresholdBlsParameters<P>,
-        dealer: &ValidatedDealerCommitment<P>,
-        recipient_index: u16,
-        s: [u8; 32],
-        r: [u8; 32],
-        u: [u8; 32],
-    ) -> Result<Self, ThresholdBlsError> {
-        verify_share_equation(parameters, dealer, recipient_index, &s, &r, &u)?;
-        Ok(Self {
-            parameters_digest: parameters.digest(),
-            dealer_index: dealer.dealer_index,
-            recipient_index,
-            s,
-            r,
-            u,
-            marker: PhantomData,
-        })
+/// Open one encrypted private DKG edge and verify it against the dealer polynomial.
+///
+/// The exact same canonical associated data used for sealing is required.
+/// Authentication happens before scalar parsing or the commitment equation, and
+/// neither the decrypted buffer nor the private contribution is returned as a
+/// public response.
+///
+/// # Errors
+///
+/// Returns [`ThresholdBlsError::PrivateShareDecryption`] for missing binding,
+/// malformed framing, a wrong recipient or authentication failure. A decrypted
+/// contribution that does not match the expected dealer/session/seat is refused
+/// by [`DasRenPrivateShare::from_components`].
+#[cfg(feature = "pqc")]
+pub fn open_das_ren_private_share<P: ThresholdBlsPurpose>(
+    parameters: &AdaptiveThresholdBlsParameters<P>,
+    dealer: &ValidatedDealerCommitment<P>,
+    recipient_index: u16,
+    recipient_secret: &HybridSecretKey,
+    kem: &HybridKemCiphertext,
+    ciphertext: &[u8],
+    aad: &[u8],
+) -> Result<DasRenPrivateShare<P>, ThresholdBlsError> {
+    if aad.is_empty() || ciphertext.len() != DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1 {
+        return Err(ThresholdBlsError::PrivateShareDecryption);
     }
-
-    /// Return the dealer index whose complaint was answered.
-    #[must_use]
-    pub const fn dealer_index(&self) -> u16 {
-        self.dealer_index
+    let derived = hybrid::decapsulate(
+        HybridSuite::X25519MlKem768ChaCha20Poly1305,
+        kem,
+        recipient_secret,
+    )
+    .map_err(|_| ThresholdBlsError::PrivateShareDecryption)?;
+    let key = Zeroizing::new(derived.encryption_key());
+    let decryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key[..])
+        .map_err(|_| ThresholdBlsError::PrivateShareDecryption)?;
+    let plaintext = Zeroizing::new(
+        decryptor
+            .decrypt_easy(aad, ciphertext)
+            .map_err(|_| ThresholdBlsError::PrivateShareDecryption)?,
+    );
+    if plaintext.len() != 96 {
+        return Err(ThresholdBlsError::PrivateShareDecryption);
     }
-
-    /// Return the recipient index whose share was revealed.
-    #[must_use]
-    pub const fn recipient_index(&self) -> u16 {
-        self.recipient_index
-    }
-
-    /// Return the three canonical public response scalars `(s, r, u)`.
-    #[must_use]
-    pub const fn scalar_bytes(&self) -> (&[u8; 32], &[u8; 32], &[u8; 32]) {
-        (&self.s, &self.r, &self.u)
-    }
+    let mut s = Zeroizing::new([0_u8; 32]);
+    let mut r = Zeroizing::new([0_u8; 32]);
+    let mut u = Zeroizing::new([0_u8; 32]);
+    s.copy_from_slice(&plaintext[..32]);
+    r.copy_from_slice(&plaintext[32..64]);
+    u.copy_from_slice(&plaintext[64..96]);
+    DasRenPrivateShare::from_components(parameters, dealer, recipient_index, *s, *r, *u)
 }
 
 /// One composite triple-generator verification share in an adaptive transcript.
@@ -1815,7 +1866,7 @@ fn verify_share_equation<P: ThresholdBlsPurpose>(
         .to_affine();
     let rhs = evaluate_commitments(&dealer.coefficients, recipient_index)?;
     if lhs != rhs {
-        return Err(ThresholdBlsError::InvalidComplaintResponse);
+        return Err(ThresholdBlsError::InvalidPrivateShare);
     }
     Ok(())
 }
@@ -2254,7 +2305,7 @@ mod tests {
     }
 
     #[test]
-    fn dealer_constant_proof_and_complaint_response_are_fully_bound() {
+    fn dealer_constant_proof_and_private_contribution_are_fully_bound() {
         let fixture = adaptive_fixture();
         let dealer = &fixture.dealers[0];
         let scalars = &fixture.dealer_scalars[0];
@@ -2262,16 +2313,24 @@ mod tests {
         let s = evaluate_dealer_scalar(scalars, recipient, 0).to_bytes_be();
         let r = evaluate_dealer_scalar(scalars, recipient, 1).to_bytes_be();
         let u = evaluate_dealer_scalar(scalars, recipient, 2).to_bytes_be();
-        let revealed = DasRenRevealedShare::verify(&fixture.parameters, dealer, recipient, s, r, u)
-            .expect("complaint response");
-        assert_eq!(revealed.dealer_index(), 1);
-        assert_eq!(revealed.recipient_index(), recipient);
+        let private =
+            DasRenPrivateShare::from_components(&fixture.parameters, dealer, recipient, s, r, u)
+                .expect("private recipient contribution");
+        assert_eq!(private.dealer_index(), 1);
+        assert_eq!(private.recipient_index(), recipient);
 
         let bad_s = (decode_scalar(&s).expect("s") + Scalar::from(1_u64)).to_bytes_be();
-        assert_eq!(
-            DasRenRevealedShare::verify(&fixture.parameters, dealer, recipient, bad_s, r, u,),
-            Err(ThresholdBlsError::InvalidComplaintResponse)
-        );
+        assert!(matches!(
+            DasRenPrivateShare::from_components(
+                &fixture.parameters,
+                dealer,
+                recipient,
+                bad_s,
+                r,
+                u,
+            ),
+            Err(ThresholdBlsError::InvalidPrivateShare)
+        ));
 
         let coefficient_bytes = dealer
             .coefficients()
@@ -2300,6 +2359,105 @@ mod tests {
             ),
             Err(ThresholdBlsError::InvalidCoefficientCommitment)
         );
+    }
+
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn encrypted_private_contribution_binds_recipient_aad_and_dealer_equation() {
+        use crate::hybrid::HybridKeyPair;
+
+        let fixture = adaptive_fixture();
+        let dealer = &fixture.dealers[0];
+        let recipient_index = 4_u16;
+        let scalars = &fixture.dealer_scalars[0];
+        let share = DasRenPrivateShare::from_components(
+            &fixture.parameters,
+            dealer,
+            recipient_index,
+            evaluate_dealer_scalar(scalars, recipient_index, 0).to_bytes_be(),
+            evaluate_dealer_scalar(scalars, recipient_index, 1).to_bytes_be(),
+            evaluate_dealer_scalar(scalars, recipient_index, 2).to_bytes_be(),
+        )
+        .expect("valid private edge");
+        let recipient = HybridKeyPair::try_generate(&mut OsRng).expect("recipient key");
+        let other = HybridKeyPair::try_generate(&mut OsRng).expect("other recipient key");
+        let aad = b"iroha:beacon-dkg:attempt:network:roster:dealer:recipient";
+        let (kem, ciphertext) =
+            seal_das_ren_private_share(&share, recipient.public(), aad).expect("seal private edge");
+        assert_eq!(ciphertext.len(), DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1);
+        let opened = open_das_ren_private_share(
+            &fixture.parameters,
+            dealer,
+            recipient_index,
+            recipient.secret(),
+            &kem,
+            &ciphertext,
+            aad,
+        )
+        .expect("recipient verifies private edge");
+        assert_eq!(opened.dealer_index(), share.dealer_index());
+        assert_eq!(opened.recipient_index(), share.recipient_index());
+        assert_eq!(
+            *opened.components_for_authenticated_encryption(),
+            *share.components_for_authenticated_encryption()
+        );
+
+        assert!(matches!(
+            seal_das_ren_private_share(&share, recipient.public(), b""),
+            Err(ThresholdBlsError::PrivateShareEncryption)
+        ));
+        for (secret, ciphertext, aad) in [
+            (
+                recipient.secret(),
+                ciphertext.as_slice(),
+                b"wrong binding".as_slice(),
+            ),
+            (other.secret(), ciphertext.as_slice(), aad.as_slice()),
+            (
+                recipient.secret(),
+                &ciphertext[..ciphertext.len() - 1],
+                aad.as_slice(),
+            ),
+        ] {
+            assert!(matches!(
+                open_das_ren_private_share(
+                    &fixture.parameters,
+                    dealer,
+                    recipient_index,
+                    secret,
+                    &kem,
+                    ciphertext,
+                    aad,
+                ),
+                Err(ThresholdBlsError::PrivateShareDecryption)
+            ));
+        }
+        let mut tampered = ciphertext.clone();
+        *tampered.last_mut().expect("AEAD tag") ^= 1;
+        assert!(matches!(
+            open_das_ren_private_share(
+                &fixture.parameters,
+                dealer,
+                recipient_index,
+                recipient.secret(),
+                &kem,
+                &tampered,
+                aad,
+            ),
+            Err(ThresholdBlsError::PrivateShareDecryption)
+        ));
+        assert!(matches!(
+            open_das_ren_private_share(
+                &fixture.parameters,
+                dealer,
+                recipient_index - 1,
+                recipient.secret(),
+                &kem,
+                &ciphertext,
+                aad,
+            ),
+            Err(ThresholdBlsError::InvalidPrivateShare)
+        ));
     }
 
     #[test]

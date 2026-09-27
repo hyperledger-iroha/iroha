@@ -600,15 +600,17 @@ mod tests {
     use p256::ecdsa::signature::Signer as _;
 
     fn challenge(f: &Fixture) -> KagemushaRetailEnrollmentChallengeV1 {
+        let client_nonce = [92; 32];
+        let server_nonce = [93; 32];
         KagemushaRetailEnrollmentChallengeV1 {
             version: 1,
-            client_nonce: [92; 32],
-            server_nonce: [93; 32],
+            client_nonce,
+            server_nonce,
             issuer_policy_id: f.policy.issuer_policy_id,
             issuer_audience: f.policy.issuer_audience.clone(),
             owner: f.certificate.subject.owner.clone(),
             issuance: f.selection.issuance.clone(),
-            app_attestation_digest: [94; 32],
+            app_attestation_digest: f.verified_app(client_nonce, server_nonce).digest(),
             issued_at_ms: 1000,
             expires_at_ms: 2000,
         }

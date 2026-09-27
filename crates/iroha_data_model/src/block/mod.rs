@@ -500,6 +500,16 @@ impl SignedBlock {
         enforce_payload_len_limit(payload_len)?;
         Ok(payload_len)
     }
+    /// Consume the original block and discard its execution result and finality certificate.
+    ///
+    /// This preserves the proposal payload and signatures without cloning any
+    /// nested transaction or consensus evidence allocation.
+    #[must_use]
+    pub fn into_resultless_proposal(mut self) -> Self {
+        self.result = None;
+        self.commit_certificate = None;
+        self
+    }
     /// Borrow this block without its commit certificate: `self` when it carries none, otherwise
     /// an owned copy with the certificate cleared.
     fn without_commit_certificate(&self) -> Cow<'_, Self> {
@@ -2966,6 +2976,7 @@ mod tests {
         assert!(proposal.commit_certificate().is_none());
         assert!(proposal.is_resultless_proposal());
         assert_eq!(proposal, plain);
+        assert_eq!(certified.clone().into_resultless_proposal(), plain);
         assert!(
             matches!(plain.without_commit_certificate(), Cow::Borrowed(_)),
             "a block without a certificate is borrowed, not copied"
@@ -3229,6 +3240,7 @@ mod tests {
         let mut block = fixture::proposal(0);
         let proposal = block.clone();
         let proposal_hash = block.canonical_proposal_wire_hash().unwrap();
+        assert_eq!(proposal_hash, Hash::new(&proposal.encode_wire().unwrap()));
         assert!(!block.has_results());
         assert!(block.is_resultless_proposal());
         assert_eq!(block.executed_block_wire_hash().unwrap(), proposal_hash);
@@ -3236,6 +3248,7 @@ mod tests {
         assert!(block.has_results());
         assert!(!block.is_resultless_proposal());
         assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(block.clone().into_resultless_proposal(), proposal);
         assert_eq!(block.canonical_proposal_wire_hash().unwrap(), proposal_hash);
         let executed = block.executed_block_wire_hash().unwrap();
         fixture::install(&mut block, vec![], 1).unwrap();

@@ -671,6 +671,8 @@ mod block {
     #[derive(thiserror::Error, Debug, displaydoc::Display)]
     #[ignore_extra_doc_attributes]
     pub enum TransactionsBlockError {
+        /// Original local State storage refusal; never a consensus rejection: {0}
+        LocalStateStorage(#[source] crate::state::StateStorageAdmissionError),
         /// The original prepaid history could not acquire its publication locks.
         MembershipAdmission(#[source] MembershipAdmissionError),
         /// `TransactionsBlock::insert_block()` was not called

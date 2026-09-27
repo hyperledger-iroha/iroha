@@ -1343,7 +1343,7 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
         .expect_err("malformed authenticated expiry state must reject the complete effect");
     assert!(matches!(
         error,
-        InstructionExecutionError::InvariantViolation(message)
+        PinExpiryMaintenanceError::Instruction(InstructionExecutionError::InvariantViolation(message))
             if message.contains("non-canonical expiry key")
     ));
     assert!(matches!(

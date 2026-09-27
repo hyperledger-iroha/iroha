@@ -2173,6 +2173,27 @@ pub mod isi {
         labeled_invariant(label, error.to_string()).into()
     }
 
+    fn retain_operation_index_refusal<T>(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        result: Result<T, (([u8; 32], [u8; 32]), mv::storage::AdmittedStorageError)>,
+    ) -> Result<T, Error> {
+        match result {
+            Ok(value) => Ok(value),
+            Err((_, refusal)) => {
+                // An inner contract may catch this execution error. The original
+                // local refusal remains on the enclosing block, so no receipt,
+                // fee or signed rejection can be published from this attempt.
+                state_transaction.arm_local_storage_refusal(
+                    crate::state::StateStorageAdmissionError::World(refusal),
+                );
+                Err(kagemusha_v1_error(
+                    "local_storage_refusal",
+                    "KAGEMUSHA operation index admission requires local retry",
+                ))
+            }
+        }
+    }
+
     fn kagemusha_v1_commit_context(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<KagemushaReserveCommitContextV1, Error> {
@@ -2391,14 +2412,16 @@ pub mod isi {
             .world
             .kagemusha_reserve_operations
             .insert(record.operation_id, operation);
-        state_transaction
+        let mint_credit_result = state_transaction
             .world
             .kagemusha_mint_credit_operations
-            .insert(record.credit_id, record.operation_id);
-        state_transaction
+            .try_insert_admitted(record.credit_id, record.operation_id);
+        retain_operation_index_refusal(state_transaction, mint_credit_result)?;
+        let issuance_result = state_transaction
             .world
             .kagemusha_issuance_operations
-            .insert(record.issuance_commitment, record.operation_id);
+            .try_insert_admitted(record.issuance_commitment, record.operation_id);
+        retain_operation_index_refusal(state_transaction, issuance_result)?;
         crate::exec_witness::record_write_kagemusha_reserve_receipt_v1(&record.reserve_receipt)
             .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
         Ok(())
@@ -2553,14 +2576,16 @@ pub mod isi {
             .world
             .kagemusha_reserve_operations
             .insert(record.operation_id, operation);
-        state_transaction
+        let redemption_result = state_transaction
             .world
             .kagemusha_redemption_id_operations
-            .insert(record.redemption_id, record.operation_id);
-        state_transaction
+            .try_insert_admitted(record.redemption_id, record.operation_id);
+        retain_operation_index_refusal(state_transaction, redemption_result)?;
+        let nullifier_result = state_transaction
             .world
             .kagemusha_terminal_nullifier_operations
-            .insert(record.terminal_nullifier, record.operation_id);
+            .try_insert_admitted(record.terminal_nullifier, record.operation_id);
+        retain_operation_index_refusal(state_transaction, nullifier_result)?;
         crate::exec_witness::record_write_kagemusha_reserve_receipt_v1(&record.reserve_receipt)
             .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
         Ok(())

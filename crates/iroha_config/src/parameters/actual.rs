@@ -82,7 +82,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -130,6 +130,8 @@ macro_rules! impl_default {
 pub struct Root {
     /// Common options shared across components.
     pub common: Common,
+    /// Authenticated local runtime-provider broker endpoint.
+    pub runtime_provider_broker: RuntimeProviderBroker,
     /// Network configuration.
     pub network: Network,
     /// Genesis configuration.
@@ -200,6 +202,69 @@ pub struct Root {
     pub streaming: Streaming,
     /// Node-local SCCP attestor and light-client keeper.
     pub sccp: SccpNode,
+}
+/// Public endpoint of the authenticated local runtime-provider broker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeProviderBroker {
+    /// Lexically validated absolute Unix socket path.
+    pub endpoint_path: RuntimeProviderBrokerEndpointPath,
+}
+
+/// An absolute, bounded broker socket path with the canonical socket basename.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeProviderBrokerEndpointPath(PathBuf);
+
+/// Invalid public runtime-provider broker endpoint path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error(
+    "runtime-provider broker endpoint must be an absolute, canonical UTF-8 Unix socket path of at most 103 bytes ending in runtime-provider-broker-v1.sock"
+)]
+pub struct RuntimeProviderBrokerEndpointPathError;
+
+impl RuntimeProviderBrokerEndpointPath {
+    /// Validate a public endpoint path without requiring the broker to be running.
+    ///
+    /// Ownership, mode, ancestor, and peer-UID checks are performed again at
+    /// the authenticated transport boundary when the socket is used.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-UTF-8, relative, ambiguous, oversized, or wrongly named path.
+    pub fn try_new(
+        path: PathBuf,
+    ) -> core::result::Result<Self, RuntimeProviderBrokerEndpointPathError> {
+        let raw = path
+            .as_os_str()
+            .to_str()
+            .ok_or(RuntimeProviderBrokerEndpointPathError)?;
+        if !raw.starts_with('/')
+            || raw.len() > 103
+            || raw.rsplit('/').next() != Some("runtime-provider-broker-v1.sock")
+            || raw.split('/').skip(1).any(|component| {
+                component.is_empty()
+                    || matches!(component, "." | "..")
+                    || component.contains('\\')
+                    || component.chars().any(char::is_control)
+            })
+        {
+            return Err(RuntimeProviderBrokerEndpointPathError);
+        }
+        Ok(Self(path))
+    }
+
+    /// Return the validated public Unix socket path.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl FromStr for RuntimeProviderBrokerEndpointPath {
+    type Err = RuntimeProviderBrokerEndpointPathError;
+
+    fn from_str(path: &str) -> core::result::Result<Self, Self::Err> {
+        Self::try_new(PathBuf::from(path))
+    }
 }
 /// Embedded Soracloud runtime-manager configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2865,6 +2930,9 @@ pub struct NexusStorage {
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes,
+    /// Original allocation pool for the four fixed KAGEMUSHA operation indexes.
+    /// Current/undo versions and overlapping execution retain this same capacity.
+    pub kagemusha_operation_index_bytes: Bytes,
     /// Finite shared pool for retained carrier World shells, effects and service descriptors.
     /// This is not an aggregate RAM or nested execution-payload limit; zero admits none.
     pub retained_carrier_shell_bytes: usize,
@@ -2903,6 +2971,10 @@ impl fmt::Debug for NexusStorage {
             )
             .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
             .field(
+                "kagemusha_operation_index_bytes",
+                &self.kagemusha_operation_index_bytes,
+            )
+            .field(
                 "retained_carrier_shell_bytes",
                 &self.retained_carrier_shell_bytes,
             )
@@ -2925,6 +2997,8 @@ impl_default!(NexusStorage => {
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+            kagemusha_operation_index_bytes:
+                defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
             retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
             consensus_evidence_preparation_bytes:
                 defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
@@ -6614,6 +6688,8 @@ mod sumeragi_core_config_tests {
 pub struct Sumeragi {
     /// Node-local participation role.
     pub role: NodeRole,
+    /// Fixed inherited private descriptor for the locally consumed Pasta seed.
+    pub mint_finality_seed_fd: Option<u16>,
     /// Public deployment binding for the runtime-only global beacon share signer.
     pub global_beacon_partial_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision paired with the beacon signer handle.
@@ -6644,6 +6720,7 @@ impl_default!(Sumeragi => {
         let store_dir = PathBuf::from(defaults::kura::STORE_DIR);
         Self {
             role: NodeRole::Validator,
+            mint_finality_seed_fd: None,
             global_beacon_partial_signer_provider_handle: None,
             global_beacon_partial_signer_provider_revision: None,
             global_beacon_partial_signer_provider_policy_digest: None,

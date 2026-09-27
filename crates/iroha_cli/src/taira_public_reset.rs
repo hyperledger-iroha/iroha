@@ -156,7 +156,7 @@ enum PublicResetCommand {
     PreparePublicInputs(public_inputs::PreparePublicInputs),
     /// Prepare exact private client configs and public validator/faucet identities from native inputs.
     PrepareRuntimeClients(runtime_clients::PrepareRuntimeClients),
-    /// Derive the nonce-bound public beacon request and exact renderer seat paths.
+    /// Derive the signed-network-bound beacon request and exact renderer seat paths.
     PrepareBeaconInputs(inputs::PrepareBeaconInputs),
     /// Render four public validator units from the embedded signed custody renderer.
     PrepareValidatorUnits(validator_units::PrepareValidatorUnits),
@@ -336,6 +336,7 @@ impl PublicResetApply {
             .qualification_scope
             .validate_stage_argument(self.inrou_stage_dir.as_deref())?;
         let inrou_stage_dir = self.inrou_stage_dir.clone();
+
         Ok(host::RuntimeCanaryInputs {
             client_config,
             validator_client_configs: self.validator_client_config.clone(),
@@ -823,7 +824,6 @@ struct InventoryV1 {
     fee_intent: FeeIntentV1,
     /// Exact fresh ceremony and final provider units authorized before execution.
     beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1,
-    /// One separately authorized ongoing maintenance service; no default or optional shape.
     cleanup: CleanupV1,
     timeouts: TimeoutsV1,
     artifact_closure_sha256: String,
@@ -1950,7 +1950,6 @@ fn validate_inventory_with_revision(
             "public-reset V1 requires all four validators and the edge on one authenticated SSH host identity"
         ));
     }
-    // Admit the complete host topology before checking its supervisor policy.
     validate_lower_hex(
         "artifact closure SHA-256",
         &inventory.artifact_closure_sha256,
@@ -9773,6 +9772,7 @@ mod executor_model {
                 authorization_nonce: "abcdefghijklmnopqrstuvwx12345678".to_owned(),
                 revision: revision.clone(),
                 beacon_bootstrap: host::beacon::fixture_plan(&validators, &validator_clients),
+
                 validators,
                 validator_clients,
                 operator_public_key: iroha_crypto::KeyPair::from_seed(

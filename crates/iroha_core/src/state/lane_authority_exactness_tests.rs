@@ -101,6 +101,7 @@ fn exact_stake_authority_fixture(
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
             },
@@ -222,7 +223,7 @@ fn private_settlement_authority_rejects_validator_only_state_authority() {
             &authority,
         )
         .is_err(),
-        "private settlement must reject Validator-only participant authority"
+        "private settlement must reject global Validator-only authority"
     );
 }
 

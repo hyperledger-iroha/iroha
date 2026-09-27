@@ -54,7 +54,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::NumericSpec};
 use iroha_test_network::{
     NetworkBuilder, genesis_participant_committee_key_instructions, read_on_dedicated_thread,
     unexecuted_genesis_factory_with_post_topology,
@@ -121,10 +121,7 @@ fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLan
     }
 }
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    nexus_fee_asset_definition_id()
 }
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
@@ -398,7 +395,6 @@ fn npos_multilane_genesis_post_topology_transactions(
         "expected {TOTAL_PEERS} peers in genesis topology, got {}",
         topology.len()
     );
-    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
     let universal_domain: DomainId =
         DomainId::try_new("universal", "universal").expect("universal domain");
     let ds1_domain: DomainId = DomainId::try_new("ds1", "universal").expect("ds1 domain");
@@ -406,25 +402,15 @@ fn npos_multilane_genesis_post_topology_transactions(
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
     let mut bootstrap_tx = vec![
-        Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::domain(Domain::new(universal_domain)).into(),
         Register::domain(Domain::new(ds1_domain)).into(),
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
-            AssetDefinition::numeric(
+            AssetDefinition::new(
                 __asset_definition_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .into(),
-        Register::asset_definition({
-            let __asset_definition_id = fee_asset_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "xor".to_owned(),
+                "XOR".to_owned(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )

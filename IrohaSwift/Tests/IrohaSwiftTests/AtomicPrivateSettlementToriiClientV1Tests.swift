@@ -549,7 +549,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         XCTAssertNotNil(captured.value(forHTTPHeaderField: "X-Iroha-Operator-Signature"))
         XCTAssertEqual(captured.httpMethod, "POST")
         XCTAssertEqual(
-            try XCTUnwrap(captured.httpBody),
+            try requestBody(captured),
             try auditorCapsuleRequest(root).bytes()
         )
 
@@ -1148,6 +1148,21 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         attestation["signature"] = signature
         candidate["responder_attestation"] = attestation
         return candidate
+    }
+
+    private func requestBody(_ request: URLRequest) throws -> Data {
+        if let body = request.httpBody { return body }
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open()
+        defer { stream.close() }
+        var body = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 { throw stream.streamError ?? URLError(.cannotDecodeContentData) }
+            if count == 0 { return body }
+            body.append(contentsOf: buffer.prefix(count))
+        }
     }
 
     private func fixture() throws -> [String: Any] {

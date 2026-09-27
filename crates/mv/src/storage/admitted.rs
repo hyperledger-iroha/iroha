@@ -3,7 +3,7 @@
 //! This admits original node, cursor, reader, tracking, publication identity and
 //! copied payload owners.
 //! Borrowed iteration retains its traversal state inline without allocating.
-//! Native mutex and release notification storage remain separately funded.
+//! Native mutex internals and pending notification waiters remain separate.
 //! Transactions additionally admit their ordered local touch owners.
 //! Replacement and snapshot restoration admit each edit and its incoming copies.
 //! Detached owners retain original funding; joint preparation borrows its pool scope.
@@ -21,6 +21,9 @@ use concread::bptree::{
     AllocationDemand, ClonePlanning, MapAdmissionError, NodeFunding, PairInsertError,
     PairRemoveError, PlanningError, Prepaid,
 };
+
+#[path = "restore_admitted.rs"]
+mod restoration;
 
 /// Constructs a payload policy from the original finite MV reservation.
 ///
@@ -47,7 +50,7 @@ pub enum StorageRole {
 }
 
 /// A local refusal before publishing an admitted block.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AdmittedStorageError {
     /// The original writer is held. The observation grants no future authority.
     Busy {
@@ -79,6 +82,26 @@ pub enum AdmittedStorageError {
         remaining_bytes: usize,
     },
 }
+
+impl AdmittedStorageError {
+    /// Original observation that may become actionable after another owner releases.
+    /// Permanent planning and authority refusals never manufacture a retry signal.
+    pub fn release_wait(&self) -> Option<&ReleaseWait> {
+        match self {
+            Self::Busy { release, .. }
+            | Self::Allocation(AllocationRefusal::Capacity { release, .. }) => Some(release),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for AdmittedStorageError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "original storage admission refused: {self:?}")
+    }
+}
+
+impl std::error::Error for AdmittedStorageError {}
 
 /// Either opening or edit admission failed or the caller aborted its block.
 #[derive(Debug)]
@@ -255,13 +278,24 @@ where
     V: Value,
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
+    /// The original finite pool shared by this storage's current and undo owners.
+    /// Cloning this handle retains that exact pool; it grants no additional limit.
+    pub fn allocation_budget(&self) -> &AllocationBudget {
+        self.allocation
+            .as_ref()
+            .expect("admitted Storage original pool")
+    }
+
     /// Initial current/undo map allocations and their shared publication identities.
-    /// Native mutex and release notification storage require separate funding.
+    /// Native mutex internals and pending waiters require separate funding.
     pub fn initial_allocation_demand() -> Result<AllocationDemand, PlanningError> {
         let mut demand = BptreeMap::<K, V, Prepaid<P>>::node_custody_allocation_demand()?;
         demand
             .add_demand(BptreeMap::<K, Option<V>, Prepaid<P>>::node_custody_allocation_demand()?)?;
         demand.add_demand(Publication::allocation_demand()?)?;
+        for _ in 0..2 {
+            demand.add_layout(ReleaseNotification::allocation_layout::<AllocationCharge>())?;
+        }
         Ok(demand)
     }
 
@@ -279,17 +313,33 @@ where
     ///
     /// A single checked admission covers both maps' real initial node/root/reader
     /// layouts and original publication identities. No empty-map substitute or
-    /// untracked node path is used. Native mutex and release notification storage
-    /// are explicit remaining scope, not charged by this admission.
+    /// untracked node path is used. Original notification control blocks share
+    /// this admission. Native mutex internals and pending waiters remain open.
     pub fn try_new_admitted(budget: AllocationBudget) -> Result<Self, AdmittedStorageError> {
         budget.with_deferred_refund_notifications(|_| {
             let current = BptreeMap::<K, V, Prepaid<P>>::node_custody_allocation_demand()
                 .map_err(AdmittedStorageError::Planning)?;
             let undo = BptreeMap::<K, Option<V>, Prepaid<P>>::node_custody_allocation_demand()
                 .map_err(AdmittedStorageError::Planning)?;
-            let identity =
+            let mut identity =
                 Publication::allocation_demand().map_err(AdmittedStorageError::Planning)?;
-            let (current, undo, identity) = reserve_owners(&budget, current, undo, identity)?;
+            let notification_layout = ReleaseNotification::allocation_layout::<AllocationCharge>();
+            for _ in 0..2 {
+                identity
+                    .add_layout(notification_layout)
+                    .map_err(AdmittedStorageError::Planning)?;
+            }
+            let (current, undo, mut identity) = reserve_owners(&budget, current, undo, identity)?;
+            let revert_released = ReleaseNotification::new_charged(
+                identity
+                    .try_split(notification_layout)
+                    .expect("original undo notification capacity"),
+            );
+            let blocks_released = ReleaseNotification::new_charged(
+                identity
+                    .try_split(notification_layout)
+                    .expect("original current notification capacity"),
+            );
             let revert =
                 BptreeMap::try_new_with_node_custody(|demand| policy::<P>(&budget, undo, demand))?;
             let blocks = BptreeMap::try_new_with_node_custody(|demand| {
@@ -297,8 +347,8 @@ where
             })?;
             Ok(Self {
                 publication: Publication::from_admission(identity),
-                revert_released: ReleaseNotification::default(),
-                blocks_released: ReleaseNotification::default(),
+                revert_released,
+                blocks_released,
                 revert,
                 blocks,
                 allocation: Some(budget.clone()),
@@ -640,6 +690,15 @@ where
     }
 }
 
+enum PublicationScope<'scope> {
+    Borrowed {
+        _scope: &'scope AllocationScope<'scope>,
+    },
+    Owned {
+        _scope: crate::allocation::OwnedAllocationScope,
+    },
+}
+
 /// Original prepaid successors held only within their pool's synchronous scope.
 ///
 /// Multiple owners from the same pool can be prepared together. The scope outlives
@@ -683,7 +742,7 @@ where
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     inner: PreparedPublication<'target, K, V, Admission, (), Prepaid<P>>,
-    _scope: &'scope AllocationScope<'scope>,
+    _scope: PublicationScope<'scope>,
 }
 
 /// Published cleanup confined to its original admitted notification scope.
@@ -709,7 +768,7 @@ where
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     inner: PublishedPublication<K, V, Admission, (), Prepaid<P>>,
-    _scope: &'scope AllocationScope<'scope>,
+    _scope: PublicationScope<'scope>,
 }
 
 impl<K: Key, V: Value, Admission, P> AdmittedPublishedPublication<'_, K, V, Admission, P>
@@ -757,7 +816,7 @@ where
 /// ```
 pub struct AdmittedAbortedPublication<'scope> {
     _inner: PublicationCleanup<()>,
-    _scope: &'scope AllocationScope<'scope>,
+    _scope: PublicationScope<'scope>,
 }
 
 impl<'scope, K: Key, V: Value, Admission, P>
@@ -816,7 +875,7 @@ where
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     inner: DetachedPublicationSlotInner<'target, K, V, Admission, (), Prepaid<P>>,
-    scope: &'scope AllocationScope<'scope>,
+    scope: PublicationScope<'scope>,
 }
 impl<'scope, 'target, K: Key, V: Value, Admission, P>
     AdmittedDetachedPublicationSlot<'scope, 'target, K, V, Admission, P>
@@ -880,7 +939,35 @@ where
         }
         Ok(AdmittedDetachedPublicationSlot {
             inner: DetachedPublicationSlotInner::new(self, target),
-            scope,
+            scope: PublicationScope::Borrowed { _scope: scope },
+        })
+    }
+
+    /// Retain the original owned refund scope through physical preparation and cleanup.
+    ///
+    /// This returns the same admitted slot as borrowed preparation, with an
+    /// original scope custodian instead of a borrowed stack boundary. It stays
+    /// on the original thread. A foreign pool refuses before touching a writer;
+    /// a clone neither allocates a new control nor grants more pool capacity.
+    pub fn try_publication_slot_owned<'target>(
+        self,
+        scope: &crate::allocation::OwnedAllocationScope,
+        target: &'target Storage<K, V, Prepaid<P>>,
+    ) -> Result<
+        AdmittedDetachedPublicationSlot<'target, 'target, K, V, Admission, P>,
+        (Self, PublicationPreparationError<AdmittedStorageError>),
+    > {
+        if !scope.belongs_to(target.allocation_budget()) {
+            return Err((
+                self,
+                PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity),
+            ));
+        }
+        Ok(AdmittedDetachedPublicationSlot {
+            inner: DetachedPublicationSlotInner::new(self, target),
+            scope: PublicationScope::Owned {
+                _scope: scope.clone(),
+            },
         })
     }
 
@@ -909,7 +996,7 @@ where
                     error,
                     AdmittedAbortedPublication {
                         _inner: PublicationCleanup::empty(),
-                        _scope: scope,
+                        _scope: PublicationScope::Borrowed { _scope: scope },
                     },
                 )
             })?;

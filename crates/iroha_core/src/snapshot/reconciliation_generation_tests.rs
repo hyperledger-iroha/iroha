@@ -214,7 +214,8 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    ) {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) {
         Ok(_) => panic!("ordinary signed snapshot must not repair a lost Kura suffix"),
         Err(error) => error,
     };
@@ -327,7 +328,8 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .expect("snapshot read should validate historical hashes without block bodies");
     assert_eq!(
         canonical_state_snapshot_bytes_for_tests(&snapshot_state),
@@ -392,7 +394,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .expect("Fast mode must restore its required current snapshot");
     SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| {
         assert_eq!(
@@ -492,7 +495,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .expect("Fast restore must not consume same-size deferred snapshot.data contents");
     assert_eq!(restored_without_reading_payload.committed_height(), 1);
     std::fs::write(&payload_path, payload_bytes).expect("restore signed snapshot payload");
@@ -520,7 +524,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .expect("Fast restore must bind but never read the deferred Merkle sidecar");
     assert_eq!(restored_without_reading_merkle.committed_height(), 1);
 
@@ -539,7 +544,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    ) {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) {
         Ok(_) => panic!("Fast restore must retain exact network identity binding"),
         Err(error) => error,
     };
@@ -575,7 +581,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    ) {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) {
         Ok(_) => panic!("Fast restore must authenticate every manifest field"),
         Err(error) => error,
     };
@@ -608,7 +615,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    ) {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) {
         Ok(_) => panic!("Fast restore must retain ordinary outer signature verification"),
         Err(error) => error,
     };
@@ -810,7 +818,8 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .expect("snapshot read");
     assert_eq!(snapshot_state.chain_id, expected_chain_id);
 }
@@ -1365,7 +1374,8 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::NotFound));
@@ -1393,7 +1403,8 @@ async fn cannot_parse_snapshot_on_read_is_error() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::NonCanonicalSnapshotPayload));
@@ -1425,7 +1436,8 @@ async fn checksum_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1455,7 +1467,8 @@ async fn network_id_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::NetworkIdMismatch { .. }));
@@ -1509,7 +1522,8 @@ async fn missing_checksum_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1543,7 +1557,8 @@ async fn missing_merkle_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1577,7 +1592,8 @@ async fn merkle_root_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::MerkleMismatch { .. }));
@@ -1611,7 +1627,8 @@ async fn merkle_leaf_count_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::MerkleMetadataMalformed(_)));
@@ -1642,7 +1659,8 @@ async fn merkle_chunk_size_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    ) else {
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1842,7 +1860,8 @@ async fn can_read_multiple_blocks() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .unwrap();
     assert_eq!(state.view().height(), 2);
 }
@@ -1905,7 +1924,8 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         #[cfg(feature = "telemetry")]
         <_>::default(),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .unwrap();
     assert_eq!(restored.view().height(), 2);
     assert_eq!(restored.latest_block_hash_fast(), Some(canonical_tip));

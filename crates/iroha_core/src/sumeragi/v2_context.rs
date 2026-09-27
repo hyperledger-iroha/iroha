@@ -103,11 +103,6 @@ pub(crate) struct StagedGenesisNexusAmxContext {
 }
 impl StagedGenesisNexusAmxContext {
     /// Return the exact projection authenticated by staged genesis execution.
-    // TODO: consume this projection in the native genesis runner boundary.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native genesis context cutover")
-    )]
     pub(crate) const fn hash(self) -> Hash {
         self.hash
     }
@@ -1130,6 +1125,7 @@ fn retained_next_epoch_snapshot(
     let authorization =
         retained_epoch_authorization(election, epoch_end_height, authenticated_beacon.binding)?;
     Ok(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation: None,
         epoch,
         kagemusha_mint_finality_authorization: authorization,
         kagemusha_mint_finality_authority: authority.clone(),
@@ -1323,6 +1319,7 @@ mod tests {
             transcript_hash: [0x92; 32],
         };
         wire::finality::FinalizedNextEpochSnapshot {
+            committee_preparation: None,
             epoch: election.epoch + 1,
             kagemusha_mint_finality_authorization: retained_epoch_authorization(
                 election, end, binding,
@@ -1667,6 +1664,7 @@ mod tests {
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 1,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
         }
@@ -2017,13 +2015,26 @@ mod tests {
             height: pulse_height - 1,
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x88; 32])),
         };
-        let peers = roster
-            .iter()
-            .map(|entry| entry.validator.clone())
+        let mut signing_keys = (1_u8..=24)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic beacon fixture signer")
+            })
+            .filter(|key| {
+                roster
+                    .iter()
+                    .any(|entry| entry.validator.public_key() == key.public_key())
+            })
             .collect::<Vec<_>>();
+        signing_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        assert_eq!(
+            signing_keys.len(),
+            roster.len(),
+            "fixture owns every beacon signer"
+        );
         let (key, pulses) = crate::beacon::signed_pulses_fixture_for_roster_and_anchors(
             *state.network_id_ref(),
-            &peers,
+            &signing_keys,
             &[anchor],
         );
         let pulse = pulses.into_iter().next().expect("one authenticated pulse");

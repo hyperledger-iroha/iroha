@@ -124,9 +124,38 @@ pub(super) fn prepare_reward_claim(
             "reward claim plan is not bounded and canonical".into(),
         ));
     }
-    let world = &state_transaction.world;
+    let prepared = evaluate_reward_claim(
+        &state_transaction.world,
+        &state_transaction.nexus.staking.reward_dust_threshold,
+        lane_id,
+        recipient,
+        plan,
+    )?;
+    for source in &plan.sources {
+        let expected = prepared
+            .payouts
+            .iter()
+            .find(|(asset, _, _)| asset == &source.source_asset)
+            .map_or_else(Quantity::zero, |(_, _, amount)| amount.clone());
+        if source.payout != expected {
+            return Err(Error::InvariantViolation(
+                "reward claim payout does not match its exact accrued entitlement and dust threshold".into(),
+            ));
+        }
+    }
+    Ok(prepared)
+}
+
+/// Shared entitlement calculation for read-only preparation and signed execution.
+pub(super) fn evaluate_reward_claim(
+    world: &impl WorldReadOnly,
+    dust_threshold: &Quantity,
+    lane_id: LaneId,
+    recipient: &AccountId,
+    plan: &PublicLaneRewardClaimPlanV1,
+) -> Result<PreparedRewardClaim, Error> {
     let claim_key = (lane_id, recipient.clone());
-    if world.public_lane_reward_claims.get(&claim_key) != plan.expected_state.as_ref() {
+    if world.public_lane_reward_claims().get(&claim_key) != plan.expected_state.as_ref() {
         return Err(Error::InvariantViolation(
             "reward claim processing cursor changed after signing".into(),
         ));
@@ -134,7 +163,7 @@ pub(super) fn prepare_reward_claim(
     let mut accrued = BTreeMap::new();
     for source in &plan.sources {
         let key = (lane_id, recipient.clone(), source.source_asset.clone());
-        if world.public_lane_reward_accruals.get(&key) != source.expected_accrued.as_ref() {
+        if world.public_lane_reward_accruals().get(&key) != source.expected_accrued.as_ref() {
             return Err(Error::InvariantViolation(
                 "reward claim source accrual changed after signing".into(),
             ));
@@ -155,7 +184,7 @@ pub(super) fn prepare_reward_claim(
             std::ops::Bound::Excluded((lane_id, epoch))
         });
     let mut records = world
-        .public_lane_rewards
+        .public_lane_rewards()
         .range((lower, std::ops::Bound::Included((lane_id, u64::MAX))));
     let mut touched_sources = std::collections::BTreeSet::new();
     let mut state_after = plan.expected_state.clone();
@@ -194,7 +223,6 @@ pub(super) fn prepare_reward_claim(
             through_epoch: Some(key.1),
         });
     }
-    let dust_threshold = &state_transaction.nexus.staking.reward_dust_threshold;
     let mut accrued_updates = Vec::with_capacity(plan.sources.len());
     let mut payouts = Vec::with_capacity(plan.sources.len());
     for source in &plan.sources {
@@ -211,11 +239,6 @@ pub(super) fn prepare_reward_claim(
         } else {
             Quantity::zero()
         };
-        if source.payout != expected_payout {
-            return Err(Error::InvariantViolation(
-                "reward claim payout does not match its exact accrued entitlement and dust threshold".into(),
-            ));
-        }
         accrued_updates.push((
             source.source_asset.clone(),
             quantity_sub(available, expected_payout.clone())?,

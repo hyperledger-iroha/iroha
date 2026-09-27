@@ -334,7 +334,43 @@ where
             },
             started: false,
             complete: false,
-            custody: AdmittedAcquisitionCustody(std::marker::PhantomData),
+            custody: AdmittedAcquisitionCustody {
+                _owned: None,
+                _thread: std::marker::PhantomData,
+            },
+            undo_release: self.revert_released.deferred_batch(),
+            current_release: self.blocks_released.deferred_batch(),
+        })
+    }
+
+    /// Create an inert slot retaining the same original prepaid refund scope.
+    ///
+    /// Unlike the borrowed callback API, this slot may return to its caller:
+    /// both it and the resulting block keep a clone of the original thread-bound
+    /// scope until after physical writer release. A foreign pool refuses before
+    /// taking a lock or allocating a cursor. Aggregate callers retain a scope
+    /// clone until every sibling writer has released, including untracked fields.
+    pub fn try_block_acquisition_owned(
+        &self,
+        scope: &crate::allocation::OwnedAllocationScope,
+    ) -> Result<BlockAcquisitionSlot<'_, K, V, concread::bptree::Prepaid<P>>, AdmittedStorageError>
+    {
+        let budget = self.allocation.as_ref().expect("original admitted pool");
+        if !scope.belongs_to(budget) {
+            return Err(AdmittedStorageError::ScopeIdentity);
+        }
+        Ok(BlockAcquisitionSlot {
+            target: self,
+            phase: AcquisitionPhase::Pending {
+                undo: WriterPhase::Empty,
+                current: WriterPhase::Empty,
+            },
+            started: false,
+            complete: false,
+            custody: AdmittedAcquisitionCustody {
+                _owned: Some(scope.clone()),
+                _thread: std::marker::PhantomData,
+            },
             undo_release: self.revert_released.deferred_batch(),
             current_release: self.blocks_released.deferred_batch(),
         })
@@ -367,7 +403,7 @@ where
             .allocation
             .as_ref()
             .expect("admitted Storage original pool");
-        let custody = self.custody;
+        let custody = self.custody.clone();
         let current_demand = BptreeMap::<K, V, Prepaid<P>>::writer_start_allocation_demand()
             .map_err(AdmittedStorageError::Planning)?;
         let undo_demand = BptreeMap::<K, Option<V>, Prepaid<P>>::writer_start_allocation_demand()

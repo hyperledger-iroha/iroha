@@ -668,7 +668,8 @@ struct AuthenticatedProviderFixtureV1 {
         devicePublicKey: devicePublicKey ?? seed.devicePublicKey,
         deviceKeyReference: requestCredential ? seed.deviceKeyReference : c.devicePolicyBinding.deviceKeyReference,
         issuedAtMS: seed.issuedAtMS, expiresAtMS: seed.expiresAtMS,
-        appPolicyBindingDigest: digest(10), governanceSignature: seed.governanceSignature)
+        appPolicyBindingDigest: seed.appPolicyBindingDigest,
+        governanceSignature: seed.governanceSignature)
       return try KagemushaHardwareQualificationV1(releaseID: requestCredential ? request.releaseID : c.release.releaseID,
         hardwarePolicyDigest: policy ?? c.devicePolicyBinding.hardwarePolicyID, coreAuthorizationKeyReference: coreKey ?? c.coreAuthorizationKeyReference,
         profile: profile, credential: credential)

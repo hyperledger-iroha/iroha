@@ -212,6 +212,7 @@
               "xor_asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "epoch_seed": "3E448A9DBA73125E26B0178E036E291374CE17CD39AC321D7BC605963577332D",
               "activation_lag_blocks": 1,
+              "xor_asset_definition_id": null,
               "epoch_length_blocks": 3600,
               "evidence_horizon_blocks": 7200,
               "finality_margin_blocks": 8,

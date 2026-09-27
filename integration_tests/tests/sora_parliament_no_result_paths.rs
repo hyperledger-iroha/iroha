@@ -755,9 +755,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         move || client.get_sumeragi_status()
     })
     .await?;
-    restored_status
-        .validate()
-        .map_err(|error| eyre!("invalid public-finding restore status: {error}"))?;
-    assert!(!restored_status.halted.is_some());
+    assert!(!restored_status.is_halted());
+    assert!(restored_status.applied_height <= restored_status.committed_height);
     Ok(())
 }

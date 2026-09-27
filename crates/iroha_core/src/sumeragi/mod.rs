@@ -2363,6 +2363,15 @@ impl FairV2IngressOwnershipEvidence {
     pub(crate) fn matches_semantic_origin(&self, origin: &PeerId) -> bool {
         self.validate_exact() && &self.first.semantic_origin == origin
     }
+    /// Whether this Native occurrence still names its original charged transport hop.
+    pub(crate) fn matches_native_authenticated_hop(&self, via: &PeerId) -> bool {
+        self.validate_exact()
+            && &self.first.authenticated_via == via
+            && matches!(
+                &self.first.authenticated_source,
+                FairV2IngressSource::Native(peer) if peer == via
+            )
+    }
     /// Decode the exact canonical v2 envelope retained by this ownership
     /// carrier. The full carrier is validated before any projection is
     /// returned, so downstream code cannot use decoded bytes to bypass route,

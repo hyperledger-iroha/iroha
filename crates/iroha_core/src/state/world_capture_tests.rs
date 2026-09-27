@@ -173,11 +173,18 @@ fn complete_world_capture_releases_peers_before_parameters_callback(
     let detached = match attempt {
         CaptureAttempt::Success => Some(
             block
-                .try_detach_journals(|_| Ok::<_, ()>(()))
+                .try_detach_journals(
+                    crate::state::world_journals::resources::WorldJournalShellReservation::for_test(
+                    ),
+                    |_| Ok::<_, ()>(()),
+                )
                 .expect("capture every original World journal"),
         ),
         CaptureAttempt::Refusal => {
-            let result = block.try_detach_journals(|_| Err::<(), _>("admission"));
+            let result = block.try_detach_journals(
+                crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+                |_| Err::<(), _>("admission"),
+            );
             assert!(matches!(
                 result,
                 Err(crate::state::world_journals::CaptureError::Admission(
@@ -188,9 +195,13 @@ fn complete_world_capture_releases_peers_before_parameters_callback(
         }
         CaptureAttempt::AdmissionPanic => {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                block.try_detach_journals(|_| -> Result<(), ()> {
-                    panic!("original World admission");
-                })
+                block.try_detach_journals(
+                    crate::state::world_journals::resources::WorldJournalShellReservation::for_test(
+                    ),
+                    |_| -> Result<(), ()> {
+                        panic!("original World admission");
+                    },
+                )
             }));
             assert!(result.is_err());
             None

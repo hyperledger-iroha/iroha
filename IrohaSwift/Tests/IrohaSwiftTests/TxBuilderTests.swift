@@ -226,7 +226,7 @@ private func expectedTail(forTTL ttl: UInt64?) -> Data {
 }
 
 final class TxBuilderTests: XCTestCase {
-    private static let pipelineHash = String(repeating: "a", count: 64)
+    private static let pipelineHash = String(repeating: "b", count: 64)
     private static let fixturePrivateKeyHex = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
     private static let fixtureNetworkId = TestNetworkIds.canonical
@@ -2027,9 +2027,6 @@ final class TxBuilderTests: XCTestCase {
 
 
     func testBuildMintWithoutBridgeThrows() throws {
-        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
-        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
-
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
@@ -2041,6 +2038,8 @@ final class TxBuilderTests: XCTestCase {
                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                   ttlMs: 45)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
         XCTAssertThrowsError(try sdk.buildMint(mint: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
                 XCTFail("Expected nativeBridgeUnavailable error")
@@ -2050,9 +2049,6 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testBuildSetMetadataWithoutBridgeThrows() throws {
-        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
-        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
-
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try SetMetadataRequest(networkId: Self.fixtureNetworkId,
@@ -2063,6 +2059,8 @@ final class TxBuilderTests: XCTestCase {
                                              feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                              ttlMs: nil)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
         XCTAssertThrowsError(try sdk.buildSetMetadata(request: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
                 XCTFail("Expected nativeBridgeUnavailable error")
@@ -2072,9 +2070,6 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testBuildBurnWithoutBridgeThrows() throws {
-        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
-        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
-
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
@@ -2086,6 +2081,8 @@ final class TxBuilderTests: XCTestCase {
                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                   ttlMs: 120)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
         XCTAssertThrowsError(try sdk.buildBurn(burn: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
                 XCTFail("Expected nativeBridgeUnavailable error")

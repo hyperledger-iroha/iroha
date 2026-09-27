@@ -117,7 +117,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use iroha_primitives::numeric::Quantity;
+use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_test_network::{
     CommitteeValidatorP2pBootstrap, Network, NetworkBuilder, NetworkPeer,
     unexecuted_genesis_factory_with_post_topology,
@@ -401,10 +401,7 @@ fn validator_authority_keypair(index: usize) -> KeyPair {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    nexus_fee_asset_definition_id()
 }
 
 fn cbdc_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
@@ -462,16 +459,10 @@ fn genesis_post_topology(
             DomainId::try_new("settlement", "universal").expect("settlement domain"),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(
+        Register::asset_definition(AssetDefinition::new(
             stake_definition.clone(),
-            "xor".to_owned(),
-            AssetBalancePolicy::Global,
-            None,
-        ))
-        .into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            nexus_fee_asset_definition_id(),
-            "xor".to_owned(),
+            "XOR".to_owned(),
+            NumericSpec::fractional(9),
             AssetBalancePolicy::Global,
             None,
         ))

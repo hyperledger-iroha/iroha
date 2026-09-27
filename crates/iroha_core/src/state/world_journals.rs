@@ -16,7 +16,7 @@ use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet, SetBlo
 use iroha_data_model::{events::EventBox, nexus::DataSpaceCatalog};
 use mv::{
     BlockCapture, BlockMode, Key, Value,
-    allocation::AllocationScope,
+    allocation::{AllocationBudget, OwnedAllocationScope},
     cell::BlockCaptureSlot as CellCaptureSlot,
     storage::{BlockCaptureSlot as StorageCaptureSlot, StorageMode},
 };
@@ -28,6 +28,7 @@ pub(in crate::state) mod resources;
 
 #[path = "world_storage_mode.rs"]
 mod storage_mode;
+use resources::WorldJournalShellReservation;
 use storage_mode::WorldStorageMode;
 
 /// Refusal drops the entire original overlay without publishing any component.
@@ -107,7 +108,11 @@ pub(in crate::state) struct DetachedWorld<Admission> {
     fields: Vec<Box<dyn RetainedWorldField>>,
     dataspace_catalog: DataSpaceCatalog,
     external_event_buf: Vec<EventBox>,
+    shells: WorldJournalShellReservation,
     admission: Admission,
+    // The original finite pool is Send; its refund scope is thread-bound and
+    // must be reentered only by the synchronous physical publisher.
+    operation_index_budget: AllocationBudget,
 }
 
 impl<Admission> DetachedWorld<Admission> {
@@ -167,7 +172,7 @@ trait RetainedWorldField: Send + Sync {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-        scope: Option<&'target AllocationScope<'target>>,
+        scope: &OwnedAllocationScope,
     ) -> Box<dyn publication::PreparedWorldField + 'target>;
 }
 
@@ -232,7 +237,7 @@ where
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-        scope: Option<&'target AllocationScope<'target>>,
+        scope: &OwnedAllocationScope,
     ) -> Box<dyn publication::PreparedWorldField + 'target> {
         publication::storage_slot(self, target, scope)
     }
@@ -307,7 +312,7 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-        scope: Option<&'target AllocationScope<'target>>,
+        scope: &OwnedAllocationScope,
     ) -> Box<dyn publication::PreparedWorldField + 'target> {
         let _ = scope;
         publication::cell_slot(self, target)
@@ -390,7 +395,7 @@ impl RetainedWorldField for RetainedTriggers {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-        scope: Option<&'target AllocationScope<'target>>,
+        scope: &OwnedAllocationScope,
     ) -> Box<dyn publication::PreparedWorldField + 'target> {
         let _ = scope;
         publication::triggers_slot(self, target)
@@ -449,10 +454,13 @@ macro_rules! declare_world_capture {
         struct WorldCapture<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*> {
             $($prefix: Option<($prefix, fn(&World) -> &<$prefix as WorldCaptureSlot>::Target)>,)* $($privacy: Option<($privacy, fn(&World) -> &<$privacy as WorldCaptureSlot>::Target)>,)* $($suffix: Option<($suffix, fn(&World) -> &<$suffix as WorldCaptureSlot>::Target)>,)*
             extras: Option<(DataSpaceCatalog, Vec<EventBox>)>,
+            shells: Option<WorldJournalShellReservation>,
             mode: BlockMode,
             refusal: Option<CaptureError<Infallible>>,
             started: bool,
             complete: bool,
+            // Last: every original field retires before deferred pool refunds.
+            operation_index_scope: Option<OwnedAllocationScope>,
         }
         #[allow(non_camel_case_types)]
         impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
@@ -494,7 +502,13 @@ macro_rules! declare_world_capture {
                     fields
                 });
                 let (dataspace_catalog, external_event_buf) = pending.extras.take().expect("original World extras");
-                DetachedWorld { mode: pending.mode, fields, dataspace_catalog, external_event_buf, admission }
+                let scope = pending.operation_index_scope.take().expect("original operation index scope");
+                let operation_index_budget = scope.allocation_budget().clone();
+                // No writer remains in the detached carrier. Unlink this
+                // thread's scope before the journals can cross threads.
+                drop(scope);
+                DetachedWorld { mode: pending.mode, fields, dataspace_catalog, external_event_buf, shells: pending.shells.take().expect("original shell reservation"), admission,
+                    operation_index_budget }
             }
         }
         #[allow(non_camel_case_types)]
@@ -544,7 +558,7 @@ macro_rules! world_capture_mode {
 }
 
 macro_rules! capture_world_fields {
-    ($original:ident;
+    ($original:ident, $shells:ident;
         [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{
         // These concrete metadata reads neither allocate nor run payload code.
         // Keep any inconsistent-mode verdict in the returned caller-owned slot.
@@ -552,13 +566,15 @@ macro_rules! capture_world_fields {
         let refusal = $original.capture_mode().err();
         let mut pending = WorldCapture {
             $($prefix: None,)* $($privacy: None,)* $($suffix: None,)*
-            extras: None, mode, refusal, started: false, complete: false,
+            extras: None, shells: Some($shells), mode, refusal, started: false, complete: false,
+            operation_index_scope: Some($original.operation_index_scope.clone()),
         };
         fill_world_capture(|| {
             let WorldBlockFields {
                 dataspace_catalog,
                 $($prefix,)* $($privacy,)* $($suffix,)*
                 external_event_buf,
+                operation_index_scope: _scope,
             } = *$original.fields.take().expect("original World block fields");
             $(pending.$prefix = Some(($prefix.into_capture(), |target: &World| &target.$prefix));)*
             $(pending.$privacy = Some(($privacy.into_capture(), |target: &World| &target.$privacy));)*
@@ -594,17 +610,23 @@ impl<'world> WorldBlock<'world> {
     /// Admit and capture every original journal, then release all concrete writers.
     ///
     /// Mode checks inspect the actual original owners before the callback. The
-    /// callback admits all retained allocation and installation resources once;
-    /// it sees the complete immutable overlay, including block-local extras.
+    /// mandatory shell owner was reserved before execution. The callback admits
+    /// the remaining retention and installation resources; it sees the complete
+    /// immutable overlay, including block-local extras.
     /// Refusal drops all original writers without publication. Success moves
     /// extras and the original MV current/undo allocations without cloning them.
     pub(in crate::state) fn try_detach_journals<Admission, E>(
         self,
+        shells: WorldJournalShellReservation,
         admit: impl FnOnce(&Self) -> Result<Admission, E>,
     ) -> Result<DetachedWorld<Admission>, CaptureError<E>> {
-        self.capture_mode().map_err(widen_error)?;
-        let admission = admit(&self).map_err(CaptureError::Admission)?;
-        let mut pending = self.capture_slot();
+        // Local order releases the original World before any capacity refund,
+        // including a normal admission refusal or an unwinding callback.
+        let shells = shells;
+        let original = self;
+        original.capture_mode().map_err(widen_error)?;
+        let admission = admit(&original).map_err(CaptureError::Admission)?;
+        let mut pending = original.capture_slot(shells);
         pending.capture().map_err(widen_error)?;
         Ok(pending.into_journals(admission))
     }
@@ -616,8 +638,11 @@ impl<'world> WorldBlock<'world> {
 
     /// Move every original field into one opaque caller-owned capture slot.
     /// Only concrete metadata reads and inert moves occur before returning.
-    pub(in crate::state) fn capture_slot(mut self) -> impl WorldJournalCapture + 'world {
-        with_world_overlay_fields!(capture_world_fields, self)
+    pub(in crate::state) fn capture_slot(
+        mut self,
+        shells: WorldJournalShellReservation,
+    ) -> impl WorldJournalCapture + 'world {
+        with_world_overlay_fields!(capture_world_fields, self, shells)
     }
 }
 

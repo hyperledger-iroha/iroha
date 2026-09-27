@@ -68,6 +68,18 @@ where
     .expect("generated instruction record")
 }
 
+/// Capture the populated staking records whose required monetary plans changed.
+pub(crate) fn staking_monetary_fixture_rows() -> Vec<Value> {
+    values::values()
+        .into_iter()
+        .filter(|row| {
+            row.get("nominal")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.contains("::staking::"))
+        })
+        .collect()
+}
+
 fn missing_record_values() -> Vec<Value> {
     let mut records = values::values();
     records.extend(super::musubi::generated_identity_values::values());
@@ -107,7 +119,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "8758612bff84503511dc71d525196d81853937b319ef66ed5e46559370811e8f",
+                "f2b1a70d690730c6015f8e7cce2d12c6b7c72240f105985edb3a199fe06cae76",
                 "instruction record capture digest drift"
             );
             let capture: Value =

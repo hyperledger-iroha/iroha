@@ -120,6 +120,7 @@ pub(super) fn collect_signed_staking_effects(
                 destination_account_id: destination.account().clone(),
                 amount: amount.clone(),
                 explicit_fee_eligible: false,
+                native_staking_leg: true,
             });
         };
     if let Some(rewards) = instruction

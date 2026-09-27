@@ -3375,7 +3375,7 @@ fn cold_restart_native_predecessor_publication_fixture(
         &nexus.configured_lane_catalog,
     )
     .expect("cold Kura reconstructs the original unfinished canonical publication owner");
-    let mut state = crate::state::deserialize::KuraSeed {
+    let mut state = crate::state::deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         kura: Arc::clone(&kura),
         lane_manifests,
         query_handle: LiveQueryStore::start_test(),

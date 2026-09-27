@@ -12,12 +12,11 @@ transactions, or create blocks to advance time.
 
 ## Validator epoch authorization
 
-Scheduling epochs advance through certified authorizations that retain the
-incumbent authority generation and its original signing keys. The consensus
-boundary binds the contiguous height interval and authenticated beacon session.
-Application deployment requires no key-renewal transaction or validator seed
-material. Prepared authority activation is not yet implemented; the current
-production boundary retains the incumbent authority.
+Scheduling epochs advance through certified contiguous authorizations that
+retain the incumbent authority generation, its original signing keys and the
+authenticated beacon session. The current production boundary retains that
+authority; prepared generation activation is not operational. Application
+deployment requires no validator seed material or key renewal transaction.
 
 ## Commands
 

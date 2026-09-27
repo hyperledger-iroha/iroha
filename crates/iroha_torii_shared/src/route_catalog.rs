@@ -1547,6 +1547,30 @@ pub mod core {
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Read one frozen validator committee attempt and its finality attachments.
+    pub const NEXUS_VALIDATOR_COMMITTEE_GET: RouteDescriptor = RouteDescriptor::new(
+        "nexus.validator_committee.read",
+        HttpMethod::Get,
+        "/v1/nexus/validator-committee",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Prepare exact staking monetary inputs without submitting a transaction.
+    pub const NEXUS_STAKING_PREPARATION_POST: RouteDescriptor = RouteDescriptor::new(
+        "nexus.staking.prepare",
+        HttpMethod::Post,
+        "/v1/nexus/staking/prepare",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Read newest ledger headers.
     pub const LEDGER_HEADERS: RouteDescriptor = RouteDescriptor::new(
         "ledger.headers",
@@ -1813,6 +1837,8 @@ pub mod core {
         READYZ,
         CONFIGURATION_GET,
         NEXUS_LIFECYCLE_GET,
+        NEXUS_VALIDATOR_COMMITTEE_GET,
+        NEXUS_STAKING_PREPARATION_POST,
         LEDGER_HEADERS,
         LEDGER_STATE_ROOT,
         LEDGER_STATE_PROOF,

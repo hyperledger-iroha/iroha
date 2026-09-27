@@ -2848,6 +2848,7 @@ fn try_read_snapshot_bundle<F>(
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<SnapshotReadOutcome, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
@@ -2923,6 +2924,7 @@ where
             false,
         )?;
         let seed = KuraSeed {
+            operation_index_budget: operation_index_budget.clone(),
             kura: Arc::clone(kura),
             lane_manifests: Arc::clone(lane_manifests),
             query_handle: live_query_store.clone(),
@@ -3010,6 +3012,7 @@ where
     // cell roles decode directly into their final typed registry owners.
     validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
+        operation_index_budget: operation_index_budget.clone(),
         kura: Arc::clone(kura),
         lane_manifests: Arc::clone(lane_manifests),
         query_handle: live_query_store.clone(),
@@ -3169,6 +3172,7 @@ pub fn try_read_snapshot(
     zk: &iroha_config::parameters::actual::Zk,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     let bootstrap_policy = SnapshotBootstrapPolicy::default();
     try_read_snapshot_with_bootstrap_policy(
@@ -3188,6 +3192,7 @@ pub fn try_read_snapshot(
         #[cfg(feature = "telemetry")]
         telemetry,
         read_buffer_budget,
+        operation_index_budget,
     )
 }
 /// Read and verify a snapshot with an explicit audited hash-only bootstrap policy.
@@ -3213,6 +3218,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     bootstrap_policy: &SnapshotBootstrapPolicy,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     try_read_snapshot_with_initializer(
         store_dir,
@@ -3235,6 +3241,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
         #[cfg(feature = "telemetry")]
         telemetry,
         read_buffer_budget,
+        operation_index_budget,
     )
 }
 #[allow(clippy::too_many_lines)]
@@ -3256,6 +3263,7 @@ fn try_read_snapshot_with_initializer<F>(
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
@@ -3301,6 +3309,7 @@ where
             #[cfg(feature = "telemetry")]
             telemetry,
             read_buffer_budget,
+            operation_index_budget,
         )?;
         if !emergency_fast {
             generation.verify_generation_unchanged()?;
@@ -4459,6 +4468,7 @@ fn validate_generated_snapshot_for_restart_with_policy(
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
+        operation_index_budget: state.world.operation_index_budget().clone(),
         kura: state.kura_handle(),
         lane_manifests: state.lane_manifests.read().clone(),
         query_handle: state.query_handle.clone(),

@@ -75,6 +75,8 @@ pub struct Untracked;
 /// Native mutex internals, the supplied data and its nested storage are separate.
 #[derive(Clone, Copy, Debug)]
 pub struct InitialLayouts {
+    /// Original reader-release notification and its strong reference counter.
+    pub notification: Layout,
     /// Original permanent writer root, including its mutex and reference counter.
     pub root: Layout,
     /// Original first-reader shell, including its reference counter.
@@ -84,6 +86,8 @@ pub struct InitialLayouts {
 /// Move-only prepaid custody for the original root and first-reader allocations.
 #[derive(Debug)]
 pub struct InitialCharges<Charge> {
+    /// Original notification control owner, funded before cell construction.
+    pub notification: crate::release::ReleaseNotification,
     /// Custody held until the last cell or detached writer destroys the root.
     pub root: Charge,
     /// Custody retained by the original first-reader generation.
@@ -256,6 +260,9 @@ struct WriteState<T, R, Charge> {
     // The exact active generation is also available under the writer lock.
     // Adopting an owned writer never contends with the short-lived reader lock.
     current: Shared<LinCowCellInner<R, Charge>, Charge>,
+    // The same notification control survives with original detached/root owners.
+    // This is a reference to the original allocation, not a replacement source.
+    _release_control: crate::release::ReleaseNotification,
 }
 
 #[derive(Debug)]
@@ -691,6 +698,7 @@ where
     /// nested storage are separate allocations, not part of this layout pair.
     pub fn initial_allocation_layouts() -> InitialLayouts {
         InitialLayouts {
+            notification: crate::release::ReleaseNotification::allocation_layout::<Charge>(),
             root: Reserved::<Mutex<WriteState<T, R, Charge>>, Charge>::layout(),
             reader: Self::reader_allocation_layout(),
         }
@@ -729,13 +737,17 @@ where
         // Initialize both permanent native mutexes during construction. A first
         // refused writer must not allocate a lazy platform mutex at admission.
         drop(active.lock().unwrap());
-        let write = root.initialize(Mutex::new(WriteState { data, current }));
+        let write = root.initialize(Mutex::new(WriteState {
+            data,
+            current,
+            _release_control: charges.notification.clone(),
+        }));
         drop(write.lock().unwrap());
         LinCowCell {
             updater: PhantomData,
             write,
             active,
-            active_released: crate::release::ReleaseNotification::default(),
+            active_released: charges.notification,
         }
     }
 
@@ -1384,6 +1396,7 @@ where
         Self::new_charged(
             data,
             InitialCharges {
+                notification: crate::release::ReleaseNotification::default(),
                 root: Untracked,
                 reader: Untracked,
             },
@@ -1946,6 +1959,7 @@ mod writer_input_tests {
                 dropped: dropped.clone(),
             },
             InitialCharges {
+                notification: crate::release::ReleaseNotification::default(),
                 root: charge(true),
                 reader: charge(false),
             },
@@ -2295,6 +2309,7 @@ mod identity_preparation_tests {
         let cell = Cell::new_charged(
             Data(drops.clone()),
             InitialCharges {
+                notification: crate::release::ReleaseNotification::default(),
                 root: RootCharge {
                     _original: Some(root),
                 },

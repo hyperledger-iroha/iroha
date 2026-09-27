@@ -27,11 +27,7 @@ use iroha::{
         account::AccountId,
         block::{
             SignedBlock,
-            consensus_v2::{
-                PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2LocalWorkStage,
-                SumeragiV2ProgressTransition, SumeragiV2Status, SumeragiV2StatusPhase,
-                recommended_data_availability_layout,
-            },
+            consensus_v2::{PROTOCOL_VERSION, recommended_data_availability_layout},
         },
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
@@ -81,16 +77,14 @@ use iroha::{
         },
         query::dsl::IntoPredicate as _,
         smart_contract::ContractAddress,
+        sumeragi::SumeragiStatus,
     },
 };
 use iroha_core::{
     beacon::{
         GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_governance_seed_v1,
         global_threshold_beacon_npos_successor_seed_v1, global_threshold_beacon_roster_hash_v1,
-        parliament_test_network_signer::{
-            deterministic_parliament_beacon_key_record_v1,
-            deterministic_parliament_beacon_successor_key_record_v1,
-        },
+        parliament_test_network_signer::deterministic_parliament_beacon_key_record_v1,
         validate_global_threshold_beacon_session_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
@@ -1122,6 +1116,74 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     network.ensure_blocks(1).await?;
     let client = network.client();
     let ordered_roster = ordered_validator_roster(&network, &client).await?;
+    let beacon_record =
+        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive exact public beacon fixture")?;
+    let beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: beacon_record.session.network_id,
+        session_id: beacon_record.session.session_id,
+        roster_hash: beacon_record.session.roster_hash,
+        transcript_hash: beacon_record.session.transcript_hash,
+    };
+    let validated_beacon_session =
+        validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
+            .wrap_err("replay the exact public beacon transcript")?;
+    let tle_public_state =
+        deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive exact public TLE fixture")?;
+    let install_height = next_queue_plan_execution_height(
+        &client,
+        beacon_record.session.adaptive_dkg.finalized_at_height,
+        "threshold-key installation",
+    )
+    .await?;
+    let lifecycle_certificates = [
+        InstructionBox::from(lifecycle_certificate(
+            &network,
+            &ordered_roster,
+            ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
+            beacon_record.session.session_id,
+            beacon_record.session.transcript_hash,
+            norito::encode_canonical(&beacon_record)?,
+            install_height,
+        )?),
+        InstructionBox::from(lifecycle_certificate(
+            &network,
+            &ordered_roster,
+            ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
+            *tle_public_state.key_session_id.as_bytes(),
+            tle_public_state.transcript_hash,
+            norito::encode_canonical(&tle_public_state)?,
+            install_height,
+        )?),
+    ];
+    let submission_authority_height = current_height(&client).await?;
+    let submission_roster = ordered_validator_roster(&network, &client).await?;
+    if submission_roster != ordered_roster {
+        return Err(eyre!(
+            "threshold-key installation roster changed between fixture derivation and submission"
+        ));
+    }
+    eprintln!(
+        "SORA_PARLIAMENT_LIFECYCLE submit_lifecycle authority_height={submission_authority_height} install_height={install_height} roster_hash={}",
+        hex::encode(global_threshold_beacon_roster_hash_v1(&ordered_roster)),
+    );
+    submit_parliament_instructions(&client, lifecycle_certificates).await?;
+    assert_eq!(current_height(&client).await?, install_height);
+    let activation_height = install_height
+        .checked_add(1)
+        .ok_or_else(|| eyre!("threshold-key activation height overflow"))?;
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
+            Level::INFO,
+            "carry Parliament threshold-key activation".to_owned(),
+        )],
+    )
+    .await?;
+    network.ensure_blocks(activation_height).await?;
+    assert_eq!(current_height(&client).await?, activation_height);
+
     let (code_hash, abi_hash) =
         stage_contract_artifact(&client, &minimal_contract_artifact()).await?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
@@ -1247,11 +1309,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             move || client.get_sumeragi_status()
         })
         .await?;
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid enacted Parliament peer status: {error}"))?;
         assert!(
-            !status.halted.is_some(),
+            !status.is_halted(),
             "an enacted Parliament validator must not be live-but-fail-stopped",
         );
     }
@@ -1304,11 +1363,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         move || client.get_sumeragi_status()
     })
     .await?;
-    restarted_status
-        .validate()
-        .map_err(|error| eyre!("invalid restarted Parliament peer status: {error}"))?;
     assert!(
-        !restarted_status.halted.is_some(),
+        !restarted_status.is_halted(),
         "normal restart must restore a live non-fail-stopped consensus reducer",
     );
     no_result_paths::exercise_public_finding_no_result_retries_and_restore(
@@ -1424,31 +1480,6 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let validated_beacon_session =
         validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
             .wrap_err("replay mandatory NPoS beacon transcript")?;
-    let successor_beacon_record = deterministic_parliament_beacon_successor_key_record_v1(
-        network.network_id(),
-        &ordered_roster,
-    )
-    .wrap_err("derive mandatory NPoS successor beacon fixture")?;
-    assert_ne!(
-        successor_beacon_record.session.session_id,
-        beacon_record.session.session_id,
-    );
-    assert_ne!(
-        successor_beacon_record.session.transcript_hash,
-        beacon_record.session.transcript_hash,
-    );
-    let successor_beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
-        network_id: successor_beacon_record.session.network_id,
-        session_id: successor_beacon_record.session.session_id,
-        roster_hash: successor_beacon_record.session.roster_hash,
-        transcript_hash: successor_beacon_record.session.transcript_hash,
-    };
-    let validated_successor_beacon_session = validate_global_threshold_beacon_session_v1(
-        successor_beacon_record.session.clone(),
-        &successor_beacon_binding,
-    )
-    .wrap_err("replay mandatory NPoS successor beacon transcript")?;
-
     let install_height = next_queue_plan_execution_height(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
@@ -1458,7 +1489,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let lifecycle_certificate = lifecycle_certificate(
         &network,
         &ordered_roster,
-        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
         beacon_record.session.session_id,
         beacon_record.session.transcript_hash,
         norito::encode_canonical(&beacon_record)?,
@@ -1482,33 +1513,13 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
 
     let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     let pulse_height = boundary_height - 1;
-    assert_eq!(
-        activation_height.checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS),
-        Some(boundary_height),
-        "the exact fixture must rotate in the boundary block after one old-session pulse",
-    );
-    let rotation_certificate = lifecycle_certificate_replacing(
+    advance_to_autonomous_predecessor(
         &network,
-        &ordered_roster,
-        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
-        Some(beacon_record.session.session_id),
-        successor_beacon_record.session.session_id,
-        successor_beacon_record.session.transcript_hash,
-        norito::encode_canonical(&successor_beacon_record)?,
-        boundary_height,
-    )?;
-    let rotation_transaction =
-        prepare_parliament_transaction(&client, [rotation_certificate]).await?;
-    let admitted_rotation = tokio::time::timeout(
-        OPERATION_TIMEOUT,
-        client
-            .account_client()
-            .submit_transaction(&rotation_transaction),
+        &client,
+        pulse_height,
+        "initial mandatory pre-boundary pulse",
     )
-    .await
-    .map_err(|_| eyre!("rotation admission deadline"))??;
-    assert_eq!(admitted_rotation, rotation_transaction.hash());
-    network.ensure_blocks(pulse_height - 1).await?;
+    .await?;
     assert_no_global_beacon_pulse_at(
         &client,
         pulse_height - 1,
@@ -1555,7 +1566,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &client,
         [Log::new(
             Level::INFO,
-            "carry post-rotation successor progression".to_owned(),
+            "carry retained-authority successor progression".to_owned(),
         )],
     )
     .await?;
@@ -1563,38 +1574,42 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     assert_eq!(current_height(&client).await?, boundary_height);
     network.ensure_blocks(boundary_height + 1).await?;
     assert_eq!(current_height(&client).await?, boundary_height + 1);
-    read_on_dedicated_thread({
-        let client = client.client().clone();
-        move || {
-            client.wait_for_transaction_applied(
-                admitted_rotation,
-                iroha::client::TransactionWaitOptions {
-                    timeout: OPERATION_TIMEOUT,
-                    poll_interval: Duration::from_millis(100),
-                },
-            )
-        }
-    })
-    .await
-    .wrap_err("the exact scheduled rotation must be Applied after the boundary")?;
     for peer in network.peers() {
         let status = read_on_dedicated_thread({
             let client = peer.client().client().clone();
             move || client.get_sumeragi_status()
         })
         .await?;
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid successor NPoS status: {error}"))?;
         assert!(
-            !status.halted.is_some(),
+            !status.is_halted(),
             "a successful mandatory beacon transition must not fail-stop a validator",
         );
         assert!(status.committed_height >= boundary_height + 1);
-        assert_eq!(status.height_context.epoch, successor_epoch);
-        assert_eq!(status.height_context.epoch_seed, successor_seed);
+        assert!(status.applied_height <= status.committed_height);
+        // Epoch state is certified finality evidence, not a local status field.
+        let (proof, certified_hash) = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            let network_id = network.network_id();
+            move || {
+                client.get_bridge_finality_anchor(
+                    NonZeroU64::new(boundary_height + 1).unwrap(),
+                    network_id,
+                )
+            }
+        })
+        .await?;
         assert_eq!(
-            status.height_context.epoch_end_height,
+            exact_block(&peer.client(), boundary_height + 1)
+                .await?
+                .header()
+                .hash(),
+            certified_hash,
+        );
+        let context = &proof.finality_artifact.height_context;
+        assert_eq!(context.epoch, successor_epoch);
+        assert_eq!(context.leader_seed, successor_seed);
+        assert_eq!(
+            context.epoch_end_height,
             boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
         );
     }
@@ -1607,7 +1622,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &network,
         &client,
         successor_pulse_height,
-        "successor-session mandatory pre-boundary pulse",
+        "retained-session mandatory pre-boundary pulse",
     )
     .await?;
     network.ensure_blocks(successor_pulse_height).await?;
@@ -1618,25 +1633,22 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     assert!(successor_pulses.windows(2).all(|pair| pair[0] == pair[1]));
     let successor_pulse = &successor_pulses[0];
     assert_eq!(successor_pulse.height, successor_pulse_height);
-    assert_eq!(
-        successor_pulse.session_id,
-        successor_beacon_record.session.session_id
-    );
+    assert_eq!(successor_pulse.session_id, beacon_record.session.session_id);
     assert_eq!(
         successor_pulse.roster_hash,
-        successor_beacon_record.session.roster_hash
+        beacon_record.session.roster_hash
     );
     assert_eq!(
         successor_pulse.transcript_hash,
-        successor_beacon_record.session.transcript_hash
+        beacon_record.session.transcript_hash
     );
-    assert_ne!(successor_pulse.session_id, pulse.session_id);
+    assert_eq!(successor_pulse.session_id, pulse.session_id);
     verify_finalized_global_threshold_beacon_pulse_v1(
-        &validated_successor_beacon_session,
+        &validated_beacon_session,
         successor_pulse,
         successor_pulse.finalized_chain_anchor,
     )
-    .wrap_err("independently verify the successor-session mandatory pulse")?;
+    .wrap_err("independently verify the retained-session mandatory pulse")?;
 
     let second_boundary_height = boundary_height
         .checked_add(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
@@ -1651,7 +1663,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &client,
         [Log::new(
             Level::INFO,
-            "carry the successor-session NPoS boundary".to_owned(),
+            "carry the retained-session NPoS boundary".to_owned(),
         )],
     )
     .await?;
@@ -1663,18 +1675,148 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
             move || client.get_sumeragi_status()
         })
         .await?;
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid rotated-session NPoS status: {error}"))?;
-        assert!(!status.halted.is_some());
+        assert!(!status.is_halted());
         assert!(status.committed_height >= second_boundary_height + 1);
-        assert_eq!(status.height_context.epoch, second_successor_epoch);
-        assert_eq!(status.height_context.epoch_seed, second_successor_seed);
+        assert!(status.applied_height <= status.committed_height);
+        // Epoch state is certified finality evidence, not a local status field.
+        let (proof, certified_hash) = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            let network_id = network.network_id();
+            move || {
+                client.get_bridge_finality_anchor(
+                    NonZeroU64::new(second_boundary_height + 1).unwrap(),
+                    network_id,
+                )
+            }
+        })
+        .await?;
         assert_eq!(
-            status.height_context.epoch_end_height,
+            exact_block(&peer.client(), second_boundary_height + 1)
+                .await?
+                .header()
+                .hash(),
+            certified_hash,
+        );
+        let context = &proof.finality_artifact.height_context;
+        assert_eq!(context.epoch, second_successor_epoch);
+        assert_eq!(context.leader_seed, second_successor_seed);
+        assert_eq!(
+            context.epoch_end_height,
             second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
         );
     }
+
+    // NetworkId pins the signed genesis. Verify every contiguous successor from that
+    // anchor so a self-consistent server snapshot cannot establish a new authority.
+    let trusted_network = network.network_id();
+    let expected_roster = ordered_roster.clone();
+    let expected_session = beacon_record.session.session_id;
+    let expected_transcript = beacon_record.session.transcript_hash;
+    read_on_dedicated_thread({
+        let client = client.client().clone();
+        move || -> Result<()> {
+            use iroha_data_model::{
+                bridge::BridgeFinalityVerifier,
+                isi::kagemusha_v1::{
+                    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+                    KagemushaMintFinalityEpochDecisionV1,
+                },
+            };
+            let (genesis, genesis_hash) =
+                client.get_bridge_finality_anchor(NonZeroU64::new(1).unwrap(), trusted_network)?;
+            assert_eq!(genesis_hash, trusted_network.into_genesis_hash());
+            assert_eq!(
+                genesis
+                    .finality_artifact
+                    .height_context
+                    .roster
+                    .iter()
+                    .map(|seat| seat.validator.clone())
+                    .collect::<Vec<_>>(),
+                expected_roster
+            );
+            let authority = genesis
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_authority
+                .clone();
+            let mut verifier = BridgeFinalityVerifier::with_context(
+                trusted_network,
+                genesis.finality_artifact.context_id(),
+            );
+            verifier.verify(&genesis)?;
+            let mut frozen_attempt = None;
+            for height in 2..=second_boundary_height + 1 {
+                let proof = client.get_next_bridge_finality_proof(
+                    NonZeroU64::new(height).unwrap(),
+                    &mut verifier,
+                )?;
+                let context = &proof.finality_artifact.height_context;
+                assert_eq!(context.kagemusha_mint_finality_authority, authority);
+                assert_eq!(context.da_layout, recommended_data_availability_layout());
+                assert_eq!(context.quorum.min_signers, 3);
+                assert_eq!(proof.finality_artifact.commit_qc.signers.len(), 3);
+                if height == boundary_height {
+                    frozen_attempt = context
+                        .next_epoch_snapshot
+                        .as_ref()
+                        .unwrap()
+                        .committee_preparation
+                        .clone();
+                }
+                if [boundary_height + 1, second_boundary_height + 1].contains(&height) {
+                    let (expected_epoch, expected_seed, expected_end) =
+                        if height == boundary_height + 1 {
+                            (
+                                successor_epoch,
+                                successor_seed,
+                                boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+                            )
+                        } else {
+                            (
+                                second_successor_epoch,
+                                second_successor_seed,
+                                second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+                            )
+                        };
+                    assert_eq!(context.epoch, expected_epoch);
+                    assert_eq!(context.leader_seed, expected_seed);
+                    assert_eq!(context.epoch_end_height, expected_end);
+                    let authorization = &context.kagemusha_mint_finality_authorization;
+                    assert_eq!(
+                        authorization.epoch,
+                        (height - 1) / MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS
+                    );
+                    if height == second_boundary_height + 1 && frozen_attempt.is_some() {
+                        assert_eq!(
+                            authorization.decision,
+                            KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+                        );
+                        assert_eq!(
+                            authorization.transition_id,
+                            frozen_attempt.as_ref().unwrap().transition_id().unwrap()
+                        );
+                    } else {
+                        assert_eq!(
+                            authorization.decision,
+                            KagemushaMintFinalityEpochDecisionV1::Retain
+                        );
+                        assert_eq!(authorization.transition_id, [0; 32]);
+                    }
+                    assert_eq!(
+                        authorization.beacon,
+                        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                            session_id: expected_session,
+                            transcript_hash: expected_transcript,
+                        })
+                    );
+                }
+            }
+            Ok(())
+        }
+    })
+    .await
+    .wrap_err("authenticate retained authority across both real scheduling boundaries")?;
 
     network.shutdown().await;
     Ok(())
@@ -1781,7 +1923,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     let lifecycle_certificate = lifecycle_certificate(
         &network,
         &ordered_roster,
-        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
         beacon_record.session.session_id,
         beacon_record.session.transcript_hash,
         norito::encode_canonical(&beacon_record)?,
@@ -1812,61 +1954,25 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     );
     network.ensure_blocks(predecessor_height).await?;
     assert_eq!(current_height(&client).await?, predecessor_height);
-    let pulse_status_is_active = |status: &SumeragiV2Status| -> Result<bool> {
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid fail-closed NPoS status: {error}"))?;
+    let pulse_status_is_active = |status: &SumeragiStatus| -> bool {
         assert!(
-            !status.halted.is_some(),
+            !status.is_halted(),
             "below-threshold beacon liveness must stall without fail-stopping consensus",
         );
         assert_eq!(status.committed_height, predecessor_height);
-        if status.height != predecessor_height {
-            assert_eq!(status.height, pulse_height);
-            return Ok(true);
+        assert!(status.applied_height <= status.committed_height);
+        if status.height == predecessor_height {
+            // A committed round remains current only until its successor
+            // configuration is available. Keep polling through that handoff.
+            assert!(status.awaiting);
+            return false;
         }
-
-        // Status publication deliberately retains the applied predecessor while
-        // the serialized runner constructs and activates its successor. Accept
-        // only that exact authenticated handoff, never an arbitrary stale height.
-        assert_eq!(status.phase, SumeragiV2StatusPhase::PendingApply);
-        if status.body_state == SumeragiV2BodyState::PendingApply {
-            // A durable Decision is published before its asynchronous local
-            // application completes. It authenticates the predecessor but is
-            // not yet the successor handoff, so keep polling instead of either
-            // accepting it as active or treating normal progress as a failure.
-            assert_eq!(status.pending_persistence_id, None);
-            assert!(matches!(
-                status.liveness.work.application,
-                SumeragiV2LocalWorkStage::Queued | SumeragiV2LocalWorkStage::Running
-            ));
-            assert_eq!(
-                status.liveness.work.successor_height,
-                SumeragiV2LocalWorkStage::Idle,
-            );
-            return Ok(false);
-        }
-        assert_eq!(status.body_state, SumeragiV2BodyState::Applied);
-        assert_eq!(
-            status.liveness.work.application,
-            SumeragiV2LocalWorkStage::Complete,
-        );
-        assert!(matches!(
-            status.liveness.work.successor_height,
-            SumeragiV2LocalWorkStage::Queued
-                | SumeragiV2LocalWorkStage::Running
-                | SumeragiV2LocalWorkStage::Complete
-        ));
-        assert!(matches!(
-            status.liveness.last_progress,
-            Some(marker)
-                if marker.generation == status.liveness.generation
-                    && marker.round.context_id == status.height_context_id
-                    && marker.round.height == status.height
-                    && marker.round.view == status.view
-                    && marker.transition == SumeragiV2ProgressTransition::Applied
-        ));
-        Ok(false)
+        assert_eq!(status.height, pulse_height);
+        // Round entry and durable application are reported separately. Begin
+        // the observation only once the predecessor is applied and the pulse
+        // round has its configuration, so configuration/application lag cannot
+        // masquerade as a below-threshold beacon stall.
+        !status.awaiting && status.applied_height == predecessor_height
     };
     // Keep each synchronous request short and check one monotonic deadline
     // before and after it. The complete wait can therefore exceed its nominal
@@ -1950,7 +2056,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                     last_activation_status_error.as_deref().unwrap_or("none"),
                 ));
             }
-            all_pulse_heights_active &= pulse_status_is_active(&status)?;
+            all_pulse_heights_active &= pulse_status_is_active(&status);
         }
         if all_pulse_heights_active {
             break;
@@ -2040,7 +2146,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                 ));
             }
             assert!(
-                pulse_status_is_active(&status)?,
+                pulse_status_is_active(&status),
                 "the bounded below-threshold observation must begin and end in the active pulse context",
             );
         }

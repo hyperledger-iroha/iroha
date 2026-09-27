@@ -3778,14 +3778,24 @@ pub mod asset {
             let (_, asset) = StubExecutor::new(2);
             let owner = asset.account().clone();
             let peer = PeerId::new(owner.expect_single_signatory().clone());
+            let network_id =
+                NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"executor-staking-routing"),
+                ));
+            let rebind_key = fixture_key_pair(44);
+            let rebind_peer = PeerId::new(rebind_key.public_key().clone());
+            let rebind_consent = PublicLanePeerBindingAuthorization::new(
+                network_id,
+                LaneId::SINGLE,
+                owner.clone(),
+                rebind_peer.clone(),
+                3,
+                peer.clone(),
+            );
             let request_id = iroha_crypto::Hash::new(b"staking-withdrawal");
             // The host stub checks permission dispatch, not admission against a ledger.
             // Nevertheless these plans bind a network, complete retained records and exact assets.
-            let network_scope = PublicLaneMonetaryScopeV1::Network(NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                    b"executor-staking-dispatch-fixture",
-                )),
-            ));
+            let network_scope = PublicLaneMonetaryScopeV1::Network(network_id);
             let custody = AssetId::new(
                 asset.definition().clone(),
                 AccountId::new(fixture_key_pair(0x51).public_key().clone()),
@@ -3878,8 +3888,14 @@ pub mod asset {
                     release_at_ms: 1,
                 }
                 .into(),
-                RebindPublicLaneValidatorPeer::new(LaneId::SINGLE, owner.clone(), peer.clone())
-                    .into(),
+                RebindPublicLaneValidatorPeer::new(
+                    LaneId::SINGLE,
+                    owner.clone(),
+                    rebind_peer,
+                    iroha_crypto::SignatureOf::try_new(rebind_key.private_key(), &rebind_consent)
+                        .expect("executor staking rebind consent"),
+                )
+                .into(),
                 BondPublicLaneStake {
                     lane_id: LaneId::SINGLE,
                     validator: owner.clone(),
@@ -3931,7 +3947,11 @@ pub mod asset {
                     epoch: 0,
                     reward_asset: asset,
                     total_reward: Quantity::from(1_u64),
-                    shares: Vec::new(),
+                    shares: vec![PublicLaneRewardShare {
+                        account: owner,
+                        role: PublicLaneRewardRole::Validator,
+                        amount: Quantity::from(1_u64),
+                    }],
                     metadata: Metadata::default(),
                 }
                 .into(),
@@ -4304,6 +4324,13 @@ pub mod parameter {
     }
     /// Applies a network parameter change when genesis or a parameter manager invokes it.
     pub fn visit_set_parameter<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &SetParameter) {
+        // Preparation commands have exact validator-owner authorization in Core and
+        // never change a parameter or grant committee activation authority.
+        if matches!(isi.inner(), Parameter::Custom(custom)
+            if custom.id() == &iroha_data_model::nexus::ValidatorCommitteeOperationV1::parameter_id())
+        {
+            execute!(executor, isi);
+        }
         if updates_sccp_governance(isi) {
             deny!(
                 executor,

@@ -456,7 +456,7 @@ impl State {
                 // The same original prepared generation returns to its sole
                 // preparation slot only after every physical sibling releases.
                 pending.retain_refused_membership();
-                return Err(error.into());
+                return Err(error);
             }
             projection_result = self.project_canonical_runtime_with_manifests(
                 pending.canonical_runtime().get(),

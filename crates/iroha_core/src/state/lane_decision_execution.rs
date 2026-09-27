@@ -197,6 +197,7 @@ impl State {
     /// acknowledged here, including for a successful economic result.
     /// TODO: replace the old merge source DTO and consumer with this actual
     /// transition before activating the process-lived lane instances.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn preexecute_lane_decision_groups<'state>(
         &'state self,
         application_block_header: super::BlockHeader,
@@ -220,6 +221,7 @@ impl State {
     /// The private continuation is never minted from a post-hook overlay.
     /// Standalone scratch wrappers isolate their whole lifetime. Recording
     /// consumers use the same scoped kernel with an owned recorder continuation.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(super) fn with_native_lane_execution<'state, R>(
         &'state self,
         header: super::BlockHeader,
@@ -229,9 +231,11 @@ impl State {
             Vec<PreexecutedLaneDecisionGroupV1>,
         ) -> Result<R, super::MergeLedgerCommitError>,
     ) -> Result<(Box<StateBlock<'state>>, R), super::MergeLedgerCommitError> {
+        let mut admission = super::NativeExecutionResourceAdmission::for_test(groups.len());
         self.with_native_lane_execution_scope(
             header,
             groups,
+            &mut admission,
             |_| Ok(()),
             finish,
             |_, result, ()| Ok(result),
@@ -246,6 +250,7 @@ impl State {
         &'state self,
         header: super::BlockHeader,
         groups: &[VerifiedLaneDecisionGroupV1],
+        admission: &mut super::NativeExecutionResourceAdmission,
         enter: impl FnOnce(&mut StateBlock<'state>) -> Result<Scope, super::MergeLedgerCommitError>,
         finish_native: impl FnOnce(
             &mut StateBlock<'state>,
@@ -259,6 +264,11 @@ impl State {
     ) -> Result<(Box<StateBlock<'state>>, Finished), super::MergeLedgerCommitError> {
         crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(super::MergeLedgerCommitError::ExecutionRecorderConflict)?;
+        if !admission.matches_group_count(groups.len()) {
+            return Err(super::MergeLedgerCommitError::ExecutionRecorderConflict(
+                "Native source admission differs from its exact group count".into(),
+            ));
+        }
         // The constructor acquires a coherent predecessor and retains the
         // actual World, membership, hash and runtime writer guards throughout
         // this transition. Its policy projections are immutable snapshots.
@@ -291,7 +301,11 @@ impl State {
                 ))
             },
             |overlay, (preflight, scope)| {
-                let result = overlay.produce_native_execution_outputs(preflight, finish_native)?;
+                let result = overlay.produce_native_execution_outputs(
+                    preflight,
+                    admission,
+                    finish_native,
+                )?;
                 finish_scope(overlay, result, scope)
             },
         )

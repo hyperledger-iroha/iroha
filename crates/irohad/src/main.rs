@@ -3,14 +3,14 @@
 compile_error!(
     "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
 );
-/// Native fresh global-beacon provisioning under centralized deployment custody.
+/// Per-seat authenticated global-beacon DKG and exact-quorum rotation provisioning.
 #[cfg(unix)]
 pub mod beacon_bootstrap;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
-mod network_relay;
 /// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
+mod network_relay;
 /// Asynchronous Nexus DPN fee settlement relay.
 /// Explicit recovery boundaries for daemon-owned provider work.
 mod panic_recovery;
@@ -57,7 +57,7 @@ mod startup_artifact;
 /// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
 #[cfg(feature = "daemon")]
 pub mod taira_bootle_lantern_broker;
-/// Fixed-descriptor Taira runtime signer and deployment launcher.
+/// Fixed-descriptor runtime signer and Taira deployment launcher.
 #[cfg(unix)]
 pub mod taira_runtime_signer;
 use crate::soracloud_runtime::{
@@ -124,6 +124,11 @@ use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
+#[cfg(all(
+    feature = "test-network-disposable-broker",
+    any(target_os = "linux", target_os = "macos")
+))]
+pub use runtime_provider_broker::load_owner_private_runtime_provider_broker_catalog_file_v1;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
@@ -166,10 +171,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{
-    sync::broadcast,
-    task,
-};
+use tokio::{sync::broadcast, task};
 
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
@@ -827,10 +829,6 @@ pub struct Args {
         hide = true
     )]
     test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode,
-    /// Use real consumed Taira custody in the explicit Core-only native fixture.
-    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-    #[arg(long = "test-network-production-beacon-custody", hide = true)]
-    test_network_production_beacon_custody: bool,
     /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-execution-mode",
@@ -1421,11 +1419,15 @@ mod snapshot_read_error_tests {
     fn snapshot_state_admission_never_authorizes_empty_state_fallback() {
         use iroha_core::state::{
             BlockHashAdmissionError, MembershipAdmissionError, StateAdmissionError,
+            StateStorageAdmissionError,
         };
         let budget = mv::allocation::AllocationBudget::new(1);
         let _occupied = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         for admission in [
+            StateAdmissionError::Storage(StateStorageAdmissionError::World(
+                mv::storage::AdmittedStorageError::Allocation(refusal.clone()),
+            )),
             StateAdmissionError::Membership(MembershipAdmissionError::Capacity(refusal.clone())),
             StateAdmissionError::History(BlockHashAdmissionError::Capacity(refusal)),
             StateAdmissionError::Membership(MembershipAdmissionError::Allocator {
@@ -2700,6 +2702,14 @@ impl Iroha {
                 })?
         };
         let mut loaded_state_from_snapshot = false;
+        let operation_index_budget = mv::allocation::AllocationBudget::new(
+            usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
+                |_| {
+                    Report::new(StartError::InitKura)
+                        .attach("configured operation-index pool exceeds addressable memory")
+                },
+            )?,
+        );
         let snapshot_read_buffer_budget =
             mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
@@ -2720,6 +2730,7 @@ impl Iroha {
                 #[cfg(feature = "telemetry")]
                 state_telemetry.clone(),
                 &snapshot_read_buffer_budget,
+                &operation_index_budget,
             )
         } else {
             iroha_logger::info!("Snapshot restore is disabled by configuration");
@@ -2764,11 +2775,13 @@ impl Iroha {
                     "Kura retains the configured-primary replay floor; rebuilding state from blocks"
                 );
                 let genesis_public_key = effective_genesis_public_key.clone();
-                let mut world = World::with(
+                let mut world = World::try_with_operation_index_budget(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
                     [],
-                );
+                    operation_index_budget.clone(),
+                )
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
                 if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
                     iroha_core::sns::seed_genesis_alias_bootstrap(
                         &mut world,
@@ -2858,15 +2871,18 @@ impl Iroha {
         }
         // Reuse the policy snapshot installed before geometry; emergency Fast never scans local
         // policy sources.
-        let (frozen_startup_lane_manifests, frozen_startup_lane_compliance) =
-            if let Some(policies) = &startup_lane_policies {
-                (Arc::clone(&policies.manifests), policies.compliance.clone())
-            } else {
-                iroha_logger::warn!(
-                    "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
-                );
-                (Arc::new(LaneManifestRegistry::empty()), None)
-            };
+        let (frozen_startup_lane_manifests, frozen_startup_lane_compliance) = if let Some(
+            policies,
+        ) =
+            &startup_lane_policies
+        {
+            (Arc::clone(&policies.manifests), policies.compliance.clone())
+        } else {
+            iroha_logger::warn!(
+                "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
+            );
+            (Arc::new(LaneManifestRegistry::empty()), None)
+        };
         if emergency_fast {
             state.install_lane_manifests(&frozen_startup_lane_manifests);
             state.install_lane_compliance_engine(None);
@@ -8084,15 +8100,15 @@ fn configure_reports(args: &Args) {
 /// Run the stock daemon launcher.
 ///
 /// The stock binaries resolve supported runtime-only bindings through a
-/// platform-fixed local broker running under the same effective service UID.
+/// configured authenticated local broker running under the same effective service UID.
 /// The broker is not contacted when the validated configuration contains no
 /// runtime-provider bindings.
 pub fn main_entry() {
-    soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
-    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-    if taira_runtime_signer::dispatch_production_beacon_fixture_if_requested() {
+    #[cfg(unix)]
+    if external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
         return;
     }
+    soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     if let Err(report) = run_main(None, None) {
         eprintln!("{report:?}");
@@ -8417,6 +8433,80 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         })
         .expect("spawn FASTPQ Metal queue telemetry thread");
 }
+/// Reject a missing Pasta seed source before contacting deployment providers.
+///
+/// Registry providers have no Pasta slot; the fixed consumed descriptor and
+/// exact launcher factory are the only supported ways to provide local seed
+/// custody. A later check binds the resolved holder to the full signed record.
+fn verify_signed_genesis_mint_finality_source_before_providers(
+    network_id: iroha_data_model::NetworkId,
+    local_validator: &iroha_model_base::peer::PeerId,
+    authenticated_authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    configured_seed_fd: bool,
+    launcher_authority: bool,
+) -> Result<(), String> {
+    authenticated_authority
+        .validate()
+        .map_err(|error| format!("signed-genesis Pasta authority is invalid: {error}"))?;
+    if authenticated_authority.network_id != network_id {
+        return Err("signed-genesis Pasta authority belongs to another network".to_owned());
+    }
+    if authenticated_authority
+        .validators
+        .iter()
+        .any(|entry| &entry.validator == local_validator)
+        && !configured_seed_fd
+        && !launcher_authority
+    {
+        return Err(
+            "signed-genesis validator requires a private Pasta seed source before provider startup"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Require exact Pasta custody before a signed-genesis validator starts.
+///
+/// A peer absent from the signed genesis authority has no genesis voting seat.
+/// Its separately held seed becomes usable only after the authenticated height
+/// context activates a generation containing that exact peer and public keys.
+fn verify_signed_genesis_mint_finality_custody(
+    network_id: iroha_data_model::NetworkId,
+    local_validator: &iroha_model_base::peer::PeerId,
+    authenticated_authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    held_authority: Option<
+        &iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+    >,
+) -> Result<(), String> {
+    authenticated_authority
+        .validate()
+        .map_err(|error| format!("signed-genesis Pasta authority is invalid: {error}"))?;
+    if authenticated_authority.network_id != network_id {
+        return Err("signed-genesis Pasta authority belongs to another network".to_owned());
+    }
+    let Some(index) = authenticated_authority
+        .validators
+        .iter()
+        .position(|entry| &entry.validator == local_validator)
+    else {
+        return Ok(());
+    };
+    let held_authority = held_authority.ok_or_else(|| {
+        "signed-genesis validator requires its exact private Pasta seed before startup".to_owned()
+    })?;
+    let expected_index = u32::try_from(index)
+        .map_err(|_| "signed-genesis Pasta seat index exceeds u32".to_owned())?;
+    if held_authority.authority() != Some(authenticated_authority)
+        || held_authority.signer().map(
+            iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::validator_index,
+        ) != Some(expected_index)
+    {
+        return Err("held Pasta seed does not match this signed-genesis validator seat".to_owned());
+    }
+    Ok(())
+}
+
 fn run_main(
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
     musubi_publication_factory: Option<
@@ -8440,11 +8530,6 @@ fn run_main_with_config_guard(
     launcher_runtime_factory: Option<IrohaLauncherRuntimeFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
-    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-    if args.test_network_production_beacon_custody && launcher_config_guard.is_none() {
-        return Err(Report::new(MainError::Config)
-            .attach("production beacon fixture requires its explicit launcher registry boundary"));
-    }
     let lang = i18n::detect_language(args.language.as_deref());
     i18n::init(lang);
     configure_reports(&args);
@@ -8495,6 +8580,24 @@ fn run_main_with_config_guard(
     // static configuration has passed the same offline checks as
     // `--check-config`, and before Tokio or node-owned durable state starts.
     validate_startup_config_offline(&config).change_context(MainError::Config)?;
+    let authenticated_genesis = genesis
+        .as_ref()
+        .map(|local_genesis| {
+            validate_available_genesis_for_check(&config, local_genesis, None)
+                .map(|(authenticated, _)| authenticated)
+        })
+        .transpose()?;
+    if let Some(authenticated_genesis) = authenticated_genesis.as_ref() {
+        let context = authenticated_genesis.context();
+        verify_signed_genesis_mint_finality_source_before_providers(
+            iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
+            &config.common.peer.id,
+            &context.kagemusha_mint_finality_authority,
+            config.sumeragi.mint_finality_seed_fd.is_some(),
+            launcher_runtime_factory.is_some(),
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    }
     let runtime_deps = if emergency_fast {
         iroha_logger::warn!(
             "emergency Fast startup skipped deployment runtime-provider projection and resolution"
@@ -8506,8 +8609,11 @@ fn run_main_with_config_guard(
                 .map_err(Report::new)
                 .change_context(MainError::Config)
                 .attach("failed to project deployment runtime-provider bindings")?;
-            (!bindings.is_empty())
-                .then(runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new)
+            (!bindings.is_empty()).then(|| {
+                runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new(
+                    config.runtime_provider_broker.endpoint_path.clone(),
+                )
+            })
         } else {
             None
         };
@@ -8522,22 +8628,48 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach("failed to resolve deployment runtime-provider bindings")?
     };
+    if config.sumeragi.mint_finality_seed_fd.is_some() && launcher_runtime_factory.is_some() {
+        return Err(Report::new(MainError::Config)
+            .attach("configured mint-finality seed rejects a second launcher authority"));
+    }
     let runtime_deps = if let Some(factory) = launcher_runtime_factory {
         if emergency_fast {
             return Err(Report::new(MainError::Config)
                 .attach("deployment runtime authority requires authenticated full startup"));
         }
-        let local_genesis = genesis.as_ref().ok_or_else(|| {
+        let authenticated_genesis = authenticated_genesis.as_ref().ok_or_else(|| {
             Report::new(MainError::Config)
                 .attach("deployment runtime authority requires the exact local signed genesis")
         })?;
-        let (authenticated_genesis, _) =
-            validate_available_genesis_for_check(&config, local_genesis, None)?;
-        factory(&config, &authenticated_genesis, runtime_deps)
+        factory(&config, authenticated_genesis, runtime_deps)
             .map_err(|error| Report::new(MainError::Config).attach(error))?
     } else {
         runtime_deps
     };
+    #[cfg(unix)]
+    let runtime_deps = if config.sumeragi.mint_finality_seed_fd.is_some() {
+        if emergency_fast {
+            return Err(Report::new(MainError::Config)
+                .attach("configured mint-finality seed rejects emergency startup"));
+        }
+        let authenticated_genesis = authenticated_genesis.as_ref().ok_or_else(|| {
+            Report::new(MainError::Config)
+                .attach("configured mint-finality seed requires exact local signed genesis")
+        })?;
+        taira_runtime_signer::resolve_inherited_mint_finality_runtime(
+            &config,
+            authenticated_genesis,
+            runtime_deps,
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?
+    } else {
+        runtime_deps
+    };
+    #[cfg(not(unix))]
+    if config.sumeragi.mint_finality_seed_fd.is_some() {
+        return Err(Report::new(MainError::Config)
+            .attach("mint-finality private descriptor requires a Unix daemon"));
+    }
     #[cfg(feature = "test-network-parliament-signers")]
     let runtime_deps = {
         if emergency_fast {
@@ -8591,6 +8723,22 @@ fn run_main_with_config_guard(
             }
         }
     };
+    if let Some(authenticated_genesis) = authenticated_genesis.as_ref() {
+        let context = authenticated_genesis.context();
+        let expected_network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash);
+        if context.network_id != expected_network_id {
+            return Err(Report::new(MainError::Config)
+                .attach("signed-genesis Pasta context belongs to another network"));
+        }
+        verify_signed_genesis_mint_finality_custody(
+            expected_network_id,
+            &config.common.peer.id,
+            &context.kagemusha_mint_finality_authority,
+            runtime_deps.kagemusha_mint_finality_authority.as_deref(),
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    }
     let musubi_publication_factory = if emergency_fast {
         None
     } else {
@@ -8855,11 +9003,20 @@ fn validate_genesis_execution_offline(
         ))
     })?;
     let kura = open_disposable_validation_kura(config, &validation_root)?;
-    let mut world = World::with(
+    let mut world = World::try_with_operation_index_budget(
         [genesis_domain(config.genesis.public_key.clone())],
         [genesis_account(config.genesis.public_key.clone())],
         [],
-    );
+        mv::allocation::AllocationBudget::new(
+            usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
+                |_| {
+                    Report::new(MainError::Config)
+                        .attach("configured operation-index pool exceeds addressable memory")
+                },
+            )?,
+        ),
+    )
+    .map_err(|error| Report::new(error).change_context(MainError::Config))?;
     iroha_core::sns::seed_genesis_alias_bootstrap(
         &mut world,
         &genesis.0,
@@ -9096,7 +9253,6 @@ fn consensus_caps_from_genesis(
         maximum_validator_roster_len,
     ))
 }
-
 
 fn authenticated_maximum_validator_roster_len(
     mode: iroha_data_model::block::consensus_v2::ConsensusMode,
@@ -10209,7 +10365,9 @@ mod tests {
             .split_once("// Recovery: scan recent persisted pipeline sidecars")
             .expect("pipeline recovery diagnostics")
             .1
-            .split_once("if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =")
+            .split_once(
+                "if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =",
+            )
             .expect("end of pipeline recovery diagnostics")
             .0;
         assert_eq!(
@@ -10581,9 +10739,9 @@ mod tests {
         );
         assert!(
             run_main_source.contains(
-                "(!bindings.is_empty()).then(runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new)"
+                "(!bindings.is_empty()).then(||{runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new(config.runtime_provider_broker.endpoint_path.clone(),)})"
             ),
-            "the stock broker registry must be instantiated only for a non-empty binding catalog"
+            "the stock broker registry must use the validated endpoint only for a non-empty binding catalog"
         );
         assert!(
             run_main_source.contains(
@@ -12225,8 +12383,6 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
-                #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,
@@ -12293,8 +12449,6 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
-                #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,

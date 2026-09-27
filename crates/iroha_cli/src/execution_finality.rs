@@ -945,6 +945,7 @@ mod tests {
             .validate_successor(&context.kagemusha_mint_finality_authorization)
             .expect("exact contiguous retained scheduling authorization");
         context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+            committee_preparation: None,
             epoch: next_authorization.epoch,
             kagemusha_mint_finality_authorization: next_authorization,
             kagemusha_mint_finality_authority: context.kagemusha_mint_finality_authority.clone(),

@@ -2767,6 +2767,15 @@ pub mod isi {
                 )
                 .into());
             }
+            if state_transaction
+                .world
+                .sumeragi_npos_parameters()
+                .is_some_and(|params| params.xor_asset_definition_id == asset_definition_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister asset definition {asset_definition_id}: it is the committed network XOR identity").into(),
+                ).into());
+            }
             if let Some(((lane_id, epoch), _)) = state_transaction
                 .world
                 .public_lane_rewards
@@ -8785,6 +8794,7 @@ mod tests {
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                         activation_height: 1,
+                        election_exit_height: None,
                         deactivation_height: None,
                         last_reward_epoch: None,
                     },
@@ -8811,6 +8821,7 @@ mod tests {
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                         activation_height: 1,
+                        election_exit_height: None,
                         deactivation_height: None,
                         last_reward_epoch: None,
                     },

@@ -330,8 +330,7 @@ impl<'a> PenaltyApplier<'a> {
         pending
             .as_mut_slice()
             .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
-        let _witness_suppression =
-            crate::exec_witness::suppress_recording_for_current_thread();
+        let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
         let mut scratch = self
             .state
             .consensus_effects_probe_block(block_header.clone())?;
@@ -400,7 +399,7 @@ impl<'a> PenaltyApplier<'a> {
                             slash_id,
                             amount,
                         };
-                        let mut transaction = scratch.consensus_effects_transaction();
+                        let mut transaction = scratch.consensus_effects_transaction()?;
                         apply_indexed_slash_to_validator_without_observability(
                             &mut transaction,
                             slash.lane_id,
@@ -480,7 +479,7 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
     current_view: u64,
     now_ms: u64,
 ) -> Result<()> {
-    let mut tx = state_block.consensus_effects_transaction();
+    let mut tx = state_block.consensus_effects_transaction()?;
     // This test-only post-execution diagnostic has a different source overlay.
     // Production consumes the original pre-State index through the same kernel.
     let stake_index = effects
@@ -966,6 +965,7 @@ pub(crate) fn seed_penalty_validator_for_tests(
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -2369,7 +2369,9 @@ mod tests {
             let mut scratch = state
                 .consensus_effects_probe_block(penalty_header(2))
                 .unwrap();
-            let mut transaction = scratch.consensus_effects_transaction();
+            let mut transaction = scratch
+                .consensus_effects_transaction()
+                .expect("fixture consensus-effects transaction admission");
             apply_slash_to_validator_without_observability(
                 &mut transaction,
                 LaneId::SINGLE,
@@ -2842,7 +2844,9 @@ mod tests {
 
         let witness_guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
-        let mut transaction = state_block.consensus_effects_transaction();
+        let mut transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,

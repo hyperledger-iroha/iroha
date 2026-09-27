@@ -75,6 +75,10 @@ pub(super) struct OwnedExecutionSources {
     source_context: iroha_data_model::fastpq::FastpqSourceStatementContextV1,
     entries: Vec<OwnedExecutionSource>,
     network_routes: Vec<crate::queue::RoutingDecision>,
+    // Each charge stays with the corresponding original Vec through the
+    // retained prefix, including validation and publication refusal.
+    _entries_charge: Option<mv::allocation::AllocationCharge>,
+    _network_routes_charge: Option<mv::allocation::AllocationCharge>,
     merge_prefix: Option<std::sync::Arc<super::merge_execution_prefix::MergeExecutionPrefixSeal>>,
 }
 

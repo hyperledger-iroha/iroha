@@ -1726,7 +1726,7 @@ fn assert_cold_merge_registry_replay_boundary(
     let startup_nexus = fixture.state.nexus_snapshot();
     let startup_lane_manifests = fixture.state.lane_manifests.read().clone();
     let restore = |snapshot| {
-        crate::state::deserialize::KuraSeed {
+        crate::state::deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::clone(&startup_lane_manifests),
             kura: Arc::clone(&fixture.kura),
             query_handle: LiveQueryStore::start_test(),

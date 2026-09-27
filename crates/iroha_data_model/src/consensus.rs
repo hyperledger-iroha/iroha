@@ -13,7 +13,7 @@ pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use iroha_crypto::{Hash, PublicKey};
+use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::{Ident, IntoSchema};
 
@@ -533,7 +533,7 @@ pub struct GlobalThresholdBeaconPublicShareV1 {
     pub public_key_share: [u8; 96],
 }
 
-/// Immutable bindings and height windows for one adaptive beacon DKG run.
+/// Immutable bindings and height windows for one all-edge beacon DKG run.
 #[derive(
     Debug,
     Clone,
@@ -556,6 +556,11 @@ pub struct GlobalThresholdBeaconDkgSessionV1 {
     /// Unique threshold-beacon session identifier.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub session_id: [u8; 32],
+    /// Unique genesis or frozen committee attempt; never reused after cancellation.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub attempt_id: [u8; 32],
+    /// Target signing generation, independent of the scheduled epoch.
+    pub authority_generation: u64,
     /// Hash of the frozen ordered DKG participant roster.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub roster_hash: [u8; 32],
@@ -566,11 +571,11 @@ pub struct GlobalThresholdBeaconDkgSessionV1 {
     /// First height at which dealer commitments are accepted.
     pub start_height: u64,
     /// Exclusive end of the dealer-commitment window.
-    pub sharing_end_height: u64,
-    /// Exclusive end of the complaint window.
-    pub complaints_end_height: u64,
-    /// Exclusive end of the complaint-response window.
-    pub responses_end_height: u64,
+    pub commitments_end_height: u64,
+    /// Exclusive end of encrypted private delivery.
+    pub deliveries_end_height: u64,
+    /// Exclusive end of signed recipient acceptance.
+    pub acceptances_end_height: u64,
 }
 
 /// Schnorr proof that a dealer knows the constant-term exponent.
@@ -625,13 +630,14 @@ pub struct GlobalThresholdBeaconDkgDealerCommitmentV1 {
     pub coefficient_commitments: Vec<[u8; 96]>,
     /// Fiat-Shamir Schnorr proof of knowledge for the constant coefficient.
     pub constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1,
+    /// Dealer-seat BLS signature over the complete session and public broadcast.
+    pub signature: Signature,
 }
 
-/// Stable reason for a recipient complaint during adaptive beacon DKG.
+/// One attempt-bound recipient encryption key authenticated by its BLS seat.
 #[derive(
     Debug,
     Clone,
-    Copy,
     PartialEq,
     Eq,
     PartialOrd,
@@ -642,19 +648,26 @@ pub struct GlobalThresholdBeaconDkgDealerCommitmentV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[norito(tag = "reason", content = "detail", rename_all = "snake_case")]
-pub enum GlobalThresholdBeaconDkgComplaintReasonV1 {
-    /// The dealer did not deliver the recipient's private `(s, r, u)` share.
-    MissingPrivateShare,
-    /// The delivered share failed the composite coefficient equation.
-    InvalidPrivateShare,
+pub struct GlobalThresholdBeaconDkgRecipientKeyV1 {
+    /// One-based index in the exact frozen roster.
+    pub recipient_index: u16,
+    /// Exact BLS validator which owns this recipient slot.
+    pub validator: iroha_model_base::peer::PeerId,
+    /// X25519 component of the canonical hybrid recipient key.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub x25519_public_key: [u8; 32],
+    /// ML-KEM-768 component of the canonical hybrid recipient key.
+    pub mlkem768_public_key: Vec<u8>,
+    /// Seat BLS signature over the complete session and unsigned key fields.
+    pub signature: Signature,
 }
 
-/// Public complaint against one dealer/recipient share edge.
+/// Public authenticated ciphertext for a private dealer-to-recipient share.
+///
+/// The plaintext scalar triple is never included in public DKG state.
 #[derive(
     Debug,
     Clone,
-    Copy,
     PartialEq,
     Eq,
     PartialOrd,
@@ -665,26 +678,34 @@ pub enum GlobalThresholdBeaconDkgComplaintReasonV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-pub struct GlobalThresholdBeaconDkgComplaintV1 {
-    /// Dealer accused by the complaint.
+pub struct GlobalThresholdBeaconDkgEncryptedShareV1 {
+    /// One-based dealer index in the frozen roster.
     pub dealer_index: u16,
-    /// Recipient which raised the complaint.
-    pub complainant_index: u16,
-    /// Hash of the exact canonical dealer commitment under dispute.
+    /// One-based recipient index in the frozen roster.
+    pub recipient_index: u16,
+    /// Hash of the exact dealer coefficient commitment.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub dealer_commitment_hash: [u8; 32],
-    /// Stable complaint classification.
-    pub reason: GlobalThresholdBeaconDkgComplaintReasonV1,
-    /// Canonical complaint ID recomputed from this record and session bindings.
+    /// Hash of the recipient's signed attempt-bound encryption key.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub complaint_id: [u8; 32],
+    pub recipient_key_hash: [u8; 32],
+    /// Authenticated height within the delivery window.
+    pub delivery_height: u64,
+    /// Ephemeral X25519 KEM public component.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub ephemeral_x25519_public_key: [u8; 32],
+    /// ML-KEM-768 encapsulation ciphertext.
+    pub mlkem768_ciphertext: Vec<u8>,
+    /// Nonce-prefixed authenticated ciphertext for one 96-byte share triple.
+    pub encrypted_share: Vec<u8>,
+    /// Dealer BLS signature over the complete session and unsigned envelope.
+    pub signature: Signature,
 }
 
-/// Dealer's public response to one DKG complaint.
+/// Public proof that a recipient accepted one authenticated private DKG edge.
 #[derive(
     Debug,
     Clone,
-    Copy,
     PartialEq,
     Eq,
     PartialOrd,
@@ -695,26 +716,24 @@ pub struct GlobalThresholdBeaconDkgComplaintV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-pub struct GlobalThresholdBeaconDkgComplaintResponseV1 {
-    /// Exact complaint being answered.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub complaint_id: [u8; 32],
-    /// Accused dealer index copied from the complaint.
+pub struct GlobalThresholdBeaconDkgShareAcceptanceV1 {
+    /// One-based dealer index in the frozen roster.
     pub dealer_index: u16,
-    /// Recipient index copied from the complaint.
+    /// One-based recipient index in the frozen roster.
     pub recipient_index: u16,
-    /// Canonical scalar `s_i(recipient)`.
+    /// Hash of the exact dealer coefficient commitment.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub s_share: [u8; 32],
-    /// Canonical scalar `r_i(recipient)`.
+    pub dealer_commitment_hash: [u8; 32],
+    /// Hash of the signed encrypted private edge acknowledged by the recipient.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub r_share: [u8; 32],
-    /// Canonical scalar `u_i(recipient)`.
-    #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub u_share: [u8; 32],
+    pub encrypted_share_hash: [u8; 32],
+    /// Authenticated finalized height at which the recipient accepted the edge.
+    pub accepted_height: u64,
+    /// Recipient BLS signature over the complete session and unsigned acceptance.
+    pub signature: Signature,
 }
 
-/// Canonical public audit transcript for a completed adaptive beacon DKG.
+/// Canonical public audit transcript for a completed all-edge beacon DKG.
 #[derive(
     Debug,
     Clone,
@@ -739,11 +758,13 @@ pub struct GlobalThresholdBeaconDkgTranscriptV1 {
     pub generator_v: [u8; 96],
     /// Valid dealer broadcasts in strictly ascending dealer order.
     pub dealer_commitments: Vec<GlobalThresholdBeaconDkgDealerCommitmentV1>,
-    /// Complaints in canonical `(dealer, complainant)` order.
-    pub complaints: Vec<GlobalThresholdBeaconDkgComplaintV1>,
-    /// Valid public responses in canonical `(dealer, recipient)` order.
-    pub complaint_responses: Vec<GlobalThresholdBeaconDkgComplaintResponseV1>,
-    /// Locally derived qualified dealer indices in strictly ascending order.
+    /// Exact signed recipient encryption keys in one-based seat order.
+    pub recipient_keys: Vec<GlobalThresholdBeaconDkgRecipientKeyV1>,
+    /// Signed encrypted private edges; ciphertext never reveals a scalar.
+    pub encrypted_shares: Vec<GlobalThresholdBeaconDkgEncryptedShareV1>,
+    /// Exact signed acknowledgments in canonical `(dealer, recipient)` order.
+    pub share_acceptances: Vec<GlobalThresholdBeaconDkgShareAcceptanceV1>,
+    /// Every dealer index in strictly ascending order; no roster reroll.
     pub qualified_dealers: Vec<u16>,
     /// Hash of the complete canonical DKG event transcript above.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -981,13 +1002,15 @@ mod tests {
             version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
             network_id,
             session_id,
+            attempt_id: session_id,
+            authority_generation: 0,
             roster_hash,
             committee_size: 4,
             threshold: 2,
             start_height: 1,
-            sharing_end_height: 10,
-            complaints_end_height: 20,
-            responses_end_height: 30,
+            commitments_end_height: 10,
+            deliveries_end_height: 20,
+            acceptances_end_height: 30,
         };
         let dealer_commitments = (1_u16..=4)
             .map(|dealer_index| GlobalThresholdBeaconDkgDealerCommitmentV1 {
@@ -1003,6 +1026,14 @@ mod tests {
                     response: [u8::try_from(dealer_index).expect("fixture value fits u8") + 0x40;
                         32],
                 },
+                signature: Signature::new(
+                    KeyPair::from_seed(
+                        vec![u8::try_from(dealer_index).expect("fixture value fits u8"); 32],
+                        Algorithm::Ed25519,
+                    )
+                    .private_key(),
+                    &session_id,
+                ),
             })
             .collect();
         GlobalThresholdBeaconKeySessionV1 {
@@ -1027,8 +1058,9 @@ mod tests {
                 generator_h: [0x61; 96],
                 generator_v: [0x62; 96],
                 dealer_commitments,
-                complaints: Vec::new(),
-                complaint_responses: Vec::new(),
+                recipient_keys: Vec::new(),
+                encrypted_shares: Vec::new(),
+                share_acceptances: Vec::new(),
                 qualified_dealers: vec![1, 2, 3, 4],
                 event_hash: [0x66; 32],
                 finalized_at_height: 30,

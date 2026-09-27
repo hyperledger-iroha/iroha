@@ -115,7 +115,7 @@ impl InternalInvocation {
                 let enabled: Name = TRIGGER_ENABLED_METADATA_KEY
                     .parse()
                     .map_err(|_| "invalid trigger enabled metadata key")?;
-                let mut policy = OutputTransaction::new(state);
+                let mut policy = OutputTransaction::new(state)?;
                 let tx = policy
                     .transaction
                     .as_mut()
@@ -148,7 +148,7 @@ impl InternalInvocation {
                     .retry_state
                     .map_or(0, |s| s.retries_used)
                     .saturating_add(1);
-                let mut policy = OutputTransaction::new(state);
+                let mut policy = OutputTransaction::new(state)?;
                 let tx = policy
                     .transaction
                     .as_mut()
@@ -197,7 +197,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .ok_or("output budget already consumed")?
             .begin(invocation.terminal())?;
         self.state.retain_fastpq_source_invocation(call)?;
-        let mut attempt = OutputTransaction::new(self.state);
+        let mut attempt = OutputTransaction::new(self.state)?;
         let tx = attempt
             .transaction
             .as_mut()

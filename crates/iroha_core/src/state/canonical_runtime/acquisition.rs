@@ -213,16 +213,19 @@ impl<'state> RuntimeBlockAcquisition<'state> {
         }
     }
 
-    pub(super) fn initialize(
-        &mut self,
-        replacement: bool,
-    ) -> Result<(), storage_transactions::MembershipAdmissionError> {
+    pub(super) fn initialize(&mut self, replacement: bool) -> Result<(), StateAdmissionError> {
         assert!(!self.started, "original State acquisition is one-shot");
         self.started = true;
         self.world = Some(if replacement {
-            self.target.world.block_and_revert()
+            self.target
+                .world
+                .try_block_and_revert()
+                .map_err(StateStorageAdmissionError::World)?
         } else {
-            self.target.world.block()
+            self.target
+                .world
+                .try_block()
+                .map_err(StateStorageAdmissionError::World)?
         });
         self.transactions = Some(
             self.target

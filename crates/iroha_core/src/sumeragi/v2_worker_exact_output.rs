@@ -78,24 +78,36 @@ struct DurableExactOutputOwnerNonce {
 pub(crate) struct DurableExactOutputServiceOwner(Arc<DurableExactOutputOwnerNonce>);
 /// Paired endpoint retained beside one exact [`crate::merge_sidecar::MergeSidecarTransport`].
 pub(crate) struct DurableExactOutputTransportOwner(
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     Arc<DurableExactOutputOwnerNonce>,
 );
+/// Mint a service endpoint for a Native lifecycle with no sidecar transport.
+pub(crate) fn durable_exact_output_service_owner() -> DurableExactOutputServiceOwner {
+    DurableExactOutputServiceOwner(Arc::new(DurableExactOutputOwnerNonce {
+        sealed: AtomicBool::new(false),
+    }))
+}
 /// Mint the unique service/transport owner pair for one height-local stack.
 pub(crate) fn durable_exact_output_handoff_owner_pair() -> (
     DurableExactOutputServiceOwner,
     DurableExactOutputTransportOwner,
 ) {
-    let owner = Arc::new(DurableExactOutputOwnerNonce {
-        sealed: AtomicBool::new(false),
-    });
-    (
-        DurableExactOutputServiceOwner(Arc::clone(&owner)),
-        DurableExactOutputTransportOwner(owner),
-    )
+    let service = durable_exact_output_service_owner();
+    let transport = DurableExactOutputTransportOwner(Arc::clone(&service.0));
+    (service, transport)
+}
+#[cfg(test)]
+mod service_only_owner_tests {
+    use super::*;
+
+    #[test]
+    fn native_service_owner_has_no_foreign_transport_authority() {
+        let service = durable_exact_output_service_owner();
+        let (_, foreign_transport) = durable_exact_output_handoff_owner_pair();
+        assert!(!service.is_bound_to_transport_owner(&foreign_transport));
+        assert!(service.seal().is_ok());
+        assert!(service.seal().is_err());
+    }
 }
 impl DurableExactOutputServiceOwner {
     /// Return whether this service endpoint was minted with one transport endpoint.
@@ -128,10 +140,7 @@ impl DurableExactOutputTransportOwner {
 /// process-local service endpoint, excluding independently created services.
 #[must_use]
 pub(crate) struct DurableExactOutputHandoffReceipt {
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     owner: Arc<DurableExactOutputOwnerNonce>,
     predecessor_context_hash: HashOf<wire::HeightContext>,
     predecessor_context_id: wire::HeightContextId,
@@ -142,10 +151,7 @@ pub(crate) struct DurableExactOutputHandoffReceipt {
 }
 impl DurableExactOutputHandoffReceipt {
     /// Return whether this receipt names the transport endpoint paired with its service.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn is_bound_to_transport_owner(
         &self,
         owner: &DurableExactOutputTransportOwner,
@@ -153,10 +159,7 @@ impl DurableExactOutputHandoffReceipt {
         Arc::ptr_eq(&self.owner, &owner.0)
     }
     /// Match the receipt's full canonical predecessor context identity.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn matches_predecessor_context(&self, context: &wire::HeightContext) -> bool {
         self.predecessor_context_hash == HashOf::new(context)
             && self.predecessor_context_id == context.id()
@@ -184,10 +187,7 @@ impl DurableExactOutputHandoffReceipt {
             && self.finality_commit_qc.round.height == self.predecessor_height
     }
 }
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "TODO: native runner cutover")
-)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn certified_sidecar_prefix_covers_occurrence(
     prefix: &CertifiedMergeSidecarClosedPrefix,
     requester: &PeerId,
@@ -791,10 +791,7 @@ impl PendingExactOutput {
         let plan = self.plan_fanout_removal(covered, validate_removed, operation)?;
         Ok(self.commit_fanout_removal(plan))
     }
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn close_certified_sidecar_prefix(
         &mut self,
         prefix: &CertifiedMergeSidecarClosedPrefix,
@@ -925,10 +922,7 @@ impl PendingExactOutput {
             "commit-certificate request cancellation",
         )
     }
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn cancel_certified_merge_sidecar_requests(
         &mut self,
         request_hashes: &BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>>,
@@ -954,10 +948,7 @@ impl PendingExactOutput {
             "certified merge-sidecar request cancellation",
         )
     }
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn cancel_obsolete_certified_merge_sidecar_generation_hints(
         &mut self,
         hints: &[CertifiedMergeSidecarGenerationHintV1],
@@ -1016,10 +1007,7 @@ impl PendingExactOutput {
             "certified merge-sidecar generation-fence cancellation",
         )
     }
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: native runner cutover")
-    )]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn cancel_acknowledged_certified_merge_sidecar_closes(
         &mut self,
         acknowledgements: &[CertifiedMergeSidecarCloseAckV1],

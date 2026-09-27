@@ -7,7 +7,7 @@ fn register_custody_fixture(
 ) -> (AccountId, AccountId, AssetId) {
     let (validator, delegator, escrow, definition) = prepare_accounts(stx);
     RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(amount)),
+        monetary_plan: fixture_registration_plan(&stx, lane, &validator, Quantity::from(amount)),
         lane_id: lane,
         peer_id: validator_peer_id(&validator),
         validator: validator.clone(),
@@ -206,7 +206,12 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
         let (validator, _, _, definition) = prepare_accounts(&mut stx);
         stx.nexus.staking.stake_escrow_account_id = validator.to_string();
         RegisterPublicLaneValidator {
-            monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(10_000_u64)),
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                lane,
+                &validator,
+                Quantity::from(10_000_u64),
+            ),
             lane_id: lane,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -239,8 +244,9 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     let instruction = {
         let mut stx = state_block.transaction();
         stx.nexus = nexus.clone();
+        let monetary_plan = fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one());
         BondPublicLaneStake {
-            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one()),
+            monetary_plan,
             lane_id: lane,
             validator: validator.clone(),
             staker: validator.clone(),
@@ -252,18 +258,25 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
         let mut stx = state_block.transaction();
         stx.nexus = nexus.clone();
         seed_test_call_hash(&mut stx, 0xC5);
-        let error = instruction
-            .clone()
-            .execute(&validator, &mut stx)
+        let error = crate::executor::Executor::Initial
+            .execute_instruction(&mut stx, &validator, instruction.clone().into())
             .unwrap_err();
-        assert!(error.to_string().contains("unreserved custody"), "{error}");
+        assert!(
+            matches!(
+                &error,
+                iroha_data_model::executor::ValidationFail::InstructionFailed(
+                    Error::InvariantViolation(message)
+                ) if message.contains("unreserved custody")
+            ),
+            "{error:?}"
+        );
         assert_eq!(
             stx.world.public_lane_validators.get(&key).unwrap().status,
             PublicLaneValidatorStatus::Active,
             "the rejected overlay includes the eligible lifecycle promotion"
         );
-        // Native instruction errors discard the enclosing transaction, including
-        // lifecycle changes that ran before the custody check rejected the bond.
+        // The executor rejects this transaction after its lifecycle write;
+        // dropping the StateTransaction rolls that write back.
     }
     assert!(state_block.drain_transfer_transcripts().is_empty());
     let mut stx = state_block.transaction();
@@ -329,7 +342,7 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
     let lane = LaneId::new(17);
     let (validator, sink, asset) = register_custody_fixture(&mut stx, lane, 1_000);
     RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(&stx, &sink, Quantity::from(500_u64)),
+        monetary_plan: fixture_registration_plan(&stx, lane, &sink, Quantity::from(500_u64)),
         lane_id: lane,
         peer_id: validator_peer_id(&sink),
         validator: sink.clone(),

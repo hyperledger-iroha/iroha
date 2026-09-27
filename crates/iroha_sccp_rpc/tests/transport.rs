@@ -401,7 +401,7 @@ fn transport_with(
     let sleeper = Arc::new(RecordingSleeper::default());
     let transport = HttpTransport::new(set, config, policy(rounds))
         .expect("transport")
-        .with_sleeper(Arc::clone(&sleeper) as Arc<dyn Sleeper>);
+        .with_sleeper(sleeper.clone());
     (transport, sleeper)
 }
 

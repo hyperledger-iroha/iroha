@@ -328,6 +328,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
     }
     let snapshot = norito::json::to_json(&state).expect("serialize committed catalog snapshot");
     let seed = || deserialize::KuraSeed {
+        operation_index_budget: state.world.operation_index_budget().clone(),
         kura: Arc::clone(&state.kura),
         lane_manifests: state.lane_manifests.read().clone(),
         query_handle: LiveQueryStore::start_test(),

@@ -51,9 +51,9 @@
 //! [`ValidBlock::commit_unchecked`] (infallible)
 mod native_amx_certified_coordinator_authority;
 mod native_lane_carrier;
-pub(crate) use native_lane_carrier::{
-    native_lane_batch_for_execution, native_lane_batch_for_scratch,
-};
+pub(crate) use native_lane_carrier::native_lane_batch_for_execution;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
@@ -1817,6 +1817,66 @@ pub(crate) fn parse_asset_definition_literal_with_world(
                 .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
         })
 }
+/// Resolve an exact fee selector against the network's committed XOR identity.
+/// Chains without NPoS use the canonical default identity, never an arbitrary
+/// locally configured token. Staking itself additionally requires signed NPoS.
+pub(crate) fn resolve_network_xor_asset_definition(
+    world: &impl WorldReadOnly,
+    input: &str,
+    now_ms: u64,
+) -> Option<AssetDefinitionId> {
+    if input.trim() != input
+        || (input != "xor#universal" && AssetDefinitionId::parse_address_literal(input).is_err())
+    {
+        return None;
+    }
+    let asset = parse_asset_definition_literal_with_world(world, input, now_ms)?;
+    let pin = match world.sumeragi_npos_parameters() {
+        Some(params) => params.xor_asset_definition_id,
+        None => {
+            if world.parameters().custom().contains_key(
+                &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
+            ) {
+                return None;
+            }
+            AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .ok()?
+        }
+    };
+    (asset == pin).then_some(asset)
+}
+#[cfg(test)]
+#[test]
+fn network_xor_resolver_requires_exact_committed_identity() {
+    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+    let world = crate::state::World::new();
+    let canonical = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
+    let other = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("test", "universal").expect("test domain"),
+        "currency".parse().expect("name"),
+    );
+    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_some());
+    assert!(resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0).is_none());
+    let mut parameters = world.parameters.block();
+    parameters.get_mut().set_parameter(Parameter::Custom(
+        SumeragiNposParameters {
+            xor_asset_definition_id: other.clone(),
+            ..Default::default()
+        }
+        .into_custom_parameter(),
+    ));
+    parameters.commit();
+    assert_eq!(
+        resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0),
+        Some(other)
+    );
+    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_none());
+    assert!(
+        resolve_network_xor_asset_definition(&world.view(), &format!(" {canonical}"), 0).is_none()
+    );
+}
 #[cfg(test)]
 fn parse_account_from_access_key(
     world: &impl WorldReadOnly,
@@ -2661,6 +2721,9 @@ impl fmt::Display for AxtEnvelopeValidationDetails {
 impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockValidationError {
     fn from(error: crate::state::StateBlockStartError<Self>) -> Self {
         match error {
+            crate::state::StateBlockStartError::Storage(error) => {
+                Self::StateStorageAdmission(error)
+            }
             crate::state::StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
             crate::state::StateBlockStartError::Membership(error) => {
                 Self::MembershipAdmission(error)
@@ -2672,6 +2735,8 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum BlockValidationError {
+    /// Local World storage admission failed before State execution: {0}
+    StateStorageAdmission(crate::state::StateStorageAdmissionError),
     /// Local evidence or stake-index penalty preparation failed: {0}
     EvidencePreparation(crate::state::EvidencePreparationError),
     /// Local hash-history admission failed before State execution: {0}
@@ -2873,13 +2938,19 @@ impl BlockValidationError {
     ) -> Self {
         use crate::state::MergeLedgerCommitError;
         match error {
+            MergeLedgerCommitError::StateStorageAdmission(error) => {
+                Self::StateStorageAdmission(error)
+            }
             MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
             MergeLedgerCommitError::MembershipAdmission(error) => Self::MembershipAdmission(error),
             MergeLedgerCommitError::NativeControlValidation(error) => *error,
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }
-            local @ (MergeLedgerCommitError::Persistence(_)
+            local @ (MergeLedgerCommitError::NativeResourceAdmission(_)
+            | MergeLedgerCommitError::ExecutionObservationChanged
+            | MergeLedgerCommitError::ExecutionRecorderConflict(_)
+            | MergeLedgerCommitError::Persistence(_)
             | MergeLedgerCommitError::LocalDrainObservation(_)) => {
                 Self::LocalStorageRecoveryRequired {
                     reason: format!("certified merge entry could not be staged: {local}"),
@@ -2890,6 +2961,30 @@ impl BlockValidationError {
             )),
         }
     }
+
+    /// Keep local resource refusal outside the deterministic NPoS verdict channel.
+    pub(crate) fn from_npos_application_error(error: eyre::Report, stage: &str) -> Self {
+        if let Some(local) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+            match local {
+                crate::state::StateAdmissionError::Storage(error) => {
+                    Self::StateStorageAdmission(error.clone())
+                }
+                crate::state::StateAdmissionError::History(error) => {
+                    Self::BlockHashAdmission(error.clone())
+                }
+                crate::state::StateAdmissionError::Membership(error) => {
+                    Self::MembershipAdmission(error.clone())
+                }
+            }
+        } else if let Some(local) = error.downcast_ref::<crate::state::StateStorageAdmissionError>()
+        {
+            Self::StateStorageAdmission(local.clone())
+        } else if let Some(local) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
+            Self::EvidencePreparation(local.clone())
+        } else {
+            Self::NposEffectsInvalid(format!("{stage}: {error}"))
+        }
+    }
 }
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
@@ -2897,6 +2992,36 @@ impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
         // including its cursors. Preserve that context so the v2 validator does
         // not mistake local reconstruction failure for a malformed candidate.
         Self::DaIndexHydration(error.to_string())
+    }
+}
+#[cfg(test)]
+#[test]
+fn native_resource_refusal_is_a_local_certified_merge_staging_error() {
+    let error = BlockValidationError::from_certified_merge_stage_error(
+        crate::state::MergeLedgerCommitError::NativeResourceAdmission(
+            mv::allocation::AllocationRefusal::DemandOverflow,
+        ),
+    );
+    assert!(matches!(
+        error,
+        BlockValidationError::LocalStorageRecoveryRequired { .. }
+    ));
+}
+#[cfg(test)]
+#[test]
+fn native_execution_observation_and_recorder_conflicts_require_local_recovery() {
+    for error in [
+        crate::state::MergeLedgerCommitError::ExecutionObservationChanged,
+        crate::state::MergeLedgerCommitError::ExecutionRecorderConflict(
+            "recorder is already owned".to_owned(),
+        ),
+    ] {
+        let classified = BlockValidationError::from_certified_merge_stage_error(error);
+        assert!(matches!(
+            &classified,
+            BlockValidationError::LocalStorageRecoveryRequired { .. }
+        ));
+        assert!(event::map_block_err_to_reason(&classified).is_none());
     }
 }
 /// Error during signature verification
@@ -3166,13 +3291,14 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
 }
 /// Canonical millisecond time strictly after every timed execution input.
 /// Admission controls are not execution inputs and do not advance this clock.
-fn creation_time_after_inputs(
-    minimum: Duration,
-    inputs: impl IntoIterator<Item = impl std::ops::Deref<Target = TransactionEntrypoint>>,
-) -> Option<Duration> {
+fn creation_time_after_inputs<I, T>(minimum: Duration, inputs: I) -> Option<Duration>
+where
+    I: IntoIterator<Item = T>,
+    T: core::borrow::Borrow<TransactionEntrypoint>,
+{
     let mut milliseconds = u64::try_from(minimum.as_millis()).ok()?;
     for input in inputs {
-        if let Some(created) = input.creation_time_ms() {
+        if let Some(created) = input.borrow().creation_time_ms() {
             milliseconds = milliseconds.max(created.checked_add(1)?);
         }
     }
@@ -3269,7 +3395,7 @@ mod input_clock_tests {
         assert_eq!(
             creation_time_after_inputs(
                 Duration::from_millis(u64::MAX),
-                std::iter::empty::<&TransactionEntrypoint>()
+                std::iter::empty::<&TransactionEntrypoint>(),
             ),
             Some(Duration::from_millis(u64::MAX))
         );
@@ -4485,7 +4611,10 @@ pub(crate) mod valid {
             matches!(self, Self::SumeragiV2 { .. })
         }
         const fn enforce_local_wall_clock(&self) -> bool {
-            matches!(self, Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. })
+            matches!(
+                self,
+                Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. }
+            )
         }
         const fn v2_block_cadence(&self) -> Option<Duration> {
             match self {
@@ -4537,9 +4666,8 @@ pub(crate) mod valid {
                     context.consensus_mode
                 }
                 Self::VerifiedReplay { authority, .. } => authority.context.consensus_mode,
-                Self::Sumeragi { consensus_mode, .. } | Self::SumeragiGenesis { consensus_mode } => {
-                    *consensus_mode
-                }
+                Self::Sumeragi { consensus_mode, .. }
+                | Self::SumeragiGenesis { consensus_mode } => *consensus_mode,
             }
         }
     }
@@ -6774,8 +6902,7 @@ pub(crate) mod valid {
                     "pre-staged controls require their original recorded constructor",
                 ));
             }
-            crate::exec_witness::begin_exec_witness_capture()
-                .map_err(Self::execution_context_error)
+            crate::exec_witness::begin_exec_witness_capture().map_err(Self::execution_context_error)
         }
 
         /// Execute a strict Sumeragi-v2 test fixture through the current validation profile.
@@ -7198,14 +7325,50 @@ pub(crate) mod valid {
                             frozen.clone(), verified.validator_set_pops.clone(), &parent, &receipt, &parent.validator_set_pops,
                         )
                     }.map_err(|error| Self::execution_context_error(error.to_string()))?;
-                        let source = match state.prepare_proposed_native_lane_batch_source(&proposal, &[])
-                        .map_err(Self::execution_context_error)? {
+                        let group_count = super::native_lane_batch_for_execution(&proposal)
+                            .map_err(Self::execution_context_error)?
+                            .groups
+                            .len();
+                        let budget = mv::allocation::AllocationBudget::new(
+                            state.nexus.read().storage.retained_carrier_shell_bytes,
+                        );
+                        let admission =
+                            crate::state::NativeExecutionResourceAdmission::try_reserve_source(
+                                &budget,
+                                group_count,
+                            )
+                            .map_err(|error| {
+                                BlockValidationError::LocalStorageRecoveryRequired {
+                                    reason: format!(
+                                        "Native replay source admission refused: {error}"
+                                    ),
+                                }
+                            })?;
+                        let source = match state.prepare_proposed_native_lane_batch_source(
+                            proposal,
+                            &[],
+                            admission,
+                        )
+                        .map_err(|error| {
+                            BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: format!("Native replay source preparation: {error}"),
+                            }
+                        })? {
                         crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) => source,
                         crate::state::NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired { .. } => {
-                            return Err(Self::execution_context_error("Native replay first input body is unavailable"));
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay first input body is unavailable".to_owned(),
+                            });
                         }
-                        crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged => {
-                            return Err(Self::execution_context_error("Native replay pre-State observation changed"));
+                        crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged { .. } => {
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay pre-State observation changed".to_owned(),
+                            });
+                        }
+                        crate::state::NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay source reservation differs from its exact batch".to_owned(),
+                            });
                         }
                         crate::state::NativeLaneBatchSourcePreparationV1::Superseded => {
                             return Err(Self::execution_context_error("Native replay carrier was superseded by finalized State"));
@@ -7218,11 +7381,19 @@ pub(crate) mod valid {
                             time_source,
                             block_cadence,
                         )
-                        .map_err(|error| Self::execution_context_error(error.to_string()))?
+                        .map_err(|error| match error {
+                            NativeCandidatePreparationError::Preflight(error) => *error,
+                            NativeCandidatePreparationError::Execution(error) => {
+                                BlockValidationError::from_certified_merge_stage_error(error)
+                            }
+                            NativeCandidatePreparationError::Preparation(error) => {
+                                classify_carrier_preparation_error(error)
+                            }
+                        })?
                         .ok_or_else(|| {
-                            Self::execution_context_error(
-                                "Native replay source observation changed",
-                            )
+                            BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay source observation changed".to_owned(),
+                            }
                         })?;
                         Ok(ValidatedReplayExecution {
                             valid: input.valid,
@@ -7395,10 +7566,11 @@ pub(crate) mod valid {
             let height = header.height().get();
             Ok(Some(PreparedPristineConsensusEffects {
                 penalty_index,
-                prune_keys: crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
-                    state, height,
-                )
-                .map_err(BlockValidationError::EvidencePreparation)?,
+                prune_keys:
+                    crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
+                        state, height,
+                    )
+                    .map_err(BlockValidationError::EvidencePreparation)?,
                 expected_anchor: header.prev_block_hash().map(|block_hash| {
                     iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
                         height: height.saturating_sub(1),
@@ -7649,9 +7821,10 @@ pub(crate) mod valid {
                                 state_block
                                     .apply_verified_merge_beacon_pulse(capability)
                                     .map_err(|error| {
-                                        Self::npos_effects_error(format!(
-                                            "certified merge beacon composition failed: {error}"
-                                        ))
+                                        BlockValidationError::from_npos_application_error(
+                                            error,
+                                            "certified merge beacon composition failed",
+                                        )
                                     })
                             } else {
                                 apply_npos(state_block)
@@ -7693,9 +7866,11 @@ pub(crate) mod valid {
             ),
             BlockValidationError,
         > {
+            let penalty_index = Self::validate_npos_effects_with_state(block, state, None, None)?;
             Self::state_block_for_execution(
                 block,
                 state,
+                penalty_index,
                 false,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
                 None,
@@ -7998,6 +8173,9 @@ pub(crate) mod valid {
                     Ok(has_work) => has_work,
                     Err(error) => {
                         let error = match error {
+                            crate::state::StateBlockStartError::Storage(error) => {
+                                BlockValidationError::StateStorageAdmission(error)
+                            }
                             crate::state::StateBlockStartError::History(error) => {
                                 BlockValidationError::BlockHashAdmission(error)
                             }
@@ -8521,22 +8699,10 @@ pub(crate) mod valid {
             BlockValidationError::NposEffectsInvalid(message.into())
         }
         fn classify_npos_penalty_derivation_error(error: eyre::Report) -> BlockValidationError {
-            if let Some(local) = error.downcast_ref::<crate::state::StateAdmissionError>() {
-                match local {
-                    crate::state::StateAdmissionError::History(error) => {
-                        BlockValidationError::BlockHashAdmission(error.clone())
-                    }
-                    crate::state::StateAdmissionError::Membership(error) => {
-                        BlockValidationError::MembershipAdmission(error.clone())
-                    }
-                }
-            } else if let Some(local) =
-                error.downcast_ref::<crate::state::EvidencePreparationError>()
-            {
-                BlockValidationError::EvidencePreparation(local.clone())
-            } else {
-                Self::npos_effects_error(format!("failed to derive NPoS effects: {error}"))
-            }
+            BlockValidationError::from_npos_application_error(
+                error,
+                "failed to derive NPoS effects",
+            )
         }
         fn validate_da_sidecar_hashes(block: &SignedBlock) -> Result<(), BlockValidationError> {
             let expected_policies = block.da_proof_policies().map(HashOf::new);
@@ -8710,7 +8876,8 @@ pub(crate) mod valid {
         fn validate_sumeragi_consensus_effects(
             block: &SignedBlock,
         ) -> Result<(), BlockValidationError> {
-            if block.header().npos_effects_hash().is_some() || block.npos_consensus_effects().is_some()
+            if block.header().npos_effects_hash().is_some()
+                || block.npos_consensus_effects().is_some()
             {
                 return Err(Self::npos_effects_error(
                     "Sumeragi blocks carry no consensus effects",
@@ -12122,10 +12289,15 @@ pub(crate) mod valid {
                 crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(
                     state_block,
                 )
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
+                .map_err(|error| match error {
+                    crate::smartcontracts::isi::sorafs::PinExpiryMaintenanceError::Storage(
+                        error,
+                    ) => BlockValidationError::StateStorageAdmission(error),
+                    crate::smartcontracts::isi::sorafs::PinExpiryMaintenanceError::Instruction(
+                        error,
+                    ) => Self::execution_context_error(format!(
                         "SoraFS pin expiry maintenance failed: {error}"
-                    ))
+                    )),
                 })?;
             if expired != 0 {
                 iroha_logger::debug!(
@@ -12155,6 +12327,9 @@ pub(crate) mod valid {
                 .map_err(Self::execution_context_error)?;
             let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
+                crate::state::ExecutionOutputSealError::Storage(error) => {
+                    BlockValidationError::StateStorageAdmission(error)
+                }
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
                     Self::execution_context_error(reason)
                 }
@@ -16721,7 +16896,7 @@ pub(crate) mod valid {
             let (authority, signer) = gen_account_in("lifecycle-control-coverage-cert");
             let certificate = ThresholdKeyLifecycleCertificateV1 {
                 version: 1,
-                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
                 expected_active_session_id: Some([0x31; 32]),
                 effective_height: block.header().height().get(),
                 network_id: state.network_id,
@@ -25038,6 +25213,7 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
+            | BlockValidationError::StateStorageAdmission(_)
             | BlockValidationError::EvidencePreparation(_)
             | BlockValidationError::BlockHashAdmission(_)
             | BlockValidationError::MembershipAdmission(_) => return None,

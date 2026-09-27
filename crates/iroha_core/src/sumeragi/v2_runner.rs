@@ -101,7 +101,7 @@ use super::{
     v2_worker::{
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
         QueuePlanBatchSources, V2CleanupSupervisor, V2CompletionRuntimeCutDecisionV1,
-        durable_exact_output_handoff_owner_pair,
+        durable_exact_output_service_owner,
     },
 };
 use crate::{
@@ -1296,6 +1296,7 @@ fn run_inner(
             lifecycle_storage_authority,
             first_height_authenticated_genesis,
             pending_successor_activation,
+            staged_genesis_nexus_amx_context,
             first_height_genesis,
             genesis_account,
             block_cadence,
@@ -3022,6 +3023,10 @@ fn classify_penalty_derivation_failure(error: eyre::Report) -> V2RunnerError {
     if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
         V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
             crate::state::StateBlockStartError::from(refusal.clone()),
+        ))
+    } else if let Some(refusal) = error.downcast_ref::<crate::state::StateStorageAdmissionError>() {
+        V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
+            crate::state::StateBlockStartError::Storage(refusal.clone()),
         ))
     } else if let Some(refusal) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
         V2RunnerError::CandidateBuild(

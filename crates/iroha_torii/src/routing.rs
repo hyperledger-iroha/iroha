@@ -69268,6 +69268,7 @@ routing_test! { sync public_lane_validator_record_matches_key_rejects_mismatched
         metadata: Metadata::default(),
         status: PublicLaneValidatorStatus::Active,
         activation_height: 1,
+        election_exit_height: None,
         deactivation_height: None,
         last_reward_epoch: None,
     };
@@ -69285,6 +69286,34 @@ routing_test! { sync public_lane_validator_record_matches_key_rejects_mismatched
         .clone(),
     );
     assert!(!public_lane_validator_record_matches_key(&key, &record));
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync public_lane_validator_projection_distinguishes_election_exit_from_actual_tenure
+    let key = checked_routing_fixture_keypair(0x77, Algorithm::BlsNormal, "validator projection fixture");
+    let validator = AccountId::new(key.public_key().clone());
+    let peer_id = PeerId::new(key.public_key().clone());
+    let mut record = PublicLaneValidatorRecord {
+        lane_id: LaneId::SINGLE, validator: validator.clone(), peer_id: peer_id.clone(),
+        stake_account: validator.clone(), total_stake: 100_u64.into(), self_stake: 100_u64.into(),
+        metadata: Metadata::default(), status: PublicLaneValidatorStatus::Active,
+        activation_height: 21, election_exit_height: Some(41), deactivation_height: None,
+        last_reward_epoch: None,
+    };
+    let (_, value) = validator_record_to_json(&record);
+    assert_eq!(value.get("election_exit_height").and_then(Value::as_u64), Some(41));
+    assert_eq!(value.get("deactivation_height"), Some(&Value::Null));
+    record.deactivation_height = Some(61);
+    let (_, value) = validator_record_to_json(&record);
+    assert_eq!(value.get("election_exit_height").and_then(Value::as_u64), Some(41));
+    assert_eq!(value.get("deactivation_height").and_then(Value::as_u64), Some(61));
+    record.election_exit_height = None;
+    let (_, value) = validator_record_to_json(&record);
+    assert_eq!(value.get("election_exit_height"), Some(&Value::Null));
+    let (_, manifest) = manifest_validator_to_json(LaneId::SINGLE, &iroha_core::governance::manifest::ManifestValidatorBinding {
+        validator, peer_id, torii_url: None,
+    });
+    assert_eq!(manifest.get("election_exit_height"), Some(&Value::Null));
+    assert_eq!(manifest.get("deactivation_height"), Some(&Value::Null));
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync public_lane_stake_share_matches_key_rejects_mismatched_rows
@@ -69656,6 +69685,7 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
             },
@@ -69751,6 +69781,10 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
         Value::from(record.activation_height),
     );
     map.insert(
+        "election_exit_height".into(),
+        record.election_exit_height.map(Value::from).unwrap_or(Value::Null),
+    );
+    map.insert(
         "deactivation_height".into(),
         record
             .deactivation_height
@@ -69786,6 +69820,7 @@ fn manifest_validator_to_json(
         validator_status_to_json(&PublicLaneValidatorStatus::Active),
     );
     map.insert("activation_height".into(), Value::Null);
+    map.insert("election_exit_height".into(), Value::Null);
     map.insert("deactivation_height".into(), Value::Null);
     map.insert("metadata".into(), metadata_to_json(&Metadata::default()));
     map.insert("last_reward_epoch".into(), Value::Null);

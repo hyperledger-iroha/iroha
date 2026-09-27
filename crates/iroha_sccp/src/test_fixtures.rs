@@ -461,7 +461,7 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
             source_network: SccpNetworkV1::SoraTaira,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
-            epoch: 1,
+            epoch: 0,
             epoch_end_height: 10,
             roster_commitment: [0x78; 32],
             checkpoint_height: 5,
@@ -1085,6 +1085,7 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
                         .validate_successor(&authorization)
                         .expect("exact SCCP epoch-one authorization is contiguous");
                     iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
+                        committee_preparation: None,
                         epoch: successor.epoch,
                         kagemusha_mint_finality_authorization: successor,
                         kagemusha_mint_finality_authority: authority.clone(),
