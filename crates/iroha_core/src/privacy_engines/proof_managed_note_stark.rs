@@ -349,18 +349,6 @@ impl ProofManagedNoteStarkProtocolV1 {
         )
         .map_err(map_transparent_error_v1)?;
         let consensus_proof_cap = self.domains.digest_context.maximum_proof_bytes_v1();
-        // Native game microcycles use a separately committed domain cap. Existing private-note
-        // profiles retain their exact first-release geometry and theorem floor.
-        let maximum_native_log = if self.domains.digest_context.is_execution_v1() {
-            19
-        } else {
-            PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1
-        };
-        let minimum_commitment_bits = if self.domains.digest_context.is_execution_v1() {
-            187
-        } else {
-            PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
-        };
         let _combined_profile_digest =
             proof_managed_note_stark_profile_digest_v1(self.domains, self.profile_descriptor)?;
         if self.parameters.security_lanes != PROOF_MANAGED_NOTE_SECURITY_LANES_V1
@@ -370,13 +358,13 @@ impl ProofManagedNoteStarkProtocolV1 {
             || self.parameters.terminal_degree_bound != PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1
             || self.parameters.composition_degree_chunks
                 != PROOF_MANAGED_NOTE_COMPOSITION_DEGREE_CHUNKS_V1
-            || self.parameters.maximum_trace_log2 > maximum_native_log
+            || self.parameters.maximum_trace_log2 > PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1
             || self.parameters.maximum_trace_groups != 1
             || self.parameters.maximum_segment_instances != 1
             || self.parameters.maximum_proof_bytes > consensus_proof_cap
             || PROOF_MANAGED_NOTE_MASK_DEGREE_V1 < mask_geometry.minimum_mask_degree
             || fri_soundness.query_error_bits != PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1
-            || fri_soundness.commitment_error_bits < minimum_commitment_bits
+            || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
             || fri_soundness.query_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || self.profile_binding_label.is_empty()
@@ -3053,7 +3041,6 @@ mod tests {
         maximum_constraint_degree: u8,
         public_digest: PrivacyOuterDigestV1,
         corrupt_schedule: bool,
-        execution: bool,
         reject_fixed_materialization: bool,
         public_input_reads: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     }
@@ -3064,7 +3051,6 @@ mod tests {
                 maximum_constraint_degree: NOTE_COPY_CONSTRAINT_DEGREE_V1,
                 public_digest: PrivacyOuterDigestV1::from_bytes([0x24; 48]),
                 corrupt_schedule: false,
-                execution: false,
                 reject_fixed_materialization: false,
                 public_input_reads: None,
             }
@@ -3073,16 +3059,9 @@ mod tests {
     impl ProofManagedNoteStarkAdapterV1 for MockAdapterV1 {
         type ProfileChallenges = ();
         fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
-            let mut domains = MOCK_DOMAINS_V1;
-            if self.execution {
-                domains.digest_context =
-                    super::super::transparent_stark::TransparentStarkDigestContextV1::execution_v1(
-                        b"execution-fixed-rejection-test",
-                    );
-            }
             ProofManagedNoteStarkProtocolV1 {
                 parameters: self.parameters,
-                domains,
+                domains: MOCK_DOMAINS_V1,
                 maximum_constraint_degree: self.maximum_constraint_degree,
                 profile_binding_label: b"proof-managed-note-mock-profile-binding-v1",
                 profile_descriptor: MOCK_PROFILE_DESCRIPTOR_V1,
@@ -3170,20 +3149,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn execution_rejects_malformed_wire_before_any_fixed_trace_allocation() {
-        let adapter = MockAdapterV1 {
-            execution: true,
-            reject_fixed_materialization: true,
-            ..MockAdapterV1::default()
-        };
-        let geometry =
-            prepare_note_profile_with_fixed_v1(&adapter, false).expect("allocation-free geometry");
-        assert!(geometry.fixed_columns.is_empty());
-        for bytes in [vec![], b"RCE1".to_vec(), vec![0; 1_048_576]] {
-            assert!(verify_proof_managed_note_stark_v1(&adapter, &bytes).is_err());
-        }
-    }
     fn mock_base_columns_v1() -> Vec<Vec<F>> {
         (0..NOTE_COPY_WIDTH_V1)
             .map(|column| vec![F(column as u64); 1 << MOCK_TRACE_LOG2_V1])

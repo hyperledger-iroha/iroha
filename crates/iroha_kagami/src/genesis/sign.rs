@@ -110,48 +110,13 @@ struct ResolvedArtifactPaths {
     expected_hash_output: Option<PathBuf>,
 }
 
-#[cfg(unix)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(unix)]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    same_file_identity(left, right)
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == right.nlink()
-        && left.size() == right.size()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
-#[cfg(windows)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
-}
-
 fn artifact_paths_alias(left: &Path, right: &Path) -> bool {
     if left == right {
         return true;
     }
     matches!(
         (fs::metadata(left), fs::metadata(right)),
-        (Ok(left), Ok(right)) if same_file_identity(&left, &right)
+        (Ok(left), Ok(right)) if crate::secure_fs::same_file_identity(&left, &right)
     )
 }
 
@@ -307,7 +272,7 @@ fn read_existing_genesis_network_identity(
         })?;
         if lexical.file_type().is_symlink()
             || !before.is_file()
-            || !same_file_snapshot(&lexical, &before)
+            || !crate::secure_fs::same_file_snapshot(&lexical, &before)
         {
             return Err(eyre!(
                 "genesis network identity output changed while opening or is not a regular file: {}",
@@ -342,7 +307,7 @@ fn read_existing_genesis_network_identity(
         let after = file
             .metadata()
             .wrap_err_with(|| format!("reinspect genesis network identity {}", path.display()))?;
-        if !same_file_snapshot(&before, &after)
+        if !crate::secure_fs::same_file_snapshot(&before, &after)
             || u64::try_from(existing.len()).ok() != Some(before.len())
         {
             return Err(eyre!(
@@ -486,20 +451,14 @@ fn publish_staged_genesis_output(
     Ok(())
 }
 struct BootstrapRegistrations {
-    domains: BTreeSet<DomainId>,
     accounts: BTreeSet<AccountId>,
     asset_defs: BTreeSet<AssetDefinitionId>,
 }
 impl BootstrapRegistrations {
     fn from_manifest(manifest: &RawGenesisTransaction) -> Self {
-        let mut domains = BTreeSet::new();
         let mut accounts = BTreeSet::new();
         let mut asset_defs = BTreeSet::new();
         for instruction in manifest.instructions() {
-            if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
-                domains.insert(register.object.id.clone());
-                continue;
-            }
             if let Some(register) = instruction.as_any().downcast_ref::<Register<Account>>() {
                 accounts.insert(register.object.id.clone());
                 continue;
@@ -516,9 +475,6 @@ impl BootstrapRegistrations {
                 .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
             {
                 match register {
-                    iroha_data_model::isi::register::RegisterBox::Domain(register) => {
-                        domains.insert(register.object.id.clone());
-                    }
                     iroha_data_model::isi::register::RegisterBox::Account(register) => {
                         accounts.insert(register.object.id.clone());
                     }
@@ -530,7 +486,6 @@ impl BootstrapRegistrations {
             }
         }
         Self {
-            domains,
             accounts,
             asset_defs,
         }
@@ -1433,7 +1388,6 @@ pub(super) fn prepare_genesis_for_signing(
         BootstrapRegistrations::from_manifest(&genesis)
     } else {
         BootstrapRegistrations {
-            domains: BTreeSet::new(),
             accounts: BTreeSet::new(),
             asset_defs: BTreeSet::new(),
         }
@@ -2755,10 +2709,23 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 },
             )
             .collect::<BTreeSet<_>>();
-        let mut builder = manifest.into_builder().next_transaction();
         let domain =
             DomainId::parse_fully_qualified(crate::genesis::profile::PUBLIC_XOR_DOMAIN).unwrap();
-        if registrations.domains.insert(domain.clone()) {
+        let domain_registered = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<Register<Domain>>()
+                .is_some_and(|register| register.object.id == domain)
+                || matches!(
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::register::RegisterBox>(),
+                    Some(iroha_data_model::isi::register::RegisterBox::Domain(register))
+                        if register.object.id == domain
+                )
+        });
+        let mut builder = manifest.into_builder().next_transaction();
+        if !domain_registered {
             builder = builder.append_instruction(Register::domain(Domain::new(domain)));
         }
         if registrations.asset_defs.insert(asset.clone()) {
@@ -3879,7 +3846,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .complete_for_test()
         };
         let mut registrations = BootstrapRegistrations {
-            domains: BTreeSet::new(),
             accounts: peers
                 .iter()
                 .map(|peer| AccountId::new(peer.public_key().clone()))

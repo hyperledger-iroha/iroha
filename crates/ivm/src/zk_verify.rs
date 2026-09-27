@@ -55,23 +55,6 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
         }
     }
 }
-/// Build an `OpenVerifyEnvelope` from wire-compatible structs with a fixed transcript label.
-pub fn build_open_verify_envelope(
-    params: iroha_zkp_halo2::IpaParams,
-    public: iroha_zkp_halo2::PolyOpenPublic,
-    proof: iroha_zkp_halo2::IpaProofData,
-    transcript_label: &str,
-) -> iroha_zkp_halo2::OpenVerifyEnvelope {
-    iroha_zkp_halo2::OpenVerifyEnvelope {
-        params,
-        public,
-        proof,
-        transcript_label: transcript_label.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    }
-}
 /// Verify multiple envelopes and return per-envelope results.
 pub fn batch_verify_open_envelopes(
     envs: &[iroha_zkp_halo2::OpenVerifyEnvelope],

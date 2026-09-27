@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::{
-    message::{BlockResponse, Defect},
+    message::BlockResponse,
     preimage::{KIND_COMMIT, KIND_PREPARE},
 };
 

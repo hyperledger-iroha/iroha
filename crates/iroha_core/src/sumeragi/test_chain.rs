@@ -22,7 +22,7 @@ use iroha_data_model::{
     block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
     domain::Domain,
     isi::{InstructionBox, Log},
-    parameter::system::{ConsensusMode, SumeragiConsensusMode},
+    parameter::system::SumeragiConsensusMode,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
@@ -288,8 +288,11 @@ impl CertifiedTestChain {
         };
         let validated_genesis = iroha_genesis::validate_prepared_genesis_bundle(
             &genesis.encode_wire().expect("fixture genesis framing"),
-            &manifest, genesis_key.public_key(), genesis.hash(),
-        ).expect("fixture signed genesis and manifest agree");
+            &manifest,
+            genesis_key.public_key(),
+            genesis.hash(),
+        )
+        .expect("fixture signed genesis and manifest agree");
         let crypto = Arc::new(BlsCrypto::new());
         crypto
             .admit_committee(
@@ -438,8 +441,21 @@ impl CertifiedTestChain {
     pub fn commit_with(
         &mut self,
         time_ms: Option<u64>,
+        transactions: Vec<SignedTransaction>,
+        signers: Signers,
+    ) -> Vec<bool> {
+        self.commit_with_pulse(time_ms, transactions, signers, None)
+    }
+
+    /// Commit real transaction work with a finalized current threshold pulse. The ordinary
+    /// executor verifies the pulse and certifies its actual state writes; this seam creates
+    /// no signer authority, pulse signature, admission exemption, or synthetic empty work.
+    pub fn commit_with_pulse(
+        &mut self,
+        time_ms: Option<u64>,
         mut transactions: Vec<SignedTransaction>,
         signers: Signers,
+        pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
     ) -> Vec<bool> {
         let submitted = transactions.len();
         let height = self.tip.0 + 1;
@@ -467,7 +483,9 @@ impl CertifiedTestChain {
             transactions.push(self.tick(time_ms - 1));
         }
         if transactions.is_empty() {
-            transactions.push(self.tick(u64::try_from((parent_time + cadence).as_millis()).expect("fixture time fits") - 1));
+            transactions.push(self.tick(
+                u64::try_from((parent_time + cadence).as_millis()).expect("fixture time fits") - 1,
+            ));
         }
         let block_time = inputs_time(&transactions);
         let (_, time_source) = TimeSource::new_mock(block_time);
@@ -495,7 +513,8 @@ impl CertifiedTestChain {
             view: 0,
             cadence,
         };
-        let proposal = payload::assemble(&self.state, assembly, &accepted).expect("assembly");
+        let proposal = payload::assemble_with_pulse(&self.state, assembly, &accepted, pulse)
+            .expect("assembly");
         assert_eq!(
             proposal.header().creation_time(),
             block_time,
@@ -692,12 +711,20 @@ fn build_genesis(
     let builder = instructions
         .into_iter()
         .fold(builder, GenesisBuilder::append_instruction);
-    let raw = builder.build_raw().map_err(|error| format!("{error:#}"))?
-        .with_consensus_mode(consensus_mode).with_consensus_meta();
-    let genesis = raw.clone()
+    let raw = builder
+        .build_raw()
+        .map_err(|error| format!("{error:#}"))?
+        .with_consensus_mode(consensus_mode)
+        .with_consensus_meta();
+    let genesis = raw
+        .clone()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
-            genesis_key, None, None, genesis_time_ms,
-        ).map_err(|error| format!("{error:#}"))?;
+            genesis_key,
+            None,
+            None,
+            genesis_time_ms,
+        )
+        .map_err(|error| format!("{error:#}"))?;
     Ok((genesis.0, raw))
 }
 

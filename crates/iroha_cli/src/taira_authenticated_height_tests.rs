@@ -1,13 +1,19 @@
-//! Real signed genesis, three-of-four certificates, and challenge-bound node attestations.
+//! Real executed blocks, current three-of-four certificates, and challenge-bound node attestations.
 
 use super::*;
+use iroha_core::{
+    state::World,
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+};
 use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    block::consensus_v2::{self as wire, *},
-    bridge::{
-        BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2,
-        BridgeFinalityAttestationBodyV1,
-    },
+    block::{CommitCertificate, decode_versioned_signed_block},
+    sumeragi::{SumeragiFootprint, SumeragiStatus},
+    sumeragi_finality::SumeragiFinalityAttestationBody,
+};
+use iroha_sumeragi::{
+    message::Qc,
+    types::{AggregateSignature, Bitmap},
 };
 use std::sync::{
     Mutex,
@@ -19,31 +25,38 @@ struct Fixture {
     genesis: iroha_genesis::ValidatedGenesisBundle,
     keys: Vec<KeyPair>,
     peers: Vec<PeerV1>,
-    proofs: Vec<BridgeFinalityProof>,
+    proofs: Vec<SumeragiFinalityProof>,
+    conflicting: SumeragiFinalityProof,
+    instance: [u8; 32],
 }
 
 impl Fixture {
+    fn chain() -> CertifiedTestChain {
+        let mut config = TestChainConfig::new(World::new(), 10_000);
+        config.chain_id = "fc56984b-2be7-431d-840e-21514d1883f0".into();
+        config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+        CertifiedTestChain::start(config).expect("real NPoS fixture chain")
+    }
+
     fn new() -> Self {
-        let mut keys = (110..114)
-            .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+        let mut keys = (0xC1..=0xC4)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
             .collect::<Vec<_>>();
         keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
-        // Reuse the canonical executed-and-signed fixture and its exact manifest binding.
-        // A raw signed proposal has no deterministic outputs and cannot anchor deployment trust.
-        let genesis = crate::taira_public_reset::deployment_validated_genesis_fixture();
-        assert_eq!(
-            genesis
-                .validator_pops()
-                .keys()
-                .cloned()
-                .map(PeerId::new)
-                .collect::<std::collections::BTreeSet<_>>(),
-            keys.iter()
-                .map(|key| PeerId::new(key.public_key().clone()))
-                .collect::<std::collections::BTreeSet<_>>(),
-            "signed genesis must use the actual four fixture signing keys",
-        );
-        let block = genesis.block().clone();
+        let mut chain = Self::chain();
+        let genesis = chain.validated_genesis().clone();
+        let instance = chain.instance().0;
+        chain.commit_at(20_000, Vec::new());
+        chain.commit_at(30_000, Vec::new());
+        let proofs = (1..=3)
+            .map(|height| {
+                iroha_core::sumeragi::finality::build_proof(&chain.state().view(), height).unwrap()
+            })
+            .collect();
+        let mut branch = Self::chain();
+        branch.commit_at(21_000, Vec::new());
+        let conflicting =
+            iroha_core::sumeragi::finality::build_proof(&branch.state().view(), 2).unwrap();
         let peers = keys
             .iter()
             .enumerate()
@@ -58,197 +71,84 @@ impl Fixture {
                 }
             })
             .collect();
-        let mut fixture = Self {
+        Self {
             genesis,
             keys,
             peers,
-            proofs: Vec::new(),
-        };
-        let genesis_ms = u64::try_from(block.header().creation_time().as_millis()).unwrap();
-        let first = fixture.proof(block.header().clone(), None);
-        let second = fixture.proof(
-            BlockHeader::new(
-                NonZeroU64::new(2).unwrap(),
-                Some(first.block_header.hash()),
-                None,
-                genesis_ms + 1,
-                0,
-            ),
-            Some(&first),
-        );
-        let third = fixture.proof(
-            BlockHeader::new(
-                NonZeroU64::new(3).unwrap(),
-                Some(second.block_header.hash()),
-                None,
-                genesis_ms + 2,
-                0,
-            ),
-            Some(&second),
-        );
-        fixture.proofs = vec![first, second, third];
-        fixture
+            proofs,
+            conflicting,
+            instance,
+        }
     }
 
     fn observer(&self) -> AuthenticatedHeightObserverV1 {
         AuthenticatedHeightObserverV1::new(&self.genesis, self.peers.clone()).unwrap()
     }
 
-    fn proof(
-        &self,
-        header: BlockHeader,
-        previous: Option<&BridgeFinalityProof>,
-    ) -> BridgeFinalityProof {
-        let network = NetworkId::from_genesis_hash(self.genesis.expected_hash());
-        let mint = self
-            .genesis
-            .consensus_metadata()
-            .kagemusha_mint_finality
-            .authority_generation
-            .bind_network_id(network)
-            .unwrap();
-        let roster = self
-            .keys
-            .iter()
-            .map(|key| ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let context = HeightContext {
-            network_id: network,
-            protocol_version: wire::PROTOCOL_VERSION,
-            height: header.height().get(),
-            epoch: 0,
-            kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint, 20).unwrap(),
-            kagemusha_mint_finality_authority: mint,
-            epoch_end_height: 20,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Npos,
-            parent_commit_qc: previous.map(|p| p.finality_artifact.commit_qc.clone()),
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).unwrap(),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"fixture nexus"),
-            execution_policy_hash: Hash::new(b"fixture execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4096,
-                max_chunk_count: 8,
-            },
-            leader_seed: [0x5A; 32],
-        };
-        let subject = BlockSubject {
-            parent_block_hash: header.prev_block_hash(),
-            block_hash: header.hash(),
-            payload_hash: Hash::new(b"fixture payload"),
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: header.height().get(),
-            view: 0,
-        };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"parent state"),
-            Hash::new(b"post state"),
-            Hash::new(b"writes"),
-            1,
-            Hash::new(b"executed wire"),
-        );
-        let preimage = Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let signatures = self.keys[..3]
-            .iter()
-            .map(|key| {
-                Signature::try_new(key.private_key(), &preimage)
-                    .unwrap()
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let qc = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&refs).unwrap(),
-        };
-        let pops = self
-            .keys
-            .iter()
-            .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
-            .collect();
-        BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-            block_header: header,
-            finality_artifact: wire::finality::V2FinalityArtifact::new(context, subject, qc, pops),
-        }
-    }
-
-    fn resign_certificate(&self, certificate: &mut QuorumCertificate, view: u64, omitted: usize) {
-        certificate.round.view = view;
-        certificate.proposal_round = certificate.round;
-        certificate.signers = (0..4)
+    fn resign_certificate(&self, certificate: &mut Qc, view: u64, omitted: usize) {
+        certificate.view = view;
+        let chosen: Vec<u32> = (0..4)
             .filter(|index| *index != omitted)
             .map(|index| index as u32)
             .collect();
-        let preimage = Vote {
-            round: certificate.round,
-            proposal_round: certificate.proposal_round,
-            phase: certificate.phase,
-            subject: certificate.subject,
-            execution_commitment: certificate.execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let signatures = certificate
-            .signers
+        certificate.signers = Bitmap::from_indices(4, chosen.iter().copied()).unwrap();
+        let signatures: Vec<_> = chosen
             .iter()
             .map(|index| {
-                Signature::try_new(self.keys[*index as usize].private_key(), &preimage)
-                    .unwrap()
-                    .payload()
-                    .to_vec()
+                Signature::try_new(
+                    self.keys[*index as usize].private_key(),
+                    &certificate.preimage(),
+                )
+                .unwrap()
             })
-            .collect::<Vec<_>>();
-        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
-            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-        )
-        .unwrap();
+            .collect();
+        certificate.agg_sig = AggregateSignature(
+            iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures
+                    .iter()
+                    .map(|signature| signature.payload())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        );
+    }
+
+    fn edit_certificate(
+        proof: &mut SumeragiFinalityProof,
+        edit: impl FnOnce(&mut CommitCertificate),
+    ) {
+        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut certificate = block.commit_certificate().unwrap().clone();
+        edit(&mut certificate);
+        block.set_commit_certificate(Some(certificate));
+        proof.block_wire = block.encode_wire().unwrap();
     }
 
     fn witness_variant(
         &self,
-        proof: &BridgeFinalityProof,
+        proof: &SumeragiFinalityProof,
         view: u64,
         omitted: usize,
-    ) -> BridgeFinalityProof {
+    ) -> SumeragiFinalityProof {
         let mut proof = proof.clone();
-        if let Some(parent) = proof
-            .finality_artifact
-            .height_context
-            .parent_commit_qc
-            .as_mut()
-        {
-            self.resign_certificate(parent, view + 1, (omitted + 1) % 4);
+        if proof.height() > 1 {
+            Self::edit_certificate(&mut proof, |certificate| {
+                let mut qc: Qc = norito::decode_from_bytes(&certificate.commit_qc).unwrap();
+                self.resign_certificate(&mut qc, view, omitted);
+                certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
+            });
         }
-        self.resign_certificate(&mut proof.finality_artifact.commit_qc, view, omitted);
         proof
+    }
+
+    fn corrupt_signature(proof: &mut SumeragiFinalityProof) {
+        Self::edit_certificate(proof, |certificate| {
+            let mut qc: Qc = norito::decode_from_bytes(&certificate.commit_qc).unwrap();
+            qc.agg_sig.0[0] ^= 1;
+            certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
+        });
     }
 
     fn attest(
@@ -256,7 +156,7 @@ impl Fixture {
         index: usize,
         height: NonZeroU64,
         challenge: [u8; 32],
-    ) -> BridgeFinalityAttestationV1 {
+    ) -> SumeragiFinalityAttestation {
         self.attest_proofs(
             index,
             self.proofs[0].clone(),
@@ -268,56 +168,38 @@ impl Fixture {
     fn attest_proofs(
         &self,
         index: usize,
-        genesis: BridgeFinalityProof,
-        proof: BridgeFinalityProof,
+        genesis: SumeragiFinalityProof,
+        proof: SumeragiFinalityProof,
         challenge: [u8; 32],
-    ) -> BridgeFinalityAttestationV1 {
-        let artifact = &proof.finality_artifact;
-        let context = &artifact.height_context;
+    ) -> SumeragiFinalityAttestation {
         let peer = &self.peers[index];
-        let status = SumeragiV2Status {
-            protocol_version: wire::PROTOCOL_VERSION,
-            node_fingerprint: peer.node_fingerprint,
-            build_fingerprint: peer.build_fingerprint,
-            config_fingerprint: peer.config_fingerprint,
-            restart_required: false,
-            height_context_id: context.id(),
-            height: artifact.height,
-            view: artifact.commit_qc.round.view,
-            phase: SumeragiV2StatusPhase::PendingApply,
-            leader: context.leader(artifact.commit_qc.round.view),
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Applied,
-            pending_persistence_id: None,
-            last_committed_height: artifact.height,
-            last_committed_subject: Some(artifact.subject),
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: context.epoch,
-                epoch_end_height: context.epoch_end_height,
-                mode: context.mode,
-                epoch_seed: context.leader_seed,
-                validator_count: 4,
-                quorum: context.quorum,
-            },
-            last_commit_qc: Some(SumeragiV2CommitQcStatus {
-                certificate: artifact.commit_qc.as_ref(),
-                validator_count: 4,
-                signer_count: 3,
-                min_signers: 3,
-                signed_power: 3,
-                total_power: 4,
-            }),
-            liveness: SumeragiV2LivenessStatus::default(),
-            beacon_horizon: None,
+        let status = SumeragiStatus {
+            instance: self.instance,
+            height: proof.height() + 1,
+            view: 0,
+            stage: 0,
+            leader: Some(self.keys[0].public_key().clone()),
+            proxy_tail: None,
+            high_qc_view: None,
+            level: 0,
+            start_level: 0,
+            t_retx_ms: 100,
+            committed_height: proof.height(),
+            applied_height: proof.height(),
+            awaiting: false,
+            signer: Some(peer.peer_id.public_key().clone()),
+            unanchored: false,
+            abstaining: false,
+            halted: None,
+            footprint: SumeragiFootprint::default(),
         };
-        let body = BridgeFinalityAttestationBodyV1 {
-            version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
+        let body = SumeragiFinalityAttestationBody {
             challenge,
-            network_id: context.network_id,
+            network_id: NetworkId::from_genesis_hash(self.genesis.expected_hash()),
             node_fingerprint: peer.node_fingerprint,
             node_id: peer.peer_id.clone(),
+            build_fingerprint: peer.build_fingerprint,
+            config_fingerprint: peer.config_fingerprint,
             genesis_block_hash: self.genesis.expected_hash(),
             genesis_finality_proof: genesis,
             status,
@@ -326,7 +208,7 @@ impl Fixture {
         let signature =
             SignatureOf::try_from_hash(self.keys[index].private_key(), body.signing_hash())
                 .unwrap();
-        BridgeFinalityAttestationV1 { body, signature }
+        SumeragiFinalityAttestation { body, signature }
     }
 }
 
@@ -334,6 +216,7 @@ impl Fixture {
 enum Fault {
     None,
     WrongIdentity,
+    WrongInstance,
     InvalidSignature,
     SkipProof,
     GenericFailure,
@@ -383,7 +266,7 @@ impl HeightReads for Reads<'_> {
         height: NonZeroU64,
         challenge: [u8; 32],
         _: &PeerId,
-    ) -> Result<BridgeFinalityAttestationV1> {
+    ) -> Result<SumeragiFinalityAttestation> {
         let round = self.attest_calls[peer].fetch_add(1, Ordering::Relaxed);
         if peer == 0
             && matches!(
@@ -439,7 +322,15 @@ impl HeightReads for Reads<'_> {
                 Fault::WrongIdentity | Fault::TipRaceWithChangedIdentity
             )
         {
-            value.body.status.config_fingerprint = Hash::new(b"changed config");
+            value.body.config_fingerprint = Hash::new(b"changed config");
+            value.signature = SignatureOf::try_from_hash(
+                self.fixture.keys[peer].private_key(),
+                value.body.signing_hash(),
+            )
+            .unwrap();
+        }
+        if peer == 3 && matches!(self.fault, Fault::WrongInstance) {
+            value.body.status.instance[0] ^= 1;
             value.signature = SignatureOf::try_from_hash(
                 self.fixture.keys[peer].private_key(),
                 value.body.signing_hash(),
@@ -455,8 +346,8 @@ impl HeightReads for Reads<'_> {
         &self,
         _: usize,
         height: NonZeroU64,
-        verifier: &mut BridgeFinalityVerifier,
-    ) -> Result<BridgeFinalityProof> {
+        verifier: &mut SumeragiFinalityVerifier,
+    ) -> Result<SumeragiFinalityProof> {
         self.proof_calls.lock().unwrap().push(height.get());
         let index = if matches!(self.fault, Fault::SkipProof) {
             height.get()
@@ -479,6 +370,27 @@ fn poll(
         Instant::now() + Duration::from_secs(10),
         [1; 32],
         [2; 32],
+    )
+}
+
+pub(super) fn convergence_evidence_fixture(
+    height: u64,
+) -> (
+    iroha_genesis::ValidatedGenesisBundle,
+    Vec<PeerV1>,
+    json::Value,
+) {
+    let fixture = Fixture::new();
+    let mut reads = Reads::new(&fixture, height);
+    reads.distinct_witnesses = true;
+    let HeightObservationV1::Verified(evidence) = poll(&mut fixture.observer(), &reads).unwrap()
+    else {
+        panic!("verified current convergence fixture")
+    };
+    (
+        fixture.genesis,
+        fixture.peers,
+        json::to_value(&evidence).unwrap(),
     )
 }
 
@@ -547,6 +459,61 @@ fn authenticated_height_verifies_contiguous_chain_and_fresh_four_peer_evidence()
 }
 
 #[test]
+fn authenticated_height_retained_evidence_revalidates_every_binding_and_certificate() {
+    let fixture = Fixture::new();
+    let HeightObservationV1::Verified(evidence) =
+        poll(&mut fixture.observer(), &Reads::new(&fixture, 2)).unwrap()
+    else {
+        panic!("verified evidence")
+    };
+    let encoded = json::to_value(&evidence).unwrap();
+    let restored = VerifiedCommittedHeightV1::validate_retained(
+        &fixture.genesis,
+        fixture.peers.clone(),
+        encoded.clone(),
+    )
+    .unwrap();
+    assert_eq!(restored.block_hash(), evidence.block_hash);
+    assert_eq!(restored.committed_height(), evidence.committed_height());
+    for mutation in 0..9 {
+        let mut raw: RetainedCommittedHeightV1 = json::from_value(encoded.clone()).unwrap();
+        match mutation {
+            0 => raw.schema.push('x'),
+            1 => raw.before_challenge = raw.after_challenge,
+            2 => {
+                raw.proofs.remove(0);
+            }
+            3 => Fixture::corrupt_signature(&mut raw.proofs[1]),
+            4 => raw.peers.swap(0, 1),
+            5 => raw.peers[3].after.body.challenge[0] ^= 1,
+            6 => raw.block_hash = fixture.proofs[0].block_header.hash(),
+            7 => raw.committed_height = NonZeroU64::new(1).unwrap(),
+            _ => raw.peers[0].before.body.config_fingerprint = Hash::new(b"changed config"),
+        };
+        let changed = VerifiedCommittedHeightV1 {
+            schema: raw.schema,
+            network_id: raw.network_id,
+            genesis_block_hash: raw.genesis_block_hash,
+            committed_height: raw.committed_height,
+            block_hash: raw.block_hash,
+            before_challenge: raw.before_challenge,
+            after_challenge: raw.after_challenge,
+            proofs: raw.proofs,
+            peers: raw.peers,
+        };
+        assert!(
+            VerifiedCommittedHeightV1::validate_retained(
+                &fixture.genesis,
+                fixture.peers.clone(),
+                json::to_value(&changed).unwrap()
+            )
+            .is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
 fn authenticated_height_rejects_skips_signatures_and_changed_identity() {
     let fixture = Fixture::new();
     for fault in [
@@ -561,6 +528,16 @@ fn authenticated_height_rejects_skips_signatures_and_changed_identity() {
         let mut observer = fixture.observer();
         assert!(poll(&mut observer, &reads).is_err());
         assert_eq!(observer.emitted_height, 0);
+    }
+}
+
+#[test]
+fn authenticated_height_rejects_foreign_instance_even_at_signed_genesis() {
+    let fixture = Fixture::new();
+    for height in [1, 2] {
+        let mut reads = Reads::new(&fixture, height);
+        reads.fault = Fault::WrongInstance;
+        assert!(poll(&mut fixture.observer(), &reads).is_err());
     }
 }
 
@@ -706,15 +683,15 @@ impl HeightReads for RestartReads<'_> {
         height: NonZeroU64,
         challenge: [u8; 32],
         identity: &PeerId,
-    ) -> Result<BridgeFinalityAttestationV1> {
+    ) -> Result<SumeragiFinalityAttestation> {
         self.0.attest(peer, height, challenge, identity)
     }
     fn next_proof(
         &self,
         peer: usize,
         height: NonZeroU64,
-        verifier: &mut BridgeFinalityVerifier,
-    ) -> Result<BridgeFinalityProof> {
+        verifier: &mut SumeragiFinalityVerifier,
+    ) -> Result<SumeragiFinalityProof> {
         self.0.next_proof(peer, height, verifier)
     }
 }
@@ -782,9 +759,9 @@ fn authenticated_height_accepts_independent_certificate_witnesses() {
     assert_eq!(evidence.committed_height().get(), 3);
     assert_eq!(evidence.block_hash, fixture.proofs[2].block_header.hash());
     assert_eq!(*reads.proof_calls.lock().unwrap(), vec![2, 3]);
-    assert_ne!(evidence.proofs[0], fixture.proofs[0]);
+    assert_eq!(evidence.proofs[0], fixture.proofs[0]);
     for peer in evidence.peers {
-        assert_ne!(
+        assert_eq!(
             peer.before.body.genesis_finality_proof,
             peer.after.body.genesis_finality_proof
         );
@@ -801,140 +778,63 @@ fn authenticated_height_accepts_independent_certificate_witnesses() {
 #[test]
 fn authenticated_height_rejects_invalid_current_and_parent_witnesses() {
     let fixture = Fixture::new();
-    let observer = fixture.observer();
-    let retained = &fixture.proofs[1];
-    let predecessor = &fixture.proofs[0];
-    let valid = fixture.witness_variant(retained, 2, 0);
-    for parent in [false, true] {
-        let mut invalid = valid.clone();
-        let certificate = if parent {
-            invalid
-                .finality_artifact
-                .height_context
-                .parent_commit_qc
-                .as_mut()
-                .unwrap()
-        } else {
-            &mut invalid.finality_artifact.commit_qc
-        };
-        let mut different_round = certificate.clone();
-        fixture.resign_certificate(&mut different_round, certificate.round.view + 1, 0);
-        certificate.aggregate_signature = different_round.aggregate_signature;
-        if parent {
-            // The current certificate remains valid: context identity deliberately excludes
-            // parent witness bytes. The contiguous verifier must verify this parent itself.
-            iroha_data_model::bridge::verify_bridge_finality_proof(
-                &invalid,
-                &observer.authority.network,
-            )
-            .unwrap();
-        }
-        assert!(
-            observer
-                .authority
-                .verify_same_decision(retained, Some(predecessor), &invalid)
-                .is_err(),
-            "parent={parent}"
-        );
+    let mut verifier = fixture.observer().authority.verifier().unwrap();
+    for proof in &fixture.proofs {
+        verifier.verify(proof).unwrap();
     }
+    let retained = &fixture.proofs[1];
+    let mut invalid = fixture.witness_variant(retained, 2, 0);
+    Fixture::corrupt_signature(&mut invalid);
+    assert!(verifier.verify_same_decision(retained, &invalid).is_err());
+    let mut invalid = fixture.proofs[2].clone();
+    Fixture::edit_certificate(&mut invalid, |certificate| {
+        let mut header: iroha_sumeragi::message::BlockHeader =
+            norito::decode_from_bytes(&certificate.consensus_header).unwrap();
+        header.parent_result.0[0] ^= 1;
+        certificate.consensus_header = norito::encode_canonical(&header).unwrap();
+    });
+    assert!(
+        verifier
+            .verify_same_decision(&fixture.proofs[2], &invalid)
+            .is_err()
+    );
 }
 
 #[test]
 fn authenticated_height_rejects_signed_conflicting_decisions() {
     let fixture = Fixture::new();
-    let observer = fixture.observer();
-    for index in 0_usize..2 {
-        let retained = &fixture.proofs[index];
-        let predecessor = index.checked_sub(1).map(|index| &fixture.proofs[index]);
-        for conflict in 0..3 {
-            let mut candidate = fixture.witness_variant(retained, 2, 0);
-            let artifact = &mut candidate.finality_artifact;
-            match conflict {
-                0 => {
-                    artifact.commit_qc.execution_commitment =
-                        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                            Hash::new(b"different parent state"),
-                            Hash::new(b"different post state"),
-                            Hash::new(b"different writes"),
-                            1,
-                            Hash::new(b"different executed wire"),
-                        );
-                }
-                1 => {
-                    artifact.subject.payload_hash = Hash::new(b"different payload");
-                    artifact.commit_qc.subject = artifact.subject;
-                }
-                2 => {
-                    artifact.height_context.nexus_amx_context_hash =
-                        Hash::new(b"different context");
-                    artifact.commit_qc.round.context_id = artifact.height_context.id();
-                }
-                _ => unreachable!(),
-            }
-            fixture.resign_certificate(&mut artifact.commit_qc, 2, 0);
-            if let Some(predecessor) = predecessor {
-                let mut independent = observer.authority.anchor(predecessor).unwrap();
-                independent
-                    .verify(&candidate)
-                    .expect("conflicting decision has valid current and parent certificates");
-            } else {
-                observer
-                    .authority
-                    .anchor(&candidate)
-                    .expect("conflicting genesis decision has a valid certificate");
-            }
-            assert_eq!(
-                candidate.block_header.hash(),
-                retained.block_header.hash(),
-                "block hash alone cannot identify the finality decision"
-            );
-            assert!(
-                observer
-                    .authority
-                    .verify_same_decision(retained, predecessor, &candidate)
-                    .is_err(),
-                "conflict={conflict}"
-            );
-        }
-    }
+    let authority = fixture.observer().authority;
+    let mut branch = authority.anchor(&fixture.proofs[0]).unwrap();
+    branch
+        .verify(&fixture.conflicting)
+        .expect("competing branch genuinely certified");
+    let mut verifier = authority.anchor(&fixture.proofs[0]).unwrap();
+    verifier.verify(&fixture.proofs[1]).unwrap();
+    assert!(
+        verifier
+            .verify_same_decision(&fixture.proofs[1], &fixture.conflicting)
+            .is_err()
+    );
 }
 
 #[test]
 fn authenticated_height_requires_authenticated_predecessor_for_alternate_witnesses() {
     let fixture = Fixture::new();
-    let observer = fixture.observer();
     let retained = &fixture.proofs[2];
     let alternate = fixture.witness_variant(retained, 2, 0);
-    assert!(
-        observer
-            .authority
-            .verify_same_decision(retained, None, &alternate)
-            .is_err()
-    );
-    assert!(
-        observer
-            .authority
-            .verify_same_decision(retained, Some(&fixture.proofs[0]), &alternate)
-            .is_err()
-    );
-    observer
-        .authority
-        .verify_same_decision(retained, Some(&fixture.proofs[1]), &alternate)
-        .unwrap();
-    observer
-        .authority
-        .verify_same_decision(
-            &fixture.proofs[0],
-            None,
-            &fixture.witness_variant(&fixture.proofs[0], 2, 0),
-        )
-        .unwrap();
+    let mut verifier = fixture.observer().authority.verifier().unwrap();
+    assert!(verifier.verify_same_decision(retained, &alternate).is_err());
+    verifier.verify(&fixture.proofs[0]).unwrap();
+    assert!(verifier.verify_same_decision(retained, &alternate).is_err());
+    verifier.verify(&fixture.proofs[1]).unwrap();
+    assert!(verifier.verify_same_decision(retained, &alternate).is_err());
+    verifier.verify(retained).unwrap();
+    verifier.verify_same_decision(retained, &alternate).unwrap();
     let mut wrong_pops = alternate;
-    wrong_pops.finality_artifact.validator_set_pops.swap(0, 1);
+    wrong_pops.committee.swap(0, 1);
     assert!(
-        observer
-            .authority
-            .verify_same_decision(retained, Some(&fixture.proofs[1]), &wrong_pops)
+        verifier
+            .verify_same_decision(retained, &wrong_pops)
             .is_err()
     );
 }
@@ -1055,10 +955,10 @@ mod deployment_prefix {
         assert!(synchronize(&mut prefix, &authority, &journal, 3, 3).unwrap());
         let path = root
             .path()
-            .join("operation/proof-00000000000000000001.json");
+            .join("operation/proof-00000000000000000002.json");
         let original = std::fs::read(&path).unwrap();
-        let mut changed = fixture().proofs[0].clone();
-        changed.finality_artifact.commit_qc.aggregate_signature[0] ^= 1;
+        let mut changed = fixture().proofs[1].clone();
+        Fixture::corrupt_signature(&mut changed);
         std::fs::write(&path, norito::json::to_vec(&changed).unwrap()).unwrap();
         let error = synchronize(&mut prefix, &authority, &journal, 3, 3).unwrap_err();
         assert!(error.to_string().contains("retained proof cache changed"));
@@ -1066,8 +966,13 @@ mod deployment_prefix {
         assert_eq!(prefix.proofs.get(&1), Some(&fixture().proofs[0]));
         // A fresh peer may use another valid certificate witness for this decision,
         // but immutable disk evidence must remain exactly the object already admitted.
-        let variant = fixture().witness_variant(&fixture().proofs[0], 1, 1);
-        authority.anchor(&variant).unwrap();
+        let variant = fixture().witness_variant(&fixture().proofs[1], 1, 1);
+        prefix
+            .verifier
+            .as_ref()
+            .unwrap()
+            .verify_same_decision(&fixture().proofs[1], &variant)
+            .unwrap();
         std::fs::write(&path, norito::json::to_vec(&variant).unwrap()).unwrap();
         let error = synchronize(&mut prefix, &authority, &journal, 3, 3).unwrap_err();
         assert!(error.to_string().contains("retained proof cache changed"));
@@ -1088,7 +993,7 @@ mod deployment_prefix {
         drop(prefix);
         drop(journal);
         let mut changed = fixture().proofs[1].clone();
-        changed.finality_artifact.commit_qc.aggregate_signature[0] ^= 1;
+        Fixture::corrupt_signature(&mut changed);
         std::fs::write(
             root.path()
                 .join("operation/proof-00000000000000000002.json"),
@@ -1114,27 +1019,20 @@ mod deployment_prefix {
         for mutation in 0..5 {
             let mut proof = fixture().proofs[1].clone();
             match mutation {
-                0 => proof.finality_artifact.commit_qc.aggregate_signature[0] ^= 1,
+                0 => Fixture::corrupt_signature(&mut proof),
                 1 => proof = fixture().proofs[2].clone(),
-                2 => proof.finality_artifact.validator_set_pops[0][0] ^= 1,
-                3 => {
-                    proof.finality_artifact.height_context.network_id =
-                        NetworkId::from_genesis_hash(
-                            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                                b"foreign network",
-                            )),
-                        );
-                }
-                _ => {
-                    let header = BlockHeader::new(
-                        NonZeroU64::new(2).unwrap(),
-                        Some(HashOf::from_untyped_unchecked(Hash::new(b"foreign parent"))),
-                        None,
-                        fixture().proofs[1].block_header.creation_time_ms,
-                        0,
-                    );
-                    proof = fixture().proof(header, Some(&fixture().proofs[0]));
-                }
+                2 => proof.committee[0].proof_of_possession[0] ^= 1,
+                3 | 4 => Fixture::edit_certificate(&mut proof, |certificate| {
+                    let mut header: iroha_sumeragi::message::BlockHeader =
+                        norito::decode_from_bytes(&certificate.consensus_header).unwrap();
+                    if mutation == 3 {
+                        header.instance.0[0] ^= 1;
+                    } else {
+                        header.parent_hash.0[0] ^= 1;
+                    }
+                    certificate.consensus_header = norito::encode_canonical(&header).unwrap();
+                }),
+                _ => unreachable!(),
             }
             assert!(
                 prefix
@@ -1204,7 +1102,7 @@ mod deployment_prefix {
                 );
                 assert!(
                     journal
-                        .optional_json::<BridgeFinalityProof>("proof-00000000000000000002.json")
+                        .optional_json::<SumeragiFinalityProof>("proof-00000000000000000002.json")
                         .unwrap()
                         .is_none()
                 );
@@ -1232,24 +1130,23 @@ mod deployment_prefix {
         assert_eq!(prefix.authenticated_rows, 3);
         let retained = prefix.proofs.get(&2).unwrap();
         let parent = prefix.proofs.get(&1).unwrap();
-        authority
-            .verify_same_decision(retained, Some(parent), &fixture().proofs[1])
+        prefix
+            .verifier
+            .as_ref()
+            .unwrap()
+            .verify_same_decision(retained, &fixture().proofs[1])
             .unwrap();
-        let header = BlockHeader::new(
-            NonZeroU64::new(2).unwrap(),
-            Some(parent.block_header.hash()),
-            None,
-            retained.block_header.creation_time_ms + 1,
-            0,
-        );
-        let conflicting = fixture().proof(header, Some(parent));
+        let conflicting = fixture().conflicting.clone();
         let mut branch = authority.anchor(parent).unwrap();
         branch
             .verify(&conflicting)
             .expect("competing decision has a genuine valid certificate");
         assert!(
-            authority
-                .verify_same_decision(retained, Some(parent), &conflicting)
+            prefix
+                .verifier
+                .as_ref()
+                .unwrap()
+                .verify_same_decision(retained, &conflicting)
                 .is_err()
         );
         let mut trial = prefix.verifier.clone().unwrap();

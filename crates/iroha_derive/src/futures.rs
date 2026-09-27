@@ -4,7 +4,11 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::ItemFn;
 
-#[cfg(feature = "telemetry")]
+/// Route an async function body through `iroha_futures::__telemetry_future_body!`.
+///
+/// The proc macro itself stays feature-free; `iroha_futures` defines the helper
+/// macro twice behind its own `telemetry` feature, so instrumentation is chosen
+/// by the consumer's `iroha_futures` build rather than by this crate.
 fn instrument_telemetry_future(emitter: &mut Emitter, input: ItemFn) -> TokenStream {
     if input.sig.asyncness.is_none() {
         emit!(
@@ -25,16 +29,15 @@ fn instrument_telemetry_future(emitter: &mut Emitter, input: ItemFn) -> TokenStr
     quote! {
         #(#attrs)*
         #vis #sig {
-            ::iroha_futures::TelemetryFuture::new(
-                async #block,
-                concat!(module_path!(), "::", stringify!(#ident)),
+            ::iroha_futures::__telemetry_future_body!(
+                #block,
+                concat!(module_path!(), "::", stringify!(#ident))
             )
-            .await
         }
     }
 }
 
-/// Wrap an async function body with telemetry when the `telemetry` feature is enabled.
+/// Wrap an async function body with telemetry when `iroha_futures/telemetry` is enabled.
 pub fn telemetry_future_impl(args: &TokenStream, input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
     if !args.is_empty() {
@@ -44,11 +47,7 @@ pub fn telemetry_future_impl(args: &TokenStream, input: TokenStream) -> TokenStr
         return emitter.finish_token_stream();
     };
 
-    #[cfg(feature = "telemetry")]
     let result = instrument_telemetry_future(&mut emitter, input);
-    #[cfg(not(feature = "telemetry"))]
-    let result = quote! { #input };
-
     emitter.finish_token_stream_with(result)
 }
 
@@ -64,7 +63,6 @@ mod tests {
         assert!(output.contains("telemetry_future does not accept arguments"));
     }
 
-    #[cfg(feature = "telemetry")]
     #[test]
     fn preserves_the_complete_function_signature() {
         let mut emitter = Emitter::new();
@@ -79,6 +77,8 @@ mod tests {
         };
         let output = instrument_telemetry_future(&mut emitter, input);
         assert!(emitter.finish_token_stream().is_empty());
+        let rendered = output.to_string();
+        assert!(rendered.contains(":: iroha_futures :: __telemetry_future_body !"));
         let output: ItemFn = syn::parse2(output).expect("instrumented function should parse");
         assert!(output.sig.asyncness.is_some());
         assert!(output.sig.unsafety.is_some());
@@ -88,7 +88,6 @@ mod tests {
         assert_eq!(output.attrs.len(), 1);
     }
 
-    #[cfg(feature = "telemetry")]
     #[test]
     fn non_async_function_reports_one_diagnostic_without_rewriting_signature() {
         let mut emitter = Emitter::new();
@@ -98,5 +97,6 @@ mod tests {
         assert!(output.contains("only async functions"));
         assert!(output.contains("fn example"));
         assert!(!output.contains("async fn example"));
+        assert!(!output.contains("__telemetry_future_body"));
     }
 }

@@ -12,17 +12,16 @@ workspace = true
 
 [features]
 default = []
-# Support lightweight telemetry, including diagnostics
-telemetry = ["iroha_derive/telemetry"]
+# Support lightweight telemetry, including diagnostics. Selects the
+# instrumented `__telemetry_future_body!` expansion of `#[telemetry_future]`.
+telemetry = []
 
 [dependencies]
-iroha_derive = { workspace = true, features = ["futures"] }
+iroha_derive = { workspace = true }
 
-iroha_config = { workspace = true }
 iroha_logger = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
-rand = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
 tokio-util = { workspace = true }
 thiserror = { workspace = true }

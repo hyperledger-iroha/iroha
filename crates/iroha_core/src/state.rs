@@ -14688,6 +14688,35 @@ impl<'state> StateBlock<'state> {
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
     }
+    /// Apply a current threshold pulse before lifecycle and transaction writes.
+    /// The caller retains the session authenticated from the exact committed predecessor.
+    pub(crate) fn apply_pristine_global_beacon_pulse(
+        &mut self,
+        header: BlockHeader,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+        parent: iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+    ) -> eyre::Result<()> {
+        if self._curr_block != header
+            || self.start_of_block_effects_applied
+            || self.applied_npos_consensus_effects_hash.is_some()
+            || header.global_beacon_pulse_hash() != Some(HashOf::new(&pulse))
+            || header.height().get() != pulse.height
+            || header.prev_block_hash() != Some(parent.block_hash)
+            || parent.height.checked_add(1) != Some(pulse.height)
+            || self.network_id != pulse.network_id
+        {
+            return Err(eyre::eyre!(
+                "current pulse differs from its pristine carrier"
+            ));
+        }
+        let mut transaction = self.consensus_effects_transaction()?;
+        transaction
+            .world
+            .verify_and_advance_global_beacon_pulse(session, pulse, parent)?;
+        transaction.apply_consensus_effects();
+        Ok(())
+    }
     /// Apply one exact NPoS finality bundle on the pristine pre-lifecycle overlay.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_pristine_npos_consensus_effects(

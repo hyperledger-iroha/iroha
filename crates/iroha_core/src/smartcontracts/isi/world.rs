@@ -21105,6 +21105,19 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Sumeragi(change) = self.inner() {
+                if !state_transaction._curr_block.is_genesis()
+                    && let iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                        epoch,
+                    ) = change
+                    && state_transaction
+                        .world
+                        .sumeragi_npos_parameters()
+                        .is_some_and(|npos| npos.epoch_length_blocks() != *epoch)
+                {
+                    return Err(invalid_smart_contract_parameter(
+                        "NPoS epoch_length_blocks must equal the signed Sumeragi epoch_length_blocks",
+                    ));
+                }
                 // Sumeragi chain parameters take effect at `h + 2` through the consensus
                 // schedule; the demotion window is a genesis constant (`specs/sumeragi.md` §10.1).
                 crate::sumeragi::schedule::validate_parameter_change(
@@ -40735,6 +40748,26 @@ seiyaku GovernanceLifecycle {
                     .expect("idempotently reinstalled NPoS parameters decode"),
                 parameters
             );
+        });
+        world_test!(set_parameter_rejects_consensus_epoch_that_conflicts_with_npos {
+            let state = blank_state();
+            {
+                let mut world = state.world.block();
+                world.parameters.get_mut().set_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ));
+                world.commit();
+            }
+            let block = new_dummy_block_at_height(NonZeroU64::new(2).unwrap());
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let previous = stx.world.parameters.get().sumeragi().epoch_length_blocks;
+            let error = SetParameter::new(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                NonZeroU64::new(previous.get() + 1).unwrap(),
+            )))
+            .expect_execute_err(&ALICE_ID, &mut stx, "conflicting scheduled epoch cannot commit");
+            assert_contains!(format!("{error:?}"), "must equal the signed Sumeragi epoch_length_blocks");
+            assert_eq!(stx.world.parameters.get().sumeragi().epoch_length_blocks, previous);
         });
         world_test!(set_parameter_keeps_npos_epoch_length_immutable {
             blank_state_transaction!(state, block, state_block, stx);

@@ -1236,6 +1236,13 @@ CONFIG_STAGES = (("production configuration schema", (
     "nexus_routing_and_governance_collection_defaults_match_config_defaults",
 )),)
 
+CONFIG_FIXTURE_STAGES = (("application rate defaults through minimal configuration", (
+    "minimal_config_inherits_large_application_rate_budgets",
+)),)
+GENESIS_STAGES = (("one signed current epoch authority", (
+    "tests::genesis_rejects_contradictory_signed_epoch_lengths",
+)),)
+
 CONFIG_UNIT_STAGES = (("explicit onboarding permission configuration", (
     "parameters::user::duration_clamp_tests::account_onboarding_accepts_explicit_dpn_user_permission",
     "parameters::user::duration_clamp_tests::account_onboarding_defaults_to_no_additional_permissions",
@@ -1481,7 +1488,7 @@ TORII_UNIT_STAGES += (("native finality attestation tip progress and public cont
     "routing::bridge_finality_attestation_progress_tests::canonical_boundary_keeps_only_valid_tip_progress_status_and_code",
     "routing::bridge_finality_attestation_progress_tests::invalid_height_progress_shapes_remain_fixed_errors",
     "openapi::tests::finality_attestation_tip_progress_openapi_matches_native_bindings",
-    "openapi::tests::compact_finality_app_contracts::bridge_finality_operations_describe_durable_v2_evidence",
+    "openapi::tests::compact_finality_app_contracts::bridge_finality_operations_describe_current_durable_evidence",
 )), )
 
 TORII_SHARED_STAGES += (("strict finality attestation tip progress details", (
@@ -1537,6 +1544,8 @@ HARNESS_TARGETS = {
     "concread": ("native admitted B+ tree ownership", "concread", "lib", ["-p", "concread", "--lib"]),
     "wallet": ("native wallet resource bounds", "iroha_wallet", "lib", ["-p", "iroha_wallet", "--lib"]),
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
+    "config-fixtures": ("native configuration loading fixtures", "fixtures", "test", ["-p", "iroha_config", "--test", "fixtures"]),
+    "genesis": ("native signed genesis contracts", "iroha_genesis", "lib", ["-p", "iroha_genesis", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
     "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
@@ -1552,6 +1561,7 @@ HARNESS_TARGETS = {
     "client": ("native Rust SDK", "iroha", "lib", ["-p", "iroha", "--lib"]),
     "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
+    "sumeragi": ("native current consensus", "iroha_sumeragi", "lib", ["-p", "iroha_sumeragi", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
     "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
     "test-network": ("native validator fixture configuration", "iroha_test_network", "lib", ["-p", "iroha_test_network", "--lib"]),
@@ -1610,6 +1620,64 @@ CORE_STARTUP_STAGES = CORE_NONEMPTY_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CORE_NONEMPTY_STAGES + CORE_ADMISSION_STARTUP_STAGES
 CORE_STAGES = CORE_NONEMPTY_STAGES + CORE_STAGES
 
+
+CURRENT_CONSENSUS_STAGES = (("current nonempty consensus and bounded work wakeup", (
+    'machine::tests::handlers::idle_payload_wait_and_payload_ready',
+    'machine::tests::handlers::oversized_payload_waits_for_bounded_rebuild',
+    'machine::tests::liveness::det_l13_late_views_build_nonempty_work',
+    'machine::tests::attestation::det_a7_empty_proposals_are_rejected_at_every_view',
+    'machine::tests::cluster::det_l21_idle_work_wakes_without_heartbeat',
+    'machine::tests::handlers::det_r4_payload_ready_moves_no_timer',
+    'sim::tests::f17_far_behind_joiner',
+    'sim::tests::f19_poison_payload',
+    'sim::tests::f35_local_queue_asymmetry',
+)),)
+
+CURRENT_BEACON_CORE_STAGES = (("current authenticated threshold pulse production and execution", (
+    'block::valid::current_beacon_tests::current_threshold_pulse_commits_real_work_and_replays_exact_result',
+    'block::valid::current_beacon_tests::current_threshold_pulse_rejects_missing_unrequested_tampered_and_empty_carriers',
+    'sumeragi::beacon::tests::current_partials_require_exact_parent_instance_and_authenticated_seat',
+    'sumeragi::beacon::tests::current_partials_from_four_validators_converge_without_idle_signing',
+    'sumeragi::schedule::tests::schedule_rejects_conflicting_npos_epoch_authority',
+    'smartcontracts::isi::world::tests::set_parameter_rejects_consensus_epoch_that_conflicts_with_npos',
+)),)
+CORE_STARTUP_STAGES = CURRENT_BEACON_CORE_STAGES + CORE_STARTUP_STAGES
+CORE_ADMISSION_STARTUP_STAGES = CURRENT_BEACON_CORE_STAGES + CORE_ADMISSION_STARTUP_STAGES
+CORE_STAGES = CURRENT_BEACON_CORE_STAGES + CORE_STAGES
+
+CURRENT_FINALITY_CORE_STAGES = (("current embedded certificate proof and runtime identity", (
+    'sumeragi::finality::tests::portable_proof_uses_current_embedded_certificates_and_rejects_subquorum',
+    'sumeragi::node::tests::configuration_fingerprint_binds_effective_runtime_settings',
+)),)
+CORE_STARTUP_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_STARTUP_STAGES
+CORE_ADMISSION_STARTUP_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_ADMISSION_STARTUP_STAGES
+CORE_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_STAGES
+DATA_MODEL_STAGES += (("portable current certificate cryptography and attestation", (
+    'block::proposal_wire_hash_tests::current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire',
+    'sumeragi_finality::tests::current_proofs_roundtrip_and_verify_successful_exact_execution',
+    'sumeragi_finality::tests::alternate_current_quorum_witnesses_have_one_authenticated_execution',
+    'sumeragi_finality::tests::current_proof_rejects_tampered_qc_result_committee_parent_and_wire',
+    'sumeragi_finality::tests::current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identity',
+)),)
+TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
+    'tests_runtime_handlers::application_default_budgets_admit_ten_thousand_operations_before_refill',
+    'torii_routed_read_tests::app_routed_read_http_admission_tests::bodyless_read_waits_before_polling_and_releases_capacity_on_cancellation',
+    'torii_routed_read_tests::app_routed_read_http_admission_tests::solo_bodyless_burst_queues_under_one_unchanged_memory_working_set',
+    'torii_routed_read_tests::app_routed_read_http_admission_tests::bodyless_read_queue_keeps_finite_count_and_deadline',
+    'tests_runtime_handlers::global_asset_definition_and_own_balance_ignore_unrelated_restricted_routes',
+    'routing::tests::finality_attestation_handler_tests::finality_attestation_handler_binds_current_node_success_and_actual_tip_race',
+    'routing::tests::finality_attestation_handler_tests::finality_attestation_latest_signs_current_status_and_rejects_stopped_driver',
+    'routing::tests::finality_attestation_handler_tests::finality_attestation_handler_distinguishes_absent_driver_and_foreign_signer',
+    'routing::tests::finality_attestation_handler_tests::finality_attestation_handler_rejects_missing_and_corrupt_embedded_certificate',
+    'routing::tests::finality_attestation_handler_tests::finality_attestation_handler_rejects_auth_challenge_and_admission_before_startup',
+    'openapi::tests::compact_finality_app_contracts::signed_status_documents_actual_driver_fields',
+    'openapi::tests::compact_finality_app_contracts::current_finality_schemas_match_portable_wire_bounds',
+    'openapi::tests::compact_finality_app_contracts::generated_spec_documents_exact_current_sumeragi_status',
+)),)
+DAEMON_STAGES += (("current certificate beacon admission before custody", (
+    'beacon_bootstrap::tests::current_phase_pipe_accepts_real_work_and_rejects_replay',
+    'beacon_bootstrap::tests::rotation_requires_current_state_evidence_before_opening_custody',
+)),)
 
 # Production beacon setup must fail before unrelated tests and network fixtures.
 CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
@@ -2734,10 +2802,11 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
     selected = {
         "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
         "mv-admitted-map": MV_ADMITTED_MAP_STAGES, "concread": CONCREAD_STAGES,
-        "config": CONFIG_STAGES, "config-unit": CONFIG_UNIT_STAGES, "data-model": DATA_MODEL_STAGES,
+        "config": CONFIG_STAGES, "config-fixtures": CONFIG_FIXTURE_STAGES, "config-unit": CONFIG_UNIT_STAGES, "genesis": GENESIS_STAGES, "data-model": DATA_MODEL_STAGES,
         "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
+        "sumeragi": CURRENT_CONSENSUS_STAGES,
         "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES, "wallet": WALLET_STAGES,
         "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
         "torii-shared": TORII_SHARED_STAGES, "torii-lifecycle": TORII_LIFECYCLE_STAGES,
@@ -2762,7 +2831,7 @@ def selected_regression_count(qualification_scope: str = "basic") -> int:
 def compile_command(root: Path, env: dict[str, str], *, harness: str = "cli") -> list[str]:
     if harness not in HARNESS_TARGETS:
         raise CheckError("invalid native regression harness selection")
-    return _compile_command(root, env, HARNESS_TARGETS[harness][3])
+    return _compile_command(root, env, native_harness_selection((harness,)))
 
 
 def _compile_command(root: Path, env: dict[str, str], selection: list[str]) -> list[str]:
@@ -2940,7 +3009,12 @@ def native_harness_selection(harnesses: tuple[str, ...]) -> list[str]:
         if arguments[1] not in packages:
             packages.append(arguments[1])
     selection = [argument for package in packages for argument in ("-p", package)]
-    return [*selection, *targets]
+    # The portable proof fixtures use the model's explicit deterministic constructors.
+    # Select the feature even for a focused model-only graph; dependency unification
+    # must not decide whether required cryptographic regressions exist.
+    features = (["--features", "iroha_data_model/transparent_api"]
+                if "data-model" in harnesses else [])
+    return [*selection, *targets, *features]
 
 
 CORE_NORMAL_LIBRARY_PROBE_EXAMPLE = "race_prover"
@@ -4209,7 +4283,7 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
             re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*\("),
             re.compile(r"\b(?:state_test|routing_test)!\s*[({]\s*"
                        r"(?:sync|async|consensus_stack)\s+([A-Za-z_]\w*)"),
-            re.compile(r"\b(?:source_contract_test|v2_apply_test)!\s*[({]\s*"
+            re.compile(r"\b(?:source_contract_test|v2_apply_test|scenario_test)!\s*[({]\s*"
                        r"([A-Za-z_]\w*)"),
         )
         missing = []

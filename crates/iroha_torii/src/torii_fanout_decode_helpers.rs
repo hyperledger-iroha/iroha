@@ -1193,6 +1193,47 @@ fn try_acquire_new_query_fanout_memory(
             )
         })
 }
+/// Queue a bodyless HTTP read before polling its body or decoding its query. The
+/// listener already bounds its raw HTTP head; the separate waiter count bounds
+/// how many of those heads remain here. No signed-query ingress permit or decoded
+/// request is pinned while waiting for the complete fanout working set.
+#[cfg(feature = "app_api")]
+async fn acquire_app_routed_read_http_memory(
+    app: &SharedAppState,
+    accepts_body: bool,
+) -> Result<QueryFanoutMemoryReservation, Response> {
+    if accepts_body || app.query_queue_timeout.is_zero() {
+        return try_acquire_new_query_fanout_memory(app);
+    }
+    let unavailable = || {
+        torii_proxy_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "query_capacity_exceeded",
+            "bodyless query capacity did not become available within the bounded admission queue",
+        )
+    };
+    let _waiter = app
+        .app_routed_read_waiters
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| unavailable())?;
+    let bytes = u64::try_from(app.query_fanout_working_set_bytes).map_err(|_| unavailable())?;
+    let permits = app
+        .query_fanout_inflight
+        .permits_for_parts([bytes])
+        .ok_or_else(unavailable)?;
+    let acquired = tokio::time::timeout(
+        app.query_queue_timeout,
+        app.query_fanout_inflight
+            .semaphore
+            .clone()
+            .acquire_many_owned(permits.get()),
+    )
+    .await
+    .map_err(|_| unavailable())?
+    .map_err(|_| unavailable())?;
+    Ok(QueryFanoutMemoryReservation::new(acquired))
+}
 #[cfg(any(feature = "connect", feature = "app_api"))]
 fn hold_query_fanout_memory_in_response_body(
     response: Response,

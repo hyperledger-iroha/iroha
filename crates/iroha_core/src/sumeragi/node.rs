@@ -101,6 +101,8 @@ pub struct StartInputs<N> {
     pub observer: Arc<dyn Observer>,
     /// Driver limits.
     pub driver: DriverConfig,
+    /// Runtime-only threshold share custody installed by the node's signer broker.
+    pub beacon_signer: Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
 }
 
 /// Everything [`start`] needs from the node.
@@ -142,6 +144,7 @@ pub struct RunningNode {
     /// The instance's cryptography.
     pub crypto: Arc<BlsCrypto>,
     identity: NodeIdentity,
+    beacon: Arc<super::beacon::BeaconService>,
 }
 
 impl RunningNode {
@@ -345,6 +348,7 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
         consensus_mode,
     })?
     .start(StartInputs {
+        beacon_signer: None,
         net,
         queue,
         key_pair,
@@ -362,6 +366,7 @@ pub struct Prepared {
     tip: GenesisTip,
     blocks: Arc<KuraBlockStore>,
     executor: StateExecutor,
+    consensus_mode: ConsensusMode,
 }
 
 impl core::fmt::Debug for Prepared {
@@ -468,6 +473,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         tip,
         blocks,
         executor,
+        consensus_mode,
     })
 }
 
@@ -490,6 +496,7 @@ impl Prepared {
             tip,
             blocks,
             executor,
+            consensus_mode,
         } = self;
         let StartInputs {
             net,
@@ -498,8 +505,19 @@ impl Prepared {
             config,
             observer,
             driver,
+            beacon_signer,
         } = inputs;
         executor.attach_queue(queue);
+        let beacon = super::beacon::BeaconService::spawn(
+            Arc::clone(&state),
+            instance,
+            PeerId::new(key_pair.public_key().clone()),
+            beacon_signer,
+            net.clone(),
+            consensus_mode,
+        )
+        .map_err(|error| NodeError::Driver(error.to_string()))?;
+        executor.attach_beacon(Arc::clone(&beacon));
         let shared: SharedCrypto = crypto.clone();
         // Records of the node's keys.
         let key =
@@ -595,7 +613,9 @@ impl Prepared {
             },
         )
         .map_err(|error| NodeError::Driver(error.to_string()))?;
+        beacon.set_wakeup(running.handle());
         Ok(RunningNode {
+            beacon,
             driver: running,
             instance,
             crypto,
@@ -620,10 +640,17 @@ impl Prepared {
             .map_err(|error| NodeError::Driver(error.to_string()))?;
         let node = self.start(inputs)?;
         let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
-        ingress.register(node.instance, Arc::new(node.driver.handle()));
+        ingress.register(
+            node.instance,
+            Arc::new(super::beacon::BeaconFrameSink::new(
+                node.driver.handle(),
+                Arc::clone(&node.beacon),
+            )),
+        );
         let ingress_thread = match spawn_ingress(subscription, Arc::clone(&ingress)) {
             Ok(thread) => thread,
             Err(error) => {
+                node.beacon.shutdown();
                 node.driver.shutdown();
                 return Err(NodeError::Driver(format!(
                     "sumeragi ingress thread: {error}"
@@ -656,6 +683,7 @@ impl NetworkedNode {
     /// Stop the instance and wait for its threads. The ingress thread ends with the network.
     pub fn shutdown(self) {
         self.ingress.unregister(&self.node.instance);
+        self.node.beacon.shutdown();
         self.node.driver.shutdown();
         drop(self.ingress_thread);
     }
@@ -796,6 +824,58 @@ fn startup_nonce() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn configuration_fingerprint_binds_effective_runtime_settings() {
+        use super::{DriverConfig, SumeragiLocalOverrides, configuration_fingerprint};
+        let local = SumeragiLocalOverrides::default();
+        let driver = DriverConfig::default();
+        let original = configuration_fingerprint(4, &local, &driver, &[]);
+        let explicit_default = SumeragiLocalOverrides {
+            t_base: Some(std::time::Duration::from_millis(2_000)),
+            ..local
+        };
+        assert_eq!(
+            original,
+            configuration_fingerprint(4, &explicit_default, &driver, &[])
+        );
+        let changed = SumeragiLocalOverrides {
+            build_timeout: Some(std::time::Duration::from_millis(201)),
+            ..local
+        };
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &changed, &driver, &[])
+        );
+        let mut changed_driver = driver;
+        changed_driver.ingress.per_peer[0] += 1;
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &local, &changed_driver, &[])
+        );
+        changed_driver = driver;
+        changed_driver.held.payload_bytes += 1;
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &local, &changed_driver, &[])
+        );
+        let first =
+            iroha_crypto::KeyPair::from_seed(vec![1; 32], iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone();
+        let second =
+            iroha_crypto::KeyPair::from_seed(vec![2; 32], iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone();
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &local, &driver, &[first.clone()])
+        );
+        assert_eq!(
+            configuration_fingerprint(4, &local, &driver, &[first.clone(), second.clone()]),
+            configuration_fingerprint(4, &local, &driver, &[second, first])
+        );
+    }
+
     use std::{collections::HashMap, num::NonZeroU64, time::Duration};
 
     use iroha_crypto::HashOf;

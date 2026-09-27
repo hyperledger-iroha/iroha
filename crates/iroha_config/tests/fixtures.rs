@@ -162,6 +162,52 @@ fn minimal_config_snapshot() {
     );
     expect_file!["fixtures/minimal_config_snapshot.txt"].assert_eq(&format!("{rendered}\n"));
 }
+/// A minimal node config inherits application-sized budgets without deployment overrides.
+#[test]
+fn minimal_config_inherits_large_application_rate_budgets() {
+    let torii = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("minimal node configuration")
+        .torii;
+    for rate in [
+        torii.query_rate_per_authority_per_sec,
+        torii.tx_rate_per_authority_per_sec,
+        torii.deploy_rate_per_origin_per_sec,
+        torii.preauth_rate_per_ip_per_sec,
+        torii.soracloud_public_rate_per_ip_per_sec,
+        torii.soracloud_mutation_rate_per_account_origin_per_sec,
+    ] {
+        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(10_000));
+    }
+    for burst in [
+        torii.query_burst_per_authority,
+        torii.tx_burst_per_authority,
+        torii.deploy_burst_per_origin,
+        torii.preauth_burst_per_ip,
+        torii.soracloud_public_burst_per_ip,
+        torii.soracloud_mutation_burst_per_account_origin,
+        torii.proof_api.burst,
+        torii.mcp.burst,
+    ] {
+        assert_eq!(burst.map(std::num::NonZeroU32::get), Some(100_000));
+    }
+    for rate in [torii.proof_api.rate_per_minute, torii.mcp.rate_per_minute] {
+        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(600_000));
+    }
+    assert_eq!(
+        torii
+            .proof_api
+            .egress_bytes_per_sec
+            .map(std::num::NonZeroU64::get),
+        Some(256 * 1024 * 1024)
+    );
+    assert_eq!(
+        torii
+            .proof_api
+            .egress_burst_bytes
+            .map(std::num::NonZeroU64::get),
+        Some(1024 * 1024 * 1024)
+    );
+}
 #[test]
 fn torii_receipt_signer_parses() {
     let config =
@@ -1679,7 +1725,10 @@ fn full_config_parses_fine() {
         PathBuf::from("sorafs_discovery/test-provider-advert-replay.to")
     );
     assert_eq!(sorafs.replay_checkpoint_max_entries.get(), 4_096);
-    assert!(sorafs.admission.is_some(), "native finalized admission is selected");
+    assert!(
+        sorafs.admission.is_some(),
+        "native finalized admission is selected"
+    );
     let alias_policy = cfg.torii.sorafs_alias_cache;
     assert_eq!(alias_policy.positive_ttl.as_secs(), 600);
     assert_eq!(alias_policy.refresh_window.as_secs(), 120);

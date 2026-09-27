@@ -65,6 +65,16 @@ pub fn assemble(
     assembly: Assembly<'_>,
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
 ) -> Result<SignedBlock, PayloadError> {
+    assemble_with_pulse(state, assembly, transactions, None)
+}
+
+/// Assemble actual transaction work together with an already finalized current pulse.
+pub fn assemble_with_pulse(
+    state: &State,
+    assembly: Assembly<'_>,
+    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+    pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+) -> Result<SignedBlock, PayloadError> {
     if transactions.is_empty() {
         return Err(PayloadError::EmptyBlock);
     }
@@ -73,7 +83,7 @@ pub fn assemble(
         .checked_add(assembly.cadence)
         .ok_or(PayloadError::TimeOverflow)?;
     let build = |time: Duration| -> Result<SignedBlock, PayloadError> {
-        build_at(state, assembly, transactions, time)
+        build_at(state, assembly, transactions, time, pulse)
     };
     let first = build(minimum)?;
     let canonical = ValidBlock::sumeragi_block_time(&first, parent_time, assembly.cadence)
@@ -90,6 +100,7 @@ fn build_at(
     assembly: Assembly<'_>,
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
     time: Duration,
+    pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
     let height = assembly.parent.header().height().get().saturating_add(1);
     let (_, time_source) = TimeSource::new_mock(time);
@@ -114,6 +125,7 @@ fn build_at(
         )))
         .with_confidential_features((!confidential.is_empty()).then_some(confidential))
         .with_execution_context((!execution_context.is_empty()).then_some(execution_context))
+        .with_global_beacon_pulse(pulse)
         .with_network_input_time_floor(time)
         .ok_or(PayloadError::TimeOverflow)?;
     Ok(builder.into_unsigned_proposal())

@@ -246,6 +246,7 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
             NonZeroU64::new(super::epoch_retention::EPOCH_LENGTH).expect("positive fixture epoch");
         // Retain evidence within the signed three-epoch window, rather than
         // truncating only the epoch while leaving incompatible production bounds.
+        parameters.sumeragi.epoch_length_blocks = npos.epoch_length_blocks;
         npos.evidence_horizon_blocks = super::epoch_retention::EPOCH_LENGTH;
         npos.slashing_delay_blocks = super::epoch_retention::EPOCH_LENGTH;
         npos.validate().map_err(|error| eyre!(error))?;

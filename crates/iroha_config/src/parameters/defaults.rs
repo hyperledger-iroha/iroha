@@ -2384,45 +2384,41 @@ pub mod torii {
             .map(|remaining| remaining / QUERY_FANOUT_PREBODY_UNITS_V1)
             .filter(|phase| *phase > 1)
     }
-    // A solo walk can use 128 direct bridge-finality GETs plus 416 MCP
-    // finality-proof tools (4,352 tokens at eight each). Leave headroom for
-    // direct readbacks and funding/contract reads while keeping a finite
-    // 20-proof/s refill and independent heavy-query and egress limits.
+    // Request-rate budgets accommodate sustained application traffic and large
+    // deployment/proof walks. Actual work is bounded separately by admission,
+    // memory, payload and execution limits.
     /// Default steady-state query rate tokens issued per authority every second.
-    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(160);
+    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
     /// Maximum burst tokens accumulated per authority.
-    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(8_192);
+    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(100_000);
     /// Default steady-state transaction submission rate tokens per authority every second.
     pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
     /// Default transaction submission burst tokens per authority.
-    pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(20_000);
-    // A single deployment can make 48 contract mutations and eight weighted
-    // bridge-proof submissions (eight tokens each) before refill. Keep both
-    // the per-origin refill and burst finite; admission and queue caps remain.
+    pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(100_000);
     /// Default steady-state deploy rate tokens issued per origin every second.
-    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(16);
+    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(10_000);
     /// Maximum burst tokens accumulated per origin for deploy endpoints.
-    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(128);
+    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(100_000);
     /// Default public Soracloud local-read rate per remote IP every second.
-    pub const SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC: Option<u32> = Some(5);
+    pub const SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC: Option<u32> = Some(10_000);
     /// Default public Soracloud local-read burst capacity per remote IP.
-    pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(10);
+    pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(100_000);
     /// Default maximum number of concurrent public Soracloud local-read executions.
     pub const SORACLOUD_PUBLIC_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
     /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
     pub const SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
     /// Default signed Soracloud mutation rate per account+origin every second.
-    pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> = Some(8);
+    pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> = Some(10_000);
     /// Default signed Soracloud mutation burst per account+origin.
-    pub const SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN: Option<u32> = Some(16);
+    pub const SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN: Option<u32> = Some(100_000);
     /// Default maximum number of concurrent signed Soracloud mutation executions.
     pub const SORACLOUD_MUTATION_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
     /// Maximum body size for signed Soracloud control-plane mutations before signature verification.
     pub const SORACLOUD_MUTATION_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024);
     /// Steady-state proof endpoint rate (requests per minute). None disables.
-    pub const PROOF_RATE_PER_MIN: Option<u32> = Some(120);
+    pub const PROOF_RATE_PER_MIN: Option<u32> = Some(600_000);
     /// Burst tokens for proof endpoints (requests).
-    pub const PROOF_BURST: Option<u32> = Some(60);
+    pub const PROOF_BURST: Option<u32> = Some(100_000);
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
@@ -2432,12 +2428,12 @@ pub mod torii {
     /// This includes SCCP submissions and KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
-    pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
+    pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(256 * 1024 * 1024); // 256 MiB/s
     /// Burst egress budget for proof responses (bytes).
     ///
-    /// The 64 MiB default accommodates both the canonical IVM job response ceiling
-    /// and worst-case first-release SCCP JSON expansion of a 16 MiB binary envelope.
-    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(64 * 1024 * 1024); // 64 MiB
+    /// Allows long finality walks and large proof responses without an artificial
+    /// per-client bandwidth bottleneck. This is a token budget, not an allocation.
+    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(1024 * 1024 * 1024); // 1 GiB
     /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
     pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes = Bytes(128 * 1024 * 1024); // 128 MiB
     /// Per-account memory budget for retained `/v1/zk/ivm/prove` job state.
@@ -2777,15 +2773,13 @@ pub mod torii {
         pub const OPERATION_REGISTRY_MAX_BYTES: usize =
             OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY * OPERATION_REGISTRY_MAX_ENTRIES;
     }
-    // The pre-auth gate charges every external HTTP request, including routine
-    // deployment reads and writes. A solo walk with 128 proof reads, 58
-    // mutations, 32 direct readbacks, four funding requests and seven outer MCP
-    // requests fits before refill. Ordinary bursts recover with token refill;
-    // operators can explicitly configure a longer rate-violation cooldown.
+    // The pre-auth gate charges every external HTTP request. Its default must
+    // accommodate the downstream application budgets, including multiple tools
+    // or wallets sharing one external IP.
     /// Steady-state rate for pre-authorization attempts per IP.
-    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(100);
+    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(10_000);
     /// Burst tokens allowed for pre-authorization attempts per IP.
-    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(256);
+    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(100_000);
     /// Optional extra cooldown after pre-auth rate exhaustion; disabled by default.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::ZERO;
     /// Maximum number of temporary pre-auth bans retained in memory.
@@ -3084,13 +3078,13 @@ pub mod torii {
         pub fn deny_tool_prefixes() -> Vec<String> {
             Vec::new()
         }
-        // Six bounded 64-tool batches plus 32 follow-up reads fit without
-        // throttling one operator. The finite refill is 20 tool calls/second;
-        // independent dispatch concurrency and payload limits still apply.
+        // Each tool dispatch consumes a token, including tools in batches.
+        // Match the HTTP application budget; dispatch concurrency and payload
+        // limits bound actual work independently.
         /// Optional steady-state MCP request budget (requests/minute). None disables.
-        pub const RATE_PER_MINUTE: Option<u32> = Some(1_200);
+        pub const RATE_PER_MINUTE: Option<u32> = Some(600_000);
         /// Optional MCP request burst budget.
-        pub const BURST: Option<u32> = Some(512);
+        pub const BURST: Option<u32> = Some(100_000);
     }
     /// Account-onboarding defaults surfaced via `torii.account_onboarding`.
     pub mod account_onboarding {

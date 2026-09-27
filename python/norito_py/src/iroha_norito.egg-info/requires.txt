@@ -1,3 +1,0 @@
-
-[compression]
-zstandard>=0.22.0

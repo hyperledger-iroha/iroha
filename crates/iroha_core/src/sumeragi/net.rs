@@ -2,9 +2,10 @@
 //! integration map §5).
 //!
 //! - **Envelope.** [`NetworkMessage::Sumeragi`] carries one [`SumeragiFrame`]: the exact
-//!   `WireMessage::encode()` bytes and the 32-byte instance id (for routing before decode, O9).
-//!   Only the driver decodes the bytes, with `WireMessage::decode` (canonical, size-limited);
-//!   the network codec sees an opaque byte string.
+//!   canonical consensus or current beacon-partial bytes and the 32-byte instance id.
+//!   The instance sink dispatches the fixed bounded beacon domain to its crypto worker;
+//!   the driver decodes consensus bytes with `WireMessage::decode`. Both paths enforce
+//!   canonical, size-limited decoding; the network codec sees an opaque byte string.
 //! - **Classes.** A frame's traffic class comes from ONE helper, [`frame_class`] (the core's
 //!   `traffic_class_of_frame` over the exact bytes), used by the decoded path
 //!   ([`SumeragiFrame::topic`], hence `NetworkMessage::topic`/`admission_class`) and by the raw
@@ -116,10 +117,14 @@ impl SumeragiFrame {
     }
 }
 
-/// The traffic class of an encoded `WireMessage` frame (§12.3 O8): the single classifier of
-/// both the decoded and the raw P2P paths.
+/// The traffic class of a current consensus or bounded beacon frame (§12.3 O8): the single
+/// classifier of both the decoded and the raw P2P paths.
 pub fn frame_class(frame: &[u8]) -> Option<TrafficClass> {
-    traffic_class_of_frame(frame)
+    if super::beacon::is_frame(frame) {
+        Some(TrafficClass::Control)
+    } else {
+        traffic_class_of_frame(frame)
+    }
 }
 
 /// The P2P topic of a traffic class: control → `ConsensusSafety` (reserved safety FIFO),

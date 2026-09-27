@@ -601,8 +601,10 @@ impl<T: Write> RunArgs<T> for Args {
             .map(|hex| parse_vrf_seed_hex(&hex))
             .transpose()
             .wrap_err("invalid --vrf-seed-hex")?;
-        let consensus_mode =
-            consensus_mode.map_or(SumeragiConsensusMode::Permissioned, SumeragiConsensusMode::from);
+        let consensus_mode = consensus_mode.map_or(
+            SumeragiConsensusMode::Permissioned,
+            SumeragiConsensusMode::from,
+        );
         let crypto = crypto.into_manifest_crypto()?;
         let resolved = resolve_profile_settings(
             profile,
@@ -710,7 +712,8 @@ pub fn generate_default(
         let seed = profile_vrf_seed.ok_or_else(|| {
             color_eyre::eyre::eyre!("NPoS genesis requires an explicit or profile-derived VRF seed")
         })?;
-        let defaults = SumeragiNposParameters::default().with_epoch_seed(seed);
+        let mut defaults = SumeragiNposParameters::default().with_epoch_seed(seed);
+        defaults.epoch_length_blocks = parameters.sumeragi().epoch_length_blocks;
         defaults
             .validate()
             .map_err(|error| color_eyre::eyre::eyre!(error))?;
@@ -964,6 +967,10 @@ mod consensus_manifest_tests {
             defaults.block_cadence_ms
         );
         assert_eq!(npos.epoch_seed(), seed);
+        assert_eq!(
+            npos.epoch_length_blocks(),
+            parameters.sumeragi().epoch_length_blocks
+        );
     }
     #[test]
     fn profile_summary_without_profile_defaults_reports_the_data_model_cadence() {

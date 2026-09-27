@@ -30,7 +30,7 @@ mod digest384_batch;
 mod digest384_benchmark;
 #[cfg(feature = "fastpq-gpu")]
 mod digest384_gpu;
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 mod digest384_indexed_gpu;
 mod digest_executor;
 mod error;
@@ -69,8 +69,7 @@ pub use axt_binding::{
     canonicalize_binding, embedded_axt_binding, encode_axt_fastpq_payload,
     set_axt_remote_spend_claims, transition_batch_from_model, transition_batch_to_model,
     validate_axt_transfer_claim_binding, verify_axt_bound_batch, verify_axt_proof_blob,
-    verify_axt_proof_envelope, verify_axt_proof_envelope_against_anchor_v1,
-    verify_axt_proof_envelope_with_outer_metadata,
+    verify_axt_proof_envelope, verify_axt_proof_envelope_with_outer_metadata,
 };
 /// Canonical masked quantity-artifact production and bounded verification.
 pub use backend::offline_compact;
@@ -96,8 +95,7 @@ pub use bn254_poseidon::{
 pub use digest::trace_commitment;
 pub use digest_executor::{
     DigestExecutionV1, MAX_DIGEST384_BATCH_FRAMES_V1, MAX_DIGEST384_BATCH_WORDS_V1,
-    MAX_DIGEST384_INDEXED_BATCH_V1, execute_digest384_frames_v1,
-    execute_digest384_indexed_coordinates_v1, hash_digest384_pairs_v1,
+    execute_digest384_frames_v1, hash_digest384_pairs_v1,
 };
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]

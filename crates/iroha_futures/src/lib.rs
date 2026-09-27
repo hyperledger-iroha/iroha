@@ -1,6 +1,32 @@
 //! Crate with various Iroha futures
 pub mod supervisor;
 pub use iroha_derive::telemetry_future;
+
+/// Expansion target of `#[telemetry_future]` when `telemetry` is enabled:
+/// wraps the async body in [`TelemetryFuture`] so every poll is reported.
+///
+/// The proc macro is feature-free; this crate's feature picks the variant, so
+/// both definitions must stay separate cfg-gated items (a `cfg` inside one body
+/// would be evaluated with the caller's features).
+#[doc(hidden)]
+#[cfg(feature = "telemetry")]
+#[macro_export]
+macro_rules! __telemetry_future_body {
+    ($body:block, $name:expr) => {
+        $crate::TelemetryFuture::new(async $body, $name).await
+    };
+}
+
+/// Expansion target of `#[telemetry_future]` without `telemetry`: the async
+/// body runs unchanged, with no extra future layer.
+#[doc(hidden)]
+#[cfg(not(feature = "telemetry"))]
+#[macro_export]
+macro_rules! __telemetry_future_body {
+    ($body:block, $name:expr) => {
+        $body
+    };
+}
 use iroha_logger::telemetry::{Event as Telemetry, Fields as TelemetryFields};
 use norito::{
     NoritoDeserialize, NoritoSerialize,

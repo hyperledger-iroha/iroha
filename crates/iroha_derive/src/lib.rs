@@ -3,10 +3,8 @@
 //! Shared diagnostic and representation helpers live in the companion
 //! `iroha_derive_primitives` crate so other proc-macro crates can use them
 //! without depending on `iroha_derive` directly.
-#[cfg(feature = "config_base")]
 mod config_base;
 mod from_variant;
-#[cfg(feature = "futures")]
 mod futures;
 use manyhow::{Result, manyhow};
 use proc_macro2::TokenStream;
@@ -141,15 +139,16 @@ fn ffi_impl_opaque_impl(args: TokenStream, item: TokenStream) -> syn::Result<Tok
 pub fn from_variant_derive(input: TokenStream) -> Result<TokenStream> {
     from_variant::impl_from_variant(syn::parse2(input)?).map_err(Into::into)
 }
-/// Macro for wrapping future for getting telemetry info about poll times and numbers
-#[cfg(feature = "futures")]
+/// Macro for wrapping future for getting telemetry info about poll times and numbers.
+///
+/// The expansion delegates to `iroha_futures`, whose `telemetry` feature decides
+/// whether the body is instrumented.
 #[manyhow]
 #[proc_macro_attribute]
 pub fn telemetry_future(args: TokenStream, input: TokenStream) -> TokenStream {
     futures::telemetry_future_impl(&args, input)
 }
 /// Derive `iroha_config_base::read::ReadConfig` trait.
-#[cfg(feature = "config_base")]
 #[manyhow]
 #[proc_macro_derive(ReadConfig, attributes(config))]
 pub fn derive_read_config(input: TokenStream) -> TokenStream {

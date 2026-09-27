@@ -29,6 +29,7 @@ impl SignedBlock {
                     .da_pin_intents()
                     .and_then(crate::da::pin_intent::DaPinIntentBundle::merkle_commitment)
             || header.npos_effects_hash() != self.npos_consensus_effects().map(HashOf::new)
+            || header.global_beacon_pulse_hash() != self.global_beacon_pulse().map(HashOf::new)
         {
             return Err("proposal header commitments differ from their actual payload".into());
         }

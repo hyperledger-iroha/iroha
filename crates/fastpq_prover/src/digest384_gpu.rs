@@ -105,6 +105,7 @@ pub(crate) enum Digest384ReadinessV1 {
 
 pub(crate) struct Digest384BackendReadinessV1 {
     pub(crate) frames: Digest384ReadinessV1,
+    #[cfg(test)]
     pub(crate) indexed: Digest384ReadinessV1,
     pub(crate) last_fields: Digest384ReadinessV1,
 }
@@ -113,8 +114,11 @@ impl Digest384BackendReadinessV1 {
         &self,
         backend: Digest384GpuBackendV1,
     ) -> Result<(), Digest384GpuErrorV1> {
+        #[cfg(test)]
+        if self.indexed == Digest384ReadinessV1::Quarantined {
+            return Err(Digest384GpuErrorV1::Quarantined { backend });
+        }
         if self.frames == Digest384ReadinessV1::Quarantined
-            || self.indexed == Digest384ReadinessV1::Quarantined
             || self.last_fields == Digest384ReadinessV1::Quarantined
         {
             return Err(Digest384GpuErrorV1::Quarantined { backend });
@@ -127,6 +131,7 @@ pub(crate) fn backend_readiness_v1(
 ) -> &'static Mutex<Digest384BackendReadinessV1> {
     const UNCHECKED: Digest384BackendReadinessV1 = Digest384BackendReadinessV1 {
         frames: Digest384ReadinessV1::Unchecked,
+        #[cfg(test)]
         indexed: Digest384ReadinessV1::Unchecked,
         last_fields: Digest384ReadinessV1::Unchecked,
     };

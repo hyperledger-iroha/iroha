@@ -25,9 +25,14 @@ use zeroize::Zeroizing;
 const MAX_RECORDS: usize = 65_536;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 const SUFFIX: &str = ".receipt.norito";
+// TODO: Compile the pending-Reserve journal outside tests with its final-promotion producer.
+#[cfg(test)]
 const PENDING_RESERVE_SUFFIX: &str = ".pending-reserve.norito";
+#[cfg(test)]
 const PENDING_RESERVE_IN_PROGRESS_SUFFIX: &str = ".pending-reserve.inflight";
+#[cfg(test)]
 const PENDING_RESERVE_DIRECTORY: &str = "pending-reserve-v1";
+#[cfg(test)]
 const PENDING_RESERVE_MAX_RECORD_BYTES: usize = 136 * 1024;
 // These bounds cap the handles and retained path storage before opening any ancestor.
 // TODO: Inject one configured process-lived pool into every production signer
@@ -45,6 +50,7 @@ struct JournalProfile {
     max_total_bytes: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingReserveCheckpoint {
     TombstoneDurable,
@@ -62,6 +68,7 @@ impl JournalProfile {
         }
     }
 
+    #[cfg(test)]
     const PENDING_RESERVE: Self = Self {
         suffix: PENDING_RESERVE_SUFFIX,
         in_progress_suffix: Some(PENDING_RESERVE_IN_PROGRESS_SUFFIX),
@@ -243,6 +250,7 @@ impl SignerReceiptJournalV1 {
     ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
         self.reader.inner.stage(operation_id, bytes)
     }
+    #[cfg(test)]
     pub(super) fn recover(
         &self,
         operation_id: [u8; 32],
@@ -255,9 +263,11 @@ impl SignerReceiptJournalV1 {
 ///
 /// This is not a receipt purpose and cannot be passed to a receipt producer. Recovery exposes
 /// bytes only; it has no signing or transport entry point.
+#[cfg(test)]
 pub(super) struct SignerPendingReserveFilesV1 {
     inner: Arc<JournalInner>,
 }
+#[cfg(test)]
 impl SignerPendingReserveFilesV1 {
     /// Open the dedicated owner-only `pending-reserve-v1` directory and pin every ancestor.
     pub(super) fn open(
@@ -577,6 +587,7 @@ impl JournalInner {
         Ok(pinned)
     }
 
+    #[cfg(test)]
     fn stage_pending_reserve(
         self: &Arc<Self>,
         operation_id: [u8; 32],
@@ -585,6 +596,7 @@ impl JournalInner {
         self.stage_pending_reserve_with(operation_id, bytes, |_| Ok(()))
     }
 
+    #[cfg(test)]
     fn stage_pending_reserve_with(
         self: &Arc<Self>,
         operation_id: [u8; 32],
@@ -711,11 +723,14 @@ impl JournalInner {
     }
 }
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_vendor = "apple",
-    target_os = "redox"
+#[cfg(all(
+    test,
+    any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        target_os = "redox"
+    )
 ))]
 fn publish_pending_reserve_no_replace(
     directory: &File,
@@ -732,12 +747,15 @@ fn publish_pending_reserve_no_replace(
     .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_vendor = "apple",
-    target_os = "redox"
-)))]
+#[cfg(all(
+    test,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        target_os = "redox"
+    ))
+))]
 fn publish_pending_reserve_no_replace(
     _directory: &File,
     _in_progress_name: &str,

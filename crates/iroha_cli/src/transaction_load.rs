@@ -35,7 +35,6 @@ use tokio::time::Instant;
 use crate::{Run, RunContext};
 
 mod allocation;
-pub(crate) mod collect_inputs;
 mod output;
 mod resource;
 mod signed_request;

@@ -1745,7 +1745,7 @@ fn hash_immutable_file_exact(
     let opened = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect opened {description}"))?;
-    if !same_input_metadata(&before, &opened) {
+    if !crate::secure_fs::same_single_link_input_snapshot(&before, &opened) {
         bail!("{description} changed before its immutable hash snapshot was opened");
     }
     let (digest, observed_len) = sha256_reader_bounded(&file, expected_len)
@@ -1753,7 +1753,7 @@ fn hash_immutable_file_exact(
     let after = file
         .metadata()
         .wrap_err_with(|| format!("failed to re-inspect opened {description}"))?;
-    if observed_len != expected_len || !same_input_metadata(&opened, &after) {
+    if observed_len != expected_len || !crate::secure_fs::same_single_link_input_snapshot(&opened, &after) {
         bail!("{description} changed while its immutable hash snapshot was read");
     }
     Ok(digest)
@@ -2033,7 +2033,7 @@ fn read_bounded_immutable_file_unix(
     let opened = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect opened {description}"))?;
-    if !same_input_metadata(&before, &opened) {
+    if !crate::secure_fs::same_single_link_input_snapshot(&before, &opened) {
         bail!("{description} changed before its immutable snapshot was opened");
     }
 
@@ -2051,29 +2051,10 @@ fn read_bounded_immutable_file_unix(
     let after = file
         .metadata()
         .wrap_err_with(|| format!("failed to re-inspect opened {description}"))?;
-    if !same_input_metadata(&opened, &after) {
+    if !crate::secure_fs::same_single_link_input_snapshot(&opened, &after) {
         bail!("{description} changed while its immutable snapshot was read");
     }
     Ok(bytes)
-}
-
-#[cfg(unix)]
-fn same_input_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.is_file()
-        && right.is_file()
-        && left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == 1
-        && right.nlink() == 1
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
 }
 
 #[cfg(test)]

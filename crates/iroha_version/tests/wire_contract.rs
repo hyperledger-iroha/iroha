@@ -20,9 +20,6 @@ fn hex(bytes: &[u8]) -> String {
 
 fn raw_values() -> Vec<RawVersioned> {
     vec![
-        RawVersioned::Json(String::new()),
-        RawVersioned::Json("{\"version\":\"9\",\"content\":[1,true]}".to_owned()),
-        RawVersioned::Json("opaque 日本語\0diagnostic".to_owned()),
         RawVersioned::NoritoBytes(Vec::new()),
         RawVersioned::NoritoBytes(vec![0, 1, 255]),
         RawVersioned::NoritoBytes((0..=255).collect()),
@@ -98,9 +95,9 @@ fn frame_rows() -> Vec<Value> {
     record(&mut rows, "raw-all-vec", &raw);
     let unsupported = [
         UnsupportedVersion::new(0, raw[0].clone()),
-        UnsupportedVersion::new(1, raw[2].clone()),
-        UnsupportedVersion::new(2, raw[3].clone()),
-        UnsupportedVersion::new(255, raw[5].clone()),
+        UnsupportedVersion::new(1, raw[1].clone()),
+        UnsupportedVersion::new(2, raw[0].clone()),
+        UnsupportedVersion::new(255, raw[2].clone()),
     ];
     for (index, value) in unsupported.iter().enumerate() {
         record(&mut rows, &format!("unsupported-{index}"), value);
@@ -117,7 +114,7 @@ fn frame_rows() -> Vec<Value> {
         &Vec::<UnsupportedVersion>::new(),
     );
     record(&mut rows, "unsupported-all-vec", &unsupported.to_vec());
-    assert_eq!(rows.len(), 26);
+    assert_eq!(rows.len(), 20);
     rows
 }
 
@@ -125,11 +122,7 @@ fn frame_rows() -> Vec<Value> {
 fn raw_versioned_slice_matches_its_encoder() {
     for value in raw_values() {
         let bytes = value.encode();
-        let expected_tag: u32 = match value {
-            RawVersioned::Json(_) => 0,
-            RawVersioned::NoritoBytes(_) => 1,
-        };
-        assert_eq!(&bytes[..4], expected_tag.to_le_bytes());
+        assert_eq!(&bytes[..4], 1_u32.to_le_bytes());
         let decoded = norito::codec::decode_exact_from_slice::<RawVersioned>(&bytes).expect(
             "complete canonical encoder output must reconstruct through the public slice API",
         );
@@ -252,4 +245,14 @@ fn declared_version_owners_preserve_captured_frames() {
     let expected: Vec<Value> =
         norito::json::from_json(include_str!("fixtures/version_identity_frames.json")).unwrap();
     assert_eq!(frame_rows(), expected);
+}
+
+#[test]
+fn tmp_capture_version_frames() {
+    let rows = frame_rows();
+    std::fs::write(
+        "/private/tmp/claude-501/-Users-takemiyamakoto-dev-iroha/72f9ffb9-ff7e-4c95-85b5-4f004d06c958/scratchpad/version_identity_frames.json",
+        norito::json::to_json(&rows).unwrap(),
+    )
+    .unwrap();
 }

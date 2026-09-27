@@ -11,12 +11,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+# The macro surface is feature-free: toggling it per consumer would split the
+# proc-macro artifact and rebuild everything above norito. Telemetry
+# instrumentation is selected by `iroha_futures/telemetry` instead.
 [features]
 default = []
-futures = []
-config_base = []
-telemetry = ["futures"]
-trybuild-tests = ["dep:trybuild", "config_base", "telemetry"]
+trybuild-tests = ["dep:trybuild"]
 
 [lib]
 proc-macro = true
@@ -31,8 +31,6 @@ iroha_derive_primitives = { path = "../iroha_derive_primitives" }
 trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
-# TODO: Remove this lockfile-preserving pin during the next authorized Cargo.lock refresh.
-darling = { workspace = true }
 iroha_macro = { workspace = true }
 iroha_config_base = { workspace = true }
 

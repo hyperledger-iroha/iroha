@@ -3755,6 +3755,8 @@ fn apply_localnet_npos_overrides(
     // The signed election ceiling must match the roster used to size ingress capacity.
     // A future larger committee requires an explicit capacity and parameter update.
     npos.max_validators = u32::from(peers.get());
+    // The current signed consensus schedule is the only epoch authority.
+    npos.epoch_length_blocks = parameters.sumeragi().epoch_length_blocks;
     // Override seat band and bond to prevent validator drops on small localnets.
     npos.seat_band_pct = 100;
     npos.min_self_bond = 1_u64.into();
@@ -9604,6 +9606,10 @@ mod tests {
                 .and_then(SumeragiNposParameters::from_custom_parameter)
                 .expect("generated NPoS parameters");
             assert_eq!(npos.max_validators(), u32::from(count));
+            assert_eq!(
+                npos.epoch_length_blocks(),
+                parameters.sumeragi().epoch_length_blocks
+            );
             let maximum = usize::try_from(npos.max_validators()).expect("bounded committee");
             assert_eq!(
                 localnet_sumeragi_body_bytes(usize::from(count))

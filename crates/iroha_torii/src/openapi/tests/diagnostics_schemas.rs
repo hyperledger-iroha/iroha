@@ -943,7 +943,7 @@ fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
     for field in ["challenge", "network_id"] {
         assert_eq!(
             properties[field],
-            component_properties(schemas, "BridgeFinalityAttestationBodyV1")[field]
+            component_properties(schemas, "SumeragiFinalityAttestationBody")[field]
         );
     }
     assert!(

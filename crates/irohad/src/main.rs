@@ -3839,6 +3839,7 @@ impl Iroha {
                             net: Arc::new(iroha_core::sumeragi::net::P2pNet::new(network.clone())),
                             queue: Arc::clone(&queue),
                             key_pair: config.common.key_pair.clone(),
+                            beacon_signer: runtime_deps.sumeragi_global_beacon_partial_signer.clone(),
                             config: sumeragi_node_config(
                                 &config,
                                 runtime_deps.sumeragi_assert_fresh_key(),

@@ -44,9 +44,6 @@ fn print_usage() {
     eprintln!(
         "    Rebuild the canned Kagami profile bundles (genesis + PoPs + snippets) under defaults/kagami for Iroha 3 smoke tests; Nexus regeneration requires an explicit canonical XOR asset id."
     );
-    eprintln!(
-        "    Lint and migrate Iroha 2 configs/genesis to Iroha 3 defaults (Nexus lanes, SoraFS, fee asset). Writes migrated copies when output paths are provided."
-    );
     eprintln!("  cargo xtask address-vectors [--out <path>] [--stdout] [--verify]");
     eprintln!(
         "    Emit or verify the ADDR-2 I105/multisig fixture. Defaults to fixtures/account/address_vectors.json"

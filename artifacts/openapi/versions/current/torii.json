@@ -4609,6 +4609,17 @@
               }
             ]
           },
+          "global_beacon_pulse_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Commitment to the finalized current threshold beacon pulse; the pulse never substitutes transaction work."
+          },
           "height": {
             "format": "uint64",
             "maximum": 18446744073709551615,
@@ -4675,7 +4686,8 @@
           "creation_time_ms",
           "view_change_index",
           "confidential_features",
-          "execution_context_hash"
+          "execution_context_hash",
+          "global_beacon_pulse_hash"
         ],
         "type": "object"
       },
@@ -5054,56 +5066,6 @@
         ],
         "type": "object"
       },
-      "BridgeFinalityAttestationBodyV1": {
-        "additionalProperties": false,
-        "description": "Exact challenge-bound statement produced from one immutable committed StateView and authoritative reducer status.",
-        "properties": {
-          "challenge": {
-            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
-          },
-          "finality_proof": {
-            "$ref": "#/components/schemas/BridgeFinalityProof"
-          },
-          "genesis_block_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "genesis_finality_proof": {
-            "$ref": "#/components/schemas/BridgeFinalityProof"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "node_fingerprint": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "node_id": {
-            "description": "Canonical PeerId of the BLS node key which signed this attestation.",
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/components/schemas/SumeragiStatusResponse"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "format": "uint8",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "challenge",
-          "network_id",
-          "node_id",
-          "node_fingerprint",
-          "genesis_block_hash",
-          "genesis_finality_proof",
-          "status",
-          "finality_proof"
-        ],
-        "type": "object"
-      },
       "BridgeFinalityAttestationTipMismatchV1": {
         "additionalProperties": false,
         "description": "Unsigned, selector-bound HTTP 409 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
@@ -5144,41 +5106,6 @@
           "challenge",
           "node_id",
           "network_id"
-        ],
-        "type": "object"
-      },
-      "BridgeFinalityAttestationV1": {
-        "additionalProperties": false,
-        "properties": {
-          "body": {
-            "$ref": "#/components/schemas/BridgeFinalityAttestationBodyV1"
-          },
-          "signature": {
-            "description": "Canonical uppercase node signature over the domain-separated typed body hash.",
-            "minLength": 2,
-            "pattern": "^(?:[0-9A-F]{2})+$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "body",
-          "signature"
-        ],
-        "type": "object"
-      },
-      "BridgeFinalityBundle": {
-        "additionalProperties": false,
-        "properties": {
-          "commitment": {
-            "$ref": "#/components/schemas/BridgeCommitment"
-          },
-          "finality_proof": {
-            "$ref": "#/components/schemas/BridgeFinalityProof"
-          }
-        },
-        "required": [
-          "commitment",
-          "finality_proof"
         ],
         "type": "object"
       },
@@ -10804,6 +10731,29 @@
           "InternalFailure"
         ],
         "type": "string"
+      },
+      "FinalityValidator": {
+        "additionalProperties": false,
+        "properties": {
+          "proof_of_possession": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
+          },
+          "public_key": {
+            "$ref": "#/components/schemas/PublicKey"
+          }
+        },
+        "required": [
+          "public_key",
+          "proof_of_possession"
+        ],
+        "type": "object"
       },
       "GameAccessV1": {
         "oneOf": [
@@ -50709,6 +50659,316 @@
           }
         ]
       },
+      "SumeragiFinalityAttestation": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/SumeragiFinalityAttestationBody"
+          },
+          "signature": {
+            "description": "Canonical uppercase node signature over the domain-separated typed body hash.",
+            "minLength": 2,
+            "pattern": "^(?:[0-9A-F]{2})+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "SumeragiFinalityAttestationBody": {
+        "additionalProperties": false,
+        "description": "Challenge-bound durable-tip capture from the running current consensus driver. Build identity comes from the executable; configuration identity binds its actual resolved runtime parameters.",
+        "properties": {
+          "build_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "challenge": {
+            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+          },
+          "config_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "finality_proof": {
+            "$ref": "#/components/schemas/SumeragiFinalityProof"
+          },
+          "genesis_block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "genesis_finality_proof": {
+            "$ref": "#/components/schemas/SumeragiFinalityProof"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "node_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "node_id": {
+            "description": "Canonical PeerId of the installed BLS node key.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SumeragiStatusResponse"
+          }
+        },
+        "required": [
+          "challenge",
+          "network_id",
+          "node_id",
+          "node_fingerprint",
+          "build_fingerprint",
+          "config_fingerprint",
+          "genesis_block_hash",
+          "genesis_finality_proof",
+          "status",
+          "finality_proof"
+        ],
+        "type": "object"
+      },
+      "SumeragiFinalityBundle": {
+        "additionalProperties": false,
+        "properties": {
+          "finality_proof": {
+            "$ref": "#/components/schemas/SumeragiFinalityProof"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "network_id",
+          "finality_proof"
+        ],
+        "type": "object"
+      },
+      "SumeragiFinalityProof": {
+        "additionalProperties": false,
+        "description": "Canonical executed SignedBlockWire with the current embedded CommitCertificate and candidate committee in canonical BLS key order. Independent verification requires the selected signed genesis and an authenticated contiguous lag-2 committee schedule. A candidate committee alone is not a trust root.",
+        "properties": {
+          "block_header": {
+            "$ref": "#/components/schemas/BlockHeader"
+          },
+          "block_wire": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 33554432,
+            "minItems": 1,
+            "type": "array"
+          },
+          "committee": {
+            "items": {
+              "$ref": "#/components/schemas/FinalityValidator"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "block_header",
+          "block_wire",
+          "committee"
+        ],
+        "type": "object"
+      },
+      "SumeragiFootprint": {
+        "additionalProperties": false,
+        "properties": {
+          "blocks": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cert_cache": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "configs": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evidence_keys": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "exec_entries": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peers": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending_apply": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "probe": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recent_headers": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sync_bytes": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sync_entries": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeouts": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "votes": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wants": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "votes",
+          "timeouts",
+          "blocks",
+          "exec_entries",
+          "wants",
+          "pending_apply",
+          "sync_entries",
+          "sync_bytes",
+          "peers",
+          "recent_headers",
+          "configs",
+          "cert_cache",
+          "evidence_keys",
+          "probe"
+        ],
+        "type": "object"
+      },
+      "SumeragiHaltReason": {
+        "discriminator": {
+          "propertyName": "reason"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "safety_record_corrupt",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "safety_record_inconsistent",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "const": "safety_violation",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "details"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "const": "apply_diverged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "details"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "const": "driver_anomaly",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "SumeragiLaneBlockSessionStatus": {
         "additionalProperties": false,
         "properties": {
@@ -51406,93 +51666,146 @@
       },
       "SumeragiStatusResponse": {
         "additionalProperties": false,
+        "description": "Exact current-driver status. committed_height is the committed decision; applied_height is its durable application frontier. A halted driver requires repair and restart.",
         "properties": {
-          "beacon_horizon": {
-            "$ref": "#/components/schemas/SumeragiV2BeaconHorizonStatus"
+          "abstaining": {
+            "type": "boolean"
           },
-          "body_state": {
-            "$ref": "#/components/schemas/SumeragiV2BodyState"
+          "applied_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
           },
-          "build_fingerprint": {
-            "$ref": "#/components/schemas/Hash"
+          "awaiting": {
+            "type": "boolean"
           },
-          "config_fingerprint": {
-            "$ref": "#/components/schemas/Hash"
+          "committed_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/SumeragiFootprint"
+          },
+          "halted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SumeragiHaltReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
-          "height_context": {
-            "$ref": "#/components/schemas/SumeragiV2HeightContextStatus"
+          "high_qc_view": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "height_context_id": {
-            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
-          },
-          "highest_prepare_qc": {
-            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
-          },
-          "last_commit_qc": {
-            "$ref": "#/components/schemas/SumeragiV2CommitQcStatus"
-          },
-          "last_committed_height": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "last_committed_subject": {
-            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
-          },
-          "last_timeout_certificate": {
-            "$ref": "#/components/schemas/SumeragiV2TimeoutCertificateRef"
+          "instance": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
           },
           "leader": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "level": {
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
-          "liveness": {
-            "$ref": "#/components/schemas/SumeragiV2LivenessStatus"
+          "proxy_tail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "locked_prepare_qc": {
-            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
+          "signer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "node_fingerprint": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "pending_persistence_id": {
-            "minimum": 1,
+          "stage": {
+            "maximum": 2,
+            "minimum": 0,
             "type": "integer"
           },
-          "phase": {
-            "$ref": "#/components/schemas/SumeragiV2StatusPhase"
-          },
-          "protocol_version": {
-            "maximum": 4,
-            "minimum": 4,
+          "start_level": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
-          "restart_required": {
+          "t_retx_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unanchored": {
             "type": "boolean"
           },
           "view": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "protocol_version",
-          "node_fingerprint",
-          "build_fingerprint",
-          "config_fingerprint",
-          "restart_required",
-          "height_context_id",
           "height",
           "view",
-          "phase",
+          "t_retx_ms",
+          "committed_height",
+          "applied_height",
+          "level",
+          "start_level",
+          "awaiting",
+          "unanchored",
+          "abstaining",
+          "instance",
+          "stage",
           "leader",
-          "body_state",
-          "last_committed_height",
-          "height_context",
-          "liveness"
+          "proxy_tail",
+          "high_qc_view",
+          "signer",
+          "halted",
+          "footprint"
         ],
         "type": "object"
       },
@@ -62227,7 +62540,7 @@
     },
     "/v1/bridge/finality/attestation/latest": {
       "get": {
-        "description": "Selects the durable tip of the immutable state view that builds the proof, then returns the same statement as /v1/bridge/finality/attestation/{height}: it signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status including its beacon_horizon, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. Both selectors share one rate-limit bucket. Responses are never cacheable. Exact positive applied or independently sampled status height disagreement returns typed HTTP 409 progress. Progress is unsigned and never replaces successful attestation authentication.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestationLatest",
         "parameters": [
           {
@@ -62248,7 +62561,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BridgeFinalityAttestationV1"
+                  "$ref": "#/components/schemas/SumeragiFinalityAttestation"
                 }
               },
               "application/x-norito": {
@@ -62519,7 +62832,7 @@
     },
     "/v1/bridge/finality/attestation/{height}": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. The requested height must equal the immutable state-view tip. Responses are never cacheable. Exact positive requested, applied, or independently sampled status height disagreement returns typed HTTP 409 progress. Progress is unsigned and never replaces successful attestation authentication.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestation",
         "parameters": [
           {
@@ -62551,7 +62864,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BridgeFinalityAttestationV1"
+                  "$ref": "#/components/schemas/SumeragiFinalityAttestation"
                 }
               },
               "application/x-norito": {
@@ -62822,7 +63135,7 @@
     },
     "/v1/bridge/finality/bundle/{height}": {
       "get": {
-        "description": "Returns a compact commitment bound to the chain, block hash, height, and immutable height-context id, together with the canonical block header and exact durable Sumeragi-v2 finality artifact, including its roster-aligned BLS proofs of possession. The response contains no legacy authority-set or detached-justification projection.",
+        "description": "Returns the network identity and durable current consensus proof, containing the canonical executed block frame with embedded CommitCertificate and the independently reconstructible authenticated committee.",
         "operationId": "bridgeFinalityBundle",
         "parameters": [
           {
@@ -62842,7 +63155,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BridgeFinalityBundle"
+                  "$ref": "#/components/schemas/SumeragiFinalityBundle"
                 }
               },
               "application/x-norito": {
@@ -62897,7 +63210,7 @@
     },
     "/v1/bridge/finality/{height}": {
       "get": {
-        "description": "Returns the canonical block header and exact durable Sumeragi-v2 finality artifact, including its frozen powered roster, dual quorum, subject, CommitQC, and roster-aligned BLS proofs of possession. Verifiers must pin the expected chain and initial height-context id before advancing through successor proofs; no retired v1 commit-certificate projection is accepted.",
+        "description": "Returns a durable current consensus proof: canonical executed block frame with embedded CommitCertificate and authenticated committee with BLS proofs of possession. Verifiers independently select signed genesis, then authenticate the contiguous chain and lag-2 committee schedule; a proof-supplied committee alone does not establish authority.",
         "operationId": "bridgeFinalityProof",
         "parameters": [
           {
@@ -62917,7 +63230,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BridgeFinalityProof"
+                  "$ref": "#/components/schemas/SumeragiFinalityProof"
                 }
               },
               "application/x-norito": {
@@ -110240,90 +110553,6 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/sorafs/providers": {
-      "get": {
-        "description": "List SoraFS providers. The providers array is bounded by `limit` and capped at 500 adverts while the full cache count remains visible.",
-        "parameters": [
-          {
-            "description": "Maximum number of provider adverts to return (default 50, max 500).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "List providers.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sorafs.provider.list"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sorafs/providers/advert": {
-      "post": {
-        "description": "Submit a SoraFS provider advert.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit provider advert.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "authenticated_protocol_principal",
-          "authentication": "protocol_handshake",
-          "schemaVersion": 1,
-          "stableRouteId": "sorafs.provider_advert.submit"
-        },
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/provider/source": {
       "post": {
         "description": "Read bounded canonical source metadata or one digest-verified chunk for the authenticated target provider owner under an exact live native replication assignment. Current and retained-floor same-State durable finality, both provider admissions, the approved retained manifest, exact order and assignment revision, and CanCompleteSorafsReplicationOrder permission are checked before and after payload I/O. Only healthy admitted payload is served. A missing chunk_index requests the Metadata variant once; a present index requests only the Chunk variant with its exact ordinal and bytes, without repeating the complete metadata. Each response is bounded to 4 MiB plus 4 KiB of framing. The response is source material, not completion evidence or a capability to sign or submit completion.",
@@ -110408,6 +110637,90 @@
           "stableRouteId": "sorafs.provider.source"
         },
         "x-iroha-tool-effect": "expensive"
+      }
+    },
+    "/v1/sorafs/providers": {
+      "get": {
+        "description": "List SoraFS providers. The providers array is bounded by `limit` and capped at 500 adverts while the full cache count remains visible.",
+        "parameters": [
+          {
+            "description": "Maximum number of provider adverts to return (default 50, max 500).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "List providers.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.provider.list"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/providers/advert": {
+      "post": {
+        "description": "Submit a SoraFS provider advert.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit provider advert.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_protocol_principal",
+          "authentication": "protocol_handshake",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.provider_advert.submit"
+        },
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/publish/prepare": {
@@ -117137,7 +117450,7 @@
     },
     "/v1/sumeragi/status": {
       "get": {
-        "description": "Return the exact reducer-owned Sumeragi v2 status snapshot.",
+        "description": "Returns the actual current consensus driver snapshot, including committed and applied heights, signer/probe state, halt reason and bounded-memory counters.",
         "responses": {
           "200": {
             "content": {

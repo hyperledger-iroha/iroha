@@ -156,7 +156,10 @@ pub(crate) fn compose_inert_completed_musubi_capture_coordinator_v1(
 /// rejects a runtime returned by the explicit H0 initialization path. This
 /// composer never initializes H0, activates capture, starts a child, or calls
 /// an effect. Stock daemon launch therefore remains unconditionally closed.
-#[allow(dead_code, clippy::too_many_arguments)]
+// TODO: Compile this composer outside tests once the provider-attestation archive,
+// checkpoint-head seal and supervised journal are activation-qualified.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_inert_completed_musubi_attestation_driver_v1(
     node: &NodeHandle,
     coordinator: ProviderIngestCompletedMusubiCaptureCoordinatorV1,
@@ -684,8 +687,8 @@ impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
 // provider-attestation archive, checkpoint-head seal, and supervised journal
 // are activation-qualified. Its private construction surface prevents
 // unqualified stock-daemon use.
+#[cfg(test)]
 #[derive(Clone)]
-#[allow(dead_code)]
 struct GovernedMusubiProviderAttestationSignerV1 {
     signer: Arc<dyn MusubiProviderAttestationSignerV1>,
     configured_binding: SorafsProviderAttestationRuntimeBinding,
@@ -693,6 +696,7 @@ struct GovernedMusubiProviderAttestationSignerV1 {
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct MusubiProviderAttestationRequestBindingV1<'a> {
     payload: &'a MusubiProviderBundleVerificationPayloadV1,
@@ -700,10 +704,12 @@ struct MusubiProviderAttestationRequestBindingV1<'a> {
     observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
+#[cfg(test)]
 type MusubiProviderAttestationApprovalFutureV1<'a> = ProviderIngestFutureV1<
     'a,
     Result<MusubiProviderBundleVerificationAttestationV1, MusubiProviderAttestationSignerErrorV1>,
 >;
+#[cfg(test)]
 impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
     for MusubiProviderAttestationRequestBindingV1<'a>
 {
@@ -716,7 +722,7 @@ impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
         }
     }
 }
-#[allow(dead_code)]
+#[cfg(test)]
 impl GovernedMusubiProviderAttestationSignerV1 {
     fn new(
         signer: Arc<dyn MusubiProviderAttestationSignerV1>,
@@ -877,6 +883,7 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         Ok(attestation)
     }
 }
+#[cfg(test)]
 impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSignerV1 {
     fn runtime_handle(&self) -> &str {
         &self.configured_binding.handle
@@ -926,15 +933,15 @@ impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSign
 // provider-attestation archive, checkpoint-head seal, and supervised journal
 // are activation-qualified. Its private construction surface prevents an
 // inventory implementation from bypassing the daemon-owned deployment binding.
+#[cfg(test)]
 #[derive(Clone)]
-#[allow(dead_code)]
 struct GovernedMusubiProviderAttestationInventoryV1 {
     inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
     configured_binding: SorafsProviderAttestationRuntimeBinding,
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
 }
-#[allow(dead_code)]
+#[cfg(test)]
 impl GovernedMusubiProviderAttestationInventoryV1 {
     fn new(
         inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
@@ -1051,6 +1058,7 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 fn map_musubi_inventory_runtime_error(
     error: MusubiProviderAttestationInventoryRuntimeErrorV1,
 ) -> MusubiProviderAttestationInventoryErrorV1 {
@@ -1063,6 +1071,7 @@ fn map_musubi_inventory_runtime_error(
         }
     }
 }
+#[cfg(test)]
 impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn runtime_handle(&self) -> &str {
         &self.configured_binding.handle
@@ -1097,6 +1106,7 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttes
         })
     }
 }
+#[cfg(test)]
 impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn put(
         &self,
@@ -1125,6 +1135,7 @@ impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestat
         })
     }
 }
+#[cfg(test)]
 impl MusubiProviderAttestationInventoryReaderV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn get<'a>(
         &'a self,
@@ -3663,6 +3674,7 @@ fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
     }
     bail!("operating-system randomness repeatedly returned a zero provider-ingest claim owner")
 }
+#[cfg(test)]
 fn random_provider_attestation_claim_owner() -> Result<MusubiProviderAttestationClaimOwnerV1> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 32];

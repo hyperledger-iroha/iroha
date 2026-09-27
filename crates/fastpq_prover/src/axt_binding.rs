@@ -15,10 +15,12 @@ use iroha_data_model::{
     },
     nexus::{
         AxtEffectBinding, AxtFastpqBinding, AxtFinalizedSpendAnchorV1, AxtProofEnvelope,
-        AxtRemoteSpendClaimV1, ProofBlob, axt_ordered_transaction_set_digest_v1,
-        compute_remote_spend_claim_commitment_v1,
+        AxtRemoteSpendClaimV1, ProofBlob, compute_remote_spend_claim_commitment_v1,
     },
-    transaction::signed::TransactionEntrypoint,
+};
+#[cfg(test)]
+use iroha_data_model::{
+    nexus::axt_ordered_transaction_set_digest_v1, transaction::signed::TransactionEntrypoint,
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
@@ -496,6 +498,10 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
 /// Rejects an invalid anchor, absent/non-positive expiry, excessive transaction
 /// witness, wrong transaction order/wires or execution membership, any mismatch
 /// in the public roots, dataspace, DA commitment or expiry, and invalid proofs.
+///
+/// TODO: export this entry point again once an admission path resolves the
+/// authoritative finalized anchor; until then it is compiled only for tests.
+#[cfg(test)]
 pub fn verify_axt_proof_envelope_against_anchor_v1(
     envelope: &AxtProofEnvelope,
     expiry_slot: Option<u64>,

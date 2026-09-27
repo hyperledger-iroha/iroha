@@ -813,7 +813,8 @@ zero block-owned transaction-set context is rejected instead of reconstructed fr
 raw transcripts. The model no longer equates a per-execution `source_tx_commitment`
 to the whole-set digest.
 
-`verify_axt_proof_envelope_against_anchor_v1` checks exact ordered-wire commitment,
+`verify_axt_proof_envelope_against_anchor_v1` (currently test-only; no production
+admission path calls it yet) checks exact ordered-wire commitment,
 exactly-once execution identity membership, transfer-only semantics, and equality
 of proof roots, transaction set, dataspace, DA commitment, and expiry with the
 supplied anchor. For sealed reveals the membership identity is derived from the

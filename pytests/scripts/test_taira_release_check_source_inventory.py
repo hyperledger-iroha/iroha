@@ -42,13 +42,15 @@ class SelectedSourceInventoryTests(unittest.TestCase):
             state_test!(consensus_stack selected_stack, {});
             source_contract_test!(selected_contract);
             v2_apply_test!(selected_apply, {});
+            scenario_test!(selected_scenario, "F35", scenarios::f35);
         """)
         stages = {
             "torii-unit": (("router", ("routing::tests::selected_route",
                                         "routing::tests::selected_torii_unit")),),
             "torii": (("endpoint", ("tests::selected_torii_integration",)),),
             "core": (("reducer", ("sumeragi::selected_state", "sumeragi::selected_stack",
-                                    "sumeragi::selected_contract", "sumeragi::selected_apply")),),
+                                    "sumeragi::selected_contract", "sumeragi::selected_apply",
+                                    "sim::tests::selected_scenario")),),
         }
         gate.validate_selected_source_test_inventory(self.root, stages)
 
@@ -122,7 +124,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                          r'#\[path = "beacon_bootstrap_tests\.rs"\]\s*mod tests;')
         declared = tuple(re.findall(r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(",
                                     source.read_text()))
-        self.assertEqual(len(declared), 10)
+        self.assertEqual(len(declared), 12)
         for scope in gate.QUALIFICATION_SCOPES:
             selected = tuple(name for _, tests in gate.qualification_stages(scope)["daemon"]
                              for name in tests)

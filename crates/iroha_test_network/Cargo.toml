@@ -26,7 +26,7 @@ iroha_data_model = { workspace = true, features = ["application-model", "transpa
 iroha_primitives.workspace = true
 iroha_genesis.workspace = true
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
-iroha_version = { workspace = true, features = ["json"] }
+iroha_version = { workspace = true }
 iroha_futures.workspace = true
 iroha_test_samples.workspace = true
 iroha_torii_shared.workspace = true

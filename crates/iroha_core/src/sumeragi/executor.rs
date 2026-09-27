@@ -90,6 +90,7 @@ enum Request {
     Build(u64, u64, u32, mpsc::SyncSender<(Vec<u8>, bool)>),
     Reject(u64, u64, Hash32),
     AttachQueue(Arc<Queue>),
+    AttachBeacon(Arc<super::beacon::BeaconService>),
 }
 
 /// The driver-facing handle of the executor thread.
@@ -124,6 +125,11 @@ impl StateExecutor {
     /// Attach the transaction queue: the builder reads it and applied blocks clean it.
     pub fn attach_queue(&self, queue: Arc<Queue>) {
         let _ = self.requests.send(Request::AttachQueue(queue));
+    }
+
+    /// Attach the current pulse producer after replay, before the consensus driver starts.
+    pub fn attach_beacon(&self, beacon: Arc<super::beacon::BeaconService>) {
+        let _ = self.requests.send(Request::AttachBeacon(beacon));
     }
 
     /// Re-apply a block Kura already holds (startup replay): execute it on the applied tip
@@ -203,6 +209,7 @@ struct Worker<'s> {
     /// The transactions of the last payload this node built, for the quarantine.
     last_built: Option<(u64, u64, Vec<iroha_crypto::HashOf<TransactionEntrypoint>>)>,
     queue: Option<Arc<Queue>>,
+    beacon: Option<Arc<super::beacon::BeaconService>>,
 }
 
 fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
@@ -215,6 +222,7 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
         results: BTreeMap::new(),
         last_built: None,
         queue: context.queue.clone(),
+        beacon: None,
     };
     while let Ok(request) = requests.recv() {
         worker.serve(request);
@@ -239,6 +247,7 @@ impl Worker<'_> {
             }
             Request::Reject(height, view, block_hash) => self.reject(height, view, block_hash),
             Request::AttachQueue(queue) => self.queue = Some(queue),
+            Request::AttachBeacon(beacon) => self.beacon = Some(beacon),
         }
     }
 
@@ -490,6 +499,27 @@ impl Worker<'_> {
         Ok(next)
     }
 
+    fn pulse_for_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>, String>
+    {
+        if let Some(beacon) = &self.beacon {
+            return beacon
+                .pulse_for_height(height)
+                .map_err(|error| error.to_string());
+        }
+        // Replay and component executors have no signer service. They may build only heights
+        // for which committed state requests no pulse.
+        if super::beacon::current_requirement(self.state, height, self.context.consensus_mode)
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Err("required global beacon producer is not attached".into());
+        }
+        Ok(None)
+    }
+
     /// Build a payload for `(height, view)` over the applied tip (§6.10).
     fn build(&mut self, height: u64, view: u64, max_bytes: u32) -> (Vec<u8>, bool) {
         if height != self.applied.0.saturating_add(1) {
@@ -510,13 +540,24 @@ impl Worker<'_> {
             queue,
             max_bytes.saturating_sub(PAYLOAD_OVERHEAD),
         );
+        // Only real queued work may activate the pulse signer. A pulse cannot create a block.
+        if selected.is_empty() {
+            return (Vec::new(), false);
+        }
+        let pulse = match self.pulse_for_height(height) {
+            Ok(pulse) => pulse,
+            Err(error) => {
+                iroha_logger::debug!(height, %error, "sumeragi: waiting for required global beacon pulse");
+                return (Vec::new(), false);
+            }
+        };
         let assembly = Assembly {
             parent: &parent,
             view,
             cadence: Duration::from_millis(scheduled.params.block_time_ms),
         };
         while !selected.is_empty() {
-            let block = match payload::assemble(self.state, assembly, &selected) {
+            let block = match payload::assemble_with_pulse(self.state, assembly, &selected, pulse) {
                 Ok(block) => block,
                 Err(error) => {
                     iroha_logger::warn!(height, %error, "sumeragi: payload assembly failed");
@@ -564,6 +605,10 @@ impl Worker<'_> {
         let Some(queue) = self.queue.clone() else {
             return;
         };
+        // Local pulse availability must never quarantine otherwise valid transactions.
+        let Ok(pulse) = self.pulse_for_height(height) else {
+            return;
+        };
         let queued = payload::select(self.state, &queue, usize::MAX);
         let mut poison = Vec::new();
         for (tx, plan) in queued
@@ -577,7 +622,9 @@ impl Worker<'_> {
                 view,
                 cadence,
             };
-            let Ok(single) = payload::assemble(self.state, assembly, &[(tx, plan)]) else {
+            let Ok(single) =
+                payload::assemble_with_pulse(self.state, assembly, &[(tx, plan)], pulse)
+            else {
                 continue;
             };
             self.live = None;

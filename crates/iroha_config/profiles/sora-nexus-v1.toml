@@ -225,16 +225,9 @@ consensus_ingress_critical_bytes_burst = 536870912
 operator_account_id = "testuﾛ1Nﾊｳ2p6ﾉｺﾋﾐNﾛzwB2CﾓﾉeﾚYﾆﾚ4AHﾏpDﾛﾄ3vEｷyﾊAM8GP1H"
 
 # Public ingress: finite per-IP, per-authority and per-origin budgets, no loopback bypass.
+# Rate and burst budgets inherit the canonical Torii defaults.
 [policy.torii]
 preauth_allow_cidrs = []
-preauth_rate_per_ip_per_sec = 100
-preauth_burst_per_ip = 256
-tx_rate_per_authority_per_sec = 10000
-tx_burst_per_authority = 20000
-query_rate_per_authority_per_sec = 160
-query_burst_per_authority = 8192
-deploy_rate_per_origin_per_sec = 16
-deploy_burst_per_origin = 128
 api_rate_limit_bypass_cidrs = []
 internal_api_trusted_cidrs = ["127.0.0.1/32", "::1/128"]
 api_high_load_tx_threshold = 20000

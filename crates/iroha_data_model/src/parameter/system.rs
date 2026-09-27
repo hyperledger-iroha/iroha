@@ -2903,7 +2903,7 @@ mod tests {
         let values = every_sumeragi_parameter_variant();
         assert_eq!(
             values.map(|value| value.value_u64()),
-            [1_500, 7_000, 3_000, 900, 2 * 1024 * 1024, 3, 7_200, 256]
+            [1_500, 7_000, 3_000, 900, 2 * 1024 * 1024, 7_200, 256]
         );
         assert_eq!(
             values.map(|value| value.is_genesis_only()),

@@ -2423,6 +2423,9 @@ struct AppState {
     query_ingress_inflight: Arc<tokio::sync::Semaphore>,
     /// Byte-weighted capacity shared by complete fanout and ordinary-query work.
     query_fanout_inflight: ByteWeightedMemoryPool,
+    /// Bounded bodyless HTTP waiters; they hold no decoded query or fanout working set.
+    #[cfg(feature = "app_api")]
+    app_routed_read_waiters: Arc<tokio::sync::Semaphore>,
     #[cfg(feature = "app_api")]
     app_api_routed_read_body_read_timeout: Duration,
     /// Immutable app-local ordinary-query geometry and configuration identity.
@@ -17991,6 +17994,9 @@ fn resolve_signed_query_routing_for_app(
             resolve_torii_target_domain_routes(app, &domain_id)
                 .and_then(|routes| require_signed_query_route(routes, DataSpaceId::UNIVERSAL))
         }
+        SignedQueryScope::UniversalAssetDefinition(_) => {
+            resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL)
+        }
         SignedQueryScope::PublicControlPlane
         | SignedQueryScope::LocalReplicated
         | SignedQueryScope::AuthorityRouted
@@ -20406,6 +20412,7 @@ enum SignedQueryScope {
     TargetAccount(AccountId),
     TargetAlias(iroha_data_model::account::AccountAlias),
     TargetDomain(iroha_model_base::domain::DomainId),
+    UniversalAssetDefinition(iroha_data_model::asset::AssetDefinitionId),
 }
 fn torii_signed_query_permission_denied_response(
     authority: &AccountId,
@@ -20517,7 +20524,7 @@ fn torii_authorize_signed_query_routes(
                 ))
             }
         }
-        SignedQueryScope::TargetDomain(_) => {
+        SignedQueryScope::TargetDomain(_) | SignedQueryScope::UniversalAssetDefinition(_) => {
             let (allowed, denied) = torii_intersect_signed_query_routes(
                 routes,
                 torii_global_signed_query_read_routes(app, authority),
@@ -20705,12 +20712,20 @@ fn resolve_asset_definition_scope(
     app: &AppState,
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
 ) -> Option<SignedQueryScope> {
-    app.state
-        .world_view()
-        .asset_definition_domains()
-        .get(asset_definition_id)
-        .cloned()
-        .map(SignedQueryScope::TargetDomain)
+    let world = app.state.world_view();
+    if let Some(domain) = world.asset_definition_domains().get(asset_definition_id) {
+        return Some(SignedQueryScope::TargetDomain(domain.clone()));
+    }
+    // An exact, known, domainless global definition belongs to the universal ledger.
+    // Sending this lookup to every dataspace makes an ordinary wallet require unrelated
+    // restricted-route permissions. Unknown identities never inherit this classification.
+    world
+        .asset_definition(asset_definition_id)
+        .ok()
+        .and_then(|definition| {
+            (definition.balance_scope_policy == iroha_data_model::asset::AssetBalancePolicy::Global)
+                .then(|| SignedQueryScope::UniversalAssetDefinition(asset_definition_id.clone()))
+        })
 }
 #[cfg(feature = "app_api")]
 fn asset_definition_domain_snapshot(
@@ -21081,6 +21096,7 @@ fn torii_authorized_signed_query_routes(
         }
         SignedQueryScope::TargetAlias(alias) => torii_target_alias_routes(app, alias)?,
         SignedQueryScope::TargetDomain(domain_id) => torii_target_domain_routes(app, domain_id)?,
+        SignedQueryScope::UniversalAssetDefinition(_) => vec![torii_nexus_route(app)?],
     };
     torii_authorize_signed_query_routes(app, request, scope, routes)
 }
@@ -22388,7 +22404,8 @@ fn torii_signed_query_fanout_routes(
     match &scope {
         SignedQueryScope::PublicControlPlane
         | SignedQueryScope::LocalReplicated
-        | SignedQueryScope::AuthorityRouted => Err(unsupported_routed_query_response(
+        | SignedQueryScope::AuthorityRouted
+        | SignedQueryScope::UniversalAssetDefinition(_) => Err(unsupported_routed_query_response(
             "Nexus fanout coordinator received a single-route query",
         )),
         SignedQueryScope::CrossDataspaceFanout
@@ -48230,6 +48247,8 @@ impl Torii {
             torii_proxy_receiver_memory_inflight,
             query_ingress_inflight,
             query_fanout_inflight,
+            #[cfg(feature = "app_api")]
+            app_routed_read_waiters: Arc::new(tokio::sync::Semaphore::new(query_max_inflight)),
             #[cfg(feature = "app_api")]
             app_api_routed_read_body_read_timeout: self.app_api_routed_read_body_read_timeout,
             ordinary_query_policy,
