@@ -121,11 +121,13 @@ reserving or signing the request again.
 ## Finality and private receipt boundary
 
 The production observer must capture custody, audit and operation state from the
-same native State view, compare its committed block hash with durable Kura state,
-authenticate retained finality artifacts, and require their genesis-derived network
-identity to equal the same State network. A caller-supplied block hash, local
-receipt or self-signed observation cannot establish native finality. Never keep a
-State view open while awaiting consensus.
+same native State view and read each committed block through the certified-chain
+reader (`iroha_core::sumeragi::certified_chain`, `specs/sumeragi.md` §12.7): the
+Kura frame must be the block the view committed, its commit certificate must
+certify that block and its `CommitQC` must verify under the committee of its
+height, and the view's genesis must be the genesis its network identity names.
+A caller-supplied block hash, local receipt or self-signed observation cannot
+establish native finality. Never keep a State view open while awaiting consensus.
 
 The source verifies a purpose-bound, durably staged private receipt before it
 submits completion commitments. Core authenticates execution and the committed
@@ -181,12 +183,14 @@ concurrent revocation; subsequent checks must fence output release.
 The Core account and receipt wrappers reuse one crate-private closed-purpose Check
 proof owner. It retains a move-only challenge, exact signed External bytes, the
 original bounded monotonic deadline and actual `Arc<State>`, authenticating aligned
-successful execution and canonical committee successors before each wrapper samples
-its purpose-owned finite UTC interval and rechecks the current applied cut.
+successful execution and a certified block chain (each block extends the previous
+one) before each wrapper samples its purpose-owned finite UTC interval and
+rechecks the current applied cut.
 Both wrappers require a single Ed25519 observer and reject another account-key
 algorithm before issuing the round or performing signing, State or proof I/O.
 A verified result preserves `original_floor()` with its exact height, hash and
-`HeightContextId`, separately from the authenticated descendant `applied_floor()`.
+certified block id (`H(tag ‖ block_hash ‖ R)`, carried in the `HeightContextId`
+field), separately from the authenticated descendant `applied_floor()`.
 It also retains `canonical_external()`, `check_height()` and `check_block_hash()`
 for the exact successful Check at H. The later cut J does not replace those
 execution coordinates. These historical getters neither renew eligibility nor

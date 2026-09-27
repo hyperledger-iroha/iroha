@@ -1943,8 +1943,8 @@ fn v2_bridge_finality_reads_fail_explicitly() {
         transaction_ttl: Duration::from_secs(5),
         transaction_status_timeout: Duration::from_secs(10),
         sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
-        sorafs_anonymity_policy: Default::default(),
-        sorafs_rollout_phase: Default::default(),
+        sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
+        sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
     };
     let client = Client::new(config).unwrap();
     let error = v2_bridge_finality_unavailable::<()>(&client, 7).expect_err("never served");
