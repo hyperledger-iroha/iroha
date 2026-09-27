@@ -5789,15 +5789,11 @@ impl SoracloudRuntimeManager {
             .collect::<BTreeSet<_>>();
         let stale_workers = {
             let mut workers = self.hosted_http_workers.lock();
-            let stale_keys = workers
-                .keys()
-                .filter(|key| !desired_keys.contains(*key))
-                .cloned()
-                .collect::<Vec<_>>();
-            stale_keys
+            let (stale, kept): (BTreeMap<_, _>, BTreeMap<_, _>) = std::mem::take(&mut *workers)
                 .into_iter()
-                .filter_map(|key| workers.remove(&key).map(|worker| (key, worker)))
-                .collect::<Vec<_>>()
+                .partition(|(key, _)| !desired_keys.contains(key));
+            *workers = kept;
+            stale
         };
         for (
             (

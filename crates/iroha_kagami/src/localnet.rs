@@ -1555,13 +1555,8 @@ fn generate_localnet_for_layout<T: Write>(
             &client_identity.account_id,
         )?;
     } else {
-        genesis = append_localnet_permissioned_lane_authority_bootstrap(
-            genesis,
-            &peers,
-            &gas_account_id,
-            &stake_amount,
-            taira,
-        )?;
+        genesis =
+            append_localnet_permissioned_support_accounts(genesis, &peers, &gas_account_id, taira)?;
     }
     genesis = apply_localnet_crypto_overrides(genesis)?;
     let alias_setup_request =
@@ -4508,15 +4503,16 @@ fn append_localnet_npos_bootstrap(
     )
     .build_raw()
 }
-fn append_localnet_permissioned_lane_authority_bootstrap(
+/// Permissioned localnets register the Nexus support accounts and every validator account, but
+/// stake nothing: staking is NPoS-only (the network XOR identity lives in the signed NPoS
+/// parameters), and the committee is the genesis roster (`RegisterPeerWithPop`).
+fn append_localnet_permissioned_support_accounts(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
     escrow_account_id: &AccountId,
-    stake_amount: &Quantity,
     taira: bool,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
-    let stake_asset_id = localnet_xor_asset_definition_id();
     let registrations = BootstrapRegistrations::from_manifest(&genesis);
     let mut builder = genesis.into_builder().next_transaction();
     if !registrations.domains.contains(&nexus_domain) {
@@ -4526,38 +4522,13 @@ fn append_localnet_permissioned_lane_authority_bootstrap(
         builder =
             builder.append_instruction(Register::account(Account::new(escrow_account_id.clone())));
     }
-    if !registrations.asset_defs.contains(&stake_asset_id) {
-        let definition = AssetDefinition::new(
-            stake_asset_id.clone(),
-            "XOR".to_owned(),
-            NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .with_metadata(Metadata::default());
-        builder = builder.append_instruction(Register::asset_definition(definition));
-    }
     for peer in peers {
         let validator_id = peer.validator_account_id(taira);
         if !registrations.accounts.contains(&validator_id) {
-            builder =
-                builder.append_instruction(Register::account(Account::new(validator_id.clone())));
+            builder = builder.append_instruction(Register::account(Account::new(validator_id)));
         }
-        builder = builder.append_instruction(Mint::asset_quantity(
-            stake_amount.clone(),
-            AssetId::new(stake_asset_id.clone(), validator_id),
-        ));
     }
-    append_public_lane_validator_registrations(
-        builder,
-        peers,
-        &[LaneId::SINGLE],
-        &stake_asset_id,
-        escrow_account_id,
-        stake_amount,
-        taira,
-    )
-    .build_raw()
+    builder.build_raw()
 }
 fn append_public_lane_validator_registrations(
     mut builder: GenesisBuilder,
@@ -7620,14 +7591,13 @@ mod tests {
             )
             .expect("append private-dataspace genesis bootstrap");
         } else {
-            genesis = append_localnet_permissioned_lane_authority_bootstrap(
+            genesis = append_localnet_permissioned_support_accounts(
                 genesis,
                 &peers,
                 &gas_account_id,
-                &stake_amount,
                 false,
             )
-            .expect("append localnet permissioned lane authority bootstrap");
+            .expect("append localnet permissioned support accounts");
         }
         apply_localnet_crypto_overrides(genesis)
             .expect("apply generated localnet fixture cryptography overrides")
@@ -9366,16 +9336,17 @@ mod tests {
             "activation roster should match peers"
         );
     }
+    /// Staking is NPoS-only, so a permissioned localnet stakes nothing: it registers the Nexus
+    /// support accounts and every validator account, and its committee is the genesis roster.
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn permissioned_localnet_bootstraps_lane_zero_authority_from_trusted_peers() {
+    fn permissioned_localnet_registers_support_accounts_without_staking() {
         use std::collections::BTreeSet;
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("localnet-permissioned-lane-authority".to_owned()),
+            seed: Some("localnet-permissioned-support-accounts".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 34080,
@@ -9399,80 +9370,19 @@ mod tests {
                 .is_none(),
             "permissioned genesis must not commit NPoS epoch parameters"
         );
-        let mut validators = Vec::new();
-        let mut activations = Vec::new();
-        for instruction in manifest.instructions() {
-            if let Some(register) = instruction
-                .as_any()
-                .downcast_ref::<RegisterPublicLaneValidator>()
-            {
-                validators.push(register);
-            }
-            if let Some(activate) = instruction
-                .as_any()
-                .downcast_ref::<ActivatePublicLaneValidator>()
-            {
-                activations.push(activate);
-            }
-        }
-        assert_eq!(
-            validators.len(),
-            4,
-            "expected one lane-0 validator registration per trusted peer"
+        assert!(
+            !manifest.instructions().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_some()
+                    || instruction
+                        .as_any()
+                        .downcast_ref::<ActivatePublicLaneValidator>()
+                        .is_some()
+            }),
+            "permissioned localnets must not stake public-lane validators"
         );
-        let min_stake = iroha_config::parameters::defaults::nexus::staking::min_validator_stake();
-        for register in &validators {
-            assert_eq!(register.lane_id, LaneId::SINGLE);
-            assert_eq!(register.validator, register.stake_account);
-            assert!(register.initial_stake >= min_stake);
-        }
-        let peers = build_peers(
-            opts.peers.get(),
-            opts.seed.as_ref().map(String::as_bytes),
-            opts.base_api_port,
-            opts.base_p2p_port,
-        )
-        .expect("test localnet peer key generation should succeed");
-        let trusted_peer_ids: BTreeSet<_> = peers
-            .iter()
-            .map(|peer| PeerId::from(peer.public_key.clone()))
-            .collect();
-        let registered_peer_ids: BTreeSet<_> = validators
-            .iter()
-            .map(|register| register.peer_id.clone())
-            .collect();
-        assert_eq!(
-            registered_peer_ids, trusted_peer_ids,
-            "lane-0 validators must be exactly the trusted peers"
-        );
-        assert_eq!(activations.len(), 4);
-        for activate in &activations {
-            assert_eq!(activate.lane_id, LaneId::SINGLE);
-        }
-        let registered_validators: BTreeSet<_> = validators
-            .iter()
-            .map(|register| register.validator.clone())
-            .collect();
-        let activated_validators: BTreeSet<_> = activations
-            .iter()
-            .map(|activate| activate.validator.clone())
-            .collect();
-        assert_eq!(activated_validators, registered_validators);
-        let stake_asset_id = localnet_xor_asset_definition_id();
-        for register in &validators {
-            let stake_asset = AssetId::new(stake_asset_id.clone(), register.stake_account.clone());
-            assert!(
-                manifest.instructions().any(|instruction| {
-                    matches!(
-                        instruction.as_any().downcast_ref::<MintBox>(),
-                        Some(MintBox::Asset(mint))
-                            if mint.destination() == &stake_asset
-                                && mint.object() >= &register.initial_stake
-                    )
-                }),
-                "validator stake account must be funded with at least its initial stake"
-            );
-        }
         let registered_accounts: BTreeSet<_> = manifest
             .instructions()
             .filter_map(
@@ -9484,6 +9394,22 @@ mod tests {
                 },
             )
             .collect();
+        let peers = build_peers(
+            opts.peers.get(),
+            opts.seed.as_ref().map(String::as_bytes),
+            opts.base_api_port,
+            opts.base_p2p_port,
+        )
+        .expect("test localnet peer key generation should succeed");
+        for peer in &peers {
+            assert!(
+                registered_accounts.contains(&account_id_runtime_literal(
+                    &peer.validator_account_id(false),
+                    None
+                )),
+                "every validator account is registered in genesis"
+            );
+        }
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -9497,22 +9423,6 @@ mod tests {
             .get("staking")
             .and_then(toml::Value::as_table)
             .expect("nexus staking table");
-        let escrow_literal = staking
-            .get("stake_escrow_account_id")
-            .and_then(toml::Value::as_str)
-            .expect("staking escrow literal");
-        let escrow = AccountId::parse_encoded(escrow_literal).expect("configured escrow identity");
-        for registration in &validators {
-            assert_eq!(
-                registration.monetary_plan,
-                PublicLaneMonetaryPlanV1::genesis_registration(
-                    AssetId::new(stake_asset_id.clone(), registration.stake_account.clone()),
-                    AssetId::new(stake_asset_id.clone(), escrow.clone()),
-                    registration.initial_stake.clone(),
-                ),
-                "genesis consent must match the custody configured for the generated node",
-            );
-        }
         for key in ["stake_escrow_account_id", "slash_sink_account_id"] {
             let literal = staking
                 .get(key)
@@ -9523,10 +9433,6 @@ mod tests {
                 "{key} must name an account registered in genesis"
             );
         }
-        assert_eq!(
-            staking.get("stake_asset_id").and_then(toml::Value::as_str),
-            Some(localnet_xor_asset_literal().as_str())
-        );
         assert!(!nexus.contains_key("fees"));
         assert!(!nexus.contains_key("storage"));
         assert!(
@@ -9534,17 +9440,6 @@ mod tests {
                 .crypto()
                 .allowed_signing
                 .contains(&iroha_crypto::Algorithm::BlsNormal)
-        );
-        let config_signing = peer_cfg
-            .get("crypto")
-            .and_then(|crypto| crypto.get("allowed_signing"))
-            .and_then(toml::Value::as_array)
-            .expect("crypto.allowed_signing");
-        assert!(
-            config_signing
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .any(|value| value == "bls_normal")
         );
     }
     #[test]

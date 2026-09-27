@@ -12,13 +12,13 @@ fn expired() -> BrokerDeadlineV1 {
 fn invalid_or_expired_deadlines_reject_even_an_uncontended_lock() {
     assert!(BrokerDeadlineV1::new(Duration::ZERO).is_err());
     assert!(BrokerDeadlineV1::new(Duration::MAX).is_err());
-    let state = Mutex::new(7);
+    let state = Mutex::new(String::from("before"));
     assert!(expired().remaining().is_err());
     assert!(expired().lock(&state).is_err());
-    assert_eq!(*state.lock().unwrap(), 7);
+    assert_eq!(*state.lock().unwrap(), "before");
     let deadline = BrokerDeadlineV1::new(Duration::from_secs(5)).unwrap();
-    *deadline.lock(&state).unwrap() = 8;
-    assert_eq!(*state.lock().unwrap(), 8);
+    *deadline.lock(&state).unwrap() = String::from("after");
+    assert_eq!(*state.lock().unwrap(), "after");
 }
 
 #[test]
@@ -68,13 +68,13 @@ fn one_deadline_survives_distinct_framing_views_without_renewal() {
 
 #[test]
 fn occupied_session_admission_ends_without_waiting_for_the_holder() {
-    let state = Mutex::new(11);
+    let state = Mutex::new(String::from("held"));
     let held = state.lock().unwrap();
     let began = Instant::now();
     let deadline = BrokerDeadlineV1::new(Duration::from_millis(25)).unwrap();
     assert!(deadline.lock(&state).is_err());
     assert!(began.elapsed() < Duration::from_secs(5));
-    assert_eq!(*held, 11);
+    assert_eq!(*held, "held");
 }
 
 #[test]

@@ -147,7 +147,7 @@ fn preflight_journal_path(
     reconstructed
         .try_reserve(path.as_os_str().as_bytes().len())
         .map_err(|_| fail())?;
-    reconstructed.push("/");
+    reconstructed.push(Component::RootDir);
     let mut names = Vec::new();
     names
         .try_reserve_exact(component_count)

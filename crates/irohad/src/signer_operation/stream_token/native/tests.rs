@@ -458,12 +458,7 @@ fn native_current_authority_disappears_when_its_durable_qc_is_removed() {
     );
 }
 
-// TODO(C2): `NativeTransactionsV1` submits through strict QueuePlan admission, which resolves
-// a lane-0 authority from public-lane validator stake; the certified test chain registers its
-// validators for consensus only. C2 deletes QueuePlan lane authority (ordinary admission,
-// DECISIONS #10); un-ignore this test then.
 #[test]
-#[ignore = "TODO(C2): strict QueuePlan admission needs a lane-0 stake authority the certified test chain does not bootstrap"]
 fn native_software_issue_and_recovery_execute_exact_signed_queue_operations() {
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
     let (directory, storage) = config(&fixture);
@@ -535,12 +530,7 @@ fn native_software_issue_and_recovery_execute_exact_signed_queue_operations() {
     );
 }
 
-// TODO(C2): `NativeTransactionsV1` submits through strict QueuePlan admission, which resolves
-// a lane-0 authority from public-lane validator stake; the certified test chain registers its
-// validators for consensus only. C2 deletes QueuePlan lane authority (ordinary admission,
-// DECISIONS #10); un-ignore this test then.
 #[test]
-#[ignore = "TODO(C2): strict QueuePlan admission needs a lane-0 stake authority the certified test chain does not bootstrap"]
 fn native_production_issuer_releases_verifiable_cid_token_and_rechecks_revocation() {
     use iroha_data_model::{
         isi::sorafs::MutateSorafsStreamTokenCustody,

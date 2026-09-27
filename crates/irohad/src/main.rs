@@ -403,9 +403,6 @@ fn complete_test_genesis_builder_for_topology(
     let validators = topology
         .iter()
         .map(|entry| entry.peer.clone())
-        .collect::<Vec<_>>();
-    let validators = validators
-        .into_iter()
         .enumerate()
         .map(|(index, validator)| {
             let seed_byte = 0xA0_u8.wrapping_add(
