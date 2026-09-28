@@ -58,6 +58,10 @@ name = "sumeragi"
 path = "tests/sumeragi.rs"
 
 [[test]]
+name = "sumeragi_lanes"
+path = "tests/sumeragi_lanes.rs"
+
+[[test]]
 name = "sumeragi_npos_committee_transition"
 path = "tests/sumeragi_npos_committee_transition.rs"
 

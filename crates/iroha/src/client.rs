@@ -8213,6 +8213,38 @@ impl Client {
         };
         Ok(status)
     }
+    /// GET `/v1/sumeragi/lanes` — every lane of the committed state with the status of the
+    /// node's instance of it (`specs/sumeragi_lanes.md` §8).
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or decoding fails.
+    pub fn get_sumeragi_lanes(
+        &self,
+    ) -> Result<Vec<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus>> {
+        type Lanes = Vec<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus>;
+        let url = join_torii_url(&self.torii_url, "v1/sumeragi/lanes");
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", ACCEPT_NORITO_PREFERRED),
+        )?;
+        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get sumeragi lanes", " ")?;
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        if Self::is_norito_content_type(content_type) {
+            decode_from_bytes::<Lanes>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi lanes Norito payload: {err}"))
+        } else if Self::is_exact_json_content_type(content_type) {
+            norito::json::from_slice::<Lanes>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi lanes JSON payload: {err}"))
+        } else {
+            Err(eyre!(
+                "Failed to decode sumeragi lanes: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
+            ))
+        }
+    }
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
     ///
     /// # Errors
