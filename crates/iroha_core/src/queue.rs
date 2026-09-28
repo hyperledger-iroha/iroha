@@ -172,6 +172,7 @@ use reservation_journal::{
 };
 #[cfg(test)]
 use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
+pub(crate) use router::matchers_match_with_world;
 #[cfg(test)]
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
@@ -183,7 +184,6 @@ pub use router::{
     evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
     resolve_query_routing_decision, resolve_routing_decision,
 };
-pub(crate) use router::rule_matches_with_world;
 #[cfg(test)]
 use std::sync::Barrier;
 use std::{

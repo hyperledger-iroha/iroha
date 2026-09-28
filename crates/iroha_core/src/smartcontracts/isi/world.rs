@@ -18671,6 +18671,19 @@ pub mod isi {
                 validate_hijiri_parameters(custom, state_transaction)?;
                 validate_da_ingest_admission_policy(custom, state_transaction)?;
                 validate_reputation_archive_retention_request(custom, state_transaction)?;
+                if let Some(policy) =
+                    iroha_data_model::sumeragi_lanes::SumeragiLanePolicy::from_custom_parameter(
+                        custom,
+                    )
+                {
+                    policy
+                        .and_then(|policy| crate::sumeragi::lanes::step::validate_policy(&policy))
+                        .map_err(|error| {
+                            invalid_smart_contract_parameter(format!(
+                                "invalid Sumeragi lane policy: {error}"
+                            ))
+                        })?;
+                }
                 match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
                     custom,
                 ) {

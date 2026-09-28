@@ -46,25 +46,32 @@ pub trait LaneTransactions: Send + Sync {
     ) -> Vec<SignedTransaction>;
 }
 
-/// The chain facts after a lane block: its anchor and the transactions of the last
+/// The chain facts after a lane block: its anchor and the anchored transactions of the last
 /// [`LANE_DEDUP_WINDOW`] blocks.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ChainState {
     anchor: u64,
-    window: VecDeque<Vec<HashOf<TransactionEntrypoint>>>,
+    window: VecDeque<(u64, Vec<HashOf<TransactionEntrypoint>>)>,
 }
 
 impl ChainState {
     fn view(&self) -> LaneChainView {
+        let mut recent = BTreeMap::new();
+        for (anchor, hashes) in &self.window {
+            for hash in hashes {
+                // Anchors never regress along the chain: later blocks overwrite.
+                recent.insert(*hash, *anchor);
+            }
+        }
         LaneChainView {
             previous_anchor: self.anchor,
-            recent: self.window.iter().flatten().copied().collect(),
+            recent,
         }
     }
 
     fn after(&self, anchor: u64, txs: Vec<HashOf<TransactionEntrypoint>>) -> Self {
         let mut window = self.window.clone();
-        window.push_back(txs);
+        window.push_back((anchor, txs));
         while window.len() > LANE_DEDUP_WINDOW {
             window.pop_front();
         }
@@ -280,10 +287,19 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
         if !self.record.admits_anchor(anchor_height) || anchor_height < self.applied.state.anchor {
             return (Vec::new(), false);
         }
-        // Skip what the lane already carries: the recent window and executed, uncommitted blocks.
-        let mut skip = self.applied.state.view().recent;
+        // Skip what the lane still carries: recent blocks the global chain may merge fresh, and
+        // executed, uncommitted blocks.
+        let view = self.applied.state.view();
+        let mut skip = view
+            .recent
+            .keys()
+            .filter(|hash| view.repeats(hash, anchor_height, self.record.anchor_freshness))
+            .copied()
+            .collect::<BTreeSet<_>>();
         for executed in self.cache.values() {
-            skip.extend(executed.state.window.back().into_iter().flatten().copied());
+            if let Some((_, hashes)) = executed.state.window.back() {
+                skip.extend(hashes.iter().copied());
+            }
         }
         // Leave room for the batch framing.
         let budget = usize::try_from(max_bytes)
@@ -427,7 +443,10 @@ mod tests {
             created_at: 1,
             active_from: 3,
             closing: None,
+            anchor_freshness: 16,
             merged: SumeragiLaneFrontier::default(),
+            merged_at: 3,
+            rescued: 0,
         }
     }
 

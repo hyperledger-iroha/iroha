@@ -7,6 +7,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use iroha_sumeragi::{
@@ -14,7 +15,7 @@ use iroha_sumeragi::{
     types::Hash32,
 };
 use norito::codec::{DecodeAll as _, Encode as _};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 use super::super::{
     driver::{SharedCrypto, traits::BlockStore},
@@ -29,6 +30,7 @@ pub struct FileLaneBlockStore {
     crypto: SharedCrypto,
     faults: Arc<dyn Faults>,
     height: Mutex<u64>,
+    grown: Condvar,
 }
 
 impl core::fmt::Debug for FileLaneBlockStore {
@@ -101,7 +103,21 @@ impl FileLaneBlockStore {
             crypto,
             faults,
             height: Mutex::new(tip),
+            grown: Condvar::new(),
         })
+    }
+
+    /// Block until the stored tip reaches `height` or `timeout` passes; whether it did.
+    #[must_use]
+    pub fn wait_for(&self, height: u64, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut tip = self.height.lock();
+        while *tip < height {
+            if self.grown.wait_until(&mut tip, deadline).timed_out() {
+                return *tip >= height;
+            }
+        }
+        true
     }
 
     fn read(&self, height: u64) -> io::Result<SyncEntry> {
@@ -164,6 +180,7 @@ impl BlockStore for FileLaneBlockStore {
         .encode();
         write_atomic(&*self.faults, &self.dir, &frame_name(height), &frame)?;
         *tip = height;
+        self.grown.notify_all();
         Ok(())
     }
 }

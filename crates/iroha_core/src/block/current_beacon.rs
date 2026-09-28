@@ -183,6 +183,7 @@ mod current_beacon_tests {
             chain.genesis_account(),
             Duration::from_millis(scheduled.params.block_time_ms),
             ConsensusMode::Permissioned,
+            crate::sumeragi::lanes::merge::LaneStepInput::default(),
             chain.state(),
         )
         .unpack(|_| {})
@@ -245,6 +246,7 @@ mod current_beacon_tests {
             applied_watch: std::sync::Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
                 0, None,
             )),
+            lane_blocks: std::sync::Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         })
         .unwrap();
         restarted

@@ -7921,22 +7921,41 @@ fn rule_matches(
     }
     true
 }
-pub(crate) fn rule_matches_with_world<W: WorldReadOnly>(
+fn rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> bool {
-    let matcher = &rule.matcher;
-    if let Some(account) = matcher.account.as_deref()
+    matchers_match_with_world(
+        rule.matcher.account.as_deref(),
+        rule.matcher.instruction.as_deref(),
+        tx,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
+}
+/// Whether `tx` satisfies every present matcher: its authority matches `account` (an account
+/// id, an encoded account id or an alias resolved in `world`) and one of its instructions
+/// matches `instruction`.
+pub(crate) fn matchers_match_with_world<W: WorldReadOnly>(
+    account: Option<&str>,
+    instruction: Option<&str>,
+    tx: &dyn TransactionRoutingView,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> bool {
+    if let Some(account) = account
         && !tx.authority_opt().is_some_and(|authority| {
             account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
         })
     {
         return false;
     }
-    if let Some(instruction) = matcher.instruction.as_deref()
+    if let Some(instruction) = instruction
         && !instructions_match_with_world(instruction, tx, dataspace_catalog, world, ledger_time_ms)
     {
         return false;

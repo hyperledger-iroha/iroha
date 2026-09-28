@@ -92,6 +92,9 @@ pub fn apply_genesis(
         .take_sumeragi_schedule()
         .and_then(|next| next.height_config())
         .map_err(|error| StartupError::Schedule(error.to_string()))?;
+    overlay
+        .take_sumeragi_lanes()
+        .map_err(|error| StartupError::InvalidGenesis(error.to_string()))?;
     let witness = overlay
         .take_exec_witness()
         .ok_or_else(|| StartupError::Local("genesis witness was not captured".into()))?;

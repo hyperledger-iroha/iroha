@@ -306,6 +306,7 @@ impl State {
                 frozen_execution_output_capacity: None,
                 execution_output_plan: None,
                 sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep::Off,
+                sumeragi_lanes_step: crate::sumeragi::lanes::step::LaneStep::Off,
                 #[cfg(feature = "telemetry")]
                 telemetry: &self.telemetry,
                 state_write_lock: &self.state_write_lock,

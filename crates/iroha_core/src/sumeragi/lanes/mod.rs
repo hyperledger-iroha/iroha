@@ -11,19 +11,28 @@
 pub mod executor;
 /// The global chain as lane instances use it: applied tip, anchors, checks and the queue.
 pub mod global;
+/// The global chain's merge of certified lane blocks.
+pub mod merge;
+/// The node's lane block stores.
+pub mod registry;
 /// Routing transactions to lanes from committed state.
 pub mod routing;
+/// The node's lane instances.
+pub mod runner;
+/// The lane step of a global block: frontiers, samples, lifecycle and autoscale.
+pub mod step;
 /// The durable block store of a lane instance.
 pub mod store;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
-    sumeragi_lanes::SumeragiLaneRecord,
+    sumeragi_lanes::{SumeragiLanePolicy, SumeragiLaneRecord},
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
+use iroha_model_base::topology::LaneId;
 use iroha_sumeragi::{
     crypto::Crypto,
     preimage::{InstanceKind, committee_digest_preimage, instance_id},
@@ -36,6 +45,7 @@ use super::{
     commitment::chain_hash,
     schedule::{ChainParamsRecord, ScheduleError, consensus_key},
 };
+use crate::state::WorldReadOnly;
 
 /// Domain tag of a lane incarnation's genesis block hash.
 pub const LANE_GENESIS_TAG: &[u8] = b"iroha/sumeragi/lane/genesis/v1";
@@ -44,17 +54,37 @@ pub const LANE_GENESIS_RESULT_TAG: &[u8] = b"iroha/sumeragi/lane/genesis-result/
 /// Domain tag of a lane block's result `R`.
 pub const LANE_RESULT_TAG: &[u8] = b"iroha/sumeragi/lane/result/v1";
 
+/// The committed lane policy of `world`, if the chain has one.
+#[must_use]
+pub fn lane_policy(world: &impl WorldReadOnly) -> Option<SumeragiLanePolicy> {
+    let custom = world
+        .parameters()
+        .custom()
+        .get(&SumeragiLanePolicy::parameter_id())?;
+    SumeragiLanePolicy::from_custom_parameter(custom)?.ok()
+}
+
 /// Genesis block hash of a lane incarnation: `H(TAG ‖ network ‖ be32(lane) ‖ incarnation)`.
 ///
 /// Every incarnation has its own genesis hash, hence its own instance id: a recreated lane never
 /// shares safety records or signatures with an earlier incarnation.
 #[must_use]
 pub fn lane_genesis_hash(network: &NetworkId, record: &SumeragiLaneRecord) -> Hash32 {
+    incarnation_genesis_hash(network, record.lane, &record.incarnation)
+}
+
+/// [`lane_genesis_hash`] of incarnation `incarnation` of `lane`.
+#[must_use]
+pub fn incarnation_genesis_hash(
+    network: &NetworkId,
+    lane: LaneId,
+    incarnation: &[u8; 32],
+) -> Hash32 {
     let mut bytes = Vec::with_capacity(LANE_GENESIS_TAG.len() + 32 + 4 + 32);
     bytes.extend_from_slice(LANE_GENESIS_TAG);
     bytes.extend_from_slice(network.as_bytes());
-    bytes.extend_from_slice(&record.lane.as_u32().to_be_bytes());
-    bytes.extend_from_slice(&record.incarnation);
+    bytes.extend_from_slice(&lane.as_u32().to_be_bytes());
+    bytes.extend_from_slice(incarnation);
     chain_hash(&bytes)
 }
 
@@ -66,12 +96,24 @@ pub fn lane_instance(
     chain_id: &str,
     record: &SumeragiLaneRecord,
 ) -> Hash32 {
+    incarnation_instance(crypto, network, chain_id, record.lane, &record.incarnation)
+}
+
+/// [`lane_instance`] of incarnation `incarnation` of `lane`.
+#[must_use]
+pub fn incarnation_instance(
+    crypto: &dyn Crypto,
+    network: &NetworkId,
+    chain_id: &str,
+    lane: LaneId,
+    incarnation: &[u8; 32],
+) -> Hash32 {
     instance_id(
         crypto,
-        &lane_genesis_hash(network, record),
+        &incarnation_genesis_hash(network, lane, incarnation),
         chain_id.as_bytes(),
         InstanceKind::Lane,
-        record.lane.as_u32(),
+        lane.as_u32(),
     )
 }
 
@@ -185,17 +227,36 @@ pub trait AnchorView {
     fn creation_time_ms(&self, height: u64) -> Option<u64>;
 }
 
-/// Blocks of the lane chain that admission deduplicates against (§3.2 step 5).
+/// Blocks of the lane chain that admission deduplicates against at most (§3.2 step 5).
 pub const LANE_DEDUP_WINDOW: usize = 64;
 
 /// The lane chain that admission reads: the previous block's anchor and the transactions of the
-/// last [`LANE_DEDUP_WINDOW`] lane blocks (§3.2 steps 2 and 5).
+/// last [`LANE_DEDUP_WINDOW`] lane blocks with the latest anchor each appeared under (§3.2 steps
+/// 2 and 5).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LaneChainView {
     /// Anchor height of the lane's previous block (`0` before the first block).
     pub previous_anchor: u64,
-    /// Transactions of the last [`LANE_DEDUP_WINDOW`] lane blocks.
-    pub recent: BTreeSet<HashOf<TransactionEntrypoint>>,
+    /// Transactions of the last [`LANE_DEDUP_WINDOW`] lane blocks and their latest anchor.
+    pub recent: BTreeMap<HashOf<TransactionEntrypoint>, u64>,
+}
+
+impl LaneChainView {
+    /// Whether a block anchored at `anchor` repeats `hash` from a recent block that the global
+    /// chain may still merge fresh (anchored at or after `anchor - A`). Once every earlier
+    /// carrier is stale for such a block, the transaction may be carried again: a stale carrier
+    /// never executes it.
+    #[must_use]
+    pub fn repeats(
+        &self,
+        hash: &HashOf<TransactionEntrypoint>,
+        anchor: u64,
+        freshness: u64,
+    ) -> bool {
+        self.recent
+            .get(hash)
+            .is_some_and(|previous| previous.saturating_add(freshness) >= anchor)
+    }
 }
 
 /// The outcome of admission.
@@ -304,7 +365,8 @@ pub fn admit(
             .check(tx, anchor_time_ms)
             .map_err(|reason| AdmissionError::Transaction { index, reason })?;
         let hash = tx.hash_as_entrypoint();
-        if chain.recent.contains(&hash) || !seen.insert(hash) {
+        if chain.repeats(&hash, batch.anchor_height, record.anchor_freshness) || !seen.insert(hash)
+        {
             return Err(AdmissionError::Duplicate(index));
         }
         tx_hashes.push(hash);
@@ -382,7 +444,10 @@ mod tests {
             created_at: 5,
             active_from: 7,
             closing,
+            anchor_freshness: 2,
             merged: SumeragiLaneFrontier::default(),
+            merged_at: 7,
+            rescued: 0,
         }
     }
 
@@ -415,6 +480,15 @@ mod tests {
                 .map(|h| (h, (block_hash(u8::try_from(h).unwrap()), h * 1000)))
                 .collect(),
         )
+    }
+
+    fn admit_open(
+        record: &SumeragiLaneRecord,
+        config: &HeightConfig,
+        payload: &[u8],
+        chain: &LaneChainView,
+    ) -> Result<Admission, AdmissionError> {
+        admit(record, &anchors(), chain, &AcceptAll, config, payload)
     }
 
     #[test]
@@ -467,7 +541,7 @@ mod tests {
         let unmerged_tx = tx(50);
         let chain = LaneChainView {
             previous_anchor: 7,
-            recent: BTreeSet::from([unmerged_tx.hash_as_entrypoint()]),
+            recent: BTreeMap::from([(unmerged_tx.hash_as_entrypoint(), 7)]),
         };
         let admit = |payload: &[u8], chain: &LaneChainView| {
             admit(&record, &anchors(), chain, &AcceptAll, &config, payload)
@@ -525,6 +599,21 @@ mod tests {
             admit(&payload(8, vec![unmerged_tx.clone()]), &chain),
             Err(AdmissionError::Duplicate(0))
         );
+        // Once the earlier carrier (anchor 7) is stale for the new block (7 + A < 10), the
+        // transaction may be carried again.
+        let open = SumeragiLaneRecord {
+            closing: None,
+            ..record.clone()
+        };
+        assert!(matches!(
+            admit_open(
+                &open,
+                &config,
+                &payload(10, vec![unmerged_tx.clone()]),
+                &chain
+            ),
+            Ok(Admission::Valid(_))
+        ));
         // A non-canonical payload.
         let mut bytes = payload(8, vec![tx(1)]);
         bytes.push(0);

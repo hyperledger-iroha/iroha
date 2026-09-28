@@ -5841,8 +5841,8 @@ pub struct WorldData {
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk:
         Storage<String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
-    /// Lifecycle records of the global chain's lanes (`specs/sumeragi_lanes.md` §2).
-    pub(crate) sumeragi_lanes: Storage<iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
+    /// The global chain's lanes and autoscale history (`specs/sumeragi_lanes.md` §2, §6).
+    pub(crate) sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6513,8 +6513,9 @@ pub struct WorldBlockFields<'world> {
     pub(crate) consensus_keys: StorageField<'world, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk: StorageField<'world, String, Vec<ConsensusKeyId>>,
-    /// Lifecycle records of the global chain's lanes.
-    pub(crate) sumeragi_lanes: StorageField<'world, iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
+    /// The global chain's lanes and autoscale history.
+    pub(crate) sumeragi_lanes:
+        CellField<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -7815,13 +7816,13 @@ impl WorldBlock<'_> {
             soracloud_sequence_watermark,
             merge_hint_roots,
             merge_global_state_root,
+            sumeragi_lanes,
         );
         append_merge_executor_delta(&mut out, "executor", &self.executor);
         self.triggers.append_merge_execution_write_set(&mut out);
         storage!(
             consensus_keys,
             consensus_keys_by_pk,
-            sumeragi_lanes,
             domain_committees,
             domain_endorsement_policies,
             domain_endorsements,
@@ -8158,8 +8159,9 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) consensus_keys: StorageTransaction<'block, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk: StorageTransaction<'block, String, Vec<ConsensusKeyId>>,
-    /// Lifecycle records of the global chain's lanes.
-    pub(crate) sumeragi_lanes: StorageTransaction<'block, iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
+    /// The global chain's lanes and autoscale history.
+    pub(crate) sumeragi_lanes:
+        CellTransaction<'block, 'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -10636,8 +10638,9 @@ pub struct WorldView<'world> {
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk:
         StorageView<'world, String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
-    /// Lifecycle records of the global chain's lanes.
-    pub(crate) sumeragi_lanes: StorageView<'world, iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
+    /// The global chain's lanes and autoscale history.
+    pub(crate) sumeragi_lanes:
+        CellView<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -14851,6 +14854,8 @@ pub struct StateBlockFields<'state> {
     execution_output_plan: Option<output_capacity::ExecutionOutputPlanState>,
     /// The Sumeragi schedule step of this block (run by the output seal's finalizer).
     pub(crate) sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep,
+    /// The lane step of this block (run by the output seal's finalizer).
+    pub(crate) sumeragi_lanes_step: crate::sumeragi::lanes::step::LaneStep,
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -23496,8 +23501,8 @@ macro_rules! world_ro_accessors {
             storage consensus_keys: ConsensusKeyId => ConsensusKeyRecord;
             /// Index mapping consensus public keys to registered identifiers.
             storage consensus_keys_by_pk: String => Vec<ConsensusKeyId>;
-            /// Lifecycle records of the global chain's lanes (read-only).
-            storage sumeragi_lanes: iroha_model_base::topology::LaneId => iroha_data_model::sumeragi_lanes::SumeragiLaneRecord;
+            /// The global chain's lanes and autoscale history (read-only).
+            ref sumeragi_lanes: iroha_data_model::sumeragi_lanes::SumeragiLaneState;
             /// Pedersen parameter registry (read-only).
             storage pedersen_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>

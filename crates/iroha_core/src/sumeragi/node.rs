@@ -145,6 +145,8 @@ pub struct RunningNode {
     pub crypto: Arc<BlsCrypto>,
     identity: NodeIdentity,
     beacon: Arc<super::beacon::BeaconService>,
+    /// The node's lane instances.
+    pub lanes: super::lanes::runner::LaneRunner,
 }
 
 impl RunningNode {
@@ -368,6 +370,8 @@ pub struct Prepared {
     executor: StateExecutor,
     consensus_mode: ConsensusMode,
     applied_watch: Arc<crate::sumeragi::lanes::global::AppliedWatch>,
+    lane_stores: Arc<crate::sumeragi::lanes::registry::LaneStores>,
+    chain_id: String,
 }
 
 impl core::fmt::Debug for Prepared {
@@ -439,13 +443,20 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     let staging = Staging::new();
     let blocks = Arc::new(KuraBlockStore::new(
         Arc::clone(&kura),
-        shared,
+        Arc::clone(&shared),
         GENESIS_HEIGHT,
         staging.clone(),
     ));
     let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
         GENESIS_HEIGHT,
         state.view().latest_block_hash(),
+    ));
+    // Lane blocks live next to Kura; replay merges from them as live execution does.
+    let lane_stores = Arc::new(crate::sumeragi::lanes::registry::LaneStores::new(
+        kura.store_root().join("lanes"),
+        *state.network_id_ref(),
+        chain_id.clone(),
+        shared,
     ));
     let mut executor = StateExecutor::spawn(ExecutorContext {
         state: Arc::clone(&state),
@@ -457,6 +468,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         applied: (GENESIS_HEIGHT, tip.block_hash),
         crypto: Some(Arc::clone(&crypto)),
         applied_watch: Arc::clone(&applied_watch),
+        lane_blocks: lane_stores.clone(),
     })
     .map_err(|error| NodeError::Driver(error.to_string()))?;
     admit_window(&state, &crypto, GENESIS_HEIGHT);
@@ -481,6 +493,8 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         executor,
         consensus_mode,
         applied_watch,
+        lane_stores,
+        chain_id,
     })
 }
 
@@ -509,6 +523,16 @@ impl Prepared {
     /// # Errors
     /// See [`NodeError`].
     pub fn start<N: Net + 'static>(self, inputs: StartInputs<N>) -> Result<RunningNode, NodeError> {
+        self.start_with(inputs, None)
+    }
+
+    /// [`Self::start`] with the ingress that routes inbound frames to the node's lane
+    /// instances.
+    fn start_with<N: Net + 'static>(
+        self,
+        inputs: StartInputs<N>,
+        ingress: Option<Arc<SumeragiIngress>>,
+    ) -> Result<RunningNode, NodeError> {
         let Self {
             state,
             crypto,
@@ -517,7 +541,9 @@ impl Prepared {
             blocks,
             executor,
             consensus_mode,
-            applied_watch: _,
+            applied_watch,
+            lane_stores,
+            chain_id,
         } = self;
         let StartInputs {
             net,
@@ -528,7 +554,7 @@ impl Prepared {
             driver,
             beacon_signer,
         } = inputs;
-        executor.attach_queue(queue);
+        executor.attach_queue(Arc::clone(&queue));
         let beacon = super::beacon::BeaconService::spawn(
             Arc::clone(&state),
             instance,
@@ -611,6 +637,27 @@ impl Prepared {
         );
         let signer =
             KeyPairSigner::new(&key_pair).map_err(|error| NodeError::Key(error.to_string()))?;
+        // Lane instances (`specs/sumeragi_lanes.md` §4.1) share the transport, ingress,
+        // records, key and limits.
+        let lanes =
+            super::lanes::runner::LaneRunner::spawn(super::lanes::runner::LaneRunnerInputs {
+                state: Arc::clone(&state),
+                queue,
+                watch: applied_watch,
+                stores: lane_stores,
+                crypto: Arc::clone(&crypto),
+                net: net.clone(),
+                ingress,
+                records: Arc::clone(&records),
+                global_instance: instance,
+                bodies_dir: config.bodies_dir.clone(),
+                key_pair: key_pair.clone(),
+                local: config.local.clone(),
+                driver,
+                network: *state.network_id_ref(),
+                chain_id,
+            })
+            .map_err(|error| NodeError::Driver(format!("sumeragi lane runner: {error}")))?;
         let running = Driver::new(
             net,
             records,
@@ -641,6 +688,7 @@ impl Prepared {
             instance,
             crypto,
             identity,
+            lanes,
         })
     }
 
@@ -659,8 +707,8 @@ impl Prepared {
     ) -> Result<NetworkedNode, NodeError> {
         let subscription = subscribe(network, fifo_capacity)
             .map_err(|error| NodeError::Driver(error.to_string()))?;
-        let node = self.start(inputs)?;
         let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
+        let node = self.start_with(inputs, Some(Arc::clone(&ingress)))?;
         ingress.register(
             node.instance,
             Arc::new(super::beacon::BeaconFrameSink::new(
@@ -671,6 +719,7 @@ impl Prepared {
         let ingress_thread = match spawn_ingress(subscription, Arc::clone(&ingress)) {
             Ok(thread) => thread,
             Err(error) => {
+                node.lanes.shutdown();
                 node.beacon.shutdown();
                 node.driver.shutdown();
                 return Err(NodeError::Driver(format!(
@@ -704,6 +753,7 @@ impl NetworkedNode {
     /// Stop the instance and wait for its threads. The ingress thread ends with the network.
     pub fn shutdown(self) {
         self.ingress.unregister(&self.node.instance);
+        self.node.lanes.shutdown();
         self.node.beacon.shutdown();
         self.node.driver.shutdown();
         drop(self.ingress_thread);
@@ -797,7 +847,7 @@ pub fn configuration_fingerprint(
 }
 
 /// The core's local parameters for a committee of `n`, with the node's overrides.
-fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> LocalParams {
+pub(crate) fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> LocalParams {
     let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
     let defaults = LocalParams::for_committee_size(n);
     LocalParams {
@@ -839,7 +889,7 @@ fn admit_window(state: &State, crypto: &BlsCrypto, t: u64) {
 }
 
 /// A fresh nonce for the record-loss probe (§7.4 R2): distinct at every start.
-fn startup_nonce() -> u64 {
+pub(crate) fn startup_nonce() -> u64 {
     rand::random()
 }
 
@@ -1342,6 +1392,7 @@ mod tests {
                 GENESIS_HEIGHT,
                 state.view().latest_block_hash(),
             )),
+            lane_blocks: std::sync::Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         })
         .expect("executor");
         admit_window(&state, &crypto, GENESIS_HEIGHT);

@@ -105,6 +105,8 @@ pub struct TestChainConfig {
     pub consensus_mode: SumeragiConsensusMode,
     /// Creation time of the first genesis transaction in milliseconds.
     pub genesis_time_ms: u64,
+    /// The node's committed lane blocks, which the chain's blocks merge.
+    pub lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
 
 impl core::fmt::Debug for TestChainConfig {
@@ -131,8 +133,32 @@ impl TestChainConfig {
             genesis_parameters: Vec::new(),
             consensus_mode: SumeragiConsensusMode::Permissioned,
             genesis_time_ms,
+            lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         }
     }
+}
+
+/// The fixed validator committee: peers in canonical order with their proofs of possession.
+#[must_use]
+pub fn fixture_validators() -> Vec<(PeerId, Vec<u8>)> {
+    fixture_keys()
+        .iter()
+        .map(|key| {
+            (
+                PeerId::new(key.public_key().clone()),
+                bls_normal_pop_prove(key.private_key()).expect("PoP of a fixture key"),
+            )
+        })
+        .collect()
+}
+
+fn fixture_keys() -> Vec<KeyPair> {
+    let mut keys = VALIDATOR_SEEDS
+        .iter()
+        .map(|seed| KeyPair::from_seed(vec![*seed; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+    keys
 }
 
 /// A chain of certified blocks over one State (see the module documentation).
@@ -153,6 +179,7 @@ pub struct CertifiedTestChain {
     tip: (u64, Hash32, Hash32),
     router: Queue,
     clock: KeyPair,
+    lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
 
 impl core::fmt::Debug for CertifiedTestChain {
@@ -208,6 +235,7 @@ impl CertifiedTestChain {
             genesis_parameters,
             consensus_mode,
             genesis_time_ms,
+            lane_blocks,
         } = config;
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let clock = KeyPair::from_seed(vec![CLOCK_SEED; 32], Algorithm::Ed25519);
@@ -225,20 +253,8 @@ impl CertifiedTestChain {
                 world.accounts.insert(id, value);
             }
         }
-        let mut keys = VALIDATOR_SEEDS
-            .iter()
-            .map(|seed| KeyPair::from_seed(vec![*seed; 32], Algorithm::BlsNormal))
-            .collect::<Vec<_>>();
-        keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
-        let validators = keys
-            .iter()
-            .map(|key| {
-                (
-                    PeerId::new(key.public_key().clone()),
-                    bls_normal_pop_prove(key.private_key()).expect("PoP of a fixture key"),
-                )
-            })
-            .collect::<Vec<_>>();
+        let keys = fixture_keys();
+        let validators = fixture_validators();
         let (genesis, manifest) = match build_genesis(
             &chain_id,
             &genesis_key,
@@ -324,6 +340,7 @@ impl CertifiedTestChain {
                 GENESIS_HEIGHT,
                 state.view().latest_block_hash(),
             )),
+            lane_blocks: Arc::clone(&lane_blocks),
         })
         .expect("executor thread");
         let signers = keys
@@ -358,6 +375,7 @@ impl CertifiedTestChain {
             tip: (GENESIS_HEIGHT, tip.block_hash, tip.result),
             router,
             clock,
+            lane_blocks,
         })
     }
 
@@ -523,8 +541,12 @@ impl CertifiedTestChain {
             view: 0,
             cadence,
         };
-        let proposal = payload::assemble_with_pulse(&self.state, assembly, &accepted, pulse)
-            .expect("assembly");
+        // The leader merges the lane blocks its lane stores have committed.
+        let (merges, _) =
+            crate::sumeragi::lanes::merge::propose(&self.state.view(), &*self.lane_blocks, height);
+        let proposal =
+            payload::assemble_with_merges(&self.state, assembly, &accepted, &merges, pulse)
+                .expect("assembly");
         assert_eq!(
             proposal.header().creation_time(),
             block_time,

@@ -43,6 +43,7 @@ use super::{
     block_store::{StagedBlock, Staging, commit_certificate},
     commitment::{ExecutionResultCommitment, execution_result},
     driver::traits::Executor,
+    lanes,
     network_topology::Topology,
     payload::{self, Assembly},
     schedule,
@@ -82,6 +83,8 @@ pub struct ExecutorContext {
     pub crypto: Option<Arc<super::crypto::BlsCrypto>>,
     /// The applied tip published to the node's lane instances (`specs/sumeragi_lanes.md` §3.2).
     pub applied_watch: Arc<crate::sumeragi::lanes::global::AppliedWatch>,
+    /// The node's committed lane blocks, which merged global blocks execute (§4.3).
+    pub lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
 
 /// Configured SoraFS archives captured from the exact committed State before apply completes.
@@ -407,6 +410,24 @@ impl Worker<'_> {
                 &"the attestation flag differs from the payload's rule",
             );
         }
+        // Merged lane blocks execute after the block's own transactions (§4.3 of
+        // `specs/sumeragi_lanes.md`); the node waits for its lane stores within `E_max`.
+        let expansion = match lanes::merge::expand(
+            &self.state.view(),
+            &iroha_block,
+            &*self.context.lane_blocks,
+            Duration::from_millis(scheduled.params.exec_budget_ms),
+        ) {
+            Ok(expansion) => expansion,
+            Err(lanes::merge::MergeError::Pending(reason)) => {
+                return ExecOutcome::Failed(reason);
+            }
+            Err(error @ lanes::merge::MergeError::Invalid(_)) => return invalid(height, &error),
+        };
+        let iroha_block = match expansion.apply(iroha_block) {
+            Ok(block) => block,
+            Err(error) => return invalid(height, &error),
+        };
         let topology = Topology::new(scheduled.committee.clone());
         let validated = catch_unwind(AssertUnwindSafe(|| {
             ValidBlock::validate_sumeragi_block(
@@ -415,6 +436,7 @@ impl Worker<'_> {
                 &self.context.genesis_account,
                 cadence,
                 self.context.consensus_mode,
+                expansion.step,
                 self.state,
             )
         }));
@@ -426,6 +448,9 @@ impl Worker<'_> {
             Ok(executed) => executed,
             Err((_, error)) => return classify(height, &error),
         };
+        if let Err(error) = overlay.take_sumeragi_lanes() {
+            return invalid(height, &error);
+        }
         let next = match overlay
             .take_sumeragi_schedule()
             .and_then(|next| next.height_config())
@@ -661,13 +686,18 @@ impl Worker<'_> {
             return (Vec::new(), false);
         };
         let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+        // Certified lane blocks come first: they reserve their share of the block's capacity
+        // (`specs/sumeragi_lanes.md` §4.2).
+        let (merges, reserved) =
+            lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height);
         let mut selected = payload::select(
             self.state,
             queue,
             max_bytes.saturating_sub(PAYLOAD_OVERHEAD),
+            reserved,
         );
-        // Only real queued work may activate the pulse signer. A pulse cannot create a block.
-        if selected.is_empty() {
+        // Only real work may activate the pulse signer. A pulse cannot create a block.
+        if selected.is_empty() && merges.is_empty() {
             return (Vec::new(), false);
         }
         let pulse = match self.pulse_for_height(height) {
@@ -682,8 +712,10 @@ impl Worker<'_> {
             view,
             cadence: Duration::from_millis(scheduled.params.block_time_ms),
         };
-        while !selected.is_empty() {
-            let block = match payload::assemble_with_pulse(self.state, assembly, &selected, pulse) {
+        while !selected.is_empty() || !merges.is_empty() {
+            let block = match payload::assemble_with_merges(
+                self.state, assembly, &selected, &merges, pulse,
+            ) {
                 Ok(block) => block,
                 Err(error) => {
                     iroha_logger::warn!(height, %error, "sumeragi: payload assembly failed");
@@ -703,9 +735,10 @@ impl Worker<'_> {
                     let attest = attestation_required(&block);
                     return (bytes, attest);
                 }
-                Ok(_) => {
+                Ok(_) if !selected.is_empty() => {
                     selected.pop();
                 }
+                Ok(_) => return (Vec::new(), false),
                 Err(_) => return (Vec::new(), false),
             }
         }
@@ -735,7 +768,7 @@ impl Worker<'_> {
         let Ok(pulse) = self.pulse_for_height(height) else {
             return;
         };
-        let queued = payload::select(self.state, &queue, usize::MAX);
+        let queued = payload::select(self.state, &queue, usize::MAX, 0);
         let mut poison = Vec::new();
         for (tx, plan) in queued
             .into_iter()
@@ -762,6 +795,7 @@ impl Worker<'_> {
                     &self.context.genesis_account,
                     cadence,
                     self.context.consensus_mode,
+                    lanes::merge::LaneStepInput::default(),
                     self.state,
                 )
                 .unpack(|_| {})
@@ -875,6 +909,7 @@ mod tests {
             applied: (1, parent_hash),
             crypto: None,
             applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
+            lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         })
         .expect("state executor");
         let zero_transaction_wire = iroha_data_model::block::builder::BlockBuilder::new(

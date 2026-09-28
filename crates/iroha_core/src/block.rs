@@ -4521,6 +4521,8 @@ pub(crate) mod valid {
         Sumeragi {
             block_cadence: Duration,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+            /// The block's lane step input (`specs/sumeragi_lanes.md` §4.3).
+            lanes: crate::sumeragi::lanes::merge::LaneStepInput,
         },
         /// The signed genesis of a Sumeragi chain: [`Self::SignedGenesis`] that also installs
         /// the consensus schedule.
@@ -4535,6 +4537,17 @@ pub(crate) mod valid {
             match self {
                 Self::Sumeragi { .. } | Self::SumeragiGenesis { .. } => {
                     Some(crate::sumeragi::startup::GENESIS_HEIGHT)
+                }
+                _ => None,
+            }
+        }
+        /// The lane step input when the block advances the lane set
+        /// (`specs/sumeragi_lanes.md` §4.3): genesis creates the policy's fixed lanes.
+        fn sumeragi_lanes(&self) -> Option<crate::sumeragi::lanes::merge::LaneStepInput> {
+            match self {
+                Self::Sumeragi { lanes, .. } => Some(lanes.clone()),
+                Self::SumeragiGenesis { .. } => {
+                    Some(crate::sumeragi::lanes::merge::LaneStepInput::default())
                 }
                 _ => None,
             }
@@ -7166,12 +7179,14 @@ pub(crate) mod valid {
         /// checked; empty blocks are valid; block time must be canonical from the parent and
         /// `block_cadence`. Transaction signatures, stateless checks, state-dependent
         /// invariants and deterministic execution all remain mandatory.
+        #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_block<'state>(
             block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
             block_cadence: Duration,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+            lanes: crate::sumeragi::lanes::merge::LaneStepInput,
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
@@ -7187,6 +7202,7 @@ pub(crate) mod valid {
                 ConsensusValidationProfile::Sumeragi {
                     block_cadence,
                     consensus_mode,
+                    lanes,
                 },
                 true,
                 None,
@@ -8177,6 +8193,9 @@ pub(crate) mod valid {
                     if let Some(genesis_height) = validation_profile.sumeragi_schedule() {
                         state_block.request_sumeragi_schedule(genesis_height);
                     }
+                    if let Some(lanes) = validation_profile.sumeragi_lanes() {
+                        state_block.request_sumeragi_lanes(lanes);
+                    }
                     (state_block, exec_witness_guard)
                 }
                 Err(error) => {
@@ -8429,8 +8448,12 @@ pub(crate) mod valid {
                 });
             }
             let params = state.world().parameters();
+            // Merged lane entrypoints are bounded by the lane merge rules
+            // (`specs/sumeragi_lanes.md` §4.3); the cap applies to the block's own.
             validate_external_entrypoint_count(
-                block.external_entrypoint_count(),
+                block
+                    .external_entrypoint_count()
+                    .saturating_sub(block.merged_entrypoint_count()),
                 params.block().max_transactions(),
             )?;
             let max_clock_drift = params.sumeragi().max_clock_drift();
@@ -12270,9 +12293,10 @@ pub(crate) mod valid {
             let finalize = |state: &mut StateBlock<'_>,
                             source: &SignedBlock,
                             routes: &[crate::queue::RoutingDecision]| {
-                // The Sumeragi schedule is World state: advance it before the seal fixes the
-                // block's World delta.
+                // The Sumeragi schedule and lane set are World state: advance them before the
+                // seal fixes the block's World delta.
                 state.advance_requested_sumeragi_schedule();
+                state.advance_requested_sumeragi_lanes();
                 Self::finalize_owned_execution_metadata(
                     source,
                     state,

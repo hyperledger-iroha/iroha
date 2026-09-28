@@ -17,17 +17,16 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_model_base::topology::LaneId;
-use mv::storage::StorageReadOnly as _;
 use parking_lot::{Condvar, Mutex};
 
 use super::{
     AnchorView, TransactionCheck,
     executor::{AnchorSource, LaneTransactions},
-    routing::{RoutingInputs, route},
+    routing::RoutingSnapshot,
 };
 use crate::{
     queue::Queue,
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, StateReadOnly},
 };
 
 /// The global chain's applied tip, published by its executor after each applied block and read
@@ -168,7 +167,6 @@ impl LaneTransactions for QueueLaneTransactions {
         max_bytes: usize,
         skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
     ) -> Vec<SignedTransaction> {
-        let nexus = self.state.nexus_snapshot();
         let view = self.state.view();
         let Some((pending, lease)) = self
             .queue
@@ -177,28 +175,13 @@ impl LaneTransactions for QueueLaneTransactions {
             return Vec::new();
         };
         drop(lease);
-        let records = view
-            .world()
-            .sumeragi_lanes()
-            .iter()
-            .map(|(_, record)| record.clone())
-            .collect::<Vec<_>>();
-        let refs = records.iter().collect::<Vec<_>>();
-        let inputs = RoutingInputs {
-            policy: &nexus.routing_policy,
-            dataspaces: &nexus.dataspace_catalog,
-            world: view.world(),
-            ledger_time_ms: view
-                .latest_block()
-                .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
-                .unwrap_or(0),
-        };
-        let elastic = |lane: LaneId| nexus.autoscale.contains_elastic_lane_id(lane);
+        let routing = RoutingSnapshot::of(&view);
+        let inputs = routing.inputs(view.world());
         let mut selected = Vec::new();
         let mut bytes = 0usize;
         for transaction in pending {
             if skip.contains(&transaction.hash_as_entrypoint())
-                || route(inputs, &refs, elastic, &transaction, height) != self.lane
+                || inputs.route(&transaction, height) != self.lane
             {
                 continue;
             }

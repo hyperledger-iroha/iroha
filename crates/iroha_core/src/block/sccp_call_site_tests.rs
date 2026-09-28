@@ -252,6 +252,7 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         chain.genesis_account(),
         cadence,
         ConsensusMode::Permissioned,
+        crate::sumeragi::lanes::merge::LaneStepInput::default(),
         state,
     )
     .unpack(|_| {})

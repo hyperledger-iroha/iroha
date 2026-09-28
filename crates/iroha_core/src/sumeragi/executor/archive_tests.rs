@@ -176,6 +176,7 @@ fn context(
             applied: (1, chain.committed(1).core_hash()),
             crypto: None,
             applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
+            lane_blocks: std::sync::Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         },
         receiver,
     )

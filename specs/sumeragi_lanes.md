@@ -14,8 +14,8 @@ own state and cross-dataspace atomicity are specified in `sumeragi.md` §11 (goa
 A **lane** adds dissemination and certification capacity to the one global world state. Every lane
 incarnation is a separate Sumeragi core instance with its own committee, pinned at creation. A
 lane block is an ordered batch of transactions that the lane committee has checked for
-*admission* (signature, size, routing, deduplication) against the global state at an **anchor**
-height; a lane never mutates world state. The global chain `G` **merges** certified lane blocks by
+*admission* (network, signature, deduplication) against a committed global block, its **anchor**;
+a lane never mutates world state. The global chain `G` **merges** certified lane blocks by
 reference: a `G` block names, per lane, the next contiguous certified lane heights, and executing
 the `G` block executes those transactions against the world state in one canonical order. `G` is
 the only place state changes, so transactions on different lanes need no cross-lane protocol:
@@ -41,34 +41,47 @@ Why this shape:
 - `G` — the global instance: the node's existing Sumeragi instance, height `h`.
 - Lane `ℓ` — a `LaneId` of the committed lane catalog. Lane `0` (the anchor lane) is sequenced by
   `G` itself and has no instance. Every other active lane has one instance per incarnation.
-- Incarnation `ι` — `H("iroha/lane/incarnation/v1" ‖ network_id ‖ be32(ℓ) ‖ be64(dataspace) ‖
-  be64(creation_height) ‖ be64(creation_counter))`; never reused.
-- Lane instance id `I_ℓ,ι = H("iroha/sumeragi/instance/lane/v1" ‖ network_id ‖ be32(ℓ) ‖ ι)`.
+- Incarnation `ι` — `H("iroha/sumeragi/lane/incarnation/v1" ‖ network_id ‖ be32(ℓ) ‖
+  be64(dataspace) ‖ be64(creation_height) ‖ be64(creation_counter))`; the counter is the number
+  of incarnations the chain has created, so `ι` is never reused.
+- Lane instance id `I_ℓ,ι` — the core instance id (`sumeragi.md` §3.5) of kind `Lane` and index
+  `ℓ` over the lane genesis hash (§2.3).
 - Lane height `x` — height in the lane instance; lane genesis is `x = 0` (§2.3).
 - Anchor `a(B)` — the `G` height named by lane block `B` (§3.2).
-- `A` — freshness bound, a `G` chain parameter (`lane_anchor_freshness`, default 16).
+- Lane policy — the governed custom chain parameter `sumeragi_lane_policy`
+  (`SumeragiLanePolicy`): freshness bound, merge bound, stall window, the chain parameters pinned
+  into new lanes, the fixed lanes with their committees, explicit routes and the autoscale
+  settings. Without it the chain has lane `0` only. `SetParameter` validates it (structure,
+  pinned parameters, every fixed member's BLS-normal key and proof of possession).
+- `A` — freshness bound: the policy's `anchor_freshness` (default 16), **pinned into each
+  incarnation** at creation, so a policy change never alters an existing lane's rules.
 
 ## 2. Lane lifecycle in `G`'s state
 
 ### 2.1 Lifecycle record
 
-World holds, per lane, a `LaneLifecycleRecord`:
+World holds one `SumeragiLaneState` cell: the lane records (lanes ascending), the autoscale
+samples (§6.1), the height of the last autoscale transition and the incarnation counter. A lane
+record is
 
 ```text
-LaneLifecycleRecord {
+SumeragiLaneRecord {
     lane: LaneId, dataspace: DataSpaceId, incarnation: [u8; 32],
-    profile: LaneProfile,                 // routing class + lane chain parameters (block_time, max_block_bytes, ...)
-    committee: Vec<(PeerId, pop)>,        // ordered, pinned for the whole incarnation
+    params: SumeragiParameters,           // the lane's chain parameters, pinned
+    committee: Vec<{peer, pop}>,          // canonical order, pinned for the whole incarnation
     created_at: u64,                      // G height of the creating block
     active_from: u64,                     // created_at + 2
     closing: Option<u64>,                 // G close height c
-    merged: LaneFrontier,                 // highest merged lane height and its block hash / R
+    anchor_freshness: u64,                // A, pinned
+    merged: {height, block_hash, result}, // highest merged lane block (lane genesis at first)
+    merged_at: u64,                       // G height of the last frontier advance
+    rescued: u64,                         // lane-routed transactions G executed directly since
 }
 ```
 
-The record, including the committee and profile, is committed in `R` (the world-state root) of the
-`G` block that writes it. A fixed lane (from the configured catalog) is created by genesis or by a
-governance transaction; an elastic lane by autoscale (§6). Lane `0` has no record.
+The state is committed by the `G` block that writes it. A fixed lane is created when the policy
+lists it (genesis, or the first block after a `SetParameter` that adds it); an elastic lane by
+autoscale (§6). Lane `0` has no record.
 
 ### 2.2 States
 
@@ -77,8 +90,10 @@ governance transaction; an elastic lane by autoscale (§6). Lane `0` has no reco
 - **Active** from `G` height `active_from`: nodes start the lane instance when they apply that
   height (§4.1); the lag of two gives every node the record before the first lane block can be
   merged.
-- **Closing** from the `G` block that sets `c` (autoscale scale-in, stall close §6.4, or a
-  governance close of a fixed lane).
+- **Closing** from the `G` block that sets `c` (autoscale scale-in, stall close §6.4, a policy
+  that no longer lists a fixed lane or lists it with another committee or dataspace, or a chain
+  without a policy). A fixed lane the policy still lists is recreated, as a new incarnation, once
+  its closing incarnation retires.
 - **Retired** at `G` height `c + A + 1` (§6.3): the record is removed and the frontier is final.
 
 ### 2.3 The lane instance's configuration
@@ -87,9 +102,10 @@ The core needs `C_{x}`, `ChainParams_x` for every lane height and an `Init` (§1
 spec). For a lane they are constants of the record:
 
 - `C_{ℓ,x} = committee` for all `x` (BLS-normal keys with the pinned proofs of possession).
-- `ChainParams_x = profile.chain_params` for all `x`; `R_x` still commits them (they never change).
-- Lane genesis `x = 0`: `block_hash_0 = H("iroha/lane/genesis/v1" ‖ I_ℓ,ι)`,
-  `R_0 = H("iroha/lane/genesis-result/v1" ‖ norito(record at creation))`.
+- `ChainParams_x = params` for all `x`; `R_x` still commits them (they never change).
+- Lane genesis `x = 0`: `block_hash_0 = H("iroha/sumeragi/lane/genesis/v1" ‖ network_id ‖
+  be32(ℓ) ‖ ι)`, `R_0 = H("iroha/sumeragi/lane/genesis-result/v1" ‖ norito(the fields fixed at
+  creation))`. The record's `merged` frontier starts at this genesis.
 
 A committee therefore cannot change within an incarnation; replacing members means closing the
 lane and creating a new incarnation. A pinned member that loses its key stalls only this
@@ -119,19 +135,21 @@ A lane member executes a lane block `B` at lane height `x` as follows; `Valid(R)
 2. Monotone anchors: `anchor_height ≥` the anchor of lane block `x − 1` (from its `R` preimage).
 3. The lane is active at the anchor: `active_from ≤ anchor_height` and not
    (`closing = Some(c)` with `anchor_height ≥ c`).
-4. Every transaction: canonical encoding, size and signature limits, chain id, and not expired at
-   the anchor block's creation time.
-5. No transaction hash appears earlier in `B` or in lane blocks `x − W .. x − 1`
-   (`W = LANE_DEDUP_WINDOW` blocks; the lane executor keeps these hashes from its own chain).
-   Duplicates across lanes, or of transactions `G` already committed, are rejected at merge.
+4. Every transaction is for this network and its signature verifies. Limits, expiry and every
+   state check belong to merge execution (§4.3), where `G`'s parameters of the merge height apply.
+5. No transaction hash appears earlier in `B`, or in one of the last `W = 64` lane blocks
+   (`LANE_DEDUP_WINDOW`) whose anchor is at least `a(B) − A` — a block `G` may still merge fresh
+   together with `B`. Once every earlier carrier is stale for `B`, the transaction may be carried
+   again: a stale carrier never executes it. Duplicates across lanes, or of transactions `G`
+   already committed, are dropped at merge.
 
-`R_x = H("iroha/lane/result/v1" ‖ norito(LaneResult))` with
+`R_x = H("iroha/sumeragi/lane/result/v1" ‖ norito(LaneResult))` with
 `LaneResult { anchor_height, anchor_hash, tx_hashes, payload_bytes, next_committee_digest, next_params }`;
 `next_*` are the pinned constants (§2.3), so the core's lag-2 rule holds trivially.
 
 Admission is a pure function of the lane block, the lane's own chain (its previous anchor and the
-last `W` blocks) and permanent facts of `G` (the anchor block's hash and time, and this lane's
-record fields, which never change once set),
+last `W` blocks with their anchors) and permanent facts of `G` (the anchor block's hash and time,
+and this lane's record fields, which never change once set),
 so every honest lane member computes the same `R_x` whenever it executes. Admission never reads
 world state and never checks routing: routing is decided at merge (§4.3 step 3), where `G`'s
 state is the single authority, so a lane's result cannot depend on how recent a node's view of
@@ -157,30 +175,49 @@ LaneMerge { lane: LaneId, incarnation: [u8; 32], from: u64, to: u64, tip_hash: H
 ```
 
 for each lane with new certified blocks: the next contiguous lane heights `from = merged + 1 ..= to`
-that the leader's node has committed. Lanes appear in ascending `LaneId`. Limits: at most
-`max_lane_blocks_per_merge` lane blocks per lane and `max_merge_bytes` of lane payload per `G`
-block (chain parameters), so a `G` block's execution stays within the execution budget.
+that the leader's node has committed. The payload carries them in its execution context
+(`SumeragiLaneMergeSection`), lanes in ascending `LaneId`. Limits: at most `max_merge_blocks`
+(policy) lane blocks per lane, and the block's own transactions plus the transactions of its
+fresh merged blocks fit the block's transaction capacity (the on-chain transaction cap and the
+execution output's network input capacity), so a `G` block's execution stays within its budget.
+The leader reserves capacity for lane blocks first, lanes taking turns (rotating by height) so
+none starves, and fills the rest with lane-0 transactions. A block with merges and no
+transactions of its own is work: lanes never wait for lane-0 traffic.
 
 ### 4.3 Merge execution
 
 `G`'s executor, for a `G` block at height `h`, after its ordinary preamble:
 
-1. For each `LaneMerge` in order, the node's lane instance must have committed heights
-   `from ..= to` with `block_hash(to) == tip_hash` and `R_to == tip_result`; otherwise the
-   execution is pending until it has (lane sync fetches them; a lane CommitQC for them exists, so
-   bodies are available from the lane committee). A `LaneMerge` whose lane is not active, whose
-   `from` is not `merged + 1`, or which violates a limit makes the `G` block `Invalid`.
-2. **Freshness:** every merged lane block's anchor satisfies `anchor_height ≥ h − A`, and, if the
-   lane is closing with `c`, `anchor_height < c`. A violating block makes the `G` block `Invalid`.
-3. The transactions of the merged lane blocks are executed in order — lanes ascending, lane heights
-   ascending, transactions in batch order — after lane 0's transactions, exactly as if they were
-   one ordered list in the `G` block. Before executing a merged transaction, execution evaluates
-   `route(tx, state before h)` (§5.1): a transaction whose route is not the lane that carried it,
-   or whose hash the chain already committed (possibly via another lane or lane 0), is rejected
-   as *misrouted* or *duplicate* with no effect and no fee. Every other transaction executes and
-   its outcome (accepted / rejected with reason, fees as usual) is committed in `R_h`. Admission
-   at the lane does not guarantee acceptance: state may have changed since the anchor.
-4. The lane records' `merged` frontiers advance to `to`, and the load samples of §6.1 are updated.
+1. For each `LaneMerge` in order, the node's lane store must hold committed heights
+   `from ..= to` (the executor waits up to `E_max`; until then execution is pending and retried —
+   lane sync fetches them, and a lane CommitQC for them exists, so bodies are available from the
+   lane committee). A `LaneMerge` out of lane order, whose lane has no record, another
+   incarnation, is not active (`h ≤ active_from`), whose `from` is not `merged + 1`, whose `to`
+   block or result differs from the lane's committed block, or which violates a limit makes the
+   `G` block `Invalid`. A certified lane block whose payload is not a lane batch (only a
+   Byzantine lane quorum certifies one) is merged without effect.
+2. **Freshness:** a merged lane block is *stale* when `anchor_height < h − A`. A stale block is
+   merged — the frontier moves past it, so a lane never stalls behind an old block — but its
+   transactions are not executed; they stay pending in the queue and are proposed again. (Lane
+   members refuse blocks anchored at or after a closing height `c`, so no merged block is.)
+3. The transactions of the fresh merged lane blocks are executed in order — lanes ascending,
+   lane heights ascending, transactions in batch order — after lane 0's transactions, exactly as
+   if they were one ordered list in the `G` block: the executed block is the proposal with these
+   entrypoints appended (`merged_count` records how many; removing them recovers the proposal).
+   A merged transaction is dropped — no effect, no fee, not in the executed block — when
+   `route(tx, state before h)` (§5.1) is not the lane that carried it (*misrouted*), the chain
+   already committed it or it occurs earlier in the block (*duplicate*), or a block at `h` could
+   not carry it (not an ordinary admission intent, created at or after the block time, or failing
+   the network, signature, limit or expiry checks at the block time). Dropping instead of
+   invalidating keeps a lane committee from blocking `G` with a transaction `G` refuses. Every
+   other transaction executes and its outcome (accepted / rejected with reason, fees as usual)
+   is committed in `R_h`. Admission at the lane does not guarantee acceptance: state may have
+   changed since the anchor.
+4. The **lane step** (in the execution output's finalizer, with the schedule step): the merged
+   frontiers advance to `to` (`merged_at = h`, `rescued = 0`); the block's lane-0 transactions
+   routed to another lane add to that lane's `rescued`; the load sample of §6.1 is recorded;
+   lanes at their retirement height are removed; fixed lanes are reconciled with the policy;
+   stalled lanes close (§6.4); at most one autoscale transition applies (§6.2–§6.3).
 
 **Parallel execution.** Step 3 fixes the *result*: the canonical serial order above. The executor
 may run merged lane batches concurrently with the deterministic parallel scheduler, which commits
@@ -190,8 +227,8 @@ one, so the result equals the serial order on every node and every machine. Lane
 adding lanes adds execution parallelism as well as dissemination and certification capacity;
 transactions that touch several lanes' state serialize on the conflict, never reorder.
 
-A certified lane block that `G` never merges (stale anchor, closed lane) has no effect; its
-transactions stay in the nodes' queues (§5.3) and are proposed again.
+A lane block that is stale when merged, or that is still unmerged when its lane retires, has no
+effect; its transactions stay in the nodes' queues (§5.3) and are proposed again.
 
 ### 4.4 Why this is safe
 
@@ -220,12 +257,20 @@ them and pruned with those `G` blocks.
 
 ### 5.1 Routing function
 
-`route(tx, state) -> LaneId` uses only committed state: explicit routing rules (fixed lanes) first;
-otherwise the default route is sharded over lane 0 and the **active, non-closing** elastic lanes by
+`route(tx, state) -> LaneId` uses only committed state: the policy's explicit routes first (an
+account matcher and/or an instruction matcher; the target is lane `0` or a fixed lane, and a
+target that is not admitted at the height sends the transaction to lane `0`); otherwise the
+default route is sharded over lane 0 and the **active, non-closing** elastic lanes by
 `H(tx.authority) mod k` (authority-based sharding keeps one account's transactions in one lane,
 preserving their order). A node routes new transactions with its latest applied `G` state; `G`
 re-evaluates the route at merge (§4.3 step 3), so a transaction routed just before a lane opened
-or closed is rejected as misrouted without effect, stays pending in the queue and is re-routed.
+or closed is dropped as misrouted without effect, stays pending in the queue and is re-routed.
+
+**Rescue.** `G` does not enforce routes on its own transactions. A leader includes a transaction
+routed to another lane once it is older than `2A` global block times (by its creation time
+against the parent block's): a stalled lane cannot hold transactions, and each rescued
+transaction is committed evidence of load the lane is not serving (§6.4). A transaction both
+rescued and carried by a lane executes once; the later carrier's copy is a duplicate.
 
 ### 5.2 Queue partitions
 
@@ -243,31 +288,39 @@ payload builder skips transactions already in committed-but-unmerged lane blocks
 ## 6. Autoscale
 
 All rules run in `G`'s execution with committed data only; every node computes the same decision.
-Parameters are the committed `nexus.autoscale` values (range `[min_lane_id, max_lane_id_exclusive)`,
-windows, ratios, cooldown, per-lane target load); at most one lifecycle transition per `G` block.
+Parameters are the policy's `autoscale` settings (elastic range `[min_lane, max_lane_exclusive)`,
+dataspace, committee size, per-lane target throughput, window, scale-out and scale-in
+utilization in per mille, cooldown); at most one autoscale transition per `G` block.
 
 ### 6.1 Samples
 
-Each `G` block appends a sample `{h, block_time_ms, merged_tx_count, lane0_tx_count,
-per-lane merged bytes}` to a bounded window in World. Utilization of the lane set is
-`(merged + lane-0 transactions in the window) / (window blocks × active lanes × per_lane_target)`;
-latency is the p95 of `block_time_ms` in the window (the `G` block time, which rises when `G`'s
-execution is saturated).
+Each `G` block appends a sample `{height, time_ms, transactions, lanes}` — the transactions it
+executed from lane 0 and the elastic lanes, and the number of default-route lanes (lane 0 plus
+the admitted elastic lanes) — keeping the last `window + 1`. Utilization over the window is
+
+```text
+Σ transactions / Σ (interval_ms × lanes × per_lane_target_tps / 1000)      (per mille)
+```
+
+over the last `window` sample intervals. Blocks are work-driven (no empty blocks), so a long
+block interval means idle time, not saturation: latency is not a load signal, and utilization
+already counts the idle time as unused capacity.
 
 ### 6.2 Scale out
 
-When the scale-out window shows `p95 ≥ scale_out_latency_ratio × target_block_ms` or
-`utilization ≥ scale_out_utilization_ratio`, the cooldown has expired and a free elastic id exists,
-execution creates a lane record: the lowest free id, the default dataspace and public profile, a
-fresh incarnation, and the committee `select_committee(dataspace, h)` — the dataspace's validator
-pool (stake-elected for public dataspaces, the manifest cohort otherwise), exactly `n` members
-(`n` = the dataspace's committee size), ordered canonically, each with its registered BLS-normal
-key and PoP. If the pool cannot fill `n`, no lane is created.
+When utilization is at least `scale_out_permille`, the cooldown has expired and a free elastic id
+exists, execution creates a lane record: the lowest free id, the autoscale dataspace, the
+policy's lane parameters and `A`, a fresh incarnation, and a committee of `committee_size`
+global validators live at `h` with their registered proofs of possession, ranked by
+`H("iroha/sumeragi/lane/committee-rank/v1" ‖ ι ‖ key)` (so successive lanes spread over the
+validator set) and stored in canonical order. If fewer validators are available, no lane is
+created.
 
 ### 6.3 Scale in and retirement
 
-When the scale-in window shows both ratios below their scale-in thresholds and the cooldown has
-expired, execution sets `closing = Some(h + 1)` on the highest active elastic lane. From `c`:
+When utilization is below `scale_in_permille` (strictly below `scale_out_permille`, so a
+transition never immediately reverses) and the cooldown has expired, execution sets
+`closing = Some(h + 1)` on the highest active, non-closing elastic lane. From `c`:
 routing excludes the lane (§5.1), lane members refuse blocks anchored at or after `c` (§3.2
 step 3), and `G` merges only its blocks anchored before `c` (§4.3). At `G` height `c + A` every
 still-unmerged block of the lane is stale, so its frontier is final; at `c + A + 1` execution
@@ -276,10 +329,11 @@ the frontier.
 
 ### 6.4 Stalled lanes
 
-A lane that is active for at least `stall_window` `G` blocks, has routed load (transactions
-routed to it were observed in `G` blocks — i.e. its queue share is non-zero in committed samples)
-and has merged nothing within the window is closed exactly like a scale-in (fixed lanes too), so
-a lane whose pinned committee lost its quorum cannot hold transactions forever.
+A lane with rescued load (`rescued > 0`, §5.1) whose frontier has not advanced for
+`stall_window` `G` blocks (`h ≥ merged_at + stall_window`) is closed exactly like a scale-in
+(fixed lanes too), so a lane whose pinned committee lost its quorum is replaced. A fixed lane is
+then recreated with the committee the policy lists; governance replaces a broken committee by
+changing the policy.
 
 ## 7. Fees and settlement
 
@@ -308,17 +362,25 @@ Kura per-instance storage identity are the inputs this design builds on.
 
 ## 10. Implementation plan
 
+Done (`crates/iroha_core/src/sumeragi/lanes/`, `crates/iroha_data_model/src/sumeragi_lanes.rs`):
+
+- **Lifecycle state and policy:** `SumeragiLaneState` in World, the `sumeragi_lane_policy`
+  parameter and its validation, lane identity and `Init`/configuration from the record.
+- **Lane executor and payload builder:** `LaneBatch`, admission and `R`, the anchor-aware
+  dedupe window, the durable per-incarnation block store, routing from committed state.
+- **`G` merge:** the merge section, pending-until-committed execution with the node's lane
+  stores (also during Kura replay), freshness, dropping rules, canonical execution order,
+  capacity reservation, rescue.
+- **Lane step:** frontiers, samples, retirement, fixed-lane reconciliation, stall close,
+  autoscale with committee selection.
+
+Remaining:
+
 1. **Multi-instance node (S5 core):** the node runs `G` plus one driver instance per active lane
-   (per-instance records dir, bodies store, block store, observer labels); `net.rs` routes frames
-   by instance id; O9 isolation tests.
-2. **Lifecycle state:** `LaneLifecycleRecord` in World, genesis/governance creation of fixed lanes,
-   lane `Init`/configuration from the record, start/stop of instances on `G` apply.
-3. **Lane executor and payload builder:** `LaneBatch`, admission execution and `R`, queue
-   partitions and routing.
-4. **`G` merge:** `LaneMerge` payload section, pending-until-committed execution, freshness,
-   canonical execution order, frontier update; Kura append order and replay.
-5. **Autoscale:** samples, scale-out committee selection, scale-in/close/retire, stall close.
-6. **Status, telemetry, Torii and SDK DTOs; kagami/localnet lane catalogs.**
-7. **Tests:** multi-instance node tests (two lanes, merge order, restart), autoscale unit tests
-   (deterministic decisions from sample windows), a four-peer network test with elastic scale-out
-   and scale-in under load, and simulator coverage of a lane instance next to `G`.
+   (per-instance records, bodies and the shared lane store; observer labels), started when `G`
+   applies `active_from` and stopped after retirement; `net.rs` routes frames by instance id;
+   O9 isolation tests.
+2. **Status, telemetry, Torii and SDK DTOs; kagami/localnet lane policies.**
+3. **Tests:** multi-instance node tests (two lanes, merge order, restart), a four-peer network
+   test with elastic scale-out and scale-in under load, and simulator coverage of a lane
+   instance next to `G`.
