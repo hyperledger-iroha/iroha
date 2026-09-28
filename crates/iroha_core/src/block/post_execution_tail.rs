@@ -321,5 +321,3 @@ impl ValidBlock {
             .map_err(Self::execution_context_error)
     }
 }
-
-include!("native_execution_metadata.rs");

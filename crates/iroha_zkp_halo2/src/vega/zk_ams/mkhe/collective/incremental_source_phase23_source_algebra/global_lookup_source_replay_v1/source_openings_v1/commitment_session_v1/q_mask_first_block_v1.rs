@@ -150,7 +150,7 @@ impl<R: MaskedRelaxedRandomSourceV1> MaskedRelaxedRandomSourceV1 for MaskEntropy
             return Err(MaskedRelaxedRandomErrorV1::Unavailable);
         };
         *self.attempted_bytes = next;
-        self.random.fill_bytes(destination).inspect_err(|error| {
+        self.random.fill_bytes(destination).inspect_err(|_| {
             destination.zeroize();
         })
     }

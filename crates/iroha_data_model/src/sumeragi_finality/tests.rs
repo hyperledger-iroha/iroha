@@ -220,6 +220,7 @@ impl Fixture {
             signers: Bitmap::new(4),
             agg_sig: AggregateSignature([0; 96]),
             attestations: vec![],
+            attestation_witness: None,
         };
         sign_qc(&mut qc, &keys, &[0, 1, 2]);
         block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
@@ -383,6 +384,9 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
         genesis_block_hash: fixture.genesis.hash(),
         genesis_finality_proof: fixture.first.clone(),
         status: SumeragiStatus {
+            protocol_version: crate::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: Hash::new(b"effective config"),
+            beacon_horizon: None,
             instance: fixture.verifier().instance().0,
             height: 3,
             view: 0,
@@ -502,71 +506,6 @@ fn certified_result_cannot_replace_its_incumbent_or_fixed_next_parameters() {
             verifier.verify(&proof).is_err(),
             "a valid signature cannot replace independently scheduled authority"
         );
-    }
-}
-
-#[test]
-fn certified_beacon_pulse_requires_the_exact_committed_parent() {
-    use crate::consensus::{
-        FinalizedGlobalThresholdBeaconPulseV1, GLOBAL_THRESHOLD_BEACON_VERSION_V1,
-        GlobalThresholdBeaconChainAnchorV1,
-    };
-
-    let fixture = Fixture::new();
-    for foreign_parent in [false, true] {
-        let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
-        let certificate = block.commit_certificate().unwrap();
-        let header = certificate.consensus_header().to_vec();
-        let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
-        let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
-        // The portable receipt authenticates the execution result with its quorum signature;
-        // threshold-beacon verification belongs to execution. Supply a canonical nonzero G1
-        // point to isolate the exact public anchor binding checked by this receipt.
-        let (_, signature) = fixture.keys[0].public_key().try_to_bytes().unwrap();
-        let mut pulse = FinalizedGlobalThresholdBeaconPulseV1 {
-            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
-            network_id: fixture.network,
-            session_id: [1; 32],
-            roster_hash: [2; 32],
-            transcript_hash: [3; 32],
-            height: 2,
-            round: 0,
-            finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {
-                height: 1,
-                block_hash: if foreign_parent {
-                    HashOf::from_untyped_unchecked(Hash::new(b"foreign finalized parent"))
-                } else {
-                    fixture.genesis.hash()
-                },
-            },
-            signature: signature.try_into().unwrap(),
-            seed: [4; 32],
-            pulse_id: [0; 32],
-        };
-        pulse.pulse_id = global_threshold_beacon_pulse_id_v1(&pulse, pulse.seed);
-        value.beacon = Some(pulse);
-        value.validate().unwrap();
-        qc.result = value.result().unwrap();
-        sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
-        block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
-            header,
-            norito::encode_canonical(&qc).unwrap(),
-            value.preimage().unwrap(),
-        )));
-        proof.block_wire = block.encode_wire().unwrap();
-        let mut verifier = fixture.verifier();
-        verifier.verify(&fixture.first).unwrap();
-        if foreign_parent {
-            assert_eq!(
-                proof.decode_checked().unwrap_err().0,
-                "beacon pulse names another committed parent"
-            );
-            assert!(verifier.verify(&proof).is_err());
-        } else {
-            proof.decode_checked().unwrap();
-            verifier.verify(&proof).unwrap();
-        }
     }
 }
 

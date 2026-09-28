@@ -189,9 +189,11 @@ pub fn sbox(byte: u8) -> u8 {
 #[path = "aes/batch.rs"]
 mod batch;
 pub use batch::{
-    aes128_decrypt_many_into, aes128_encrypt_many_into, aesdec_many_into,
-    aesdec_n_rounds_many_into, aesenc_many_into, aesenc_n_rounds_many_into,
+    aes128_decrypt_many_into, aes128_encrypt_many_into, aesdec_n_rounds_many_into,
+    aesenc_n_rounds_many_into,
 };
+#[cfg(test)]
+pub use batch::{aesdec_many_into, aesenc_many_into};
 /// AES "last" round for encryption (no MixColumns): SubBytes → ShiftRows → AddRoundKey.
 #[allow(dead_code)]
 pub fn aesenc_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {

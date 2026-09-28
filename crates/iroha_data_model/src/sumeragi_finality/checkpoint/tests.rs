@@ -49,6 +49,7 @@ fn extend(
     let result = result(&block, &parent.commitment.schedule.current);
     let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
     let header = CoreHeader {
+        control_witness: iroha_sumeragi::types::ControlWitness::empty(),
         instance: fixture.verifier().instance(),
         epoch: core_epoch(&parent.commitment.schedule.current).unwrap().id,
         height,
@@ -73,6 +74,7 @@ fn extend(
         signers: Bitmap::new(4),
         agg_sig: AggregateSignature([0; 96]),
         attestations: vec![],
+        attestation_witness: None,
     };
     sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(

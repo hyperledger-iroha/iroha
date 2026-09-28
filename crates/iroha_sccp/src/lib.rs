@@ -23,7 +23,16 @@ pub use ethereum_native::*;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 mod ton_native;
-pub use ton_native::*;
+pub use ton_native::{
+    TON_NATIVE_MAX_BOC_BYTES_V1, TON_NATIVE_MAX_MASTERCHAIN_BLOCKS_V1, TonAccountStateOpeningV1,
+    TonBlockIdExtV1, TonBlockSignaturesV1, TonMasterchainBlockProofV1, TonNativeSourceError,
+    TonOrdinaryBlockSignaturesV1, TonShardEventProofV1, TonSimplexBlockSignaturesV1,
+    TonValidatorConfigV1, TonValidatorSetV1, TonValidatorSignatureV1, TonValidatorV1,
+    ton_block_id_ext_tl_bytes_v1, ton_boc_single_ordinary_root_hash_v1,
+    ton_boc_single_root_hash_v1, ton_canonical_boc_single_root_hash_v1, ton_canonical_boc_v1,
+    ton_header_key_block_v1, ton_sccp_transfer_payload_v1, ton_state_init_address_hash_v1,
+    ton_validator_list_hash_short_v1, ton_validator_node_id_short_v1,
+};
 #[cfg(any(test, feature = "test-fixtures"))]
 mod test_fixtures;
 use alloc::vec::Vec;

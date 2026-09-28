@@ -1,5 +1,5 @@
 //! Benchmarks for IVM memory commit performance and memory operations.
-use criterion::Criterion;
+use criterion::{BatchSize, Criterion};
 use ivm::Memory;
 fn dirty_memory() -> Memory {
     let mut mem = Memory::new();
@@ -22,23 +22,29 @@ fn dirty_memory_large() -> Memory {
     mem
 }
 fn bench_memory_commit(c: &mut Criterion) {
-    let base = dirty_memory();
+    // `Memory` is deliberately not `Clone`; build a fresh dirty image per batch.
     c.bench_function("memory_commit", |b| {
-        b.iter(|| {
-            let mut mem = base.clone();
-            mem.commit();
-            std::hint::black_box(())
-        })
+        b.iter_batched(
+            dirty_memory,
+            |mut mem| {
+                mem.commit();
+                std::hint::black_box(mem)
+            },
+            BatchSize::LargeInput,
+        )
     });
 }
 fn bench_memory_commit_large(c: &mut Criterion) {
-    let base = dirty_memory_large();
+    // `Memory` is deliberately not `Clone`; build a fresh dirty image per batch.
     c.bench_function("memory_commit_large", |b| {
-        b.iter(|| {
-            let mut mem = base.clone();
-            mem.commit();
-            std::hint::black_box(())
-        })
+        b.iter_batched(
+            dirty_memory_large,
+            |mut mem| {
+                mem.commit();
+                std::hint::black_box(mem)
+            },
+            BatchSize::LargeInput,
+        )
     });
 }
 /// Entry point for the benchmark binary.

@@ -145,6 +145,7 @@ pub(crate) fn metal_aes_batch_in_place(
 }
 
 /// Attempt one AESENC batch; refusal or failure preserves the caller destination.
+#[cfg(test)]
 pub fn metal_aesenc_batch_into(
     states: &[[u8; 16]],
     key: [u8; 16],
@@ -160,6 +161,7 @@ pub fn metal_aesenc_batch_into(
     )
 }
 /// Attempt one AESDEC batch; refusal or failure preserves the caller destination.
+#[cfg(test)]
 pub fn metal_aesdec_batch_into(
     states: &[[u8; 16]],
     key: [u8; 16],
@@ -175,6 +177,7 @@ pub fn metal_aesdec_batch_into(
     )
 }
 /// Attempt ordered AESENC rounds; refusal or failure preserves the caller destination.
+#[cfg(test)]
 pub fn metal_aesenc_rounds_batch_into(
     states: &[[u8; 16]],
     keys: &[[u8; 16]],
@@ -190,6 +193,7 @@ pub fn metal_aesenc_rounds_batch_into(
     )
 }
 /// Attempt ordered AESDEC rounds; refusal or failure preserves the caller destination.
+#[cfg(test)]
 pub fn metal_aesdec_rounds_batch_into(
     states: &[[u8; 16]],
     keys: &[[u8; 16]],

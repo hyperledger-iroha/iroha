@@ -3,7 +3,7 @@
 use super::*;
 use crate::block::consensus_v2::PERMISSIONED_TAG;
 use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
-use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
 use std::num::NonZeroU64;

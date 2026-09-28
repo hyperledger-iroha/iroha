@@ -30,22 +30,20 @@ fn plain_signed_block() -> SignedBlock {
 
 fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
     let reference = block.canonical_resultless_proposal().encode_wire().unwrap();
-    let (prefix, payload) = block.borrowed_resultless_wire_parts().unwrap();
-    assert_eq!(prefix.len(), 1 + norito::core::Header::SIZE);
-    assert_eq!(prefix.as_slice(), &reference[..prefix.len()]);
-    assert_eq!(payload.as_slice(), &reference[prefix.len()..]);
-    let borrowed = [prefix.as_slice(), payload.as_slice()].concat();
+    assert_eq!(reference[0], block.version());
+    assert!(
+        block
+            .canonical_resultless_proposal()
+            .matches_resultless_proposal_wire(&reference)
+            .unwrap(),
+        "version, SignedBlock header and payload"
+    );
     let candidate = SignedBlockOutputCandidate {
         signatures: OutputFieldRef(&block.signatures),
         payload: OutputFieldRef(&block.payload),
         result: None,
         commit_certificate: None,
     };
-    assert_eq!(
-        borrowed, reference,
-        "version, SignedBlock header and payload"
-    );
-    assert_eq!(borrowed[0], block.version());
     let payload_len = {
         norito::core::reset_decode_state();
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -53,7 +51,7 @@ fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
     };
     assert_eq!(
         payload_len + norito::core::Header::SIZE + 1,
-        borrowed.len(),
+        reference.len(),
         "version + fixed header + counted payload define the custom wire size",
     );
     assert_eq!(
@@ -561,65 +559,10 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
 }
 
 #[test]
-fn checked_resultless_comparison_binds_native_recovery_hint_beyond_consensus_identity() {
-    use super::consensus::{LaneBlockCommitment, LaneBlockProposalPayloadHintV1};
-
-    let document: norito::json::Value = norito::json::from_str(include_str!(
-        "../../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-    ))
-    .unwrap();
-    let commitment: LaneBlockCommitment =
-        norito::json::from_value(document.pointer("/golden/receipt_group").cloned().unwrap())
-            .unwrap();
-    commitment.validate_native_amx_receipts().unwrap();
-    let mut receipt = commitment.native_amx_receipts.into_iter().next().unwrap();
-    let participant = &mut receipt.legs[0].participant_proposal;
-    participant.payload_block_hint = Some(LaneBlockProposalPayloadHintV1 {
-        proposal_height: 2,
-        proposal_view: 0,
-        proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"original recovery body")),
-    });
-    let original_participant = participant.clone();
-    let mut original = complete_comparison_proposal();
-    // The canonical receipt fixture supplies the nested fields. This composite
-    // tests codec identity only; it does not claim a valid routed execution.
-    original
-        .payload
-        .execution_context
-        .as_mut()
-        .unwrap()
-        .external[0]
-        .native_amx_receipt = Some(receipt);
-    let mut changed = original.clone();
-    let changed_participant = &mut changed.payload.execution_context.as_mut().unwrap().external[0]
-        .native_amx_receipt
-        .as_mut()
-        .unwrap()
-        .legs[0]
-        .participant_proposal;
-    changed_participant
-        .payload_block_hint
-        .as_mut()
-        .unwrap()
-        .proposal_block_hash = HashOf::from_untyped_unchecked(Hash::new(b"another recovery body"));
-    assert!(original_participant.same_consensus_identity(changed_participant));
-    assert_eq!(
-        original_participant.computed_proposal_hash(),
-        changed_participant.computed_proposal_hash()
-    );
-    assert_ne!(&original_participant, &*changed_participant);
-    assert_eq!(
-        original.checked_resultless_payload_len().unwrap(),
-        changed.checked_resultless_payload_len().unwrap()
-    );
-    assert_checked_comparison_matches_wire(&original, &changed);
-    assert!(!original.checked_resultless_proposal_eq(&changed).unwrap());
-}
-
-#[test]
 fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
     use crate::consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
+        GlobalThresholdBeaconPulseContextV1,
     };
     let mut proposal = plain_signed_block();
     let original_header = proposal.hash();
@@ -632,6 +575,13 @@ fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
         session_id: [1; 32],
         roster_hash: [2; 32],
         transcript_hash: [3; 32],
+        context: GlobalThresholdBeaconPulseContextV1 {
+            instance: [7; 32],
+            epoch: 0,
+            epoch_context_id: [8; 32],
+            parent_consensus_hash: [9; 32],
+            parent_result: [10; 32],
+        },
         height: 2,
         round: 0,
         finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {

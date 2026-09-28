@@ -2833,6 +2833,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                 };
                 let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                 quote! {
+                        #[automatically_derived]
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                             fn json_object_field_order() -> ::core::option::Option<&'static [&'static str]> {
                                 #field_order
@@ -2894,6 +2895,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                 }
                 let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                 quote! {
+                        #[automatically_derived]
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                             fn write_json(&self, out: &mut ::std::string::String) {
                                 norito::json::write_json_unbounded(self, out);
@@ -2919,6 +2921,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                 let r#gen = generics.clone();
                 let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                 quote! {
+                        #[automatically_derived]
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                             fn write_json(&self, out: &mut ::std::string::String) {
                                 norito::json::write_json_unbounded(self, out);
@@ -3161,6 +3164,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
             }
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                     fn write_json(&self, out: &mut ::std::string::String) {
                         norito::json::write_json_unbounded(self, out);
@@ -3316,6 +3320,7 @@ fn derive_struct_json_deserialize(
             };
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             let result = quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
                     #[allow(clippy::useless_let_if_seq)]
                     fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3388,6 +3393,7 @@ fn derive_struct_json_deserialize(
             let (impl_generics, ty_generics, where_clause) = gen_local.split_for_impl();
             let len = unnamed.unnamed.len();
             let result = quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
                     #[allow(clippy::useless_let_if_seq)]
                     fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3429,6 +3435,7 @@ fn derive_struct_json_deserialize(
         Fields::Unit => {
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             Ok(quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
                     #[allow(clippy::useless_let_if_seq)]
                     fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3466,6 +3473,7 @@ fn derive_struct_json_deserialize_flatten(
         TokenStream2::new()
     };
     let result = quote! {
+        #[automatically_derived]
         impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
             #[allow(clippy::useless_let_if_seq)]
             fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3745,6 +3753,7 @@ fn derive_enum_json_deserialize(
         }
     };
     let result = quote! {
+        #[automatically_derived]
         impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
             #[allow(clippy::useless_let_if_seq)]
             fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {

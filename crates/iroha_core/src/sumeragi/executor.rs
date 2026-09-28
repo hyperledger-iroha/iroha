@@ -1901,7 +1901,6 @@ mod tests {
     }
 }
 
-mod archive_tests;
 #[cfg(test)]
 mod archive_tests;
 #[cfg(test)]

@@ -744,6 +744,9 @@ mod tests {
         let running = SumeragiLaneStatus {
             record: record(None),
             instance: Some(crate::sumeragi::SumeragiStatus {
+                protocol_version: crate::sumeragi::PROTOCOL_VERSION,
+                config_fingerprint: iroha_crypto::Hash::new(b"lane status fixture"),
+                beacon_horizon: None,
                 instance: [5; 32],
                 height: 4,
                 view: 0,

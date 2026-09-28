@@ -125,8 +125,8 @@ fn current_finality_fixture() -> (
         })
     };
     let (len, hash) = block.executed_block_wire_identity().unwrap();
-    let (native_contexts, ordinary_root) =
-        NativeContextsProof::empty_for_testing(epoch.network_id, 1);
+    let (native_lanes, ordinary_root) =
+        NativeLaneStateProof::empty_for_testing(epoch.network_id, 1);
     let result = ExecutionResultCommitment {
         height: 1,
         execution: ExecutionCommitment {
@@ -148,7 +148,7 @@ fn current_finality_fixture() -> (
             after_next: slot(3),
         },
         beacon: None,
-        native_contexts,
+        native_lanes,
     };
     block.set_commit_certificate(Some(
         iroha_data_model::block::CommitCertificate::from_untrusted_parts(
@@ -187,6 +187,9 @@ fn client_attestation_fixture() -> iroha_data_model::sumeragi_finality::Sumeragi
         genesis_block_hash: proof.block_header.hash(),
         genesis_finality_proof: proof.clone(),
         status: iroha_data_model::sumeragi::SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: Hash::new(b"config"),
+            beacon_horizon: None,
             instance: verifier.instance().0,
             height: 2,
             view: 0,
