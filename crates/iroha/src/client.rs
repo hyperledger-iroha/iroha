@@ -34762,7 +34762,6 @@ mod tests {
         "limit=50&after_sequence=12&after_block_height=7&after_block_hash_hex=aa&after_event_index=3",
     );
     include!("client/uaid_literal_tests.rs");
-    }
     fn sample_privacy_capabilities() -> PrivacyExact12CapabilityManifestV1 {
         let snapshot = PrivacyCapabilitySnapshotV1 {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,

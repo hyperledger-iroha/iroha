@@ -1495,7 +1495,8 @@ fn malformed_der_wires_reject_before_sampled_fixed_evaluation() {
     let document = [0x30, 0x03, 0x02, 0x01, 0x01];
     let private_shape = build_zk_x509_der_stark_base_v1(&[&document])
         .expect("DER base")
-        .private_shape;
+        .private_shape
+        .clone();
     private_shape.validate().expect("private DER shape");
     let shape = ZkX509DerStarkShapeV1;
     let claims = ZkX509DerStarkTerminalClaimsV1 {

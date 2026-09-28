@@ -348,7 +348,7 @@ fn a_network_without_sccp_is_unchanged() {
         iroha_data_model::isi::Log::new(iroha_data_model::Level::INFO, "ordinary".to_owned())
             .into(),
     ]);
-    assert_eq!(admission::classify(world, 2, &transaction), Ok(None));
+    assert_eq!(admission::classify(world, &view, 2, &transaction), Ok(None));
     assert!(!admission::allows_unregistered_authority(
         transaction.instructions(),
         transaction.authority()

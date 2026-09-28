@@ -7548,7 +7548,7 @@ mod tests {
                     (0..rows)
                         .map(|row| match (row + column) % 3 {
                             0 => F::ZERO,
-                            1 => F(GOLDILOCKS_MODULUS_V1 - 1),
+                            1 => F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1 - 1),
                             _ => F((row * 31 + column * 17) as u64),
                         })
                         .collect::<Vec<_>>()
@@ -7632,7 +7632,7 @@ mod tests {
             Err(AggregateStarkErrorV1::InvalidLayout)
         );
         let mut invalid = columns.clone();
-        invalid[1][rows - 1] = F(GOLDILOCKS_MODULUS_V1);
+        invalid[1][rows - 1] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
         assert_eq!(
             actual.absorb_columns_v1(&invalid),
             Err(AggregateStarkErrorV1::NonCanonicalField)
