@@ -233,6 +233,35 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                     with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
                         gate.require_tests(without_case, gate.qualification_stages(scope)["daemon"])
 
+    def test_genesis_identity_publication_controls_are_required_in_both_scopes(self):
+        required = {"kagami": (
+            "genesis::sign::tests::identity_drift_leaves_every_requested_output_unchanged",
+            "genesis::sign::tests::expected_hash_output_matches_the_signed_consensus_header",
+            "genesis::sign::tests::network_identity_publication_is_idempotent_and_refuses_drift",
+            "genesis::sign::tests::existing_network_identity_requires_safe_single_link_custody",
+            "genesis::sign::tests::guarded_replacement_publishes_consistent_genesis_bundle",
+            "genesis::sign::tests::guarded_replacement_rejects_stale_missing_and_unsafe_prior_without_writes",
+            "genesis::sign::tests::identity_guard_serializes_publishers_and_rejects_substitution",
+            "genesis::sign::tests::interrupted_replacement_preserves_prior_identity_until_complete_retry",
+            "genesis::sign::tests::replacement_requires_complete_explicit_output_bundle",
+        ), "cli": (
+            "taira_parliament_seating::tests::seat_parliament_seats_a_generated_network_once",
+            "taira_parliament_seating::tests::resign_identity_requires_one_canonical_line",
+        )}
+        for scope in gate.QUALIFICATION_SCOPES:
+            for harness, names in required.items():
+                stages = gate.qualification_stages(scope)[harness]
+                selected = tuple(name for _, tests in stages for name in tests)
+                gate.validate_selected_source_test_inventory(SCRIPT.parents[1], {harness: stages})
+                for name in names:
+                    with self.subTest(scope=scope, harness=harness, test=name):
+                        self.assertEqual(selected.count(name), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                        self.assertEqual(tuple(focused), (harness,))
+                        missing = "\n".join(case + ": test" for case in selected if case != name)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(missing, stages)
+
 
 if __name__ == "__main__":
     unittest.main()

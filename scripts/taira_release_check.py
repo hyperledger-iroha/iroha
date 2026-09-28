@@ -1604,6 +1604,23 @@ KAGAMI_STAGES += (("retired epoch key derivation commands are rejected", (
     'kagemusha::tests::parser_rejects_epoch_key_derivation_commands',
 )),)
 
+KAGAMI_STAGES += (("signed genesis identity publication and custody", (
+    "genesis::sign::tests::identity_drift_leaves_every_requested_output_unchanged",
+    "genesis::sign::tests::expected_hash_output_matches_the_signed_consensus_header",
+    "genesis::sign::tests::network_identity_publication_is_idempotent_and_refuses_drift",
+    "genesis::sign::tests::existing_network_identity_requires_safe_single_link_custody",
+    "genesis::sign::tests::guarded_replacement_publishes_consistent_genesis_bundle",
+    "genesis::sign::tests::guarded_replacement_rejects_stale_missing_and_unsafe_prior_without_writes",
+    "genesis::sign::tests::identity_guard_serializes_publishers_and_rejects_substitution",
+    "genesis::sign::tests::interrupted_replacement_preserves_prior_identity_until_complete_retry",
+    "genesis::sign::tests::replacement_requires_complete_explicit_output_bundle",
+)),)
+
+STAGES += (("parliament seating retains exact genesis replacement authority", (
+    "taira_parliament_seating::tests::seat_parliament_seats_a_generated_network_once",
+    "taira_parliament_seating::tests::resign_identity_requires_one_canonical_line",
+)),)
+
 KAGAMI_STAGES += (("typed public beacon history candidates and explicit proof limits", (
     'kura::beacon_history::tests::beacon_history_projects_only_typed_public_candidates_and_keeps_proof_limits',
     'kura::beacon_history::tests::beacon_history_distinguishes_admission_from_recorded_execution_and_nested_effects',

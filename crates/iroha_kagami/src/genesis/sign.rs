@@ -69,6 +69,11 @@ pub struct Args {
     /// `network_id_file`, respectively.
     #[clap(long, value_name = "PATH")]
     expected_hash_out: Option<PathBuf>,
+    /// Replace the expected-hash file only if it still contains this exact prior NetworkId.
+    /// Requires all three output paths. The identity is published last as the bundle's commit
+    /// marker; interrupted publication must be retried with the same prior identity.
+    #[clap(long, value_name = "NETWORK_ID", requires_all = ["expected_hash_out", "out_file", "bound_manifest_out"])]
+    replace_expected_hash: Option<NetworkId>,
     /// Use this topology instead of specified in genesis.json.
     /// JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
     ///
@@ -137,6 +142,15 @@ fn reject_artifact_alias(
 }
 
 fn resolve_artifact_paths(args: &Args) -> Result<ResolvedArtifactPaths, color_eyre::eyre::Error> {
+    if args.replace_expected_hash.is_some()
+        && (args.expected_hash_out.is_none()
+            || args.out_file.is_none()
+            || args.bound_manifest_out.is_none())
+    {
+        return Err(eyre!(
+            "--replace-expected-hash requires --expected-hash-out, --out-file, and --bound-manifest-out"
+        ));
+    }
     let genesis_input = fs::canonicalize(&args.genesis_file).wrap_err_with(|| {
         format!(
             "resolve input genesis manifest {}",
@@ -241,6 +255,79 @@ fn genesis_network_identity_body(network_id: NetworkId) -> String {
 fn read_existing_genesis_network_identity(
     path: &Path,
 ) -> Result<Option<Vec<u8>>, color_eyre::eyre::Error> {
+    Ok(open_existing_genesis_network_identity(path)?.map(|held| held.bytes))
+}
+
+struct GenesisNetworkIdentityGuard {
+    file: File,
+    snapshot: fs::Metadata,
+    bytes: Vec<u8>,
+}
+
+impl GenesisNetworkIdentityGuard {
+    /// All publishers of signed/manifest outputs use the same existing-identity lock.
+    fn acquire(path: &Path) -> Result<Option<Self>, color_eyre::eyre::Error> {
+        let Some(mut held) = open_existing_genesis_network_identity(path)? else {
+            return Ok(None);
+        };
+        #[cfg(unix)]
+        rustix::fs::flock(
+            &held.file,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .wrap_err("another genesis publisher holds the expected-hash file")?;
+        held.revalidate(path)?;
+        Ok(Some(held))
+    }
+
+    fn require_identity(&self, expected: NetworkId) -> Outcome {
+        if self.bytes != genesis_network_identity_body(expected).as_bytes() {
+            return Err(eyre!(
+                "genesis expected-hash file does not match the required prior NetworkId"
+            ));
+        }
+        Ok(())
+    }
+
+    fn revalidate(&mut self, path: &Path) -> Outcome {
+        use std::io::{Read as _, Seek as _};
+
+        let current = open_existing_genesis_network_identity(path)?
+            .ok_or_else(|| eyre!("held genesis expected-hash file disappeared"))?;
+        if !crate::secure_fs::same_file_snapshot(&self.snapshot, &current.snapshot)
+            || self.bytes != current.bytes
+        {
+            return Err(eyre!("held genesis expected-hash path or contents changed"));
+        }
+        self.file
+            .rewind()
+            .wrap_err("rewind held genesis expected-hash file")?;
+        let mut bytes = Vec::with_capacity(self.bytes.len());
+        std::io::Read::by_ref(&mut self.file)
+            .take(MAX_GENESIS_NETWORK_IDENTITY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .wrap_err("reread held genesis expected-hash file")?;
+        if bytes != self.bytes
+            || !crate::secure_fs::same_file_snapshot(&self.snapshot, &self.file.metadata()?)
+        {
+            return Err(eyre!(
+                "held genesis expected-hash inode or contents changed"
+            ));
+        }
+        Ok(())
+    }
+
+    fn publish_replacement(&mut self, path: &Path, temporary: tempfile::NamedTempFile) -> Outcome {
+        self.revalidate(path)?;
+        // No signed/manifest writes may follow this rename: the lock remains attached to the
+        // prior inode, while a subsequent publisher can now lock the new identity inode.
+        publish_staged_genesis_output(temporary, path, "replacement genesis network identity")
+    }
+}
+
+fn open_existing_genesis_network_identity(
+    path: &Path,
+) -> Result<Option<GenesisNetworkIdentityGuard>, color_eyre::eyre::Error> {
     let lexical = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -315,7 +402,11 @@ fn read_existing_genesis_network_identity(
                 path.display()
             ));
         }
-        Ok(Some(existing))
+        Ok(Some(GenesisNetworkIdentityGuard {
+            file,
+            snapshot: after,
+            bytes: existing,
+        }))
     }
 }
 fn preflight_genesis_network_identity(
@@ -428,6 +519,21 @@ fn stage_genesis_output(
         .sync_all()
         .wrap_err_with(|| format!("sync staged {label} for {}", path.display()))?;
     Ok(temporary)
+}
+
+fn publish_guarded_genesis_bundle(
+    guard: &mut GenesisNetworkIdentityGuard,
+    identity_path: &Path,
+    outputs: [(&Path, tempfile::NamedTempFile, &str); 2],
+    identity: tempfile::NamedTempFile,
+) -> Outcome {
+    for (path, temporary, label) in outputs {
+        guard.revalidate(identity_path)?;
+        publish_staged_genesis_output(temporary, path, label)?;
+    }
+    // This is a commit marker, not a multi-file transaction. An interrupted earlier
+    // output write leaves the prior identity in place; consumers reject disagreement.
+    guard.publish_replacement(identity_path, identity)
 }
 fn publish_staged_genesis_output(
     temporary: tempfile::NamedTempFile,
@@ -1448,6 +1554,20 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
         let artifact_paths = resolve_artifact_paths(&self)?;
+        let mut identity_guard = artifact_paths
+            .expected_hash_output
+            .as_deref()
+            .map(GenesisNetworkIdentityGuard::acquire)
+            .transpose()?
+            .flatten();
+        if let Some(prior) = self.replace_expected_hash {
+            identity_guard
+                .as_ref()
+                .ok_or_else(|| {
+                    eyre!("--replace-expected-hash requires an existing expected-hash file")
+                })?
+                .require_identity(prior)?;
+        }
         let genesis = RawGenesisTransaction::from_path(&artifact_paths.genesis_input)?;
         reject_retired_public_chain_id(genesis.chain_id().as_str())?;
         // Keep every same-thread rebuild, config parse, and bound-manifest
@@ -1517,7 +1637,9 @@ impl<T: Write> RunArgs<T> for Args {
                 SIGNED_GENESIS_MAX_BYTES_V1
             ));
         }
-        if let Some(path) = artifact_paths.expected_hash_output.as_deref() {
+        if self.replace_expected_hash.is_none()
+            && let Some(path) = artifact_paths.expected_hash_output.as_deref()
+        {
             preflight_genesis_network_identity(path, network_id)?;
         }
         let staged_signed_output = artifact_paths
@@ -1537,14 +1659,70 @@ impl<T: Write> RunArgs<T> for Args {
             (None, None) => None,
             _ => unreachable!("bound manifest bytes exist exactly when an output path was set"),
         };
+        let staged_identity = if self.replace_expected_hash.is_some() {
+            Some(stage_genesis_output(
+                artifact_paths
+                    .expected_hash_output
+                    .as_deref()
+                    .expect("replacement output checked"),
+                genesis_network_identity_body(network_id).as_bytes(),
+                "replacement genesis network identity",
+            )?)
+        } else {
+            None
+        };
         if let Some(path) = artifact_paths.expected_hash_output.as_deref() {
-            // Publish the shared trust root before any requested signed or manifest output. The
-            // explicit preflight above rejects a stale identity before staging, while this second
-            // checked publication closes the race window before the remaining outputs commit.
-            publish_genesis_network_identity(path, network_id)?;
+            if self.replace_expected_hash.is_none() {
+                // Fresh publication remains no-clobber. Lock and recheck the winning identity
+                // before persisting any outputs, including when another publisher won this race.
+                publish_genesis_network_identity(path, network_id)?;
+                if identity_guard.is_none() {
+                    identity_guard = GenesisNetworkIdentityGuard::acquire(path)?;
+                }
+                identity_guard
+                    .as_ref()
+                    .ok_or_else(|| eyre!("published genesis expected-hash file disappeared"))?
+                    .require_identity(network_id)?;
+            }
+            identity_guard
+                .as_mut()
+                .expect("identity publication holds a guard")
+                .revalidate(path)?;
         }
         eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
         eprintln!("Genesis network identity: {network_id}");
+        if let Some(identity) = staged_identity {
+            publish_guarded_genesis_bundle(
+                identity_guard
+                    .as_mut()
+                    .expect("replacement holds the prior identity"),
+                artifact_paths
+                    .expected_hash_output
+                    .as_deref()
+                    .expect("replacement output checked"),
+                [
+                    (
+                        artifact_paths
+                            .signed_output
+                            .as_deref()
+                            .expect("replacement output checked"),
+                        staged_signed_output.expect("replacement signed output staged"),
+                        "signed genesis output",
+                    ),
+                    (
+                        artifact_paths
+                            .bound_manifest_output
+                            .as_deref()
+                            .expect("replacement output checked"),
+                        staged_bound_manifest.expect("replacement manifest staged"),
+                        "config-bound genesis manifest",
+                    ),
+                ],
+                identity,
+            )?;
+            tui::success("Genesis block signed");
+            return Ok(());
+        }
         match (
             artifact_paths.signed_output.as_deref(),
             staged_signed_output,
@@ -2812,6 +2990,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 out_file: None,
                 bound_manifest_out: None,
                 expected_hash_out: None,
+                replace_expected_hash: None,
                 topology: None,
                 peer_pops: Vec::new(),
                 private_key_file: test_private_key_file(),
@@ -2837,6 +3016,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -2858,6 +3038,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 out_file: None,
                 bound_manifest_out: None,
                 expected_hash_out: None,
+                replace_expected_hash: None,
                 topology: None,
                 peer_pops: Vec::new(),
                 private_key_file: test_private_key_file(),
@@ -2886,6 +3067,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 out_file: None,
                 bound_manifest_out: None,
                 expected_hash_out: None,
+                replace_expected_hash: None,
                 topology: None,
                 peer_pops: Vec::new(),
                 private_key_file: private_key_file.clone(),
@@ -2921,6 +3103,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: vec!["pk=00".to_string()],
             private_key_file: test_private_key_file(),
@@ -2948,6 +3131,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -3037,6 +3221,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: Some(bound_manifest_path.clone()),
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(norito::json::to_json(&topology).expect("serialize topology override")),
             peer_pops,
             private_key_file: test_private_key_file_for(&genesis_key_pair),
@@ -3109,6 +3294,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: Some(bound_manifest_path.clone()),
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some("not valid json".to_owned()),
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3136,6 +3322,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: Some(temp.path().join("missing-parent/genesis.signed.nrt")),
             bound_manifest_out: Some(bound_manifest_path.clone()),
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3163,6 +3350,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: Some(output_path.clone()),
             bound_manifest_out: Some(output_path.clone()),
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3192,6 +3380,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: Some(genesis_file.clone()),
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3223,6 +3412,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: Some(canonical_parent.join("same-output")),
             bound_manifest_out: Some(parent_alias.join("same-output")),
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3245,6 +3435,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: Some(signed.clone()),
             bound_manifest_out: Some(manifest.clone()),
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3283,6 +3474,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: Some(signed_path.clone()),
             bound_manifest_out: Some(bound_manifest_path.clone()),
             expected_hash_out: Some(identity_path.clone()),
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3324,6 +3516,287 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "identity preflight must reject before output staging"
         );
     }
+    fn replacement_args(directory: &Path, prior: NetworkId) -> Args {
+        Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: Some(directory.join("genesis.signed.nrt")),
+            bound_manifest_out: Some(directory.join("genesis.bound.json")),
+            expected_hash_out: Some(directory.join("genesis.expected_hash")),
+            replace_expected_hash: Some(prior),
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key_file: test_private_key_file(),
+            expected_public_key: None,
+            creation_time_ms: Some(1_700_000_000_000),
+            config: None,
+        }
+    }
+    fn identity_fixture(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+            label,
+        )))
+    }
+    #[cfg(unix)]
+    #[test]
+    fn guarded_replacement_publishes_consistent_genesis_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        let prior = identity_fixture(b"prior genesis");
+        let args = replacement_args(temp.path(), prior);
+        let identity = args.expected_hash_out.clone().unwrap();
+        let signed = args.out_file.clone().unwrap();
+        let manifest = args.bound_manifest_out.clone().unwrap();
+        publish_genesis_network_identity(&identity, prior).unwrap();
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).unwrap();
+        assert!(writer.into_inner().unwrap().is_empty());
+        let block = decode_framed_signed_block(&fs::read(&signed).unwrap()).unwrap();
+        let current = NetworkId::from_genesis_hash(block.hash());
+        assert_ne!(current, prior);
+        assert_eq!(
+            fs::read(&identity).unwrap(),
+            genesis_network_identity_body(current).as_bytes()
+        );
+        RawGenesisTransaction::from_path(&manifest).unwrap();
+        // Re-signing the exact published manifest with the same deterministic time must
+        // reproduce the same consensus identity, through the ordinary Exact publisher.
+        let mut repeat = replacement_args(temp.path(), current);
+        repeat.genesis_file = manifest;
+        repeat.replace_expected_hash = None;
+        repeat.run(&mut BufWriter::new(Vec::new())).unwrap();
+        let repeated = decode_framed_signed_block(&fs::read(signed).unwrap()).unwrap();
+        assert_eq!(repeated.hash(), block.hash());
+        assert_eq!(
+            fs::read(&identity).unwrap(),
+            genesis_network_identity_body(current).as_bytes()
+        );
+        // A completed operation must not silently replay using the old prior.
+        let stale = replacement_args(temp.path(), prior);
+        assert!(stale.run(&mut BufWriter::new(Vec::new())).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn guarded_replacement_rejects_stale_missing_and_unsafe_prior_without_writes() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let prior = identity_fixture(b"required prior");
+        for defect in ["stale", "missing", "symlink", "hardlink", "writable"] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut args = replacement_args(temp.path(), prior);
+            let signed = args.out_file.clone().unwrap();
+            let manifest = args.bound_manifest_out.clone().unwrap();
+            let identity = args.expected_hash_out.clone().unwrap();
+            fs::write(&signed, b"prior signed").unwrap();
+            fs::write(&manifest, b"prior manifest").unwrap();
+            if defect != "missing" {
+                publish_genesis_network_identity(
+                    &identity,
+                    if defect == "stale" {
+                        identity_fixture(b"foreign prior")
+                    } else {
+                        prior
+                    },
+                )
+                .unwrap();
+            }
+            match defect {
+                "symlink" => {
+                    fs::rename(&identity, temp.path().join("target")).unwrap();
+                    symlink(temp.path().join("target"), &identity).unwrap();
+                }
+                "hardlink" => fs::hard_link(&identity, temp.path().join("alias")).unwrap(),
+                "writable" => {
+                    fs::set_permissions(&identity, fs::Permissions::from_mode(0o620)).unwrap()
+                }
+                _ => {}
+            }
+            let before = fs::read(&identity).ok();
+            // Existing but malformed key proves rejection happens before key loading.
+            let key = temp.path().join("bad.key");
+            fs::write(&key, b"not a key").unwrap();
+            args.private_key_file = key;
+            let error = format!(
+                "{:#}",
+                args.run(&mut BufWriter::new(Vec::new())).unwrap_err()
+            );
+            assert!(!error.contains("private-key"), "{defect}: {error}");
+            assert_eq!(fs::read(&signed).unwrap(), b"prior signed", "{defect}");
+            assert_eq!(fs::read(&manifest).unwrap(), b"prior manifest", "{defect}");
+            assert_eq!(fs::read(&identity).ok(), before, "{defect}");
+            assert!(fs::read_dir(temp.path()).unwrap().all(|e| {
+                !e.unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".genesis-output-")
+            }));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn identity_guard_serializes_publishers_and_rejects_substitution() {
+        let temp = tempfile::tempdir().unwrap();
+        let prior = identity_fixture(b"locked prior");
+        let identity = temp.path().join("genesis.expected_hash");
+        publish_genesis_network_identity(&identity, prior).unwrap();
+        let mut guard = GenesisNetworkIdentityGuard::acquire(&identity)
+            .unwrap()
+            .unwrap();
+        for replacement in [false, true] {
+            let mut args = replacement_args(temp.path(), prior);
+            if !replacement {
+                args.replace_expected_hash = None;
+            }
+            fs::write(args.out_file.as_ref().unwrap(), b"signed sentinel").unwrap();
+            fs::write(
+                args.bound_manifest_out.as_ref().unwrap(),
+                b"manifest sentinel",
+            )
+            .unwrap();
+            let error = format!(
+                "{:#}",
+                args.run(&mut BufWriter::new(Vec::new())).unwrap_err()
+            );
+            assert!(error.contains("another genesis publisher"), "{error}");
+            assert_eq!(
+                fs::read(temp.path().join("genesis.signed.nrt")).unwrap(),
+                b"signed sentinel"
+            );
+            assert_eq!(
+                fs::read(temp.path().join("genesis.bound.json")).unwrap(),
+                b"manifest sentinel"
+            );
+        }
+        // An identical-byte inode replacement is still a changed custody boundary.
+        let changed = stage_genesis_output(
+            &identity,
+            genesis_network_identity_body(prior).as_bytes(),
+            "substitution",
+        )
+        .unwrap();
+        changed.persist(&identity).unwrap();
+        assert!(guard.revalidate(&identity).is_err());
+        drop(guard);
+        let mut guard = GenesisNetworkIdentityGuard::acquire(&identity)
+            .unwrap()
+            .unwrap();
+        fs::write(
+            &identity,
+            genesis_network_identity_body(identity_fixture(b"mutated prior")),
+        )
+        .unwrap();
+        assert!(guard.revalidate(&identity).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_replacement_preserves_prior_identity_until_complete_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let prior = identity_fixture(b"interrupted prior");
+        let next = identity_fixture(b"complete next");
+        let identity = temp.path().join("genesis.expected_hash");
+        let signed = temp.path().join("signed");
+        let manifest = temp.path().join("manifest");
+        publish_genesis_network_identity(&identity, prior).unwrap();
+        let mut guard = GenesisNetworkIdentityGuard::acquire(&identity)
+            .unwrap()
+            .unwrap();
+        let stage = || {
+            [
+                (
+                    signed.as_path(),
+                    stage_genesis_output(&signed, b"new signed", "signed").unwrap(),
+                    "signed",
+                ),
+                (
+                    manifest.as_path(),
+                    stage_genesis_output(&manifest, b"new manifest", "manifest").unwrap(),
+                    "manifest",
+                ),
+            ]
+        };
+        let outputs = stage();
+        let next_identity = stage_genesis_output(
+            &identity,
+            genesis_network_identity_body(next).as_bytes(),
+            "identity",
+        )
+        .unwrap();
+        // Simulate an output destination becoming unavailable after staging.
+        fs::create_dir(&manifest).unwrap();
+        assert!(
+            publish_guarded_genesis_bundle(&mut guard, &identity, outputs, next_identity).is_err()
+        );
+        assert_eq!(fs::read(&signed).unwrap(), b"new signed");
+        assert_eq!(
+            fs::read(&identity).unwrap(),
+            genesis_network_identity_body(prior).as_bytes()
+        );
+        assert!(preflight_genesis_network_identity(&identity, next).is_err());
+        fs::remove_dir(&manifest).unwrap();
+        drop(guard);
+        let mut retry = GenesisNetworkIdentityGuard::acquire(&identity)
+            .unwrap()
+            .unwrap();
+        retry.require_identity(prior).unwrap();
+        let next_identity = stage_genesis_output(
+            &identity,
+            genesis_network_identity_body(next).as_bytes(),
+            "identity",
+        )
+        .unwrap();
+        publish_guarded_genesis_bundle(&mut retry, &identity, stage(), next_identity).unwrap();
+        assert_eq!(fs::read(&manifest).unwrap(), b"new manifest");
+        assert_eq!(
+            fs::read(&identity).unwrap(),
+            genesis_network_identity_body(next).as_bytes()
+        );
+        drop(retry);
+        let current = GenesisNetworkIdentityGuard::acquire(&identity)
+            .unwrap()
+            .unwrap();
+        assert!(current.require_identity(prior).is_err());
+    }
+    #[test]
+    fn replacement_requires_complete_explicit_output_bundle() {
+        let prior = identity_fixture(b"parse prior");
+        let prior_text = prior.to_string();
+        let base = [
+            "sign",
+            "genesis.json",
+            "--private-key-file",
+            "key",
+            "--replace-expected-hash",
+            prior_text.as_str(),
+        ];
+        assert!(Args::try_parse_from(base).is_err());
+        let flags = [
+            ("--expected-hash-out", "identity"),
+            ("--out-file", "signed"),
+            ("--bound-manifest-out", "manifest"),
+        ];
+        for omitted in 0..3 {
+            let mut argv = base.to_vec();
+            for (index, (flag, value)) in flags.iter().enumerate() {
+                if index != omitted {
+                    argv.extend([*flag, *value]);
+                }
+            }
+            assert!(Args::try_parse_from(argv).is_err());
+            let temp = tempfile::tempdir().unwrap();
+            let mut args = replacement_args(temp.path(), prior);
+            match omitted {
+                0 => args.expected_hash_out = None,
+                1 => args.out_file = None,
+                _ => args.bound_manifest_out = None,
+            }
+            assert!(resolve_artifact_paths(&args).is_err());
+        }
+        let mut argv = base.to_vec();
+        for (flag, value) in flags {
+            argv.extend([flag, value]);
+        }
+        assert_eq!(
+            Args::try_parse_from(argv).unwrap().replace_expected_hash,
+            Some(prior)
+        );
+    }
     #[test]
     fn expected_hash_output_matches_the_signed_consensus_header() {
         let temp = tempfile::tempdir().expect("expected hash output temp dir");
@@ -3333,6 +3806,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: Some(expected_hash_path.clone()),
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3454,6 +3928,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some("not valid json".to_owned()),
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3472,6 +3947,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -3499,6 +3975,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops: vec![peer_pops[0].clone()],
             private_key_file: test_private_key_file(),
@@ -3546,6 +4023,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -3614,6 +4092,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: vec![],
             private_key_file: test_private_key_file_for(&key_pair),
@@ -3735,6 +4214,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: vec![],
             private_key_file: test_private_key_file_for(&genesis_key_pair),
@@ -3916,6 +4396,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file,
@@ -4211,6 +4692,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -4313,6 +4795,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: Some(bound_manifest.path().to_path_buf()),
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -4383,6 +4866,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -4412,6 +4896,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -4441,6 +4926,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -4469,6 +4955,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -4507,6 +4994,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: Some(topology_json),
             peer_pops,
             private_key_file: test_private_key_file(),
@@ -4561,6 +5049,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -4584,6 +5073,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
@@ -4680,6 +5170,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file_for(&key_pair),
@@ -4709,6 +5200,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
+            replace_expected_hash: None,
             topology: None,
             peer_pops: Vec::new(),
             private_key_file: test_private_key_file(),
