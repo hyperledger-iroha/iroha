@@ -2645,6 +2645,12 @@ pub mod sumeragi {
     /// Stream authoritative Sumeragi status snapshots as an authenticated operator.
     pub const STATUS_SSE: RouteDescriptor =
         telemetry_sse("sumeragi.status.stream_sse", "/v1/sumeragi/status/sse");
+    /// Read the global chain's lanes and the node's lane instances as an authenticated operator.
+    // TODO(N12): project into OpenAPI and the SDKs once the signed OpenAPI release artifact can
+    // be regenerated (its generator currently fails on the finality validator schema).
+    pub const LANES: RouteDescriptor =
+        telemetry_operator_get("sumeragi.lane.list", "/v1/sumeragi/lanes")
+            .with_projections(RouteProjections::NONE);
     /// Read the consensus BLS key roster as an authenticated operator.
     pub const BLS_KEYS: RouteDescriptor =
         telemetry_operator_get("sumeragi.bls_key.list", "/v1/sumeragi/bls-keys");
@@ -2681,6 +2687,7 @@ pub mod sumeragi {
         STATUS,
         DIAGNOSTICS,
         STATUS_SSE,
+        LANES,
         BLS_KEYS,
         BRIDGE_FINALITY,
         BRIDGE_FINALITY_ATTESTATION,

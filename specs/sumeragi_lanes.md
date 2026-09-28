@@ -353,9 +353,11 @@ executes the transactions itself.
 
 ## 8. Status and telemetry
 
-`/v1/sumeragi/status` gains per-lane entries (lane, incarnation, instance status DTO, merged
-frontier, closing height). Lane instances report through the same observer as `G`, labelled by
-instance id.
+`/v1/sumeragi/status` stays the status of `G`'s instance. `/v1/sumeragi/lanes` serves one
+`SumeragiLaneStatus` per lane of the committed state: its record (lane, dataspace, incarnation,
+pinned committee and parameters, activation, closing, merged frontier, stall bookkeeping) and the
+status of the node's instance of it (the same `SumeragiStatus` as `G`'s, or none before the
+instance runs). Lane instances report through the node's log observer like `G`.
 
 ## 9. What lanes do not have
 

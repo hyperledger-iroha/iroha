@@ -105,7 +105,7 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
         let Some(authority) = tx.authority_opt() else {
             return GLOBAL_LANE;
         };
-        shards[shard_index(&authority.encode(), shards.len())]
+        shards[default_shard(authority, shards.len())]
     }
 }
 
@@ -158,9 +158,11 @@ impl RoutingSnapshot {
     }
 }
 
-/// `H(authority) mod count` over the first eight digest bytes.
-fn shard_index(authority: &[u8], count: usize) -> usize {
-    let digest: [u8; 32] = Hash::new(authority).into();
+/// The default-route shard of `authority` among `count` shards: `H(authority) mod count` over
+/// the first eight digest bytes.
+#[must_use]
+pub fn default_shard(authority: &iroha_data_model::account::AccountId, count: usize) -> usize {
+    let digest: [u8; 32] = Hash::new(authority.encode()).into();
     let mut prefix = [0u8; 8];
     prefix.copy_from_slice(&digest[..8]);
     let count = u64::try_from(count.max(1)).unwrap_or(u64::MAX);

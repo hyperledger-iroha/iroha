@@ -212,57 +212,66 @@ impl NodeHandle {
 
     /// The status the node serves (`/v1/sumeragi/status`; `None` before the core started).
     pub fn status_dto(&self) -> Option<SumeragiStatus> {
-        let status = self.status()?;
-        let key = |key: &PublicKey| iroha_key(key).ok();
-        let widen = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
-        let footprint = &status.footprint;
-        Some(SumeragiStatus {
-            instance: status.instance.0,
-            height: status.height,
-            view: status.view,
-            stage: status.stage,
-            leader: status.leader.as_ref().and_then(key),
-            proxy_tail: status.proxy_tail.as_ref().and_then(key),
-            high_qc_view: status.high_qc_view,
-            level: status.level,
-            start_level: status.start_level,
-            t_retx_ms: status.t_retx,
-            committed_height: status.committed_height,
-            applied_height: status.applied_height,
-            awaiting: status.awaiting,
-            signer: status.signer.as_ref().and_then(key),
-            unanchored: status.unanchored,
-            abstaining: status.abstaining,
-            halted: self.halted().map(|reason| match reason {
-                HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
-                HaltReason::SafetyRecordInconsistent => {
-                    SumeragiHaltReason::SafetyRecordInconsistent
-                }
-                HaltReason::SafetyViolation { height } => {
-                    SumeragiHaltReason::SafetyViolation(height)
-                }
-                HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
-                HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
-            }),
-            footprint: SumeragiFootprint {
-                votes: widen(footprint.votes),
-                timeouts: widen(footprint.timeouts),
-                blocks: widen(footprint.blocks),
-                exec_entries: widen(footprint.exec_entries),
-                wants: widen(footprint.wants),
-                pending_apply: widen(footprint.pending_apply),
-                sync_entries: widen(footprint.sync_entries),
-                sync_bytes: widen(footprint.sync_bytes),
-                peers: widen(footprint.peers),
-                recent_headers: widen(footprint.recent_headers),
-                configs: widen(footprint.configs),
-                cert_cache: widen(footprint.cert_cache),
-                evidence_keys: widen(footprint.evidence_keys),
-                probe: widen(footprint.probe),
-            },
-        })
+        status_dto(&self.driver)
     }
 
+    /// Every lane of the committed state with the node's instance of it
+    /// (`/v1/sumeragi/lanes`, `specs/sumeragi_lanes.md` §8).
+    pub fn lane_statuses(&self) -> Vec<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus> {
+        self.lanes.statuses()
+    }
+}
+
+/// The served status of the instance `driver` runs (`None` before its core started).
+pub(crate) fn status_dto(driver: &DriverHandle) -> Option<SumeragiStatus> {
+    let status = driver.status()?;
+    let key = |key: &PublicKey| iroha_key(key).ok();
+    let widen = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
+    let footprint = &status.footprint;
+    Some(SumeragiStatus {
+        instance: status.instance.0,
+        height: status.height,
+        view: status.view,
+        stage: status.stage,
+        leader: status.leader.as_ref().and_then(key),
+        proxy_tail: status.proxy_tail.as_ref().and_then(key),
+        high_qc_view: status.high_qc_view,
+        level: status.level,
+        start_level: status.start_level,
+        t_retx_ms: status.t_retx,
+        committed_height: status.committed_height,
+        applied_height: status.applied_height,
+        awaiting: status.awaiting,
+        signer: status.signer.as_ref().and_then(key),
+        unanchored: status.unanchored,
+        abstaining: status.abstaining,
+        halted: driver.halted().map(|reason| match reason {
+            HaltReason::SafetyRecordCorrupt => SumeragiHaltReason::SafetyRecordCorrupt,
+            HaltReason::SafetyRecordInconsistent => SumeragiHaltReason::SafetyRecordInconsistent,
+            HaltReason::SafetyViolation { height } => SumeragiHaltReason::SafetyViolation(height),
+            HaltReason::ApplyDiverged { height } => SumeragiHaltReason::ApplyDiverged(height),
+            HaltReason::DriverAnomaly => SumeragiHaltReason::DriverAnomaly,
+        }),
+        footprint: SumeragiFootprint {
+            votes: widen(footprint.votes),
+            timeouts: widen(footprint.timeouts),
+            blocks: widen(footprint.blocks),
+            exec_entries: widen(footprint.exec_entries),
+            wants: widen(footprint.wants),
+            pending_apply: widen(footprint.pending_apply),
+            sync_entries: widen(footprint.sync_entries),
+            sync_bytes: widen(footprint.sync_bytes),
+            peers: widen(footprint.peers),
+            recent_headers: widen(footprint.recent_headers),
+            configs: widen(footprint.configs),
+            cert_cache: widen(footprint.cert_cache),
+            evidence_keys: widen(footprint.evidence_keys),
+            probe: widen(footprint.probe),
+        },
+    })
+}
+
+impl NodeHandle {
     /// The instance halted or stopped: only a restart recovers the node's consensus.
     pub fn restart_required(&self) -> bool {
         self.halted().is_some()
@@ -1087,6 +1096,7 @@ mod tests {
             [
                 Account::new(account.clone()).build(&account),
                 Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(second_shard_account()).build(&second_shard_account()),
             ],
             [],
         );
@@ -1255,6 +1265,24 @@ mod tests {
         }
     }
 
+    /// The key of an account whose default route is the second of two shards (an elastic lane
+    /// next to lane 0).
+    fn second_shard_key() -> KeyPair {
+        (1u8..)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519))
+            .find(|key| {
+                crate::sumeragi::lanes::routing::default_shard(
+                    &AccountId::new(key.public_key().clone()),
+                    2,
+                ) == 1
+            })
+            .expect("a key on the second shard")
+    }
+
+    fn second_shard_account() -> AccountId {
+        AccountId::new(second_shard_key().public_key().clone())
+    }
+
     /// Submit a transaction to every validator's queue (the transaction gossip's job in the
     /// node) and tell the drivers.
     fn submit(
@@ -1262,14 +1290,24 @@ mod tests {
         validators: &[Validator],
         message: &str,
     ) -> HashOf<TransactionEntrypoint> {
+        submit_as(chain, validators, &ALICE_KEYPAIR, message)
+    }
+
+    /// [`submit`] signed by `key`'s account.
+    fn submit_as(
+        chain: &Chain,
+        validators: &[Validator],
+        key: &KeyPair,
+        message: &str,
+    ) -> HashOf<TransactionEntrypoint> {
         let network_id = NetworkId::from_genesis_hash(chain.genesis.hash());
         let signed = TransactionBuilder::new(
             network_id,
-            ALICE_ID.clone(),
+            AccountId::new(key.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, message.to_owned())])
-        .sign(ALICE_KEYPAIR.private_key());
+        .sign(key.private_key());
         let accepted = AcceptedTransaction::accept(
             signed,
             &network_id,
@@ -1457,6 +1495,148 @@ mod tests {
         );
         assert_eq!(merged_everywhere(&validators, &disks), vec![2; 4]);
         assert!(frontier(&validators)[0].height > merged[0].height);
+        shutdown(validators);
+    }
+
+    /// A lane policy that autoscales one elastic lane (16) over the whole validator set.
+    fn elastic_lane_policy(_keys: &[KeyPair]) -> Vec<Parameter> {
+        use iroha_data_model::sumeragi_lanes::{SumeragiLaneAutoscale, SumeragiLanePolicy};
+        let policy = SumeragiLanePolicy {
+            anchor_freshness: 4,
+            max_merge_blocks: 16,
+            stall_window: 10_000,
+            lane_params: iroha_data_model::parameter::system::SumeragiParameters {
+                block_cadence_ms: NonZeroU64::new(100).expect("non-zero"),
+                payload_retry_interval_ms: NonZeroU64::new(200).expect("non-zero"),
+                ..iroha_data_model::parameter::system::SumeragiParameters::default()
+            },
+            fixed: Vec::new(),
+            routes: Vec::new(),
+            autoscale: Some(SumeragiLaneAutoscale {
+                min_lane: iroha_model_base::topology::LaneId::new(16),
+                max_lane_exclusive: iroha_model_base::topology::LaneId::new(17),
+                dataspace: iroha_model_base::topology::DataSpaceId::new(0),
+                committee_size: 4,
+                per_lane_target_tps: 10,
+                window: 3,
+                scale_out_permille: 300,
+                scale_in_permille: 150,
+                cooldown: 3,
+            }),
+        };
+        vec![Parameter::Custom(policy.into_custom_parameter())]
+    }
+
+    fn lane_record(
+        validator: &Validator,
+        lane: iroha_model_base::topology::LaneId,
+    ) -> Option<iroha_data_model::sumeragi_lanes::SumeragiLaneRecord> {
+        validator
+            .state
+            .view()
+            .world()
+            .sumeragi_lanes()
+            .lane(lane)
+            .cloned()
+    }
+
+    #[test]
+    fn autoscale_opens_an_elastic_lane_under_load_and_retires_it_when_idle() {
+        let elastic = iroha_model_base::topology::LaneId::new(16);
+        let chain = chain_with(4, 200, elastic_lane_policy);
+        let disks = disks(&chain);
+        let validators = start_all(&chain, &disks, true);
+        let mut round = 0usize;
+        let mut burst = |validators: &[Validator], size: usize| {
+            round += 1;
+            let hashes = (0..size)
+                .map(|index| submit(&chain, validators, &format!("load {round}.{index}")))
+                .collect::<Vec<_>>();
+            wait_until(
+                validators,
+                Duration::from_secs(60),
+                "a burst commits",
+                || {
+                    hashes
+                        .iter()
+                        .all(|hash| committed_everywhere(validators, *hash))
+                },
+            );
+        };
+        let running = |validators: &[Validator]| {
+            validators
+                .iter()
+                .map(|validator| validator.node.lanes.instances().len())
+                .collect::<Vec<_>>()
+        };
+        // Load opens the elastic lane; once the global chain applies its activation height,
+        // every validator runs it.
+        for _ in 0..16 {
+            if running(&validators) == vec![1; 4] {
+                break;
+            }
+            burst(&validators, 6);
+        }
+        assert_eq!(running(&validators), vec![1; 4], "the elastic lane runs");
+        let record = lane_record(&validators[0], elastic).expect("the elastic lane");
+        assert_eq!(record.committee.len(), 4, "drawn from the validators");
+        // The second shard's account is routed to the elastic lane.
+        let hash = submit_as(
+            &chain,
+            &validators,
+            &second_shard_key(),
+            "through the elastic lane",
+        );
+        wait_until(
+            &validators,
+            Duration::from_secs(60),
+            "the elastic lane's transaction merged",
+            || committed_everywhere(&validators, hash),
+        );
+        assert!(
+            merged_everywhere(&validators, &disks)
+                .iter()
+                .all(|merged| *merged >= 1)
+        );
+        // Idle: spaced transactions show low utilization and the lane closes.
+        for index in 0..12 {
+            if lane_record(&validators[0], elastic).is_none_or(|record| record.closing.is_some()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1_600));
+            let hash = submit(&chain, &validators, &format!("idle {index}"));
+            wait_until(
+                &validators,
+                Duration::from_secs(60),
+                "idle work commits",
+                || committed_everywhere(&validators, hash),
+            );
+        }
+        let closing = lane_record(&validators[0], elastic)
+            .and_then(|record| record.closing)
+            .expect("the idle lane closes");
+        // It retires at c + A + 1, and every validator stops its instance.
+        for _ in 0..16 {
+            if validators
+                .iter()
+                .all(|validator| lane_record(validator, elastic).is_none())
+            {
+                break;
+            }
+            burst(&validators, 1);
+        }
+        assert!(
+            validators
+                .iter()
+                .all(|validator| lane_record(validator, elastic).is_none()),
+            "the lane closed at {closing} retires"
+        );
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "every validator stops the retired lane",
+            || running(&validators) == vec![0; 4],
+        );
         shutdown(validators);
     }
 

@@ -569,10 +569,11 @@ Generate a genesis configuration and standard-output in JSON format
 * `--genesis-public-key <MULTI_HASH>`
 * `--kagemusha-mint-finality-parameters <PATH>` — Path to the explicitly provisioned public KAGEMUSHA mint-finality genesis parameters
 * `--ivm-gas-limit-per-block <U64>` — Optional: set the custom parameter `ivm_gas_limit_per_block` (u64) in genesis so all peers agree on the block gas budget. If omitted, a sensible default (1,680,000) is applied
-* `--consensus-mode <MODE>` — Select the consensus mode snapshot to seed in the genesis parameters (public dataspace requires NPoS; other dataspaces may use permissioned or NPoS)
+* `--consensus-mode <MODE>` — Select the consensus mode snapshot to seed in the genesis parameters (default: permissioned; profiles that require NPoS select it themselves)
 
   Possible values: `permissioned`, `npos`
 
+* `--lane-policy <PATH>` — Optional path to a JSON Sumeragi lane policy (fixed lanes, routes, autoscale) to set in genesis. If omitted, the chain has lane 0 only until governance sets a policy
 * `--sm-openssl-preview <BOOL>` — Toggle the OpenSSL-backed SM preview helpers in the generated manifest
 
   Possible values: `true`, `false`
@@ -621,7 +622,7 @@ Synthetic mode is useful when we need a semi-realistic genesis for stress-testin
 
 Materialize an incomplete source template with operator-provisioned public authority
 
-**Usage:** `kagami genesis materialize --kagemusha-mint-finality-parameters <PATH> --xor-asset-definition-id <ASSET_DEFINITION_ID> <TEMPLATE_FILE>`
+**Usage:** `kagami genesis materialize [OPTIONS] --kagemusha-mint-finality-parameters <PATH> <TEMPLATE_FILE>`
 
 ###### **Arguments:**
 
@@ -630,7 +631,7 @@ Materialize an incomplete source template with operator-provisioned public autho
 ###### **Options:**
 
 * `--kagemusha-mint-finality-parameters <PATH>` — Explicitly provisioned public KAGEMUSHA mint-finality genesis parameters
-* `--xor-asset-definition-id <ASSET_DEFINITION_ID>` — Required for NPoS sources; exact network XOR identity committed at genesis. Omit for permissioned sources.
+* `--xor-asset-definition-id <ASSET_DEFINITION_ID>` — Explicit canonical XOR definition committed by an NPoS source template
 
 
 

@@ -43301,11 +43301,8 @@ fn committed_lane_block_wire(
         commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
     }
 }
-/// GET /v1/sumeragi/status — latest authoritative Sumeragi v2 snapshot.
-///
-/// The legacy status shape is archival-only. Until the v2 runner publishes a
-/// replayed reducer snapshot, fail closed instead of exposing v1/RBC state as
-/// though it described the live consensus protocol.
+/// GET /v1/sumeragi/status — the status of the node's global Sumeragi instance
+/// (`specs/sumeragi.md` §12.1); unavailable before the instance's core started.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_status(
     accept: Option<axum::http::HeaderValue>,
@@ -43319,6 +43316,22 @@ pub async fn handle_v1_sumeragi_status(
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     Ok(crate::utils::respond_with_format(status, format))
+}
+/// GET /v1/sumeragi/lanes — every lane of the committed state with the status of the node's
+/// instance of it (`specs/sumeragi_lanes.md` §8); unavailable before consensus started.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sumeragi_lanes(
+    accept: Option<axum::http::HeaderValue>,
+    lanes: Option<Vec<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus>>,
+) -> Result<Response> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let Some(lanes) = lanes else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
+    Ok(crate::utils::respond_with_format(lanes, format))
 }
 fn sumeragi_pipeline_execution_status(
     snapshot: iroha_core::status::PipelineExecutionSnapshot,

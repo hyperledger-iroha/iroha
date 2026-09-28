@@ -316,6 +316,31 @@ impl SumeragiLaneState {
     }
 }
 
+/// A lane incarnation as the node serves it (`specs/sumeragi_lanes.md` §8): the committed record
+/// and the status of the node's instance of it.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sumeragi_lanes::SumeragiLaneStatus")]
+pub struct SumeragiLaneStatus {
+    /// The committed lifecycle record.
+    pub record: SumeragiLaneRecord,
+    /// The node's instance (`None` while it does not run one: before activation, or when its
+    /// instance failed to start).
+    #[norito(required)]
+    pub instance: Option<crate::sumeragi::SumeragiStatus>,
+}
+
 /// A fixed lane of the policy: created with this committee, recreated after it retires while
 /// the policy still lists it, closed once the policy no longer lists it (§2.1).
 #[derive(
@@ -712,6 +737,51 @@ mod tests {
             SumeragiLanePolicy::from_custom_parameter(&custom),
             Some(Ok(value))
         );
+    }
+
+    #[test]
+    fn lane_statuses_roundtrip_with_and_without_an_instance() {
+        let running = SumeragiLaneStatus {
+            record: record(None),
+            instance: Some(crate::sumeragi::SumeragiStatus {
+                instance: [5; 32],
+                height: 4,
+                view: 0,
+                stage: 0,
+                leader: None,
+                proxy_tail: None,
+                high_qc_view: None,
+                level: 0,
+                start_level: 0,
+                t_retx_ms: 100,
+                committed_height: 3,
+                applied_height: 3,
+                awaiting: false,
+                signer: None,
+                unanchored: false,
+                abstaining: true,
+                halted: None,
+                footprint: crate::sumeragi::SumeragiFootprint::default(),
+            }),
+        };
+        for status in [
+            running.clone(),
+            SumeragiLaneStatus {
+                instance: None,
+                ..running
+            },
+        ] {
+            let bytes = status.encode();
+            let decoded =
+                <SumeragiLaneStatus as norito::codec::DecodeAll>::decode_all(&mut bytes.as_slice())
+                    .expect("decode");
+            assert_eq!(decoded, status);
+            let json = norito::json::to_json(&status).expect("json");
+            assert_eq!(
+                norito::json::from_json::<SumeragiLaneStatus>(&json).expect("from json"),
+                status
+            );
+        }
     }
 
     #[test]

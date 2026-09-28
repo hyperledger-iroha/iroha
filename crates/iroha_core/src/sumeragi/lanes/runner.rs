@@ -27,7 +27,10 @@ use std::{
 
 use iroha_config::parameters::actual::SumeragiLocalOverrides;
 use iroha_crypto::KeyPair;
-use iroha_data_model::{NetworkId, sumeragi_lanes::SumeragiLaneRecord};
+use iroha_data_model::{
+    NetworkId,
+    sumeragi_lanes::{SumeragiLaneRecord, SumeragiLaneStatus},
+};
 use iroha_model_base::topology::LaneId;
 use iroha_sumeragi::{crypto::NoAttestation, types::Hash32};
 use parking_lot::Mutex;
@@ -163,22 +166,26 @@ impl LaneRunnerHandle {
         }
     }
 
-    /// The running lane instances with their cores' latest diagnostics.
+    /// Every lane of the committed state with the status of the node's instance of it.
     #[must_use]
-    pub fn statuses(&self) -> Vec<(LaneInstance, Option<iroha_sumeragi::api::CoreStatus>)> {
-        self.inner
-            .running
-            .lock()
-            .iter()
-            .map(|((lane, incarnation), running)| {
-                (
-                    LaneInstance {
-                        lane: *lane,
-                        incarnation: *incarnation,
-                        instance: running.instance,
-                    },
-                    running.driver.handle().status(),
-                )
+    pub fn statuses(&self) -> Vec<SumeragiLaneStatus> {
+        let lanes = self
+            .inner
+            .inputs
+            .state
+            .view()
+            .world()
+            .sumeragi_lanes()
+            .clone();
+        let running = self.inner.running.lock();
+        lanes
+            .lanes
+            .into_iter()
+            .map(|record| {
+                let instance = running
+                    .get(&(record.lane, record.incarnation))
+                    .and_then(|lane| crate::sumeragi::node::status_dto(&lane.driver.handle()));
+                SumeragiLaneStatus { record, instance }
             })
             .collect()
     }

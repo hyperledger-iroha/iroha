@@ -23,6 +23,7 @@ use iroha_data_model::{
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameters},
     },
     prelude::*,
+    sumeragi_lanes::SumeragiLanePolicy,
 };
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount,
@@ -47,6 +48,38 @@ use std::{
 };
 
 const KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES: u64 = 1024 * 1024;
+const LANE_POLICY_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Load and validate a Sumeragi lane policy (`specs/sumeragi_lanes.md`) from a JSON file: its
+/// structure, pinned lane parameters and every fixed member's proof of possession.
+pub(super) fn load_lane_policy(path: &std::path::Path) -> color_eyre::Result<SumeragiLanePolicy> {
+    let metadata = fs::metadata(path)
+        .wrap_err_with(|| format!("read lane policy metadata from {}", path.display()))?;
+    if !metadata.is_file() || metadata.len() > LANE_POLICY_MAX_BYTES {
+        return Err(color_eyre::eyre::eyre!(
+            "the lane policy must be a regular file no larger than {LANE_POLICY_MAX_BYTES} bytes"
+        ));
+    }
+    let bytes =
+        fs::read(path).wrap_err_with(|| format!("read lane policy from {}", path.display()))?;
+    let policy: SumeragiLanePolicy =
+        norito::json::from_slice(&bytes).wrap_err("decode the lane policy")?;
+    iroha_core::sumeragi::lanes::step::validate_policy(&policy)
+        .map_err(|error| color_eyre::eyre::eyre!("invalid lane policy: {error}"))?;
+    Ok(policy)
+}
+
+/// Add the lane policy parameter to `genesis`.
+fn append_lane_policy(
+    genesis: RawGenesisTransaction,
+    policy: SumeragiLanePolicy,
+) -> color_eyre::Result<RawGenesisTransaction> {
+    Ok(genesis
+        .into_builder()
+        .append_parameter(Parameter::Custom(policy.into_custom_parameter()))
+        .build_raw()?
+        .with_consensus_meta())
+}
 
 pub(super) fn load_kagemusha_mint_finality_parameters(
     path: &std::path::Path,
@@ -118,6 +151,10 @@ pub struct Args {
     /// permissioned; profiles that require NPoS select it themselves).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
+    /// Optional path to a JSON Sumeragi lane policy (fixed lanes, routes, autoscale) to set in
+    /// genesis. If omitted, the chain has lane 0 only until governance sets a policy.
+    #[clap(long, value_name = "PATH")]
+    lane_policy: Option<PathBuf>,
     /// Override cryptography snapshot fields in the generated manifest.
     #[clap(flatten)]
     crypto: CryptoArgs,
@@ -588,6 +625,7 @@ impl<T: Write> RunArgs<T> for Args {
             mode,
             ivm_gas_limit_per_block,
             consensus_mode,
+            lane_policy,
             crypto,
         } = self;
         let mode = mode.unwrap_or_default();
@@ -647,6 +685,9 @@ impl<T: Write> RunArgs<T> for Args {
         )?;
         if let Some(asset_definition_id) = public_xor_asset_definition_id.as_ref() {
             genesis = append_public_xor_binding(genesis, asset_definition_id)?;
+        }
+        if let Some(path) = lane_policy {
+            genesis = append_lane_policy(genesis, load_lane_policy(&path)?)?;
         }
         let chain_discriminant = profile_defaults
             .as_ref()
@@ -1037,6 +1078,63 @@ mod consensus_manifest_tests {
         )
         .expect_err("NPoS genesis without a seed must fail closed");
         assert!(error.to_string().contains("VRF seed"));
+    }
+    #[test]
+    fn a_lane_policy_file_becomes_the_genesis_lane_policy() {
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLaneRoute,
+        };
+        let key = iroha_crypto::KeyPair::from_seed(vec![7; 32], Algorithm::BlsNormal);
+        let policy = SumeragiLanePolicy {
+            anchor_freshness: 16,
+            max_merge_blocks: 32,
+            stall_window: 256,
+            lane_params: SumeragiParameters::default(),
+            fixed: vec![SumeragiFixedLane {
+                lane: iroha_model_base::topology::LaneId::new(2),
+                dataspace: iroha_model_base::topology::DataSpaceId::new(0),
+                committee: vec![SumeragiLaneMember {
+                    peer: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+                    pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("pop"),
+                }],
+            }],
+            routes: vec![SumeragiLaneRoute {
+                lane: iroha_model_base::topology::LaneId::new(2),
+                account: None,
+                instruction: Some("Log".to_owned()),
+            }],
+            autoscale: None,
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("lanes.json");
+        fs::write(&path, norito::json::to_json(&policy).expect("json")).expect("write");
+        let loaded = load_lane_policy(&path).expect("a valid policy loads");
+        assert_eq!(loaded, policy);
+        let manifest = generate_default(
+            GenesisBuilder::new_without_executor(ChainId::from("lanes"), PathBuf::from("."))
+                .complete_for_test(),
+            iroha_test_samples::ALICE_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+        )
+        .expect("generate genesis");
+        let manifest = append_lane_policy(manifest, loaded).expect("append the policy");
+        let parameters = manifest.effective_parameters().expect("parameters");
+        let custom = parameters
+            .custom()
+            .get(&SumeragiLanePolicy::parameter_id())
+            .expect("the policy parameter");
+        assert_eq!(
+            SumeragiLanePolicy::from_custom_parameter(custom),
+            Some(Ok(policy.clone()))
+        );
+        // A committee member whose proof of possession does not verify is refused.
+        let mut forged = policy;
+        forged.fixed[0].committee[0].pop = vec![0; 96];
+        fs::write(&path, norito::json::to_json(&forged).expect("json")).expect("write");
+        assert!(load_lane_policy(&path).is_err());
     }
     #[test]
     fn generated_genesis_does_not_reregister_its_preseeded_authority() {

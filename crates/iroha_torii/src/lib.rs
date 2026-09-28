@@ -31418,6 +31418,39 @@ async fn handler_sumeragi_status(
         .map(axum::response::IntoResponse::into_response)
 }
 #[cfg(feature = "telemetry")]
+async fn handler_sumeragi_lanes(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    validate_api_token(app.as_ref(), &headers)?;
+    let key = rate_limit_key(
+        &headers,
+        Some(remote.ip()),
+        "v1/sumeragi/lanes",
+        app.authenticated_api_token_principal(&headers),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    if !app.telemetry.allows_metrics() {
+        return Ok(telemetry_unavailable_response(
+            "/v1/sumeragi/lanes",
+            &app.telemetry,
+        ));
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    let lanes = app
+        .sumeragi
+        .as_ref()
+        .map(iroha_core::sumeragi::node::NodeHandle::lane_statuses);
+    routing::handle_v1_sumeragi_lanes(accept, lanes)
+        .await
+        .map(axum::response::IntoResponse::into_response)
+}
+#[cfg(feature = "telemetry")]
 async fn handler_sumeragi_diagnostics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -42789,6 +42822,7 @@ impl Torii {
                 STATUS => operator_get(handler_sumeragi_status, app_state);
                 DIAGNOSTICS => operator_get(handler_sumeragi_diagnostics, app_state);
                 STATUS_SSE => operator_get(handler_sumeragi_status_sse, app_state);
+                LANES => operator_get(handler_sumeragi_lanes, app_state);
                 BLS_KEYS => operator_get(handler_sumeragi_bls_keys, app_state);
                 CONSENSUS_KEYS => operator_get(handler_sumeragi_consensus_keys, app_state);
                 PARAMETERS => operator_get(handler_sumeragi_params, app_state);
