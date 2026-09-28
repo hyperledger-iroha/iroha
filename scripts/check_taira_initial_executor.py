@@ -20,6 +20,7 @@ CLOSED = {
         "RegisterProviderOwner",
         "UnregisterProviderOwner",
         "MutateSorafsReleaseManifestAuthority",
+        "MutateSorafsTopologyAuthority",
     },
 }
 RETIRED_SORAFS_INSTRUCTIONS = {
@@ -114,9 +115,6 @@ def mutation_tests(registry: str, wire: str) -> int:
     marker = "dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService> => CoreAuthorized,"
     if registry.count(marker) != 1:
         raise ValueError("mutation fixture anchor is not unique")
-    closed_marker = "dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority> => Closed,"
-    if registry.count(closed_marker) != 1:
-        raise ValueError("closed SoraFS mutation fixture anchor is not unique")
     mutations = [
         (registry.replace(marker, marker.replace(" => CoreAuthorized", "")), wire),
         (registry.replace(marker, ""), wire),
@@ -125,8 +123,14 @@ def mutation_tests(registry: str, wire: str) -> int:
         (registry.replace(marker, marker + "\n" + marker), wire),
         (registry.replace(marker, marker.replace("CoreAuthorized", "Closed")), wire),
         (registry.replace(marker, marker.replace("dispatch_instruction", "unavailable_instruction")), wire),
-        (registry.replace(closed_marker, closed_marker.replace("Closed", "CoreAuthorized")), wire),
     ]
+    for name in sorted(CLOSED["sorafs"]):
+        closed_marker = f"dispatch_instruction::<iroha_data_model::isi::sorafs::{name}> => Closed,"
+        if registry.count(closed_marker) != 1:
+            raise ValueError(f"closed SoraFS mutation fixture anchor is not unique: {name}")
+        mutations.append(
+            (registry.replace(closed_marker, closed_marker.replace("Closed", "CoreAuthorized")), wire)
+        )
     for name in sorted(RETIRED_SORAFS_INSTRUCTIONS):
         row = f"dispatch_instruction::<iroha_data_model::isi::sorafs::{name}> => CoreAuthorized,"
         wire_entry = f'\nbuilt_in_wire_id!(sorafs::{name} => "iroha.instruction.v1::sorafs::{name}"),\n'

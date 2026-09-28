@@ -68,8 +68,10 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   checks below, this closes ZK01's software defect scope; compiler-created copies,
   device timing and independent cryptographic qualification remain ZK06.
 - Optional-input transfer/full/change circuits gate root equality by presence.
-  Path builders accept one path per actual input. Native golden/key regeneration
-  and full-capacity/adversarial validation are in progress.
+  Path builders accept one path per actual input. Native full-capacity one-input
+  path/list proofs, adversarial relation cases and regenerated canonical key
+  goldens pass. The wallet's real transfer/full/change controls also pass; final
+  source-bound reruns and packaged SDK qualification remain open.
 - `zk::verify_for_relation` requires an explicit semantic role and returns typed
   failures. IVM and Kaigi consumers use it; mandatory IVM replay remains.
   Data-model docs now state validators observe execution and gas through replay.
@@ -201,15 +203,22 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   digests. The typed-error enum and an explicitly justified bounded inline
   consensus-parent enum expectation resolve those source blockers. The rebuilt
   native circuit generated replacement full/change unshield key digests; pins
-  are updated and the complete focused Core suite is queued. A stale Vega build
+  are updated. A stale Vega build
   captured dependency metadata before the `zeroize` manifest change; its fresh
   locked rerun and the additional native commitment suites now pass. The next
   Core compile found a compact-CA alpha shape mismatch and a concurrent SoraFS
   fixture mutation error; both sources are repaired and the fresh run is queued.
   The September 28 build reached Core but encountered a concurrent reputation/
-  archive API migration before executing tests. It yields no new profile/KAT
-  capture or Core pass; the source-contract/geometry selection separately passes
-  21 checks.
+  archive API migration before executing tests. The later broad native Core run
+  compiles in 8m03s and completes 479 selected tests in 999.67s: 466 pass, 10 fail,
+  three are ignored. All ten failures are repaired in source: three engine-pin
+  dependent checks, two protocol KAT literals, one SHA block-count expectation
+  and four positive fixtures still using a retired circuit-ID label. A fresh
+  targeted run checks these repairs, latest private owners and row-batch parity.
+  The complete 49-family MAIN OODS differential test, typed relation-confusion
+  negatives and unavailable RAM-LFE preflight pass in the broad run. The refreshed
+  source-contract/geometry selection separately passes 21 checks; the codec and
+  historical archive guards also pass.
 - The renamed CLI graph checks pass 5 focused tests under Python 3.12. Its wider
   10-test module has four observed mock-boundary failures (`/fixed/cargo`), and
   the workspace target inventory reports a concurrently added KAGEMUSHA binary

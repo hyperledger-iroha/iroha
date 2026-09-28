@@ -32,7 +32,7 @@ iroha_data_model = { path = "../iroha_data_model", default-features = false, fea
 iroha_logger = { workspace = true }
 iroha_telemetry = { path = "../iroha_telemetry" }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
-sorafs_manifest = { path = "../sorafs_manifest" }
+sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"] }
 thiserror = "2.0.17"
 sorafs_car = { path = "../sorafs_car", features = ["manifest"] }
 hex = { workspace = true }

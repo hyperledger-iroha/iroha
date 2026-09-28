@@ -191,7 +191,7 @@ fastpq_isi = { path = "../fastpq_isi" }
 mv = { workspace = true }
 concread = { workspace = true, features = ["ebr", "maps", "foldhash"] }
 iroha_schema = { workspace = true }
-sorafs_manifest = { path = "../sorafs_manifest" }
+sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"] }
 settlement_router = { path = "../settlement_router" }
 iroha_sccp = { path = "../iroha_sccp" }
 iroha_sumeragi = { workspace = true }

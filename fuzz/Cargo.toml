@@ -13,7 +13,7 @@ libfuzzer-sys = { version = "=0.4.10", features = ["arbitrary-derive"] }
 arbitrary = { version = "=1.4.2", features = ["derive"] }
 iroha_core = { path = "../crates/iroha_core" }
 sorafs_car = { path = "../crates/sorafs_car", features = ["manifest"] }
-sorafs_manifest = { path = "../crates/sorafs_manifest" }
+sorafs_manifest = { path = "../crates/sorafs_manifest", features = ["pqc"] }
 flate2 = "=1.1.5"
 zstd = "=0.13.3"
 base64 = "=0.22.1"

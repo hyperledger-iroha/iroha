@@ -86,7 +86,7 @@ ivm_abi = { path = "crates/ivm_abi" }
 kotodama_lang = { path = "crates/kotodama_lang" }
 sorafs_car = { path = "crates/sorafs_car" }
 sorafs_chunker = { path = "crates/sorafs_chunker" }
-sorafs_manifest = { path = "crates/sorafs_manifest" }
+sorafs_manifest = { path = "crates/sorafs_manifest", features = ["pqc"] }
 sorafs_orchestrator = { path = "crates/sorafs_orchestrator", default-features = false, features = ["cli-orchestrator"] }
 soranet_pq = { path = "crates/soranet_pq" }
 soranet_incentives = { path = "crates/soranet_incentives" }

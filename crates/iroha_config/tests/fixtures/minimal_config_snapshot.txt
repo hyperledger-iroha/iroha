@@ -610,10 +610,10 @@ Root {
         push: Push {
             enabled: false,
             rate_per_minute: Some(
-                60,
+                600000,
             ),
             burst: Some(
-                30,
+                100000,
             ),
             connect_timeout: 5s,
             request_timeout: 10s,

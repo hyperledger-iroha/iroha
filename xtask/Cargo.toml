@@ -82,7 +82,7 @@ ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"
 soranet-handshake-harness = { path = "../tools/soranet-handshake-harness" }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 sorafs_car = { workspace = true }
-sorafs_manifest = { path = "../crates/sorafs_manifest" }
+sorafs_manifest = { path = "../crates/sorafs_manifest", features = ["pqc"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
 tower = { version = "0.5.2", features = ["util"] }
 axum = { workspace = true }

@@ -130,7 +130,12 @@ pub(super) fn run_call(
     let _lock = writer
         .lock_exclusive(Path::new("call.lock"))
         .map_err(atomic_diagnostic)?;
-    ensure_previous_call_terminal(&writer, &service)?;
+    ensure_previous_call_terminal(
+        &writer,
+        &service,
+        build.workspace.root_manifest_path(),
+        &build.network,
+    )?;
     let address = service.resolve_address(&alias).map_err(call_diagnostic)?;
     let (intent, payload) = trusted_call_intent(&bytes, address, entrypoint, payload)?;
     let gas_limit = NonZeroU64::new(args.gas_limit)
@@ -168,11 +173,11 @@ pub(super) fn run_call(
     } else {
         ""
     };
-    let resume = format!(
-        "musubi --manifest-path {} call --network {} --resume {}",
-        quote_cli_argument(&build.workspace.root_manifest_path().display().to_string()),
-        quote_cli_argument(&build.network.name),
-        quote_cli_argument(&journal.display().to_string())
+    let resume = deploy::contract_resume_command(
+        "call",
+        build.workspace.root_manifest_path(),
+        &build.network,
+        &journal,
     );
     if args.prepare {
         return Ok(Success {
@@ -305,6 +310,8 @@ fn call_slot(
 fn ensure_previous_call_terminal(
     writer: &AtomicWriteRoot,
     service: &ContractCallService,
+    manifest: &Path,
+    network: &network::SelectedNetwork,
 ) -> Result<(), Diagnostic> {
     let Some(bytes) = writer
         .load_immutable(Path::new("active-journal"), 64)
@@ -326,8 +333,8 @@ fn ensure_previous_call_terminal(
         )
         .with_context("journal", journal.display().to_string())
         .with_help(format!(
-            "run `musubi call --resume {}` on the same network",
-            quote_cli_argument(&journal.display().to_string())
+            "resume the exact call with `{}`",
+            deploy::contract_resume_command("call", manifest, network, &journal)
         )));
     }
     Ok(())

@@ -1856,18 +1856,7 @@ fn receiver_sequence_entry_bytes<T: norito::core::SerializePayload>(
     let _canonical_flags = norito::core::DecodeFlagsGuard::enter(flags);
     let payload_bytes = norito::core::encoded_payload_len(value)
         .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
-    let framing_bytes = if norito::core::packed_seq_enabled_for_flags(flags) {
-        core::mem::size_of::<u64>()
-    } else {
-        let mut encoded = Vec::with_capacity(10);
-        norito::core::write_len_with_flags(
-            &mut encoded,
-            u64::try_from(payload_bytes).map_err(|_| KagemushaStateErrorV1::ArithmeticOverflow)?,
-            flags,
-        )
-        .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
-        encoded.len()
-    };
+    let framing_bytes = norito::core::len_prefix_len_with_flags(payload_bytes, flags);
     u64::try_from(
         payload_bytes
             .checked_add(framing_bytes)

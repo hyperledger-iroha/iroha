@@ -16,8 +16,10 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 681_403
-EXPECTED_ASSET_SHA256 = "4687d7a4c34d8c89918267514692fe3fa3b6b19ded5cefb0d3b75c5052b46f92"
+# The extracted protected-body and pending-Kura validators retain explicit
+# dispatch custody and compare the recovered validated receipt before moving it.
+EXPECTED_ASSET_LENGTH = 682_211
+EXPECTED_ASSET_SHA256 = "58be1287e1950a0ab7ac5bd38d80fadac2cd6bfdbe7e41e31ac75f6b626ed6e4"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {

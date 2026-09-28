@@ -326,85 +326,19 @@ fn inbound_two_field_struct(
     flags: u8,
     first_field_width: usize,
 ) -> Result<(&[u8], &[u8]), norito::core::Error> {
-    use norito::core::{Error, header_flags};
-    if flags & header_flags::PACKED_STRUCT == 0 {
-        let (first_len, first_prefix) =
-            norito::core::read_len_from_slice_with_flags(payload, flags)?;
-        let first_end = first_prefix
-            .checked_add(first_len)
-            .ok_or(Error::LengthMismatch)?;
-        let first = payload
-            .get(first_prefix..first_end)
-            .ok_or(Error::LengthMismatch)?;
-        let remaining = payload.get(first_end..).ok_or(Error::LengthMismatch)?;
-        let second = inbound_enum_field(remaining, flags)?;
-        return (first.len() == first_field_width)
-            .then_some((first, second))
-            .ok_or(Error::LengthMismatch);
-    }
-    if flags & header_flags::FIELD_BITSET == 0 {
-        const FIELD_COUNT: usize = 2;
-        let table_len = (FIELD_COUNT + 1)
-            .checked_mul(core::mem::size_of::<u64>())
-            .ok_or(Error::LengthMismatch)?;
-        let (offsets, fields) = payload
-            .split_at_checked(table_len)
-            .ok_or(Error::LengthMismatch)?;
-        let read_offset = |index: usize| -> Result<usize, Error> {
-            let start = index
-                .checked_mul(core::mem::size_of::<u64>())
-                .ok_or(Error::LengthMismatch)?;
-            let end = start
-                .checked_add(core::mem::size_of::<u64>())
-                .ok_or(Error::LengthMismatch)?;
-            let bytes: [u8; 8] = offsets
-                .get(start..end)
-                .ok_or(Error::LengthMismatch)?
-                .try_into()
-                .map_err(|_| Error::LengthMismatch)?;
-            usize::try_from(u64::from_le_bytes(bytes)).map_err(|_| Error::LengthMismatch)
-        };
-        let start = read_offset(0)?;
-        let middle = read_offset(1)?;
-        let end = read_offset(2)?;
-        if start != 0 || middle != first_field_width || middle > end || end != fields.len() {
-            return Err(Error::LengthMismatch);
-        }
-        return Ok((
-            fields.get(start..middle).ok_or(Error::LengthMismatch)?,
-            fields.get(middle..end).ok_or(Error::LengthMismatch)?,
-        ));
-    }
-    // Both consensus envelopes have a fixed-width u16 followed by one dynamic enum.
-    const EXPECTED_FIELD_BITSET: u8 = 0b0000_0010;
-    let (&bitset, size_header) = payload.split_first().ok_or(Error::LengthMismatch)?;
-    if bitset != EXPECTED_FIELD_BITSET {
-        return Err(Error::LengthMismatch);
-    }
-    let (second_len, prefix_len) =
-        norito::core::read_len_from_slice_with_flags(size_header, flags)?;
-    let fields = size_header.get(prefix_len..).ok_or(Error::LengthMismatch)?;
-    let expected_len = first_field_width
-        .checked_add(second_len)
+    use norito::core::Error;
+    let (first_len, first_prefix) = norito::core::read_len_from_slice_with_flags(payload, flags)?;
+    let first_end = first_prefix
+        .checked_add(first_len)
         .ok_or(Error::LengthMismatch)?;
-    if fields.len() != expected_len {
-        return Err(Error::LengthMismatch);
-    }
-    Ok((
-        fields
-            .get(..first_field_width)
-            .ok_or(Error::LengthMismatch)?,
-        fields
-            .get(first_field_width..)
-            .ok_or(Error::LengthMismatch)?,
-    ))
-}
-#[derive(Clone, Copy)]
-enum InboundStructField {
-    Fixed(usize),
-    Sized,
-    ByteSequence,
-    Sequence,
+    let first = payload
+        .get(first_prefix..first_end)
+        .ok_or(Error::LengthMismatch)?;
+    let remaining = payload.get(first_end..).ok_or(Error::LengthMismatch)?;
+    let second = inbound_enum_field(remaining, flags)?;
+    (first.len() == first_field_width)
+        .then_some((first, second))
+        .ok_or(Error::LengthMismatch)
 }
 fn inbound_sequence_count(bytes: &[u8]) -> Result<(u64, usize), norito::core::Error> {
     let prefix = bytes
@@ -423,123 +357,40 @@ fn inbound_byte_sequence_wire_len(bytes: &[u8]) -> Result<usize, norito::core::E
         .filter(|len| *len <= bytes.len())
         .ok_or(norito::core::Error::LengthMismatch)
 }
-fn inbound_struct_field<'a>(
-    payload: &'a [u8],
+/// Borrow field `target` of a derived struct payload with `field_count` fields.
+///
+/// Every v1 struct field is length-prefixed, so the walk validates each
+/// boundary and rejects trailing bytes without decoding any field value.
+fn inbound_struct_field(
+    payload: &[u8],
     flags: u8,
-    fields: &[InboundStructField],
+    field_count: usize,
     target: usize,
-) -> Result<&'a [u8], norito::core::Error> {
-    use norito::core::{Error, header_flags};
-    if target >= fields.len() || fields.len() > u8::BITS as usize {
+) -> Result<&[u8], norito::core::Error> {
+    use norito::core::Error;
+    if target >= field_count {
         return Err(Error::LengthMismatch);
     }
-    if flags & header_flags::PACKED_STRUCT == 0 {
-        let mut remaining = payload;
-        let mut selected = None;
-        for index in 0..fields.len() {
-            let (field_len, prefix_len) =
-                norito::core::read_len_from_slice_with_flags(remaining, flags)?;
-            let field_end = prefix_len
-                .checked_add(field_len)
-                .ok_or(Error::LengthMismatch)?;
-            let field = remaining
-                .get(prefix_len..field_end)
-                .ok_or(Error::LengthMismatch)?;
-            if index == target {
-                selected = Some(field);
-            }
-            remaining = remaining.get(field_end..).ok_or(Error::LengthMismatch)?;
-        }
-        if !remaining.is_empty() {
-            return Err(Error::LengthMismatch);
-        }
-        return selected.ok_or(Error::LengthMismatch);
-    }
-    if flags & header_flags::FIELD_BITSET == 0 {
-        let table_entries = fields.len().checked_add(1).ok_or(Error::LengthMismatch)?;
-        let table_len = table_entries
-            .checked_mul(core::mem::size_of::<u64>())
+    let mut remaining = payload;
+    let mut selected = None;
+    for index in 0..field_count {
+        let (field_len, prefix_len) =
+            norito::core::read_len_from_slice_with_flags(remaining, flags)?;
+        let field_end = prefix_len
+            .checked_add(field_len)
             .ok_or(Error::LengthMismatch)?;
-        let (offsets, data) = payload
-            .split_at_checked(table_len)
+        let field = remaining
+            .get(prefix_len..field_end)
             .ok_or(Error::LengthMismatch)?;
-        let read_offset = |index: usize| -> Result<usize, Error> {
-            let start = index
-                .checked_mul(core::mem::size_of::<u64>())
-                .ok_or(Error::LengthMismatch)?;
-            let end = start
-                .checked_add(core::mem::size_of::<u64>())
-                .ok_or(Error::LengthMismatch)?;
-            let encoded: [u8; core::mem::size_of::<u64>()] = offsets
-                .get(start..end)
-                .ok_or(Error::LengthMismatch)?
-                .try_into()
-                .map_err(|_| Error::LengthMismatch)?;
-            usize::try_from(u64::from_le_bytes(encoded)).map_err(|_| Error::LengthMismatch)
-        };
-        let mut previous = 0;
-        for index in 0..table_entries {
-            let offset = read_offset(index)?;
-            if (index == 0 && offset != 0) || offset < previous || offset > data.len() {
-                return Err(Error::LengthMismatch);
-            }
-            previous = offset;
-        }
-        if previous != data.len() {
-            return Err(Error::LengthMismatch);
-        }
-        let start = read_offset(target)?;
-        let end = read_offset(target + 1)?;
-        return data.get(start..end).ok_or(Error::LengthMismatch);
-    }
-
-    let (&bitset, mut size_headers) = payload.split_first().ok_or(Error::LengthMismatch)?;
-    let expected_bitset = fields
-        .iter()
-        .enumerate()
-        .fold(0_u8, |bits, (index, field)| {
-            if matches!(field, InboundStructField::Sized) {
-                bits | (1_u8 << index)
-            } else {
-                bits
-            }
-        });
-    if bitset != expected_bitset {
-        return Err(Error::LengthMismatch);
-    }
-    let mut sized_lengths = [0_usize; u8::BITS as usize];
-    for (index, field) in fields.iter().enumerate() {
-        if matches!(field, InboundStructField::Sized) {
-            let (field_len, prefix_len) =
-                norito::core::read_len_from_slice_with_flags(size_headers, flags)?;
-            sized_lengths[index] = field_len;
-            size_headers = size_headers
-                .get(prefix_len..)
-                .ok_or(Error::LengthMismatch)?;
-        }
-    }
-    let data = size_headers;
-    let mut offset = 0_usize;
-    for (index, field) in fields.iter().enumerate() {
-        if index == target && matches!(field, InboundStructField::Sequence) {
-            return data.get(offset..).ok_or(Error::LengthMismatch);
-        }
-        let field_len = match field {
-            InboundStructField::Fixed(width) => *width,
-            InboundStructField::Sized => sized_lengths[index],
-            InboundStructField::ByteSequence => {
-                inbound_byte_sequence_wire_len(data.get(offset..).ok_or(Error::LengthMismatch)?)?
-            }
-            InboundStructField::Sequence => return Err(Error::LengthMismatch),
-        };
-        let end = offset.checked_add(field_len).ok_or(Error::LengthMismatch)?;
-        let field = data.get(offset..end).ok_or(Error::LengthMismatch)?;
         if index == target {
-            return Ok(field);
+            selected = Some(field);
         }
-        offset = end;
+        remaining = remaining.get(field_end..).ok_or(Error::LengthMismatch)?;
     }
-    Err(Error::LengthMismatch)
+    if !remaining.is_empty() {
+        return Err(Error::LengthMismatch);
+    }
+    selected.ok_or(Error::LengthMismatch)
 }
 fn enforce_inbound_sequence_limit(field: &[u8], limit: usize) -> Result<(), norito::core::Error> {
     let (length, _) = inbound_sequence_count(field)?;
@@ -561,15 +412,8 @@ fn enforce_inbound_byte_sequence_limit(
     Ok(())
 }
 fn enforce_inbound_manifest_limits(manifest: &[u8], flags: u8) -> Result<(), norito::core::Error> {
-    const FIELDS: [InboundStructField; 6] = [
-        InboundStructField::Sized,
-        InboundStructField::Sized,
-        InboundStructField::Fixed(core::mem::size_of::<u64>()),
-        InboundStructField::Sized,
-        InboundStructField::Sequence,
-        InboundStructField::Sized,
-    ];
-    let hashes = inbound_struct_field(manifest, flags, &FIELDS, 4)?;
+    const FIELDS: usize = 6;
+    let hashes = inbound_struct_field(manifest, flags, FIELDS, 4)?;
     enforce_inbound_sequence_limit(
         hashes,
         iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize,
@@ -579,8 +423,8 @@ fn enforce_inbound_peer_id_limits(peer_id: &[u8], flags: u8) -> Result<(), norit
     // `PeerId` is a one-field struct around `PublicKey`; the latter delegates
     // directly to `PublicKeyCompact`'s `ConstVec<u8>` wire. Its sequence
     // includes the algorithm byte in addition to the bounded key payload.
-    const FIELDS: [InboundStructField; 1] = [InboundStructField::Sized];
-    let public_key = inbound_struct_field(peer_id, flags, &FIELDS, 0)?;
+    const FIELDS: usize = 1;
+    let public_key = inbound_struct_field(peer_id, flags, FIELDS, 0)?;
     enforce_inbound_sequence_limit(public_key, MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS)
 }
 fn enforce_inbound_consensus_v2_payload_limits(
@@ -589,66 +433,45 @@ fn enforce_inbound_consensus_v2_payload_limits(
     flags: u8,
 ) -> Result<(), norito::core::Error> {
     use iroha_data_model::block::consensus_v2 as wire;
-    const PROPOSAL_FIELDS: [InboundStructField; 6] = [
-        InboundStructField::Sized,
-        // `ValidatorIndex` is a type alias, but the derive deliberately treats
-        // arbitrary named field types as length-delimited in hybrid layouts.
-        InboundStructField::Sized,
-        InboundStructField::Sized,
-        InboundStructField::Sized,
-        InboundStructField::Sized,
-        InboundStructField::ByteSequence,
-    ];
-    const CHUNK_FIELDS: [InboundStructField; 5] = [
-        InboundStructField::Sized,
-        InboundStructField::Fixed(core::mem::size_of::<u32>()),
-        InboundStructField::ByteSequence,
-        InboundStructField::Sized,
-        InboundStructField::ByteSequence,
-    ];
-    const CERTIFIED_RESPONSE_FIELDS: [InboundStructField; 5] = [
-        InboundStructField::Sized,
-        InboundStructField::Sized,
-        InboundStructField::ByteSequence,
-        InboundStructField::Sized,
-        InboundStructField::ByteSequence,
-    ];
+    const PROPOSAL_FIELDS: usize = 6;
+    const CHUNK_FIELDS: usize = 5;
+    const CERTIFIED_RESPONSE_FIELDS: usize = 5;
     match tag {
         wire::CONSENSUS_MESSAGE_V2_PROPOSAL_TAG => {
             enforce_inbound_manifest_limits(
-                inbound_struct_field(payload, flags, &PROPOSAL_FIELDS, 3)?,
+                inbound_struct_field(payload, flags, PROPOSAL_FIELDS, 3)?,
                 flags,
             )?;
             enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, &PROPOSAL_FIELDS, 5)?,
+                inbound_struct_field(payload, flags, PROPOSAL_FIELDS, 5)?,
                 wire::MAX_CONSENSUS_SIGNATURE_BYTES,
             )
         }
         wire::CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG => {
             enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, &CHUNK_FIELDS, 2)?,
+                inbound_struct_field(payload, flags, CHUNK_FIELDS, 2)?,
                 wire::MAX_DA_CHUNK_SIZE_BYTES as usize,
             )?;
             enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, &CHUNK_FIELDS, 4)?,
+                inbound_struct_field(payload, flags, CHUNK_FIELDS, 4)?,
                 wire::MAX_CONSENSUS_SIGNATURE_BYTES,
             )
         }
         wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG => {
             enforce_inbound_manifest_limits(
-                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 1)?,
+                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 1)?,
                 flags,
             )?;
             enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 2)?,
+                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 2)?,
                 wire::MAX_DA_PAYLOAD_SIZE_BYTES as usize,
             )?;
             enforce_inbound_peer_id_limits(
-                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 3)?,
+                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 3)?,
                 flags,
             )?;
             enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 4)?,
+                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 4)?,
                 wire::MAX_CONSENSUS_SIGNATURE_BYTES,
             )
         }
@@ -1545,13 +1368,7 @@ mod tests {
         expected: iroha_p2p::TransportAdmissionClass,
     ) {
         assert_eq!(message.admission_class(), expected);
-        for requested in [
-            0,
-            ncore::header_flags::COMPACT_LEN,
-            ncore::header_flags::PACKED_STRUCT
-                | ncore::header_flags::COMPACT_LEN
-                | ncore::header_flags::FIELD_BITSET,
-        ] {
+        for requested in [0, ncore::header_flags::COMPACT_LEN] {
             let (bare, flags) = {
                 let _encode_guard = ncore::DecodeFlagsGuard::enter(requested);
                 norito::codec::encode_with_header_flags(message)
@@ -1839,10 +1656,10 @@ mod tests {
         );
     }
     #[test]
-    fn raw_consensus_struct_parser_accepts_each_advertised_packed_layout() {
+    fn raw_consensus_struct_parser_accepts_each_v1_layout() {
         #[derive(norito::NoritoSchema)]
         #[norito_schema(
-            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::TwoFieldFixture"
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_v1_layout::TwoFieldFixture"
         )]
         #[derive(Encode)]
         struct TwoFieldFixture {
@@ -1851,7 +1668,7 @@ mod tests {
         }
         #[derive(norito::NoritoSchema)]
         #[norito_schema(
-            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::PayloadFixture"
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_v1_layout::PayloadFixture"
         )]
         #[derive(Encode)]
         enum PayloadFixture {
@@ -1861,22 +1678,13 @@ mod tests {
             version: 3,
             payload: PayloadFixture::Safety(7),
         };
-        for requested in [
-            0,
-            ncore::header_flags::PACKED_STRUCT,
-            ncore::header_flags::PACKED_STRUCT
-                | ncore::header_flags::COMPACT_LEN
-                | ncore::header_flags::FIELD_BITSET,
-        ] {
+        for requested in [0, ncore::header_flags::COMPACT_LEN] {
             let (bare, flags) = {
                 let _guard = ncore::DecodeFlagsGuard::enter(requested);
                 norito::codec::encode_with_header_flags(&fixture)
             };
             assert_eq!(
-                flags
-                    & (ncore::header_flags::PACKED_STRUCT
-                        | ncore::header_flags::COMPACT_LEN
-                        | ncore::header_flags::FIELD_BITSET),
+                flags & ncore::header_flags::COMPACT_LEN,
                 requested,
                 "fixture must advertise the layout under test"
             );
@@ -1886,11 +1694,8 @@ mod tests {
             assert_eq!(version, 3_u16.to_le_bytes());
             let (tag, remaining) = super::inbound_enum_parts(payload).expect("payload enum tag");
             assert_eq!(tag, 0);
-            let field = if flags & ncore::header_flags::PACKED_STRUCT == 0 {
-                super::inbound_enum_field(remaining, flags).expect("length-prefixed enum field")
-            } else {
-                remaining
-            };
+            let field =
+                super::inbound_enum_field(remaining, flags).expect("length-prefixed enum field");
             assert_eq!(field, [7]);
         }
     }

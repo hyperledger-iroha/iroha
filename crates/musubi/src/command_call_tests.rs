@@ -2,7 +2,7 @@
 use super::*;
 fn fixture() -> (Vec<u8>, ContractAddress) {
     let artifact = ivm::kotodama::compiler::Compiler::new().compile_source(
-        "seiyaku Example { kotoage fn write(int value) authorize(\"CanInvokeContractEntrypoint\") {} kotoage fn ping() {} view fn read() -> int { return 1; } }",
+        "seiyaku Example { kotoage fn write(int value) authorize(\"CanInvokeContractEntrypoint\") {} kotoage fn ping() authorize(\"CanInvokeContractEntrypoint\") {} view fn read() -> int { return 1; } }",
     ).expect("compile current artifact");
     let key = iroha::crypto::KeyPair::random();
     let authority = iroha_data_model::account::AccountId::new(key.public_key().clone());
@@ -51,19 +51,11 @@ fn mutable_call_encodes_local_schema_and_omits_zero_argument_payload() {
         .is_err()
     );
     assert!(trusted_call_intent(&artifact, address.clone(), "ping", value).is_err());
-    assert!(
-        trusted_call_intent(&artifact, address.clone(), "read", norito::json!({})).is_err()
-    );
+    assert!(trusted_call_intent(&artifact, address.clone(), "read", norito::json!({})).is_err());
     let mut changed = artifact;
     changed[0] ^= 1;
     assert!(
-        trusted_call_intent(
-            &changed,
-            address,
-            "write",
-            norito::json!({"value": "7"})
-        )
-        .is_err()
+        trusted_call_intent(&changed, address, "write", norito::json!({"value": "7"})).is_err()
     );
 }
 #[test]
@@ -115,4 +107,80 @@ fn mutable_call_cli_requires_new_intent_or_exact_resume() {
         ])
         .is_err()
     );
+}
+
+fn continuation_network(config: Option<PathBuf>) -> network::SelectedNetwork {
+    network::SelectedNetwork {
+        name: "other-taira".to_owned(),
+        config,
+        config_image: None,
+        chain_discriminant: 369,
+        network_id: None,
+        fee_payment: None,
+        contracts: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn mutable_call_continuation_retains_quoted_project_network_and_selected_client() {
+    let manifest = Path::new("/projects/coffee club/Musubi.toml");
+    let journal = Path::new("/projects/coffee club/target/call/exact-journal");
+    let network = continuation_network(Some(PathBuf::from("/runtime/owner's wallet/client.toml")));
+    assert_eq!(
+        deploy::contract_resume_command("call", manifest, &network, journal),
+        r#"musubi --manifest-path '/projects/coffee club/Musubi.toml' call --network other-taira --config '/runtime/owner'"'"'s wallet/client.toml' --resume '/projects/coffee club/target/call/exact-journal'"#
+    );
+    let parsed = Cli::try_parse_from([
+        "musubi",
+        "--manifest-path",
+        manifest.to_str().expect("manifest"),
+        "call",
+        "--network",
+        &network.name,
+        "--config",
+        network
+            .config
+            .as_ref()
+            .expect("client")
+            .to_str()
+            .expect("path"),
+        "--resume",
+        journal.to_str().expect("journal"),
+    ])
+    .expect("continuation uses exact call resume grammar");
+    assert_eq!(parsed.manifest_path.as_deref(), Some(manifest));
+    let Command::Call(args) = parsed.command else {
+        panic!("call continuation");
+    };
+    assert_eq!(args.network.as_deref(), Some("other-taira"));
+    assert_eq!(args.config, network.config);
+    assert_eq!(args.resume.as_deref(), Some(journal));
+}
+
+#[test]
+fn mutable_call_continuation_without_client_override_keeps_network_selection() {
+    let manifest = Path::new("/projects/coffee club/Musubi.toml");
+    let journal = Path::new("/projects/coffee club/target/call/exact-journal");
+    let network = continuation_network(None);
+    assert_eq!(
+        deploy::contract_resume_command("call", manifest, &network, journal),
+        "musubi --manifest-path '/projects/coffee club/Musubi.toml' call --network other-taira --resume '/projects/coffee club/target/call/exact-journal'"
+    );
+    let parsed = Cli::try_parse_from([
+        "musubi",
+        "--manifest-path",
+        manifest.to_str().expect("manifest"),
+        "call",
+        "--network",
+        &network.name,
+        "--resume",
+        journal.to_str().expect("journal"),
+    ])
+    .expect("configured-network continuation remains valid");
+    let Command::Call(args) = parsed.command else {
+        panic!("call continuation");
+    };
+    assert_eq!(args.network.as_deref(), Some("other-taira"));
+    assert!(args.config.is_none());
+    assert_eq!(args.resume.as_deref(), Some(journal));
 }

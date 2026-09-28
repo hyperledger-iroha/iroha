@@ -158,9 +158,13 @@ changes, refresh the relevant fixture directory and run the matching
 Focused checks for this reference are:
 
 ```sh
-cargo test -p sorafs_manifest
-cargo test -p sorafs_manifest --test sorafs_validate_cli
+cargo test -p sorafs_manifest --features pqc,dev-tools
+cargo test -p iroha_cli --test sorafs_validate_cli
 ```
+
+`sorafs_manifest` has no default features: `pqc` enables the hybrid envelope
+module and `dev-tools` builds the fixture generators that the regeneration
+tests drive.
 
 Run SDK parity tests when changing the reference FFI or generated language
 bindings.

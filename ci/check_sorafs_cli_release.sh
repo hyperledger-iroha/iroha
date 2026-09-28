@@ -220,7 +220,7 @@ cargo clippy --locked -p sorafs_orchestrator --all-targets -- -D warnings
 echo "[sorafs-release] clippy sorafs_car helpers (cli feature)"
 cargo clippy --locked -p sorafs_car --features cli --all-targets -- -D warnings
 echo "[sorafs-release] clippy sorafs_manifest"
-cargo clippy --locked -p sorafs_manifest --all-targets -- -D warnings
+cargo clippy --locked -p sorafs_manifest --features pqc,dev-tools --all-targets -- -D warnings
 
 echo "[sorafs-release] clippy sorafs_chunker"
 cargo clippy --locked -p sorafs_chunker --all-targets -- -D warnings
@@ -231,7 +231,7 @@ cargo test --locked -p sorafs_orchestrator --test sorafs_cli
 echo "[sorafs-release] tests sorafs_car helpers (cli feature)"
 cargo test --locked -p sorafs_car --features cli --all-targets
 echo "[sorafs-release] tests sorafs_manifest"
-cargo test --locked -p sorafs_manifest --all-targets
+cargo test --locked -p sorafs_manifest --features pqc,dev-tools --all-targets
 
 echo "[sorafs-release] tests sorafs_chunker"
 cargo test --locked -p sorafs_chunker --all-targets

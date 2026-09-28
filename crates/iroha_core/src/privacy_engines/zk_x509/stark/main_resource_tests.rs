@@ -1,4 +1,4 @@
-//! Whole-profile retained allocation bounds, without materializing private traces.
+//! Whole-profile allocation bounds and opt-in native resource diagnostics.
 
 use super::*;
 
@@ -385,4 +385,80 @@ fn maximum_profile_streaming_hash_cost_diagnostic() {
             );
         }
     }
+}
+
+#[test]
+#[ignore = "optimized eight-column native log19/common log22 FFT cost diagnostic; run --release"]
+fn maximum_profile_replay_fft_cost_diagnostic() {
+    use crate::privacy_engines::transparent_stark::{
+        masked_trace_coefficients_on_coset_v1, masked_trace_coefficients_with_mask_v1,
+    };
+    use rayon::prelude::*;
+    use std::time::Instant;
+
+    assert!(
+        !cfg!(debug_assertions),
+        "run this diagnostic with --release"
+    );
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let native_log = layout.trace_groups.last().unwrap().native_trace_log2;
+    let common_log = layout.common_lde_log2;
+    assert_eq!((native_log, common_log), (19, 22));
+    let batch_width = aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1;
+    let mut coefficients = Vec::with_capacity(batch_width);
+    let interpolation_start = Instant::now();
+    for column in 0..batch_width {
+        let native = ZeroizingMainTraceColumnV1(
+            (0..(1_usize << native_log))
+                .map(|row| F((row * 31 + column * 17) as u64))
+                .collect(),
+        );
+        let mask = ZeroizingMainTraceColumnV1(
+            (0..=MASK_DEGREE)
+                .map(|index| F((index * 13 + column * 19 + 1) as u64))
+                .collect(),
+        );
+        coefficients.push(ZeroizingMainTraceColumnV1(
+            masked_trace_coefficients_with_mask_v1(&native, native_log, &mask).unwrap(),
+        ));
+    }
+    let interpolation_seconds = interpolation_start.elapsed().as_secs_f64();
+    let lde_start = Instant::now();
+    let evaluations = coefficients
+        .par_iter()
+        .map(|column| {
+            masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
+                .map(ZeroizingMainTraceColumnV1)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let lde_seconds = lde_start.elapsed().as_secs_f64();
+    let rows = 1_usize << common_log;
+    let root = goldilocks_primitive_root_v1(common_log).unwrap();
+    for (coefficients, evaluations) in coefficients.iter().zip(&evaluations) {
+        assert_eq!(evaluations.len(), rows);
+        for index in [0, 1, rows - 1] {
+            let point = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(index as u128));
+            let expected = coefficients
+                .iter()
+                .rev()
+                .fold(F::ZERO, |value, coefficient| {
+                    value.mul(point).add(*coefficient)
+                });
+            assert_eq!(evaluations[index], expected);
+        }
+    }
+    let total_columns = layout
+        .trace_groups
+        .iter()
+        .map(|group| group.base_width + group.aux_width)
+        .sum::<usize>();
+    let forward_transforms = 2 * total_columns;
+    let butterflies = forward_transforms as u64 * (rows / 2) as u64 * u64::from(common_log);
+    eprintln!(
+        "X509 replay FFT diagnostic: rayon_workers={}, columns={batch_width}, native_rows={}, common_rows={rows}, interpolation_and_mask_seconds={interpolation_seconds:.6}, forward_seconds={lde_seconds:.6}, commitment_forward_transforms={forward_transforms}, commitment_forward_butterflies={butterflies}, linear_commitment_forward_seconds={:.3}; excludes source construction/replay, remaining native IFFTs, constraints/quotient/DEEP, hashing/FRI/CA and host contention",
+        rayon::current_num_threads(),
+        1_usize << native_log,
+        lde_seconds * forward_transforms as f64 / batch_width as f64,
+    );
 }

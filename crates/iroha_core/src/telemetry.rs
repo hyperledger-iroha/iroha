@@ -330,7 +330,6 @@ struct SpaceDirectoryActiveIndex {
     entries: BTreeSet<(UniversalAccountId, u64)>,
     counts: BTreeMap<u64, u64>,
 }
-#[allow(dead_code)]
 impl SpaceDirectoryActiveIndex {
     fn clear(&mut self) {
         self.entries.clear();
@@ -341,6 +340,7 @@ impl SpaceDirectoryActiveIndex {
             *self.counts.entry(dataspace).or_default() += 1;
         }
     }
+    #[cfg(feature = "telemetry")]
     fn remove(&mut self, uaid: UniversalAccountId, dataspace: u64) {
         if self.entries.remove(&(uaid, dataspace)) {
             if let Some(entry) = self.counts.get_mut(&dataspace) {
@@ -351,6 +351,7 @@ impl SpaceDirectoryActiveIndex {
             }
         }
     }
+    #[cfg(feature = "telemetry")]
     fn count(&self, dataspace: u64) -> u64 {
         self.counts.get(&dataspace).copied().unwrap_or(0)
     }
@@ -1214,7 +1215,7 @@ impl StateTelemetry {
         drop(guard);
         self.refresh_space_directory_active_gauges();
     }
-    #[allow(dead_code)]
+    #[cfg(feature = "telemetry")]
     fn record_space_directory_activation(&self, uaid: UniversalAccountId, dataspace: DataSpaceId) {
         let count = {
             let mut guard = self
@@ -1226,7 +1227,7 @@ impl StateTelemetry {
         };
         self.publish_space_directory_active(dataspace, count);
     }
-    #[allow(dead_code)]
+    #[cfg(feature = "telemetry")]
     fn record_space_directory_deactivation(
         &self,
         uaid: UniversalAccountId,
@@ -1242,7 +1243,7 @@ impl StateTelemetry {
         };
         self.publish_space_directory_active(dataspace, count);
     }
-    #[allow(dead_code)]
+    #[cfg(feature = "telemetry")]
     fn record_space_directory_revocation(&self, dataspace: DataSpaceId, reason: Option<&str>) {
         let labels = self.dataspace_labels(dataspace);
         let reason_label = reason

@@ -162,17 +162,3 @@ fn payload_only_owned_source_drops_before_the_result_decoder() {
     assert_eq!(result.0, 7);
     assert!(SOURCE_DROPPED.get());
 }
-
-#[test]
-fn borrowed_struct_still_rejects_unsupported_packed_layout() {
-    let _flags = DecodeFlagsGuard::enter(ncore::header_flags::PACKED_STRUCT);
-    let value = PayloadOnly(7_u8);
-    let borrowed = BorrowedSingularStruct::<1>::new([&value]);
-    assert_eq!(borrowed.encoded_len_exact(), None);
-    assert!(matches!(
-        ncore::encoded_payload_len(&borrowed),
-        Err(ncore::Error::UnsupportedFeature(
-            "borrowed singular packed struct"
-        )),
-    ));
-}

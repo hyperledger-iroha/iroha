@@ -1210,6 +1210,10 @@ fn rejected_der_binding_and_trace_drop_clear_owned_field_tables() {
         },
         aux_rows: vec![[F(23); ZK_X509_DER_STARK_AUX_WIDTH_V1]; 7],
     };
+    assert_eq!(
+        format!("{trace:?}"),
+        "ZkX509DerStarkTraceV1 { <private material redacted> }"
+    );
     let ((), erasures) = observe_v1(|| drop(trace));
     for cells in [
         5 * ZK_X509_DER_STARK_BASE_WIDTH_V1,

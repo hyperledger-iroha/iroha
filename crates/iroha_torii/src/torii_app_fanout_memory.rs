@@ -267,9 +267,8 @@ trait ToriiAppFanoutNoritoDto:
 }
 /// Decode one admitted, canonical-layout route response sequentially.
 ///
-/// `SequentialOverrideGuard` currently resolves layout flags to the default layout, so the header
-/// is checked first and non-default or compressed frames fail closed. This avoids per-worker
-/// decoder contexts without guessing wire flags.
+/// The header is checked first and non-default or compressed frames fail closed. This avoids
+/// per-worker decoder contexts without guessing wire flags.
 fn decode_torii_app_fanout_norito<T>(
     bytes: &[u8],
     plan: ToriiFanoutNoritoDecodePlan,
@@ -284,7 +283,6 @@ where
     {
         return Err(ToriiAppFanoutDecodeFailure::Norito);
     }
-    let _sequential = norito::core::SequentialOverrideGuard::enter();
     norito::decode_from_bytes_with_limits(bytes, plan.limits)
         .map_err(sanitize_torii_app_fanout_norito_error)
 }
