@@ -2095,8 +2095,9 @@ mod tests {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let network_id =
-                crate::unit_test_support::synthetic_network_id("sumeragi-v2-concrete-admission-test");
+            let network_id = crate::unit_test_support::synthetic_network_id(
+                "sumeragi-v2-concrete-admission-test",
+            );
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id, 100, &roster,

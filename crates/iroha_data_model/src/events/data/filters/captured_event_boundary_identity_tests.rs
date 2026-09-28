@@ -166,6 +166,13 @@ const CASES: &[fn()] = &[
             "2355579e076dcbae635d0362d37eaa50",
         )
     },
+    || {
+        check::<super::SccpEventFilter>(
+            "iroha_data_model::events::data::filters::model::SccpEventFilter",
+            "ed7059a117dc0017823fa86b8ba74622",
+            "ed7059a117dc0017823fa86b8ba74622",
+        )
+    },
 ];
 
 #[test]

@@ -62,8 +62,6 @@ fn published_native_replay_fixture(atomic: bool) -> Box<PublishedNativeReplayFix
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(()),
         )
         .expect("capture the actual executed Native owner");
@@ -74,8 +72,6 @@ fn published_native_replay_fixture(atomic: bool) -> Box<PublishedNativeReplayFix
         Arc::clone(&state),
         phase_queue(),
         Arc::clone(&state.kura),
-        None,
-        None,
         state.sumeragi_block_cadence(),
         iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         events,

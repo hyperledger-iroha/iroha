@@ -184,7 +184,6 @@ use iso_profile::from_request as iso_profile_from_request;
 mod content;
 mod durable_fs;
 mod proof_filters;
-pub mod sccp_replay;
 mod secure_file_metadata;
 pub mod sorafs;
 use axum::{
@@ -1193,7 +1192,6 @@ pub use gov::{
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 #[cfg(feature = "telemetry")]
-pub use iroha_data_model::block::consensus_v2::SumeragiV2QcResponse;
 pub use limits::RateLimiter as BenchRateLimiter;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
@@ -1257,8 +1255,7 @@ pub use routing::{
 pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share, handle_v1_kaigi_relays,
     handle_v1_kaigi_relays_health, handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics,
-    handle_v1_sumeragi_leader, handle_v1_sumeragi_params, handle_v1_sumeragi_qc,
-    handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_sumeragi_params, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
 };
 #[cfg(all(feature = "app_api", feature = "bench"))]
 pub use routing::{
@@ -2351,7 +2348,6 @@ struct AppState {
     transaction_batch_max_transactions: usize,
     transaction_batch_max_bytes: usize,
     state: Arc<CoreState>,
-    sccp_replay_archive: Option<Arc<sccp_replay::ToriiSccpReplayArchiveServiceV1>>,
     #[cfg(feature = "app_api")]
     parliament_tle_release_coordinator: Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
     #[cfg(feature = "app_api")]
@@ -4460,121 +4456,14 @@ async fn enforce_required_api_token_private_no_store(
     Ok(response)
 }
 #[cfg(feature = "app_api")]
-const SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1: usize = 16 * 1024 * 1024;
-#[cfg(feature = "app_api")]
-const SCCP_SUBMIT_MAX_DETACHED_SIGNATURE_BYTES_V1: usize = 16 * 1024;
-#[cfg(feature = "app_api")]
-const SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1: usize = 1024 * 1024;
-#[cfg(feature = "app_api")]
 const fn canonical_base64_max_len(decoded_len: usize) -> usize {
     4 * decoded_len.div_ceil(3)
-}
-#[cfg(feature = "app_api")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SccpSubmitIngressPolicy {
-    rate_limit_hint: &'static str,
-    rate_limit_cost: u64,
-    telemetry_label: &'static str,
-    max_body_bytes: usize,
-}
-#[cfg(feature = "app_api")]
-#[derive(Clone)]
-struct SccpSubmitIngressState {
-    app: SharedAppState,
-    operator_max_body_bytes: usize,
-}
-#[cfg(feature = "app_api")]
-struct SccpSubmitAdmission {
-    work: parking_lot::Mutex<Option<SccpSubmitWork>>,
-}
-#[cfg(feature = "app_api")]
-struct SccpSubmitWork {
-    permit: QueryAdmissionPermit,
-    body: axum::body::Bytes,
-}
-#[cfg(feature = "app_api")]
-impl SccpSubmitAdmission {
-    fn new(permit: QueryAdmissionPermit, body: axum::body::Bytes) -> Self {
-        Self {
-            work: parking_lot::Mutex::new(Some(SccpSubmitWork { permit, body })),
-        }
-    }
-    fn take(&self) -> Result<SccpSubmitWork, Error> {
-        self.work.lock().take().ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                "SCCP submission body and admission permit were already consumed".to_owned(),
-            ))
-        })
-    }
-}
-#[cfg(feature = "app_api")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SccpSubmitBodyReadError {
-    TooLarge,
-    Read,
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BoundedContentLengthError {
     TooLarge,
     Invalid,
-}
-#[cfg(feature = "app_api")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SccpSubmitContentTypeError {
-    Unsupported,
-    Invalid,
-}
-#[cfg(feature = "app_api")]
-fn sccp_submit_ingress_policy(path: &str) -> Option<SccpSubmitIngressPolicy> {
-    let proof_field_max = match path {
-        "/v1/bridge/proofs/submit" => iroha_sccp::SCCP_DESTINATION_PROOF_MAX_BASE64_BYTES_V1,
-        "/v1/bridge/messages" => iroha_sccp::SCCP_NATIVE_ADMISSION_MAX_BASE64_BYTES_V1,
-        _ => return None,
-    };
-    let max_body_bytes = proof_field_max
-        .saturating_add(canonical_base64_max_len(
-            SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1,
-        ))
-        .saturating_add(canonical_base64_max_len(
-            SCCP_SUBMIT_MAX_DETACHED_SIGNATURE_BYTES_V1,
-        ))
-        .saturating_add(SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1);
-    let (rate_limit_hint, telemetry_label) = match path {
-        "/v1/bridge/proofs/submit" => ("v1/bridge/proofs/submit", "bridge_proof"),
-        "/v1/bridge/messages" => ("v1/bridge/messages", "bridge_message"),
-        _ => unreachable!("SCCP submit path was matched above"),
-    };
-    Some(SccpSubmitIngressPolicy {
-        rate_limit_hint,
-        rate_limit_cost: FINALITY_HEAVY_QUERY_RATE_COST,
-        telemetry_label,
-        max_body_bytes,
-    })
-}
-#[cfg(feature = "app_api")]
-async fn collect_sccp_submit_body(
-    body: Body,
-    max_body_bytes: usize,
-) -> Result<axum::body::Bytes, SccpSubmitBodyReadError> {
-    axum::body::to_bytes(body, max_body_bytes)
-        .await
-        .map_err(|error| {
-            let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
-            let mut length_limit = false;
-            while let Some(error) = source {
-                if error.is::<http_body_util::LengthLimitError>() {
-                    length_limit = true;
-                    break;
-                }
-                source = error.source();
-            }
-            if length_limit {
-                SccpSubmitBodyReadError::TooLarge
-            } else {
-                SccpSubmitBodyReadError::Read
-            }
-        })
 }
 #[cfg(feature = "app_api")]
 fn validate_bounded_content_length(
@@ -4607,250 +4496,6 @@ fn validate_bounded_content_length(
     usize::try_from(declared)
         .map(Some)
         .map_err(|_| BoundedContentLengthError::TooLarge)
-}
-#[cfg(feature = "app_api")]
-fn validate_sccp_submit_content_type(
-    headers: &axum::http::HeaderMap,
-) -> Result<(), SccpSubmitContentTypeError> {
-    use axum::http::header::CONTENT_TYPE;
-    let mut values = headers.get_all(CONTENT_TYPE).iter();
-    let value = values
-        .next()
-        .ok_or(SccpSubmitContentTypeError::Unsupported)?;
-    if values.next().is_some() {
-        return Err(SccpSubmitContentTypeError::Invalid);
-    }
-    let raw = value
-        .to_str()
-        .map_err(|_| SccpSubmitContentTypeError::Invalid)?;
-    if !raw.is_ascii() || raw.bytes().any(|byte| byte.is_ascii_control()) {
-        return Err(SccpSubmitContentTypeError::Invalid);
-    }
-    let mut parts = raw.split(';');
-    let media_type = parts.next().unwrap_or_default().trim();
-    // Unlike general Torii JSON extractors, the closed SCCP submission contract deliberately
-    // accepts only the registered `application/json` media type, not arbitrary `+json` profiles.
-    if !media_type.eq_ignore_ascii_case("application/json") {
-        return Err(SccpSubmitContentTypeError::Unsupported);
-    }
-    let mut charset_seen = false;
-    for parameter in parts {
-        let parameter = parameter.trim();
-        let Some((name, value)) = parameter.split_once('=') else {
-            return Err(SccpSubmitContentTypeError::Invalid);
-        };
-        if !name.trim().eq_ignore_ascii_case("charset") {
-            return Err(SccpSubmitContentTypeError::Unsupported);
-        }
-        if charset_seen {
-            return Err(SccpSubmitContentTypeError::Invalid);
-        }
-        charset_seen = true;
-        let value = value.trim();
-        let charset = if value.starts_with('"') || value.ends_with('"') {
-            value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .ok_or(SccpSubmitContentTypeError::Invalid)?
-        } else {
-            value
-        };
-        if !charset.eq_ignore_ascii_case("utf-8") {
-            return Err(SccpSubmitContentTypeError::Unsupported);
-        }
-    }
-    Ok(())
-}
-/// Authenticate, rate-limit, and resource-bound SCCP submissions before JSON extraction.
-/// This middleware intentionally owns the sole network-body read for these two proof-bearing
-/// endpoints. The listener credential, exact JSON media type, rate, declared-length, and body-buffer
-/// admission checks run before polling the request body. Admitted reads have an absolute byte cap
-/// and deadline, then authenticate the exact bytes with a one-shot, network-bound account
-/// signature before JSON extraction or general/heavy query admission; accepted chunked bodies
-/// remain bounded without `Content-Length`, and declared lengths must match the bytes restored for
-/// the downstream JSON extractor.
-#[cfg(feature = "app_api")]
-async fn enforce_sccp_submit_ingress(
-    State(ingress): State<SccpSubmitIngressState>,
-    req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<axum::response::Response, Infallible> {
-    use axum::response::IntoResponse as _;
-    if req.method() != axum::http::Method::POST {
-        return Ok(next.run(req).await);
-    }
-    let app = &ingress.app;
-    let Some(policy) = sccp_submit_ingress_policy(req.uri().path()) else {
-        return Ok((StatusCode::NOT_FOUND, "unknown SCCP submission endpoint").into_response());
-    };
-    let max_body_bytes = policy.max_body_bytes.min(ingress.operator_max_body_bytes);
-    if let Err(error) = validate_api_token(app.as_ref(), req.headers()) {
-        app.telemetry
-            .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
-        return Ok(error.into_response());
-    }
-    if let Err(error) = validate_sccp_submit_content_type(req.headers()) {
-        app.telemetry
-            .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
-        return Ok(match error {
-            SccpSubmitContentTypeError::Unsupported => (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "SCCP submissions require Content-Type application/json with optional charset=utf-8",
-            )
-                .into_response(),
-            SccpSubmitContentTypeError::Invalid => (
-                StatusCode::BAD_REQUEST,
-                "invalid or ambiguous SCCP submission Content-Type",
-            )
-                .into_response(),
-        });
-    }
-    let remote_ip = req
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|connect_info| connect_info.0.ip());
-    let key = rate_limit_key(
-        req.headers(),
-        remote_ip,
-        policy.rate_limit_hint,
-        app.authenticated_api_token_principal(req.headers()),
-    );
-    if !app
-        .deploy_rate_limiter
-        .allow_cost_capped_to_burst(&key, policy.rate_limit_cost)
-        .await
-    {
-        app.telemetry
-            .with_metrics(|metrics| metrics.inc_torii_contract_throttle(policy.telemetry_label));
-        return Ok(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        ))
-        .into_response());
-    }
-    let declared_content_length =
-        match validate_bounded_content_length(req.headers(), max_body_bytes) {
-            Ok(declared) => declared,
-            Err(error) => {
-                app.telemetry.with_metrics(|metrics| {
-                    metrics.inc_torii_contract_error(policy.telemetry_label)
-                });
-                return Ok(match error {
-                    BoundedContentLengthError::TooLarge => (
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        format!(
-                            "SCCP submission body exceeds the {}-byte endpoint limit",
-                            max_body_bytes
-                        ),
-                    )
-                        .into_response(),
-                    BoundedContentLengthError::Invalid => (
-                        StatusCode::BAD_REQUEST,
-                        "invalid or ambiguous SCCP submission Content-Length",
-                    )
-                        .into_response(),
-                });
-            }
-        };
-    let body_permit = match app.proof_body_inflight.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            app.telemetry.with_metrics(|metrics| {
-                metrics.inc_torii_contract_throttle(policy.telemetry_label)
-            });
-            return Ok(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            ))
-            .into_response());
-        }
-    };
-    let (mut parts, body) = req.into_parts();
-    let body = match tokio::time::timeout(
-        app.proof_limits.body_read_timeout,
-        collect_sccp_submit_body(body, max_body_bytes),
-    )
-    .await
-    {
-        Ok(Ok(body)) => body,
-        Ok(Err(error)) => {
-            app.telemetry
-                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
-            return Ok(match error {
-                SccpSubmitBodyReadError::TooLarge => (
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    format!(
-                        "SCCP submission body exceeds the {}-byte endpoint limit",
-                        max_body_bytes
-                    ),
-                )
-                    .into_response(),
-                SccpSubmitBodyReadError::Read => (
-                    StatusCode::BAD_REQUEST,
-                    "failed to read SCCP submission body",
-                )
-                    .into_response(),
-            });
-        }
-        Err(_) => {
-            app.telemetry
-                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
-            return Ok((
-                StatusCode::REQUEST_TIMEOUT,
-                "SCCP submission body was not completed before the absolute read deadline",
-            )
-                .into_response());
-        }
-    };
-    if declared_content_length.is_some_and(|declared| declared != body.len()) {
-        app.telemetry
-            .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            "SCCP submission Content-Length does not match the received body",
-        )
-            .into_response());
-    }
-    let network_id = app.signed_query_admission.network_id();
-    let verified = match crate::app_auth::verify_canonical_network_request(
-        &app.state,
-        &network_id,
-        &parts.headers,
-        &parts.method,
-        &parts.uri,
-        body.as_ref(),
-        None,
-    ) {
-        Ok(Some(verified)) => verified,
-        Ok(None) => {
-            app.telemetry
-                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
-            return Ok(Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-                "canonical account request authentication is required for SCCP submission"
-                    .to_owned(),
-            ))
-            .into_response());
-        }
-        Err(error) => {
-            app.telemetry
-                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
-            return Ok(error.into_response());
-        }
-    };
-    parts.extensions.insert(verified);
-    let admission = match acquire_query_admission(app.as_ref(), true).await {
-        Ok(admission) => Arc::new(SccpSubmitAdmission::new(
-            admission.with_body_permit(body_permit),
-            body.clone(),
-        )),
-        Err(error) => {
-            app.telemetry.with_metrics(|metrics| {
-                metrics.inc_torii_contract_throttle(policy.telemetry_label)
-            });
-            return Ok(error.into_response());
-        }
-    };
-    parts.extensions.insert(admission);
-    let request = axum::http::Request::from_parts(parts, Body::from(body));
-    Ok(next.run(request).await)
 }
 #[cfg(feature = "app_api")]
 async fn enforce_soracloud_signed_mutation_request(
@@ -7018,7 +6663,6 @@ fn negotiate_heavy_query_response_format(
 }
 const FINALITY_HEAVY_QUERY_RATE_COST: u64 = 8;
 const BRIDGE_FINALITY_CHALLENGE_HEADER: &str = "x-iroha-finality-challenge";
-const SCCP_RECENT_QUERY_RATE_COST: u64 = 4;
 fn bridge_finality_challenge(headers: &axum::http::HeaderMap) -> Result<[u8; 32], Error> {
     let all_values = headers.get_all(BRIDGE_FINALITY_CHALLENGE_HEADER);
     let mut values = all_values.iter();
@@ -13986,24 +13630,6 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Consensus admission is unavailable",
-        )
-            .into_response();
-    }
-    let replay_archive_required = app
-        .state
-        .sccp_registry_snapshot()
-        .lanes()
-        .iter()
-        .any(|lane| !lane.routes.is_empty());
-    if (replay_archive_required && app.sccp_replay_archive.is_none())
-        || app
-            .sccp_replay_archive
-            .as_ref()
-            .is_some_and(|archive| archive.checkpoint_set_sha256().is_err())
-    {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "SCCP replay archive is not synchronized with finalized state",
         )
             .into_response();
     }
@@ -31858,64 +31484,6 @@ async fn handler_sumeragi_status_sse(
     )
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_leader(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/leader",
-        app.authenticated_api_token_principal(&headers),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/leader",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    routing::handle_v1_sumeragi_leader(accept).await
-}
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_qc(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/qc",
-        app.authenticated_api_token_principal(&headers),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/qc",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sumeragi_qc(accept)
-        .await?
-        .into_response())
-}
 async fn handler_bridge_finality_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -32098,498 +31666,6 @@ async fn handler_bridge_finality_bundle(
         &headers,
         Some(remote_ip),
         "v1/bridge/finality/bundle",
-        response,
-        true,
-    )
-    .await
-}
-async fn handler_sccp_message_proof(
-    State(app): State<SharedAppState>,
-    axum::extract::Path(message_id): axum::extract::Path<String>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
-    routing::reject_sccp_query(raw_query.as_deref())?;
-    let format = match negotiate_heavy_query_response_format(&headers) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/proofs/message/{message_id}",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
-    #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/proofs/message");
-    }
-    let response = routing::handle_v1_sccp_message_bundle(
-        Arc::clone(&app.state),
-        message_id,
-        format,
-        query_permit,
-    )
-    .await?
-    .into_response();
-    proof_response_with_exact_egress(
-        app.as_ref(),
-        &headers,
-        Some(remote_ip),
-        "v1/sccp/proofs/message",
-        response,
-        true,
-    )
-    .await
-}
-async fn handler_sccp_registry(
-    State(app): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
-    routing::reject_sccp_query(raw_query.as_deref())?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/registry",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests(&app, &key).await?;
-    #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/registry");
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sccp_registry(app.state.as_ref(), accept)
-        .await?
-        .into_response())
-}
-async fn handler_sccp_sora_outbound_material(
-    State(app): State<SharedAppState>,
-    axum::extract::Path((source_profile, route_id, asset_key, revision)): axum::extract::Path<(
-        String,
-        String,
-        String,
-        u32,
-    )>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
-    routing::reject_sccp_query(raw_query.as_deref())?;
-    let format = match negotiate_heavy_query_response_format(&headers) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
-    #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/sora-outbound-material");
-    }
-    let response = routing::handle_v1_sccp_sora_outbound_material(
-        Arc::clone(&app.state),
-        source_profile,
-        route_id,
-        asset_key,
-        revision,
-        format,
-        query_permit,
-    )
-    .await?
-    .into_response();
-    proof_response_with_exact_egress(
-        app.as_ref(),
-        &headers,
-        Some(remote_ip),
-        "v1/sccp/sora-outbound-material",
-        response,
-        true,
-    )
-    .await
-}
-fn sccp_replay_endpoint_error_response(
-    error: sccp_replay::ToriiSccpReplayEndpointErrorV1,
-) -> AxResponse {
-    if error == sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity {
-        iroha_logger::error!("SCCP replay endpoint rejected locally retained integrity state");
-    }
-    let status = match error {
-        sccp_replay::ToriiSccpReplayEndpointErrorV1::NotFound => StatusCode::NOT_FOUND,
-        sccp_replay::ToriiSccpReplayEndpointErrorV1::Disabled
-        | sccp_replay::ToriiSccpReplayEndpointErrorV1::Unavailable => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
-        sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    private_no_store_error_response(
-        status,
-        ErrorEnvelope::new(
-            error.code(),
-            "SCCP replay proof is not currently available.",
-        ),
-        ResponseFormat::Norito,
-    )
-}
-fn sccp_replay_path_error_response() -> AxResponse {
-    private_no_store_error_response(
-        StatusCode::BAD_REQUEST,
-        ErrorEnvelope::new(
-            "sccp_replay_path_invalid",
-            "The SCCP replay accumulator or replay-key path is not canonical.",
-        ),
-        ResponseFormat::Norito,
-    )
-}
-fn sccp_replay_norito_response(body: Vec<u8>) -> AxResponse {
-    let mut response = AxResponse::new(Body::from(body));
-    response.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        HeaderValue::from_static(utils::NORITO_MIME_TYPE),
-    );
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
-    response.headers_mut().insert(
-        axum::http::header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    append_vary_accept(response.headers_mut());
-    response
-}
-async fn handler_sccp_replay_root(
-    State(app): State<SharedAppState>,
-    axum::extract::Path((boundary, source_profile, route_id, asset_key, revision)): axum::extract::Path<(
-        String,
-        String,
-        String,
-        String,
-        String,
-    )>,
-    axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    routing::reject_sccp_query(raw_query.as_deref())?;
-    if let Err(response) =
-        utils::negotiate_norito_only_response(headers.get(axum::http::header::ACCEPT))
-    {
-        return Ok(response);
-    }
-    let rate_key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests_with_cost(&app, &rate_key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let accumulator_id = match sccp_replay::decode_sccp_replay_accumulator_path_v1(
-        &boundary,
-        &source_profile,
-        &route_id,
-        &asset_key,
-        &revision,
-    ) {
-        Ok(id) => id,
-        Err(_) => return Ok(sccp_replay_path_error_response()),
-    };
-    let segments = match sccp_replay::encode_sccp_replay_accumulator_path_v1(&accumulator_id) {
-        Ok(segments) => segments,
-        Err(_) => {
-            iroha_logger::error!("SCCP replay root path failed canonical re-encoding");
-            return Ok(sccp_replay_endpoint_error_response(
-                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
-            ));
-        }
-    };
-    let expected_path = format!(
-        "/v1/sccp/replay/{}/{}/{}/{}/{}/root",
-        segments[0], segments[1], segments[2], segments[3], segments[4]
-    );
-    if original_uri.path() != expected_path {
-        return Ok(sccp_replay_path_error_response());
-    }
-    let Some(service) = app.sccp_replay_archive.clone() else {
-        return Ok(sccp_replay_endpoint_error_response(
-            sccp_replay::ToriiSccpReplayEndpointErrorV1::Disabled,
-        ));
-    };
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    let response_limit = app.torii_proxy_max_response_bytes.max(1);
-    let worker = panic_recovery::spawn_blocking_recoverable(move || {
-        let result = service
-            .accumulator_id_for_path(&accumulator_id)
-            .and_then(|id| service.root_response(&id))
-            .and_then(|response| {
-                utils::encode_norito_bounded(&response, response_limit)
-                    .map_err(|_| sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity)
-            });
-        (result, admission)
-    });
-    let worker = panic_recovery::join_recoverable(worker).await;
-    let (result, _admission) = match worker {
-        Ok(result) => result,
-        Err(_) => {
-            iroha_logger::error!("SCCP replay root worker exited without a response");
-            return Ok(sccp_replay_endpoint_error_response(
-                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
-            ));
-        }
-    };
-    let body = match result {
-        Ok(body) => body,
-        Err(error) => return Ok(sccp_replay_endpoint_error_response(error)),
-    };
-    let response = sccp_replay_norito_response(body);
-    proof_response_with_exact_egress(
-        app.as_ref(),
-        &headers,
-        Some(remote_ip),
-        "v1/sccp/replay/root",
-        response,
-        true,
-    )
-    .await
-}
-async fn handler_sccp_replay_witness(
-    State(app): State<SharedAppState>,
-    axum::extract::Path((boundary, source_profile, route_id, asset_key, revision, replay_key)): axum::extract::Path<(
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-    )>,
-    axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    routing::reject_sccp_query(raw_query.as_deref())?;
-    if let Err(response) =
-        utils::negotiate_norito_only_response(headers.get(axum::http::header::ACCEPT))
-    {
-        return Ok(response);
-    }
-    let rate_key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests_with_cost(&app, &rate_key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let accumulator_id = match sccp_replay::decode_sccp_replay_accumulator_path_v1(
-        &boundary,
-        &source_profile,
-        &route_id,
-        &asset_key,
-        &revision,
-    ) {
-        Ok(id) => id,
-        Err(_) => return Ok(sccp_replay_path_error_response()),
-    };
-    let replay_key = match sccp_replay::decode_sccp_replay_key_path_v1(&replay_key) {
-        Ok(key) => key,
-        Err(_) => return Ok(sccp_replay_path_error_response()),
-    };
-    let segments = match sccp_replay::encode_sccp_replay_accumulator_path_v1(&accumulator_id) {
-        Ok(segments) => segments,
-        Err(_) => {
-            return Ok(sccp_replay_endpoint_error_response(
-                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
-            ));
-        }
-    };
-    let expected_path = format!(
-        "/v1/sccp/replay/{}/{}/{}/{}/{}/witness/{}",
-        segments[0],
-        segments[1],
-        segments[2],
-        segments[3],
-        segments[4],
-        hex::encode(replay_key)
-    );
-    if original_uri.path() != expected_path {
-        return Ok(sccp_replay_path_error_response());
-    }
-    let Some(service) = app.sccp_replay_archive.clone() else {
-        return Ok(sccp_replay_endpoint_error_response(
-            sccp_replay::ToriiSccpReplayEndpointErrorV1::Disabled,
-        ));
-    };
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    let response_limit = app.torii_proxy_max_response_bytes.max(1);
-    let worker = panic_recovery::spawn_blocking_recoverable(move || {
-        let result = service
-            .accumulator_id_for_path(&accumulator_id)
-            .and_then(|id| service.witness_response(&id, replay_key))
-            .and_then(|response| {
-                utils::encode_norito_bounded(&response, response_limit)
-                    .map_err(|_| sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity)
-            });
-        (result, admission)
-    });
-    let worker = panic_recovery::join_recoverable(worker).await;
-    let (result, _admission) = match worker {
-        Ok(result) => result,
-        Err(_) => {
-            iroha_logger::error!("SCCP replay witness worker exited without a response");
-            return Ok(sccp_replay_endpoint_error_response(
-                sccp_replay::ToriiSccpReplayEndpointErrorV1::Integrity,
-            ));
-        }
-    };
-    let body = match result {
-        Ok(body) => body,
-        Err(error) => return Ok(sccp_replay_endpoint_error_response(error)),
-    };
-    let response = sccp_replay_norito_response(body);
-    proof_response_with_exact_egress(
-        app.as_ref(),
-        &headers,
-        Some(remote_ip),
-        "v1/sccp/replay/witness",
-        response,
-        true,
-    )
-    .await
-}
-async fn handler_sccp_proof_request(
-    State(app): State<SharedAppState>,
-    axum::extract::Path(message_id): axum::extract::Path<String>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
-    routing::reject_sccp_query(raw_query.as_deref())?;
-    let format = match negotiate_heavy_query_response_format(&headers) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/proof-requests/{message_id}",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
-    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
-    #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/proof-requests");
-    }
-    let response = routing::handle_v1_sccp_proof_request(
-        Arc::clone(&app.state),
-        message_id,
-        format,
-        query_permit,
-    )
-    .await?
-    .into_response();
-    proof_response_with_exact_egress(
-        app.as_ref(),
-        &headers,
-        Some(remote_ip),
-        "v1/sccp/proof-requests",
-        response,
-        true,
-    )
-    .await
-}
-async fn handler_sccp_capabilities(
-    State(app): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
-    routing::reject_sccp_query(raw_query.as_deref())?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/capabilities",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests(&app, &key).await?;
-    #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/capabilities");
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sccp_capabilities(&app.state, accept)
-        .await?
-        .into_response())
-}
-async fn handler_sccp_messages_recent(
-    State(app): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let _api_token_principal =
-        validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
-    let window = routing::parse_sccp_recent_query(raw_query.as_deref())?;
-    let format = match negotiate_heavy_query_response_format(&headers) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/messages/recent",
-        app.authenticated_api_token_principal(&headers),
-    );
-    rate_limit_requests_with_cost(&app, &key, SCCP_RECENT_QUERY_RATE_COST).await?;
-    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
-    #[cfg(feature = "telemetry")]
-    if _api_token_principal.is_some() {
-        crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/sccp/messages/recent");
-    }
-    let response = routing::handle_v1_sccp_messages_recent(
-        Arc::clone(&app.state),
-        window,
-        format,
-        query_permit,
-    )
-    .await?
-    .into_response();
-    proof_response_with_exact_egress(
-        app.as_ref(),
-        &headers,
-        Some(remote_ip),
-        "v1/sccp/messages/recent",
         response,
         true,
     )
@@ -32901,84 +31977,6 @@ async fn handler_post_contract_call_simulate(
                     .to_owned(),
             ),
         ))),
-    }
-}
-#[cfg(feature = "app_api")]
-async fn handler_post_bridge_proof_submit(
-    State(app): State<SharedAppState>,
-    axum::Extension(admission): axum::Extension<Arc<SccpSubmitAdmission>>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let SccpSubmitWork { permit, body } = admission.take()?;
-    match crate::routing::handle_post_bridge_proof_submit(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-        permit,
-    )
-    .await
-    {
-        Ok((response, true)) => {
-            proof_response_with_exact_egress(
-                app.as_ref(),
-                &headers,
-                Some(remote.ip()),
-                "v1/bridge/proofs/submit",
-                response,
-                true,
-            )
-            .await
-        }
-        // A direct submission has already mutated the local queue. Never turn
-        // its success into a retry-inducing egress rejection after the fact.
-        Ok((response, false)) => Ok(response),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
-            Err(err)
-        }
-    }
-}
-#[cfg(feature = "app_api")]
-async fn handler_post_bridge_message_submit(
-    State(app): State<SharedAppState>,
-    axum::Extension(admission): axum::Extension<Arc<SccpSubmitAdmission>>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let SccpSubmitWork { permit, body } = admission.take()?;
-    match crate::routing::handle_post_bridge_message_submit(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-        permit,
-    )
-    .await
-    {
-        Ok((response, true)) => {
-            proof_response_with_exact_egress(
-                app.as_ref(),
-                &headers,
-                Some(remote.ip()),
-                "v1/bridge/messages",
-                response,
-                true,
-            )
-            .await
-        }
-        // See the proof-submit route: mutation success must not be rewritten
-        // as a retryable response solely by post-commit egress shaping.
-        Ok((response, false)) => Ok(response),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_message"));
-            Err(err)
-        }
     }
 }
 #[cfg(feature = "app_api")]
@@ -41558,7 +40556,6 @@ pub struct Torii {
     ws_message_timeout: Duration,
     address: WithOrigin<SocketAddr>,
     state: Arc<CoreState>,
-    sccp_replay_archive: Option<Arc<sccp_replay::ToriiSccpReplayArchiveServiceV1>>,
     #[cfg(feature = "app_api")]
     parliament_tle_release_coordinator:
         Arc<iroha_core::tle_release::TleReleaseCoordinatorV1>,
@@ -43114,95 +42111,6 @@ where
     }
 }
 
-struct SccpReplayRefreshWorkerHandle {
-    task: tokio::task::JoinHandle<()>,
-}
-
-impl SccpReplayRefreshWorkerHandle {
-    fn new(task: tokio::task::JoinHandle<()>) -> Self {
-        Self { task }
-    }
-
-    async fn join(&mut self) -> Result<(), tokio::task::JoinError> {
-        (&mut self.task).await
-    }
-}
-
-impl Drop for SccpReplayRefreshWorkerHandle {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SccpReplayRefreshSupervisionFailure {
-    WorkerExitedUnexpectedly,
-    WorkerPanicked,
-    WorkerCancelled,
-    ServerExitedUnexpectedly,
-}
-
-impl SccpReplayRefreshSupervisionFailure {
-    const fn diagnostic(self) -> &'static str {
-        match self {
-            Self::WorkerExitedUnexpectedly => "SCCP replay refresh worker exited unexpectedly",
-            Self::WorkerPanicked => "SCCP replay refresh worker panicked",
-            Self::WorkerCancelled => "SCCP replay refresh worker was cancelled",
-            Self::ServerExitedUnexpectedly => {
-                "Torii server exited before SCCP replay refresh worker shutdown"
-            }
-        }
-    }
-}
-
-async fn supervise_sccp_replay_refresh_worker<F>(
-    shutdown_signal: ShutdownSignal,
-    worker: Option<SccpReplayRefreshWorkerHandle>,
-    server: F,
-) -> std::io::Result<()>
-where
-    F: std::future::IntoFuture<Output = std::io::Result<()>>,
-{
-    let server = server.into_future();
-    let Some(mut worker) = worker else {
-        return server.await;
-    };
-    tokio::pin!(server);
-    let outcome = tokio::select! {
-        worker_result = worker.join() => {
-            let shutdown_was_sent = shutdown_signal.is_sent();
-            if !shutdown_was_sent {
-                shutdown_signal.send();
-            }
-            let server_result = server.await;
-            match worker_result {
-                Ok(()) if shutdown_was_sent => return server_result,
-                Ok(()) => SccpReplayRefreshSupervisionFailure::WorkerExitedUnexpectedly,
-                Err(error) if error.is_panic() => {
-                    SccpReplayRefreshSupervisionFailure::WorkerPanicked
-                }
-                Err(_) => SccpReplayRefreshSupervisionFailure::WorkerCancelled,
-            }
-        }
-        server_result = &mut server => {
-            let shutdown_was_sent = shutdown_signal.is_sent();
-            if !shutdown_was_sent {
-                shutdown_signal.send();
-            }
-            let worker_result = worker.join().await;
-            match worker_result {
-                Err(error) if error.is_panic() => {
-                    SccpReplayRefreshSupervisionFailure::WorkerPanicked
-                }
-                Err(_) => SccpReplayRefreshSupervisionFailure::WorkerCancelled,
-                Ok(()) if server_result.is_err() || shutdown_was_sent => return server_result,
-                Ok(()) => SccpReplayRefreshSupervisionFailure::ServerExitedUnexpectedly,
-            }
-        }
-    };
-    Err(std::io::Error::other(outcome.diagnostic()))
-}
-
 macro_rules! catalog_route_policy {
     (canonical_account_delete($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_delete($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
@@ -43436,109 +42344,6 @@ async fn next_musubi_search_projection_input(
 }
 
 impl Torii {
-    fn spawn_sccp_replay_refresh_worker(
-        &self,
-        shutdown_signal: ShutdownSignal,
-    ) -> Option<SccpReplayRefreshWorkerHandle> {
-        let service = self.sccp_replay_archive.clone()?;
-        let mut events = self.events.subscribe();
-        let task = tokio::spawn(async move {
-            let mut retry = tokio::time::interval(service.refresh_interval());
-            retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // Bootstrap already authenticated the current head. Consume the
-            // immediate first interval tick so periodic retry begins after the
-            // configured delay, while finalized block events still wake the
-            // worker immediately.
-            retry.tick().await;
-            let mut events_open = true;
-            loop {
-                let should_refresh = tokio::select! {
-                    biased;
-                    _ = shutdown_signal.receive() => break,
-                    _ = retry.tick() => true,
-                    received = events.recv(), if events_open => match received {
-                        Ok(EventBox::Pipeline(PipelineEventBox::Block(event))) => {
-                            matches!(event.status(), BlockStatus::Committed | BlockStatus::Applied)
-                        }
-                        Ok(EventBox::PipelineBatch(events)) => events.iter().any(|event| {
-                            matches!(
-                                event,
-                                PipelineEventBox::Block(block)
-                                    if matches!(
-                                        block.status(),
-                                        BlockStatus::Committed | BlockStatus::Applied
-                                    )
-                            )
-                        }),
-                        Ok(_) => false,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            events_open = false;
-                            false
-                        }
-                    },
-                };
-                if !should_refresh {
-                    continue;
-                }
-                // One refresh authenticates the latest committed projection,
-                // so every already-queued wakeup is covered by the same job.
-                // Events arriving while that job runs remain queued and
-                // collapse into at most one immediately following refresh.
-                if events_open {
-                    loop {
-                        match events.try_recv() {
-                            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
-                            }
-                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
-                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
-                                events_open = false;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if shutdown_signal.is_sent() {
-                    break;
-                }
-                let refresh = Arc::clone(&service);
-                let refresh_job = panic_recovery::spawn_blocking_recoverable(move || {
-                    refresh.refresh_if_stale().map(|_| ())
-                });
-                let refresh_job = panic_recovery::join_recoverable(refresh_job);
-                tokio::pin!(refresh_job);
-                let refresh_result = tokio::select! {
-                    biased;
-                    _ = shutdown_signal.receive() => {
-                        // Blocking validation has explicit transport, byte,
-                        // accumulator, and leaf ceilings but is not
-                        // preemptible. Detach only this one already-started
-                        // job so shutdown never waits on it; this worker exits
-                        // and cannot schedule a replacement.
-                        break;
-                    }
-                    result = &mut refresh_job => result,
-                };
-                match refresh_result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        iroha_logger::warn!(
-                            %error,
-                            "SCCP replay archive refresh failed closed; retry is scheduled"
-                        );
-                    }
-                    Err(_) => {
-                        // A physical panic is fatal to this ordinary supervised worker,
-                        // never a retryable refresh error. Do not suppress its supervisor.
-                        iroha_logger::error!("SCCP replay archive refresh worker join failed");
-                        return;
-                    }
-                }
-            }
-        });
-        Some(SccpReplayRefreshWorkerHandle::new(task))
-    }
-
     #[cfg(feature = "app_api")]
     fn spawn_musubi_search_projection_worker(
         &self,
@@ -43972,14 +42777,6 @@ impl Torii {
             builder, sumeragi;
             EVIDENCE_COUNT => operator_get(handler_sumeragi_evidence_count, app_state);
             EVIDENCE_LIST => operator_get(handler_sumeragi_evidence, app_state);
-            SCCP_MESSAGE_PROOF => public_get(handler_sccp_message_proof);
-            SCCP_PROOF_REQUEST => public_get(handler_sccp_proof_request);
-            SCCP_MESSAGES_RECENT => public_get(handler_sccp_messages_recent);
-            SCCP_CAPABILITIES => public_get(handler_sccp_capabilities);
-            SCCP_REGISTRY => public_get(handler_sccp_registry);
-            SCCP_SORA_OUTBOUND_MATERIAL => public_get(handler_sccp_sora_outbound_material);
-            SCCP_REPLAY_ROOT => public_get(handler_sccp_replay_root);
-            SCCP_REPLAY_WITNESS => public_get(handler_sccp_replay_witness);
             BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
             BRIDGE_FINALITY_ATTESTATION => public_get(handler_bridge_finality_attestation);
             BRIDGE_FINALITY_ATTESTATION_LATEST => public_get(handler_bridge_finality_attestation_latest);
@@ -43992,9 +42789,7 @@ impl Torii {
                 STATUS => operator_get(handler_sumeragi_status, app_state);
                 DIAGNOSTICS => operator_get(handler_sumeragi_diagnostics, app_state);
                 STATUS_SSE => operator_get(handler_sumeragi_status_sse, app_state);
-                LEADER => operator_get(handler_sumeragi_leader, app_state);
                 BLS_KEYS => operator_get(handler_sumeragi_bls_keys, app_state);
-                QC => operator_get(handler_sumeragi_qc, app_state);
                 CONSENSUS_KEYS => operator_get(handler_sumeragi_consensus_keys, app_state);
                 PARAMETERS => operator_get(handler_sumeragi_params, app_state);
             );
@@ -44279,10 +43074,6 @@ impl Torii {
                 ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1,
         );
         let contracts_body_limit = DefaultBodyLimit::max(transaction_max_content_len);
-        let bridge_submit_state = SccpSubmitIngressState {
-            app: app_state.clone(),
-            operator_max_body_bytes: transaction_max_content_len,
-        };
         mount_catalog_route_rows!(
             builder, contracts_and_verification_keys;
             CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => layered_canonical_signature_get(handler_get_contract_code_bytes, contracts_body_limit);
@@ -44293,26 +43084,6 @@ impl Torii {
             CONTRACTS_CALL_POST => layered_canonical_account_post(handler_post_contract_call, app_state, contracts_body_limit, transaction_max_content_len);
             CONTRACTS_CALL_BATCH_PREPARE_POST => layered_canonical_account_post(handler_post_contract_call_batch_prepare, app_state, contracts_body_limit, transaction_max_content_len);
             CONTRACTS_CALL_SIMULATE_POST => layered_canonical_account_post(handler_post_contract_call_simulate, app_state, contracts_body_limit, transaction_max_content_len);
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
-            catalog_post(handler_post_bridge_proof_submit)
-                .layer(DefaultBodyLimit::disable())
-                .layer(axum::middleware::from_fn_with_state(
-                    bridge_submit_state.clone(),
-                    enforce_sccp_submit_ingress,
-                ))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
-            catalog_post(handler_post_bridge_message_submit)
-                .layer(DefaultBodyLimit::disable())
-                .layer(axum::middleware::from_fn_with_state(
-                    bridge_submit_state,
-                    enforce_sccp_submit_ingress,
-                ))
-                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         mount_catalog_route_rows!(
             builder, contracts_and_verification_keys;
@@ -45526,7 +44297,6 @@ impl Torii {
             // the next Strict restart; Fast never opens their journals or
             // starts their mutation workers.
             config.privacy_bootle_lantern_issuer = None;
-            config.sccp_replay_archive = None;
             config.webhooks_enabled = false;
             config.zk_attachments_enabled = false;
             config.zk_prover_enabled = false;
@@ -46949,20 +45719,6 @@ impl Torii {
         } else {
             select_initial_musubi_search_index(rebuild_musubi_search_index(state.as_ref(), None))
         }));
-        let sccp_replay_archive = config
-            .sccp_replay_archive
-            .clone()
-            .map(|archive_config| {
-                sccp_replay::ToriiSccpReplayArchiveServiceV1::bootstrap(
-                    archive_config,
-                    Arc::clone(&state),
-                    Arc::clone(&kura),
-                )
-                .map_err(|error| {
-                    ToriiBuildError::component_initialization("sccp_replay_archive", error)
-                })
-            })
-            .transpose()?;
         #[cfg(feature = "app_api")]
         let private_settlement_runtime = private_settlement::PrivateSettlementToriiRuntimeV1::open(
             state.as_ref(),
@@ -47030,7 +45786,6 @@ impl Torii {
             query_service,
             kura,
             state: state.clone(),
-            sccp_replay_archive,
             #[cfg(feature = "app_api")]
             parliament_tle_release_coordinator,
             #[cfg(feature = "app_api")]
@@ -48054,7 +46809,6 @@ impl Torii {
             transaction_batch_max_transactions: self.transaction_batch_max_transactions,
             transaction_batch_max_bytes: self.transaction_max_content_len,
             state: self.state.clone(),
-            sccp_replay_archive: self.sccp_replay_archive.clone(),
             #[cfg(feature = "app_api")]
             parliament_tle_release_coordinator: self.parliament_tle_release_coordinator.clone(),
             #[cfg(feature = "app_api")]
@@ -48297,7 +47051,6 @@ impl Torii {
             &app_state.mcp_rate_limiter,
             &app_state.mcp_tools,
             &app_state.mcp_dispatch_router,
-            &app_state.sccp_replay_archive,
         );
         #[cfg(feature = "app_api")]
         let _ = (
@@ -49102,11 +47855,6 @@ impl Torii {
         } else {
             self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())
         };
-        let sccp_replay_refresh_worker = if emergency_fast {
-            None
-        } else {
-            self.spawn_sccp_replay_refresh_worker(shutdown_signal.clone())
-        };
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
@@ -49127,11 +47875,6 @@ impl Torii {
                     Err(std::io::Error::other(failure.diagnostic()))
                 })
         };
-        let server = supervise_sccp_replay_refresh_worker(
-            shutdown_signal.clone(),
-            sccp_replay_refresh_worker,
-            server,
-        );
         #[cfg(feature = "app_api")]
         let server_result = supervise_evidence_viewer_compaction_worker(
             shutdown_signal.clone(),

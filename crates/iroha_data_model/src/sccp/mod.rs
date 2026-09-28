@@ -22,6 +22,7 @@ pub mod events;
 pub mod governance;
 pub mod inbound;
 pub mod keys;
+pub mod keys_index;
 pub mod light_client;
 pub mod outbound;
 pub mod params;

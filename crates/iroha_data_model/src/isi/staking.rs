@@ -3,7 +3,6 @@ use super::*;
 use crate::{
     account::AccountId,
     asset::AssetId,
-    block::consensus::Evidence,
     nexus::{PublicLaneMonetaryPlanV1, PublicLaneRewardClaimPlanV1, PublicLaneRewardShare},
 };
 use iroha_crypto::{Hash, SignatureOf};
@@ -676,14 +675,6 @@ isi! {
     }
 }
 isi! {
-    /// Cancel a pending consensus evidence penalty before slashing executes.
-    #[norito_schema(name = "iroha_data_model::isi::staking::CancelConsensusEvidencePenalty")]
-    pub struct CancelConsensusEvidencePenalty {
-        /// Evidence entry to cancel.
-        pub evidence: Evidence,
-    }
-}
-isi! {
     /// Record a reward distribution for a public lane epoch.
     #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::RecordPublicLaneRewards")]
@@ -723,7 +714,6 @@ impl crate::seal::Instruction for BondPublicLaneStake {}
 impl crate::seal::Instruction for SchedulePublicLaneUnbond {}
 impl crate::seal::Instruction for FinalizePublicLaneUnbond {}
 impl crate::seal::Instruction for SlashPublicLaneValidator {}
-impl crate::seal::Instruction for CancelConsensusEvidencePenalty {}
 impl crate::seal::Instruction for RecordPublicLaneRewards {}
 impl crate::seal::Instruction for ClaimPublicLaneRewards {}
 fn staking_decode_flags() -> u8 {
@@ -911,40 +901,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExitPublicLaneValidator {
         ))
     }
 }
-impl<'a> norito::core::DecodeFromSlice<'a> for CancelConsensusEvidencePenalty {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = staking_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
-        let mut offset = 0usize;
-        let evidence = super::decode_aos_canonical_field::<Evidence>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((Self { evidence }, offset))
-    }
-}
 #[cfg(test)]
 mod slice_tests {
     use super::*;
+    use crate::NetworkId;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use crate::{
-        NetworkId,
-        block::{
-            Header as BlockHeader,
-            consensus::SumeragiV2EquivocationEvidence,
-            consensus_v2::{
-                ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum, HeightContext,
-                PROTOCOL_VERSION, PayloadEncoding, SumeragiV2Equivocation, TimeoutVote,
-                ValidatorPower,
-            },
-        },
-    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Decode;
@@ -1020,95 +981,6 @@ mod slice_tests {
         )
     }
     #[test]
-    #[ignore = "explicit maintenance command prints the canonical evidence cancellation record"]
-    fn print_staking_evidence_cancellation_fixture_row() {
-        let row =
-            crate::isi::generated_record_identity_tests::capture(CancelConsensusEvidencePenalty {
-                evidence: sample_evidence(),
-            });
-        println!(
-            "STAKING_CANCELLATION_FIXTURE_ROW={}",
-            norito::json::to_json(&row).expect("canonical evidence cancellation row")
-        );
-    }
-
-    fn sample_evidence() -> Evidence {
-        let mut peers = (0xE1_u8..=0xE4).map(peer).collect::<Vec<_>>();
-        peers.sort();
-        let roster = peers
-            .into_iter()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
-        );
-        let authority = crate::block::consensus_v2::test_kagemusha_mint_finality_authority(
-            network_id, 0, &roster,
-        );
-        let authorization =
-            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                &authority, 2,
-            )
-            .expect("valid fixture genesis scheduling authorization");
-        let context = HeightContext {
-            network_id,
-            protocol_version: PROTOCOL_VERSION,
-            height: 1,
-            epoch: 0,
-            kagemusha_mint_finality_authorization: authorization,
-            kagemusha_mint_finality_authority: authority,
-            epoch_end_height: 2,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"staking evidence nexus context"),
-            execution_policy_hash: Hash::new(b"staking evidence execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 4,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 1024,
-                max_chunk_count: 512,
-            },
-            leader_seed: [0xA5; 32],
-        };
-        context
-            .validate()
-            .expect("canonical non-boundary evidence fixture");
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        Evidence {
-            equivocation: SumeragiV2EquivocationEvidence {
-                context,
-                proofs_of_possession: vec![vec![0xC1; 96]; 4],
-                conflict: SumeragiV2Equivocation::TimeoutVote {
-                    first: TimeoutVote {
-                        round,
-                        highest_prepare_qc: None,
-                        signer: 0,
-                        signature: vec![0xD1; 96],
-                    },
-                    second: TimeoutVote {
-                        round,
-                        highest_prepare_qc: None,
-                        signer: 0,
-                        signature: vec![0xD2; 96],
-                    },
-                },
-            },
-        }
-    }
-    #[test]
     fn staking_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -1134,9 +1006,6 @@ mod slice_tests {
             validator: account(0x11),
             release_at_ms: 123_456,
         });
-        assert_slice_roundtrip(CancelConsensusEvidencePenalty {
-            evidence: sample_evidence(),
-        });
     }
     #[test]
     fn staking_registry_decodes_only_stable_ids() {
@@ -1152,9 +1021,6 @@ mod slice_tests {
             )
             .register_with_id_slice::<ExitPublicLaneValidator>(
                 "iroha.staking.exit_public_lane_validator",
-            )
-            .register_with_id_slice::<CancelConsensusEvidencePenalty>(
-                "iroha.instruction.v1::staking::CancelConsensusEvidencePenalty",
             );
         assert_registry_decodes(
             &registry,
@@ -1196,19 +1062,11 @@ mod slice_tests {
                 release_at_ms: 123_456,
             },
         );
-        assert_registry_decodes(
-            &registry,
-            "iroha.instruction.v1::staking::CancelConsensusEvidencePenalty",
-            CancelConsensusEvidencePenalty {
-                evidence: sample_evidence(),
-            },
-        );
         for type_name in [
             std::any::type_name::<RegisterPublicLaneValidator>(),
             std::any::type_name::<RebindPublicLaneValidatorPeer>(),
             std::any::type_name::<ActivatePublicLaneValidator>(),
             std::any::type_name::<ExitPublicLaneValidator>(),
-            std::any::type_name::<CancelConsensusEvidencePenalty>(),
         ] {
             assert!(registry.decode(type_name, &[]).is_none());
         }

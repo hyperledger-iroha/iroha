@@ -65,7 +65,6 @@ macro_rules! runtime_cells {
             pub(in crate::state) transactions: TransactionsBlock<'state>,
             $(pub(in crate::state) $field: CellBlock<'state, $value>,)+
             pub(in crate::state) projection: CanonicalRuntimeProjection,
-            pub(in crate::state) sccp_registry: Arc<ValidatedSccpRegistryV1>,
             pub(in crate::state) block_hashes: BlockHashesBlock<'state>,
             pub(in crate::state) da_rewind_releases: Option<da_hydration::DaRewindReleases<'state>>,
         }
@@ -82,7 +81,6 @@ macro_rules! runtime_cells {
             pub(super) fn finish(
                 &mut self,
                 projection: &mut Option<CanonicalRuntimeProjection>,
-                sccp_registry: &mut Option<Arc<ValidatedSccpRegistryV1>>,
             ) -> AcquiredRuntimeBlock<'state> {
                 // Borrow the caller's pending owner and metadata. A by-value
                 // receiver adds another complete World temporary to the native
@@ -95,7 +93,7 @@ macro_rules! runtime_cells {
                 assert!(original.world.is_some() && original.transactions.is_some());
                 assert!(original.block_hashes.is_some());
                 $(assert!(cells.$field.is_some());)+
-                assert!(projection.is_some() && sccp_registry.is_some());
+                assert!(projection.is_some());
                 // All checks precede any extraction. A second finish remains
                 // terminal, and the outlined closure borrows every original.
                 original.complete = false;
@@ -110,7 +108,6 @@ macro_rules! runtime_cells {
                             transactions: original.transactions.take().expect("original State membership"),
                             $($field: cells.$field.take().expect("original State Cell"),)+
                             projection: projection.take().expect("original prepared runtime projection"),
-                            sccp_registry: sccp_registry.take().expect("original prepared SCCP registry"),
                             block_hashes: original.block_hashes.take().expect("original funded hash successor"),
                             da_rewind_releases: None,
                         }),

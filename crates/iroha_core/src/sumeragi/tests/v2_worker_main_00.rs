@@ -1556,8 +1556,6 @@ fn start_timeout_delivery_constructor_for_test(
         state,
         queue,
         kura,
-        None,
-        None,
         Duration::from_secs(1),
         iroha_data_model::account::AccountId::new(template.key_pair.public_key().clone()),
         events_sender,

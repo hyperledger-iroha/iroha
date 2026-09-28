@@ -14862,11 +14862,12 @@ export class ConfidentialProverError extends Error {
 }
 
 /** Local wallet prover with automatic circuit/key selection and native self-verification.
- * Owns a key copy until dispose(); callers remain responsible for their original key.
+ * Native proof work runs off the JavaScript thread. Owns a key copy until dispose();
+ * already queued jobs finish independently. Callers own their original key.
  */
 export class ConfidentialProver {
   constructor(options: { networkId: NetworkId; assetDefinitionId: string; spendKey: Uint8Array });
   dispose(): void;
-  proveTransfer(request: ConfidentialSpend & { outputs: ConfidentialTransferProofOutputsV2 }): ConfidentialProof;
-  proveRedemption(request: ConfidentialSpend & { publicAmount: NumericLike; change?: ConfidentialUnshieldProofOutputV3 }): ConfidentialProof;
+  proveTransfer(request: ConfidentialSpend & { outputs: ConfidentialTransferProofOutputsV2 }): Promise<ConfidentialProof>;
+  proveRedemption(request: ConfidentialSpend & { publicAmount: NumericLike; change?: ConfidentialUnshieldProofOutputV3 }): Promise<ConfidentialProof>;
 }

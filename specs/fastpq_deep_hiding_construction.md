@@ -25,7 +25,7 @@ are our application; the full transcript adaptation still needs review.
 
 Here `N=65,536`, `M=8,388,608`, `e=4`, `n_F=1`, `n_D=64`, and multiplication
 by the execution generator `g` rotates LDE indices by 128. For each of the 301
-private columns, propose independent uniform base coefficients of
+private columns, sample independent uniform base coefficients of
 `r_j in F_p[X]_<136` and `w'_j=w_j+(X^N-1)r_j`. The 41 omitted public columns
 must stay exactly verifier-reconstructed and unmasked.
 
@@ -76,7 +76,7 @@ exclusive degrees are:
 | Quotient, conditional on zero remainder | 131,215 |
 | Randomized low chunk | 65,601 |
 | Randomized high chunk | 65,679 |
-| Proposed independent composition mask | 131,072 |
+| Independent composition mask | 131,072 |
 
 The quotient exceeds `2N` by 143 coefficients. A producer that assumes both
 unrandomized chunks fit `N` would silently truncate data. The new private
@@ -112,7 +112,8 @@ qualification.
 
 `check_deep_hiding_candidate.py` independently charges the third individually
 framed Fp4 field and all containing vector/field prefixes. Roots and frontiers
-retain their counts; the maximal native codec fixture is queued for execution:
+retain their counts; the September 28 maximal native codec fixture passes with
+this exact encoded extent:
 
 | Quantity | Bytes |
 | --- | ---: |
@@ -125,9 +126,9 @@ retain their counts; the maximal native codec fixture is queued for execution:
 
 The separate existing geometry screen's inline-row-mask proposal yields
 502,831 because it relocates R into 32 inline bytes per row. That is a different
-hypothetical layout, not the implemented third-field candidate. Neither the
-candidate codec nor its size screen is an emitted private proof. The exact
-complete AXT carrier remains to be qualified.
+hypothetical layout, not the implemented third-field codec. The codec size
+screen is not a complete proof-generation measurement. Exact complete carriers
+are checked against their independently enforced byte limits.
 
 ## Prover resources and source authority still required
 
@@ -155,28 +156,26 @@ chunk bounds are 65,601 and 65,679. Its shared plan adds public preparation,
 reconstruction, numerator, division and chunk buffers to the replay charge.
 The DEEP coefficient composer borrows virtual masked coefficients directly from
 the replay owner; it does not duplicate 301 masked coefficient arrays. These
-owners are still private, test-compiled construction prerequisites, not an
-emitting or admitted private-proof API.
+crate-private owners now feed the normal-library `deep_prover` through the
+sealed `DeepRelation` bridge and the offline quantity facade.
 
 Those are not a complete producer memory bound. One full retained-row LDE alone
 is 20,199,768,064 bytes, one M-leaf binary digest tree is 805,306,320 bytes, and
-each full extension oracle is 268,435,456 bytes. A usable producer needs one
-shared preflight charging source storage, public fixed-polynomial evaluation,
-all replay passes, quotient construction/division, bounded Merkle/frontier
-replay, FRI layers, scratch and output. The earlier offline stripe producer
-retains its original eight-stripe profile; it is not a DEEP producer.
+each full extension oracle is 268,435,456 bytes. The implemented shared producer
+plan charges source storage, public fixed-polynomial evaluation, all replay
+passes, quotient construction/division, bounded Merkle/frontier replay, FRI
+layers, scratch and output. It retains no complete LDE or digest tree. Its
+2 GiB payload, 2^42 structural work and 524,288-byte child defaults are unchanged.
+The predecessor eight-stripe protocol remains only in test diagnostics.
 
-The current relation also proves only declared two-update SMT/hash arithmetic.
-`CompactTransferAir::new` binds caller context as opaque bytes; public transfer
-wrappers must supply checked quantity semantics, identities, native leaf hashes
-and collision-resolved paths. Neither binding bytes nor a valid mathematical
-proof authenticates their source root or finalized transaction set.
-Core `validate_axt_proof` currently rejects `StandaloneUnanchored`, and the
-handle-use path checks the issuer signature then rejects because a reusable
-capability does not authorize the exact intent, proof, amount and source state.
-Retain those gates until an authoritative finalized/QC-backed source anchor and
-fresh exact-spend authorization are integrated. Prover privacy cannot repair
-that admission obligation.
+The inner AIR proves declared two-update SMT/hash arithmetic.
+`CompactTransferAir::new` binds caller context as opaque bytes; the prepared
+ordinary/AXT wrappers supply checked quantity semantics, identities, native
+leaf hashes and collision-resolved paths. The sealed bridge binds their complete
+statement and relation identity. Neither binding bytes nor a valid mathematical
+proof authenticates a source root or finalized transaction set by itself. Core
+must independently enforce authoritative source-state and exact-spend
+authorization. This construction note does not qualify those admission paths.
 
 ## Evidence and next implementation boundary
 
@@ -187,26 +186,33 @@ unequal/short chunks, masks longer than the split, explicit zero masks, padding,
 overflow and exact resource limits. Additional native tests check nonzero R in
 coefficient composition, the highest permitted coefficient through all five
 folds and all 128 terminal values, authenticated R mutation, and rejection of
-the old two-value leaf. The centrally run focused native filters passed 80 tests,
-including masked replay, full-numerator arithmetic, typed coefficient commitments,
-all five coefficient folds, streamed frontier parity and private frame storage.
-That result predates the complete producer's native execution.
+the old two-value leaf. The September 28 normal-library check passes; the fresh
+feature-enabled focused suite passes 134 tests, including masked replay,
+full-numerator arithmetic, typed coefficient commitments, all five coefficient
+folds, streamed frontier parity, private frame storage, returned device-digest
+erasure and whole-attempt resource rejection. Three separately selected actual
+Metal tests pass leaf/parent parity and required-device readiness, including
+1024-job batches. Eleven external API tests and one public usage doctest also
+pass. The current Python
+geometry, hiding and source-budget selection passes 37 tests. See the
+[source-scoped validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
 
-`deep_candidate_producer` now joins the actual owners: whole-attempt preflight,
+`deep_prover` joins the actual owners: whole-attempt preflight,
 explicit entropy, row root, full quotient, quotient/R root, OOD identity,
 composition, five FRI roots and coefficient folds, terminal, transcript-sampled
 query replays/frontiers, bounded canonical serialization and an independent
 verifier self-check. It retains coefficient vectors, one active stripe and
 streamed tree stacks; no complete LDE or digest tree is retained. A failed attempt
-does not retry with reused entropy. This module is test-only and has no admission
-or SDK entry point. Its full-size roundtrip diagnostic is explicitly ignored
-because one attempt hashes over 69 million typed leaves/parents; no full-size
-runtime result is claimed.
+does not retry with reused entropy. This normal-library module serves the offline
+quantity facade. Its full-size roundtrip diagnostic is explicitly selected
+separately because one attempt hashes over 69 million typed leaves/parents; it
+has not yet completed in the September 28 validation. No full-size runtime,
+peak-RSS or complete hiding result is claimed.
 
 Next execute full-size valid/invalid relation witnesses and qualify complete
 bytes/work/memory and the cryptographic reduction. Small arithmetic tests independently compare
 128 stripes to materialized FFT/Horner evaluation, current/next rotations,
 virtual/dense composition, and numerator/quotient coefficient convolution;
-nonzero remainders, entropy failures and exhausted work budgets reject. Finally integrate
-the authenticated source relation and usable SDK entry point. None of those
-completion criteria is satisfied by this prerequisite alone.
+nonzero remainders, entropy failures and exhausted work budgets reject. Separately
+qualify authenticated source-state admission and the usable SDK path. Passing
+these kernel tests does not satisfy those completion criteria.

@@ -46,7 +46,7 @@ pub(in crate::runtime_provider_registry) fn hardware_config(
     };
     SorafsStreamTokenSignerConfig {
         native: None,
-            clock_uncertainty_ms: 250,
+        clock_uncertainty_ms: 250,
         runtime_handle: "hsm://sorafs/stream-token/primary".to_owned(),
         key_handle: "pkcs11://sorafs/stream-token/key-primary".to_owned(),
         service_id: "stream-signer-primary".to_owned(),

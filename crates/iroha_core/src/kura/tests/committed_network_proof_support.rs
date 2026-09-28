@@ -87,7 +87,6 @@ impl CommittedNetworkProofFixture {
                         wire_len,
                         wire_hash,
                         None,
-                        Vec::new(),
                     );
                     let retained_path = kura.retained_block_record_path(2);
                     fs::create_dir_all(retained_path.parent().unwrap()).unwrap();

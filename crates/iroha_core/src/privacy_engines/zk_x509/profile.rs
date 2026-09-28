@@ -171,10 +171,10 @@ pub(crate) const ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1: u16 = 64;
 pub(crate) const ZK_X509_LDE_COLUMN_BATCH_V1: u16 = 8;
 /// Hard peak-memory envelope for the native prover.
 ///
-/// The degree-seven DER composition stage has a 10.13 GiB retained-allocation
-/// lower bound before allocator and stack overhead. Twelve GiB remains the
-/// release ceiling, not a claimed measurement; activation stays closed until
-/// the optimized prover is measured below it on the release benchmark.
+/// The prover replays original masked columns and evaluates quotient cosets in
+/// bounded stripes. Source and arithmetic allocation plans must fit this same
+/// ceiling. These checked payloads and the explicit process reserve are not a
+/// measured RSS bound; activation still requires complete release benchmarks.
 pub(crate) const ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1: u64 = 12 * 1024 * 1024 * 1024;
 /// Exact virtual-address-space containment ceiling for one release proof.
 ///

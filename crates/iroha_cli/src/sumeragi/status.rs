@@ -1,5 +1,5 @@
 #![allow(clippy::redundant_pub_crate, clippy::needless_pass_by_value)]
-use super::commands::{DiagnosticsArgs, LeaderArgs, ParamsArgs, QcArgs, StatusArgs};
+use super::commands::{DiagnosticsArgs, ParamsArgs, StatusArgs};
 use crate::{CliOutputFormat, RunContext};
 use eyre::Result;
 use norito::json::Value;
@@ -20,14 +20,6 @@ pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-pub(crate) fn leader<C: RunContext>(context: &mut C, _args: LeaderArgs) -> Result<()> {
-    let client = context.client_from_config()?;
-    let value = client.get_sumeragi_leader_json()?;
-    match context.output_format() {
-        CliOutputFormat::Text => context.println(summarize_leader(&value)),
-        CliOutputFormat::Json => context.print_data(&value),
-    }
-}
 pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Result<()> {
     let client = context.client_from_config()?;
     let value = client.get_sumeragi_params_json()?;
@@ -36,47 +28,34 @@ pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Resul
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-pub(crate) fn qc<C: RunContext>(context: &mut C, _args: QcArgs) -> Result<()> {
-    let client = context.client_from_config()?;
-    let value = client.get_sumeragi_qc_json()?;
-    match context.output_format() {
-        CliOutputFormat::Text => context.println(summarize_qc(&value)),
-        CliOutputFormat::Json => context.print_data(&value),
-    }
-}
+/// One line from the `/v1/sumeragi/status` JSON (`iroha_data_model::sumeragi::SumeragiStatus`).
 fn summarize_status(value: &Value) -> String {
-    let protocol = value
-        .get("protocol_version")
+    let number = |key: &str| value.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let flag = |key: &str| value.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let key = |key: &str| value.get(key).and_then(Value::as_str).unwrap_or("-");
+    let lock = value
+        .get("high_qc_view")
         .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let height = value.get("height").and_then(Value::as_u64).unwrap_or(0);
-    let view = value.get("view").and_then(Value::as_u64).unwrap_or(0);
-    let leader = value.get("leader").and_then(Value::as_u64).unwrap_or(0);
-    let committed = value
-        .get("last_committed_height")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let phase = tagged_unit(value.get("phase"), "phase");
-    let body = tagged_unit(value.get("body_state"), "state");
-    let persistence = value
-        .get("pending_persistence_id")
-        .and_then(Value::as_u64)
-        .map_or_else(|| "-".to_owned(), |id| id.to_string());
-    let restart_required = value
-        .get("restart_required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .map_or_else(|| "-".to_owned(), |view| view.to_string());
+    let halted = match value.get("halted") {
+        None | Some(Value::Null) => "no".to_owned(),
+        Some(reason) => reason.as_str().map_or_else(
+            || norito::json::to_json(reason).unwrap_or_default(),
+            str::to_owned,
+        ),
+    };
     format!(
-        "protocol={protocol} height={height} view={view} phase={phase} leader={leader} body={body} pending_persistence={persistence} last_committed={committed} restart_required={restart_required}"
+        "height={} view={} stage={} leader={} proxy_tail={} lock_view={lock} committed={} applied={} awaiting={} signing={} halted={halted}",
+        number("height"),
+        number("view"),
+        number("stage"),
+        key("leader"),
+        key("proxy_tail"),
+        number("committed_height"),
+        number("applied_height"),
+        flag("awaiting"),
+        !value.get("signer").is_none_or(Value::is_null) && !flag("abstaining") && !flag("unanchored"),
     )
-}
-fn tagged_unit<'a>(value: Option<&'a Value>, tag: &str) -> &'a str {
-    value
-        .and_then(Value::as_object)
-        .and_then(|object| object.get(tag))
-        .and_then(Value::as_str)
-        .or_else(|| value.and_then(Value::as_str))
-        .unwrap_or("unknown")
 }
 fn summarize_diagnostics(value: &Value) -> String {
     let depth = value
@@ -118,26 +97,6 @@ fn summarize_diagnostics(value: &Value) -> String {
         "queue={depth}/{capacity} saturated={saturated} election={election} lanes={lanes} relays={relays} sealed={sealed}"
     )
 }
-fn summarize_leader(value: &Value) -> String {
-    let leader = value
-        .get("leader_index")
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let prf = value.get("prf").and_then(|v| v.as_object());
-    let height = prf
-        .and_then(|o| o.get("height"))
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let view = prf
-        .and_then(|o| o.get("view"))
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let seed = prf
-        .and_then(|o| o.get("epoch_seed"))
-        .and_then(|v| v.as_str())
-        .map_or("-", |s| if s.len() > 8 { &s[..8] } else { s });
-    format!("leader={leader} prf_h={height} prf_v={view} seed={seed}")
-}
 fn summarize_params(value: &Value) -> String {
     let cadence = value
         .get("block_cadence_ms")
@@ -153,61 +112,34 @@ fn summarize_params(value: &Value) -> String {
         .unwrap_or(0);
     format!("block_cadence={cadence}ms max_clock_drift={drift}ms chain_height={height}")
 }
-fn summarize_qc(value: &Value) -> String {
-    let hq = value.get("highest_prepare_qc").and_then(|v| v.as_object());
-    let lq = value.get("locked_prepare_qc").and_then(|v| v.as_object());
-    let hqc_height = hq
-        .and_then(|o| o.get("round"))
-        .and_then(|v| v.as_object())
-        .and_then(|o| o.get("height"))
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let hqc_view = hq
-        .and_then(|o| o.get("round"))
-        .and_then(|v| v.as_object())
-        .and_then(|o| o.get("view"))
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let subj = hq
-        .and_then(|o| o.get("subject"))
-        .and_then(|v| v.as_object())
-        .and_then(|o| o.get("block_hash"))
-        .and_then(|v| v.as_str())
-        .map_or("-", |s| if s.len() > 8 { &s[..8] } else { s });
-    let lqc_height = lq
-        .and_then(|o| o.get("round"))
-        .and_then(|v| v.as_object())
-        .and_then(|o| o.get("height"))
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    let lqc_view = lq
-        .and_then(|o| o.get("round"))
-        .and_then(|v| v.as_object())
-        .and_then(|o| o.get("view"))
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or(0);
-    format!(
-        "highest_prepare_qc={hqc_height}/{hqc_view} subject={subj} locked_prepare_qc={lqc_height}/{lqc_view}"
-    )
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn summarize_status_handles_defaults() {
+    fn summarize_status_reports_the_round_and_heights() {
         let value = norito::json!({
-            "protocol_version": 4,
             "height": 7,
             "view": 3,
-            "phase": { "phase": "prepare" },
-            "leader": 4,
-            "body_state": { "state": "validated" },
-            "last_committed_height": 6,
-            "restart_required": false
+            "stage": 1,
+            "leader": "ea01leader",
+            "proxy_tail": "ea01tail",
+            "high_qc_view": 2,
+            "committed_height": 6,
+            "applied_height": 6,
+            "awaiting": false,
+            "signer": "ea01me",
+            "unanchored": false,
+            "abstaining": false,
+            "halted": null
         });
         assert_eq!(
             summarize_status(&value),
-            "protocol=4 height=7 view=3 phase=prepare leader=4 body=validated pending_persistence=- last_committed=6 restart_required=false"
+            "height=7 view=3 stage=1 leader=ea01leader proxy_tail=ea01tail lock_view=2 committed=6 applied=6 awaiting=false signing=true halted=no"
+        );
+        let observer = norito::json!({ "height": 1, "signer": null, "halted": "DriverAnomaly" });
+        assert_eq!(
+            summarize_status(&observer),
+            "height=1 view=0 stage=0 leader=- proxy_tail=- lock_view=- committed=0 applied=0 awaiting=false signing=false halted=DriverAnomaly"
         );
     }
     #[test]
@@ -229,21 +161,6 @@ mod tests {
         );
     }
     #[test]
-    fn summarize_leader_truncates_seed() {
-        let value = norito::json!({
-            "leader_index": 1,
-            "prf": {
-                "height": 10,
-                "view": 2,
-                "epoch_seed": "0x1234567890abcdef"
-            }
-        });
-        assert_eq!(
-            summarize_leader(&value),
-            "leader=1 prf_h=10 prf_v=2 seed=0x123456"
-        );
-    }
-    #[test]
     fn summarize_params_reports_signed_cadence_and_height() {
         let value = norito::json!({
             "block_cadence_ms": 1000,
@@ -253,22 +170,6 @@ mod tests {
         assert_eq!(
             summarize_params(&value),
             "block_cadence=1000ms max_clock_drift=500ms chain_height=42"
-        );
-    }
-    #[test]
-    fn summarize_qc_reports_subject_hash() {
-        let value = norito::json!({
-            "highest_prepare_qc": {
-                "round": { "height": 8, "view": 1 },
-                "subject": { "block_hash": "1234567890abcdef" }
-            },
-            "locked_prepare_qc": {
-                "round": { "height": 6, "view": 0 }
-            }
-        });
-        assert_eq!(
-            summarize_qc(&value),
-            "highest_prepare_qc=8/1 subject=12345678 locked_prepare_qc=6/0"
         );
     }
 }

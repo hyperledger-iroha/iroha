@@ -1,15 +1,14 @@
 //! This module contains [`store::LiveQueryStore`] and helpers.
 #![allow(clippy::disallowed_types)]
-mod archive_capture;
+pub(crate) mod archive_finality;
 mod archive_index;
-#[cfg(test)]
-mod fixture_write_tests;
-pub use archive_capture::ArchiveCaptureWait;
 pub mod cursor;
 pub mod final_promotion_account_custody;
 /// Coherent native deployment custody and durable final-promotion operation history.
 pub mod final_promotion_authority;
 mod finalized_archive_fs;
+#[cfg(test)]
+mod fixture_write_tests;
 pub mod index_status;
 mod journal_io;
 pub mod pagination;

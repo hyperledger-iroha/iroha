@@ -47,6 +47,7 @@ macro_rules! schema_types {
             BlockSubscriptionRequest,
             // Current Torii finality responses and challenge-bound node statements.
             iroha_data_model::sumeragi_finality::SumeragiFinalityProof,
+            iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint,
             iroha_data_model::sumeragi_finality::SumeragiFinalityBundle,
             iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
             // Durable cross-service DA spool envelope.
@@ -536,12 +537,19 @@ mod tests {
             sumeragi::SumeragiStatus,
             sumeragi_finality::{
                 FinalityValidator, SumeragiFinalityAttestation, SumeragiFinalityAttestationBody,
-                SumeragiFinalityBundle, SumeragiFinalityProof,
+                SumeragiFinalityBundle, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
             },
         };
         let schemas = super::build_schemas();
         assert!(schemas.contains_key::<FinalityValidator>());
         assert!(schemas.contains_key::<SumeragiFinalityBundle>());
+        let Some(Metadata::Struct(checkpoint)) = schemas.get::<SumeragiFinalityCheckpoint>() else {
+            panic!("current compact checkpoint is absent from the canonical schema");
+        };
+        assert_eq!(
+            checkpoint.declarations.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
+            ["network_id", "chain_id", "genesis_wire", "genesis_committee", "decisions", "tip"]
+        );
         assert!(schemas.contains_key::<SumeragiStatus>());
         let Some(Metadata::Struct(proof)) = schemas.get::<SumeragiFinalityProof>() else {
             panic!("current finality proof is absent from the canonical schema");

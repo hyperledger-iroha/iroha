@@ -1925,7 +1925,7 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
     /// Exact requested vector rows keyed by ascending LDE index.
     pub(crate) opened_rows: BTreeMap<usize, Vec<F>>,
 }
-/// Column-at-a-time vector-row commitment builder.
+/// Bounded column-batch vector-row commitment builder.
 ///
 /// This is the bounded-memory replacement for retaining every LDE column.
 /// Each row owns one incremental SHA3-384 byte state while columns are supplied in
@@ -1938,6 +1938,7 @@ pub(crate) struct StreamingRowCommitmentV1 {
     rows: usize,
     width: usize,
     received_columns: usize,
+    failed: bool,
     context: TransparentStarkDigestContextV1,
     node_role: &'static [u8],
     digest_streams: Vec<PrivacyOuterLastFieldStreamV1>,
@@ -2011,6 +2012,7 @@ impl StreamingRowCommitmentV1 {
             rows,
             width,
             received_columns: 0,
+            failed: false,
             context,
             node_role,
             digest_streams,
@@ -2018,28 +2020,86 @@ impl StreamingRowCommitmentV1 {
             opened_rows,
         })
     }
-    /// Absorb the next complete LDE column in canonical column order.
+    /// Absorb one complete LDE column in canonical column order.
+    #[cfg(test)]
     pub(crate) fn absorb_column(&mut self, column: &[F]) -> Result<(), AggregateStarkErrorV1> {
-        if self.received_columns >= self.width || column.len() != self.rows {
+        self.absorb_columns_v1(&[column])
+    }
+    /// Absorb at most eight adjacent columns, with exact row-major byte order.
+    ///
+    /// Independent row states run in parallel. Each active row chunk owns one
+    /// clearing 64-byte packing buffer; no row matrix or result vector is
+    /// allocated. The complete batch is checked before any hash state changes.
+    /// An unexpected stream failure poisons the builder and selects the error
+    /// at the earliest row, independently of worker completion order.
+    pub(crate) fn absorb_columns_v1<C: AsRef<[F]> + Sync>(
+        &mut self,
+        columns: &[C],
+    ) -> Result<(), AggregateStarkErrorV1> {
+        if self.failed
+            || columns.is_empty()
+            || columns.len() > MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || self
+                .received_columns
+                .checked_add(columns.len())
+                .is_none_or(|end| end > self.width)
+            || columns
+                .iter()
+                .any(|column| column.as_ref().len() != self.rows)
+        {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
-        if column.iter().any(|value| F::canonical(value.0).is_none()) {
+        if columns.iter().any(|column| {
+            column
+                .as_ref()
+                .iter()
+                .any(|value| F::canonical(value.0).is_none())
+        }) {
             return Err(AggregateStarkErrorV1::NonCanonicalField);
         }
-        for (stream, value) in self.digest_streams.iter_mut().zip(column) {
-            let packed = zeroize::Zeroizing::new(value.0.to_be_bytes());
-            stream
-                .update(&packed[..])
-                .map_err(map_digest_stream_error_v1)
-                .map_err(map_transparent_error_v1)?;
+        self.failed = true;
+        const ROWS_PER_CHUNK: usize = 1024;
+        let failure = self
+            .digest_streams
+            .par_chunks_mut(ROWS_PER_CHUNK)
+            .enumerate()
+            .map(|(chunk_index, streams)| {
+                let mut packed = zeroize::Zeroizing::new(
+                    [0_u8; MASKED_TRACE_LDE_COLUMN_BATCH_V1 * core::mem::size_of::<u64>()],
+                );
+                for (offset, stream) in streams.iter_mut().enumerate() {
+                    let row = chunk_index * ROWS_PER_CHUNK + offset;
+                    for (column, values) in columns.iter().enumerate() {
+                        packed[column * 8..(column + 1) * 8]
+                            .copy_from_slice(&values.as_ref()[row].0.to_be_bytes());
+                    }
+                    if let Err(error) = stream.update(&packed[..columns.len() * 8]) {
+                        return Some((row, error));
+                    }
+                }
+                None
+            })
+            .reduce(
+                || None,
+                |left, right| match (left, right) {
+                    (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+                    (left, right) => left.or(right),
+                },
+            );
+        if let Some((_, error)) = failure {
+            return Err(map_transparent_error_v1(map_digest_stream_error_v1(error)));
         }
         for &index in &self.opening_indices {
-            self.opened_rows
+            let row = self
+                .opened_rows
                 .get_mut(&index)
-                .ok_or(AggregateStarkErrorV1::InternalInvariant)?
-                .push(column[index]);
+                .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
+            for column in columns {
+                row.push(column.as_ref()[index]);
+            }
         }
-        self.received_columns += 1;
+        self.received_columns += columns.len();
+        self.failed = false;
         Ok(())
     }
     fn clear_private_opened_rows_v1(&mut self) {
@@ -2051,7 +2111,8 @@ impl StreamingRowCommitmentV1 {
     pub(crate) fn finish(
         mut self,
     ) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
-        if self.received_columns != self.width
+        if self.failed
+            || self.received_columns != self.width
             || self
                 .opened_rows
                 .values()
@@ -2106,12 +2167,6 @@ pub(crate) struct StreamingTraceMaskSetV1 {
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
-    /// Transfer ownership to another zeroizing container without duplicating
-    /// the secret-bearing allocation.
-    pub(super) fn into_vec_v1(mut self) -> Vec<F> {
-        core::mem::take(&mut self.0)
-    }
-
     fn zeroize_v1(&mut self) {
         zeroize_field_column_v1(&mut self.0);
     }
@@ -2120,6 +2175,12 @@ impl ZeroizingFieldColumnV1 {
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
     fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl AsRef<[F]> for ZeroizingFieldColumnV1 {
+    fn as_ref(&self) -> &[F] {
         &self.0
     }
 }
@@ -2575,9 +2636,7 @@ where
                 .map_err(map_transparent_error_v1)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        for evaluation in &evaluations {
-            commitment.absorb_column(evaluation)?;
-        }
+        commitment.absorb_columns_v1(&evaluations)?;
     }
     Ok((commitment.finish()?, polynomials))
 }
@@ -2615,9 +2674,7 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
                 polynomials.evaluate_column_on_coset_v1(column, polynomials.commitment_lde_log2)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        for evaluation in &evaluations {
-            commitment.absorb_column(evaluation)?;
-        }
+        commitment.absorb_columns_v1(&evaluations)?;
     }
     commitment.finish()
 }
@@ -7481,6 +7538,160 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn batched_streamed_rows_preserve_scalar_frames_frontiers_and_worker_parity() {
+        let rows = 2048;
+        let indices = [0, 1, 1023, 1024, 2047];
+        for width in [1, 8, 11, 17] {
+            let columns = (0..width)
+                .map(|column| {
+                    (0..rows)
+                        .map(|row| match (row + column) % 3 {
+                            0 => F::ZERO,
+                            1 => F(GOLDILOCKS_MODULUS_V1 - 1),
+                            _ => F((row * 31 + column * 17) as u64),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            // Independent full-row framing does not use the incremental stream.
+            let expected = row_tree_v1(
+                DOMAINS.digest_context,
+                DOMAINS.base_leaf,
+                DOMAINS.base_node,
+                65_535,
+                &columns,
+                rows,
+            )
+            .unwrap();
+            let frontier = canonical_multiproof_frontier_v1(&expected, rows, &indices).unwrap();
+            for threads in [1, 4] {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap()
+                    .install(|| {
+                        for batch_width in [1, MASKED_TRACE_LDE_COLUMN_BATCH_V1] {
+                            let mut actual = StreamingRowCommitmentV1::new(
+                                DOMAINS.digest_context,
+                                DOMAINS.base_leaf,
+                                DOMAINS.base_node,
+                                65_535,
+                                rows,
+                                width,
+                                &indices,
+                            )
+                            .unwrap();
+                            for batch in columns.chunks(batch_width) {
+                                actual.absorb_columns_v1(batch).unwrap();
+                            }
+                            let actual = actual.finish().unwrap();
+                            assert_eq!(actual.commitment.root, expected.root());
+                            assert_eq!(actual.commitment.frontier, frontier);
+                            for index in indices {
+                                assert_eq!(
+                                    actual.opened_rows[&index],
+                                    columns
+                                        .iter()
+                                        .map(|column| column[index])
+                                        .collect::<Vec<_>>()
+                                );
+                            }
+                        }
+                    });
+            }
+        }
+    }
+
+    #[test]
+    fn batched_streamed_rows_validate_all_columns_before_changing_state() {
+        let rows = 8;
+        let columns = vec![vec![F(3); rows], vec![F(7); rows]];
+        let mut actual = StreamingRowCommitmentV1::new(
+            DOMAINS.digest_context,
+            DOMAINS.base_leaf,
+            DOMAINS.base_node,
+            0,
+            rows,
+            2,
+            &[1],
+        )
+        .unwrap();
+        assert_eq!(
+            actual.absorb_columns_v1::<Vec<F>>(&[]),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        );
+        let too_many = vec![vec![F::ZERO; rows]; MASKED_TRACE_LDE_COLUMN_BATCH_V1 + 1];
+        assert_eq!(
+            actual.absorb_columns_v1(&too_many),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        );
+        let wrong_rows = vec![columns[0].clone(), vec![F(11); rows - 1]];
+        assert_eq!(
+            actual.absorb_columns_v1(&wrong_rows),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        );
+        let mut invalid = columns.clone();
+        invalid[1][rows - 1] = F(GOLDILOCKS_MODULUS_V1);
+        assert_eq!(
+            actual.absorb_columns_v1(&invalid),
+            Err(AggregateStarkErrorV1::NonCanonicalField)
+        );
+        assert_eq!(actual.received_columns, 0);
+        assert!(!actual.failed);
+        assert!(actual.opened_rows[&1].is_empty());
+        actual.absorb_columns_v1(&columns).unwrap();
+        assert_eq!(
+            actual.absorb_columns_v1(&columns[..1]),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        );
+        let expected = row_tree_v1(
+            DOMAINS.digest_context,
+            DOMAINS.base_leaf,
+            DOMAINS.base_node,
+            0,
+            &columns,
+            rows,
+        )
+        .unwrap();
+        assert_eq!(actual.finish().unwrap().commitment.root, expected.root());
+    }
+
+    #[test]
+    fn batched_streamed_rows_poison_on_partial_hash_failure() {
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut actual = StreamingRowCommitmentV1::new(
+                        DOMAINS.digest_context,
+                        DOMAINS.aux_leaf,
+                        DOMAINS.aux_node,
+                        0,
+                        2048,
+                        2,
+                        &[0, 2047],
+                    )
+                    .unwrap();
+                    // Internal corruption models an unexpected late hasher error.
+                    // The public preflight succeeds; other row chunks may finish.
+                    actual.digest_streams[1025].update(&[0; 8]).unwrap();
+                    let columns = [vec![F(3); 2048], vec![F(5); 2048]];
+                    assert!(actual.absorb_columns_v1(&columns).is_err());
+                    assert!(actual.failed);
+                    assert_eq!(actual.received_columns, 0);
+                    assert!(actual.opened_rows.values().all(Vec::is_empty));
+                    assert_eq!(
+                        actual.absorb_columns_v1(&columns),
+                        Err(AggregateStarkErrorV1::InvalidLayout)
+                    );
+                    assert_eq!(actual.finish(), Err(AggregateStarkErrorV1::InvalidLayout));
+                });
+        }
+    }
+
     #[test]
     fn column_streamed_vector_rows_reject_shape_and_order_abuse() {
         assert!(

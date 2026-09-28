@@ -1,6 +1,6 @@
 # FASTPQ masked DEEP protocol contract
 
-Source contract: 2026-09-26. The normal-library
+Source contract: 2026-09-28. The normal-library
 [`offline_compact`](../crates/fastpq_prover/src/backend/offline_compact.rs)
 quantity producer and verifier select this single fixed profile. Core transfer
 proofs and AXT envelopes use canonical artifacts with bounded verification.
@@ -125,16 +125,28 @@ hash buffers, both full public prefix caches and codec/self-verification buffers
 It preflights payload, arithmetic/inspection work, hash calls and proof bytes
 before private transforms. The offline wrapper also checks source conversion,
 private SMT, bundle and decode budgets. These are checked payload/work charges,
-not RSS or latency bounds. Defaults allow a 2 GiB segment charge and 2^46
+not RSS or latency bounds. Defaults allow a 2 GiB segment charge and 2^42
 structural work units; an oversized plan fails before private computation.
+
+The September 28 fixed-SMT preflight fixture reports 1,065,090,768 payload bytes,
+3,468,335,009,584 structural work units and 69,362,447 hash calls. These are
+checked plan charges for that public context, unchanged with 1024-job buffers
+because another phase determines the peak. They are not measurements of a complete
+proof attempt. The [native validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md)
+separates the passing library, kernel and actual Metal tests from the outstanding
+full-size producer execution.
 
 Fresh entropy comes from an explicit `TryCryptoRng`; the normal offline wrapper
 uses `OsRng`. Failed attempts do not reuse masks. CPU and required-device policies
-select bulk leaf hashing only; streamed parents and transcript hashing use CPU.
+select bulk leaf and independent lower-tree parent hashing. The ordered upper
+tree stack and transcript hashing use CPU. Parent batching preserves every
+natural level/index and reuses caller-owned clearing digest slots.
 Required-device availability is checked with public input before private-tree
 work, entropy and transforms, and actual dispatch checks quarantine again.
 There is no implicit CPU fallback for required-device failures. Leaves are
-prepared in fixed batches of at most 32, independent of worker count. No hardware
+prepared in fixed batches of at most 1024, independent of worker count; the
+shared plan charges canonical bodies, frames, ordered parallel job results and
+executor buffers before allocation. No hardware
 or whole-prover performance qualification follows from this dispatch wiring.
 
 ## Bounded wire verification

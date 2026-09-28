@@ -2527,12 +2527,15 @@ mod tests {
             issued_at: 10,
             deadline_at: 20,
             sla: ReplicationOrderSlaV1 {
-                ingest_deadline_secs: 1_000,
+                ingest_deadline_secs: 10,
                 min_availability_percent_milli: 99_000,
                 min_por_success_percent_milli: 98_000,
             },
             metadata: Vec::new(),
         };
+        order_payload
+            .validate()
+            .expect("valid replication order fixture");
         let canonical = norito::to_bytes(&order_payload).expect("encode order");
         let public_key: PublicKey =
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"

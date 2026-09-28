@@ -1,4 +1,4 @@
-//! Fixed quantity-artifact production and verification for offline callers.
+//! Fixed quantity-artifact production and verification for local callers.
 //! Masked trace rows use fresh cryptographic entropy; a complete reviewed
 //! zero-knowledge guarantee remains a separate qualification requirement.
 //!
@@ -10,6 +10,38 @@
 //! Proving uses explicit work limits and constructs one segment at a time.
 //! The fixed canonical profile is available in every build. Callers bind their
 //! authenticated statement and enforce finality and replay policy at use.
+//!
+//! Callers select ordinary or AXT semantics; they do not choose circuits,
+//! transcripts, query counts or verifying keys. For an ordinary artifact:
+//!
+//! ```no_run
+//! use fastpq_prover::offline_compact::{
+//!     ExpectedStatement, ProvingLimits, VerificationLimits,
+//!     prove_quantity_ordinary_artifact, verify_quantity_ordinary_artifact,
+//! };
+//! use iroha_data_model::fastpq::FastpqPublicTransferStatementV1;
+//!
+//! fn prove_and_check(
+//!     authenticated_statement: &FastpqPublicTransferStatementV1,
+//! ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+//!     let expected = ExpectedStatement::from_statement(authenticated_statement)?;
+//!     let policy = VerificationLimits::default();
+//!     let bytes = prove_quantity_ordinary_artifact(
+//!         authenticated_statement, expected, ProvingLimits::default(), policy,
+//!     )?; // The producer also self-verifies before returning.
+//!     let verified = verify_quantity_ordinary_artifact(&bytes, expected, policy)?;
+//!     assert!(verified.segments() > 0);
+//!     Ok(bytes)
+//! }
+//! ```
+//!
+//! A separate verifier derives `expected` from its own authenticated statement,
+//! never from the artifact being checked. `old_root` and `new_root` commit the
+//! touched balance tree; the surrounding ledger checks source authority and
+//! replay admission. Proving is substantial synchronous work: run it on a worker,
+//! retain the default bounds or impose stricter application limits, and handle
+//! [`ProvingError::Busy`] without an unbounded retry loop. Device execution is an
+//! explicit [`ProvingLimits`] choice and fails if the required device is unavailable.
 
 use iroha_data_model::{
     fastpq::{
@@ -46,7 +78,7 @@ pub use resources::{QuantityArtifactResources, quantity_artifact_resources};
 /// Obtain these values from the surrounding application's trusted context. Copying
 /// them from the artifact being checked does not authenticate that artifact.
 /// Compute the statement digest from the independently authenticated complete
-/// statement as `Hash::new(norito::encode_canonical(statement)?)`. Its canonical
+/// statement with [`Self::from_statement`]. Its canonical
 /// frame includes every transcript header and occurrence. The caller owns the
 /// provenance of that expected digest; the verifier cannot establish it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +92,28 @@ pub struct ExpectedStatement {
 }
 
 impl ExpectedStatement {
+    /// Derive all expectations from the caller's independently trusted statement.
+    ///
+    /// This hashes the exact canonical Norito frame without retaining an encoded
+    /// frame copy. It does not authenticate or validate the supplied statement;
+    /// apply the application's source and admission limits before calling it.
+    /// Do not derive expectations from the artifact being verified.
+    ///
+    /// # Errors
+    /// Returns an encoding error without returning a partial statement digest.
+    pub fn from_statement(statement: &FastpqPublicTransferStatementV1) -> crate::Result<Self> {
+        let digest = iroha_crypto::Hash::new_from_writer(|writer| {
+            norito::core::write_canonical_to_writer(statement, writer)
+                .map_err(std::io::Error::other)
+        })
+        .map_err(norito::core::Error::Io)?;
+        Ok(Self {
+            inputs: statement.public_inputs,
+            ordering_hash: statement.ordering_hash,
+            public_statement_digest: digest.into(),
+        })
+    }
+
     pub(super) fn internal(self) -> PublicIO {
         PublicIO {
             dsid: self.inputs.dsid,

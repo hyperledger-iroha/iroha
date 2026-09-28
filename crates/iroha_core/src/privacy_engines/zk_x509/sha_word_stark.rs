@@ -22,6 +22,7 @@ use super::credential_pre_aux::ZkX509CredentialPreAuxBindingV1;
 use super::sha256_word_air::derive_sha256_word_memory_challenges_v1;
 use super::{
     der_limits::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
+    private_table::{PrivateTableV1, zeroize_field_rows_v1},
     sha256_word_air::{
         SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1, SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1,
         SigmaThirdV1, WORD_MEMORY_PERMUTATION_LANES_V1, WordIdV1, WordMemoryAccessV1,
@@ -34,7 +35,9 @@ use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1,
     TransparentTranscriptV1,
 };
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use thiserror::Error;
 pub(crate) const SHA_WORD_BASE_WIDTH_V1: usize = 64;
 pub(crate) const SHA_WORD_COPY_LANES_V1: usize = WORD_MEMORY_PERMUTATION_LANES_V1;
@@ -425,6 +428,55 @@ pub(crate) struct ZkX509ShaWordStarkBaseV1 {
     #[cfg(test)]
     pub(crate) active_rows_per_segment: Vec<usize>,
 }
+fn zeroize_sha_word_events_v1(events: &mut [WordMemoryAccessV1]) {
+    for event in events {
+        event.address.zeroize_v1();
+        event.value.zeroize_v1();
+        event.is_write.zeroize_v1();
+    }
+}
+fn zeroize_sha_word_event_rows_v1(rows: &mut [Vec<WordMemoryAccessV1>]) {
+    for events in rows {
+        zeroize_sha_word_events_v1(events);
+    }
+}
+fn zeroize_sha_word_private_fixed_v1(rows: &mut [ShaWordFixedRowV1]) {
+    for fixed in rows {
+        if let ShaWordFixedRowV1::Digest { expected, .. } = fixed {
+            zeroize::Zeroize::zeroize(expected);
+        }
+    }
+}
+impl ZkX509ShaWordStarkBaseV1 {
+    fn zeroize_private_cells_v1(&mut self) {
+        for value in self.base_rows.iter_mut().flatten() {
+            value.zeroize_v1();
+        }
+        for events in &mut self.local_events {
+            zeroize_sha_word_events_v1(events);
+        }
+        zeroize_sha_word_events_v1(&mut self.execution);
+        zeroize_sha_word_events_v1(&mut self.sorted);
+        // Raw digest rows bind the actual message digest. The verifier-owned
+        // fixed schedule is moved out before this clearing owner is dropped.
+        for fixed in &mut self.fixed_rows {
+            if let ShaWordFixedRowV1::Digest { expected, .. } = fixed {
+                zeroize::Zeroize::zeroize(expected);
+            }
+        }
+        zeroize::Zeroize::zeroize(&mut self.local_rows);
+        #[cfg(test)]
+        {
+            zeroize::Zeroize::zeroize(&mut self.statement.message_len);
+            zeroize::Zeroize::zeroize(&mut self.statement.digest);
+        }
+    }
+}
+impl Drop for ZkX509ShaWordStarkBaseV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_cells_v1();
+    }
+}
 /// Challenge-independent fixed-capacity SHA word material.
 ///
 /// This source owns every base and fixed row plus the private word-memory events needed to derive
@@ -512,33 +564,21 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
     ) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
         self.bind_challenges_v1(challenges)
     }
-    pub(crate) fn zeroize_private_v1(&mut self) {
-        self.message_len = 0;
-        self.active_blocks = 0;
-        self.actual_compute_rows = 0;
-        for row in &mut self.base_rows {
-            row.fill(F::ZERO);
-        }
-        for row in &mut self.fixed_rows {
-            row.fill(F::ZERO);
+    fn zeroize_private_cells_v1(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.message_len);
+        zeroize::Zeroize::zeroize(&mut self.active_blocks);
+        zeroize::Zeroize::zeroize(&mut self.actual_compute_rows);
+        for value in self.base_rows.iter_mut().flatten() {
+            value.zeroize_v1();
         }
         for events in &mut self.local_events {
-            for event in events.iter_mut() {
-                *event = WordMemoryAccessV1 {
-                    address: F::ZERO,
-                    value: F::ZERO,
-                    is_write: F::ZERO,
-                };
-            }
-            events.clear();
+            zeroize_sha_word_events_v1(events);
         }
-        for event in self.execution.iter_mut().chain(&mut self.sorted) {
-            *event = WordMemoryAccessV1 {
-                address: F::ZERO,
-                value: F::ZERO,
-                is_write: F::ZERO,
-            };
-        }
+        zeroize_sha_word_events_v1(&mut self.execution);
+        zeroize_sha_word_events_v1(&mut self.sorted);
+    }
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        self.zeroize_private_cells_v1();
         self.base_rows.clear();
         self.fixed_rows.clear();
         self.local_events.clear();
@@ -602,19 +642,19 @@ impl core::fmt::Debug for ZkX509ShaWordCapacityTraceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaWordCapacityTraceV1 {
+    fn zeroize_private_cells_v1(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.message_len);
+        zeroize::Zeroize::zeroize(&mut self.active_blocks);
+        for value in self.base_rows.iter_mut().flatten() {
+            value.zeroize_v1();
+        }
+        for value in self.aux_rows.iter_mut().flatten() {
+            value.zeroize_v1();
+        }
+    }
     /// Recursively overwrite message-derived rows and private geometry.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.message_len = 0;
-        self.active_blocks = 0;
-        for row in &mut self.base_rows {
-            row.fill(F::ZERO);
-        }
-        for row in &mut self.aux_rows {
-            row.fill(F::ZERO);
-        }
-        for row in &mut self.fixed_rows {
-            row.fill(F::ZERO);
-        }
+        self.zeroize_private_cells_v1();
         self.base_rows.clear();
         self.aux_rows.clear();
         self.fixed_rows.clear();
@@ -649,9 +689,18 @@ pub(crate) struct ZkX509ShaWordCapacityFixedScheduleV1 {
     maximum_memory_rows: usize,
     maximum_compute_rows: usize,
     word: ZkX509ShaWordStarkFixedScheduleV1,
-    input_word_indices: BTreeMap<usize, usize>,
+    input_word_indices: Vec<(usize, usize)>,
 }
 impl ZkX509ShaWordCapacityFixedScheduleV1 {
+    /// Exact allocated public preprocessing payload, including spare capacity.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            vector_v1(&self.word.fixed_rows),
+            vector_v1(&self.input_word_indices),
+        ])
+    }
     #[cfg(test)]
     pub(crate) const fn maximum_message_len(&self) -> usize {
         self.maximum_message_len
@@ -711,7 +760,11 @@ impl ZkX509ShaWordCapacityFixedScheduleV1 {
             }
             match self.word.fixed_rows.get(index) {
                 Some(ShaWordFixedRowV1::Word { address, .. }) => {
-                    if let Some(input_word) = self.input_word_indices.get(address).copied() {
+                    if let Ok(position) = self
+                        .input_word_indices
+                        .binary_search_by_key(address, |entry| entry.0)
+                    {
+                        let input_word = self.input_word_indices[position].1;
                         fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] = F::ONE;
                         fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1] = F(u64::try_from(input_word)
                             .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?);
@@ -816,7 +869,7 @@ pub(crate) fn compile_sha_word_capacity_fixed_schedule_v1(
         message_len: maximum_message_len,
         digest: maximum_circuit.digest(),
     };
-    let maximum = build_sha_word_stark_base_v1(maximum_statement, &maximum_message)?;
+    let mut maximum = build_sha_word_stark_base_v1(maximum_statement, &maximum_message)?;
     drop(maximum_message);
     if maximum.local_rows != maximum_local_rows
         || maximum.execution.len() != maximum_memory_rows
@@ -825,15 +878,8 @@ pub(crate) fn compile_sha_word_capacity_fixed_schedule_v1(
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
     let slots = aggregate_slots_v1(maximum.local_rows, maximum_logical_rows)?;
-    let ZkX509ShaWordStarkBaseV1 {
-        base_rows,
-        fixed_rows,
-        local_events,
-        execution,
-        sorted,
-        ..
-    } = maximum;
-    drop((base_rows, local_events, execution, sorted));
+    let fixed_rows = core::mem::take(&mut maximum.fixed_rows);
+    drop(maximum);
     let word = ZkX509ShaWordStarkFixedScheduleV1 {
         #[cfg(test)]
         statement: maximum_statement,
@@ -842,15 +888,20 @@ pub(crate) fn compile_sha_word_capacity_fixed_schedule_v1(
         logical_rows: maximum_logical_rows,
         slots,
     };
-    let input_word_indices = maximum_circuit
+    let mut input_word_indices = maximum_circuit
         .stark_input_words_v1()
         .iter()
         .copied()
         .enumerate()
         .map(|(index, word)| (word.0, index))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<Vec<_>>();
+    input_word_indices.sort_unstable_by_key(|entry| entry.0);
     drop(maximum_circuit);
-    if input_word_indices.len() != maximum_blocks * 16 {
+    if input_word_indices.len() != maximum_blocks * 16
+        || input_word_indices
+            .windows(2)
+            .any(|pair| pair[0].0 == pair[1].0)
+    {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
     Ok(ZkX509ShaWordCapacityFixedScheduleV1 {
@@ -1218,6 +1269,49 @@ fn capacity_raw_base_row_v1(
     row.try_into()
         .map_err(|_| ZkX509ShaWordStarkErrorV1::Topology)
 }
+/// Conservative payload forecast for constructing and replaying one SHA call.
+///
+/// Counts six simultaneous circuit copies, raw rows/events, complete capacity
+/// matrices and call products, plus bounded sorting/index scratch. This intentionally
+/// overcharges owners whose scopes do not overlap. Allocator metadata is excluded.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn source_replay_scratch_forecast_v1(
+    maximum_blocks: usize,
+) -> Result<usize, ZkX509ShaWordStarkErrorV1> {
+    use super::air::U32RangeAirRowV1;
+    use core::mem::size_of;
+    if maximum_blocks == 0
+        || maximum_blocks > capacity_blocks_v1(ZK_X509_DER_MAX_DOCUMENT_BYTES_V1)?
+    {
+        return Err(ZkX509ShaWordStarkErrorV1::Resource);
+    }
+    let local = capacity_local_rows_v1(maximum_blocks)?;
+    let memory = capacity_memory_rows_v1(maximum_blocks)?;
+    let rows = local
+        .checked_add(memory)
+        .ok_or(ZkX509ShaWordStarkErrorV1::Resource)?;
+    let circuit = local.next_power_of_two()
+        * (size_of::<U32RangeAirRowV1>() + size_of::<WordOperationV1>())
+        + (maximum_blocks * 16).next_power_of_two() * size_of::<WordIdV1>()
+        + 2 * memory.next_power_of_two() * size_of::<WordMemoryAccessV1>();
+    let event_heap = 6 * local * size_of::<WordMemoryAccessV1>();
+    let memory_tables = 2 * memory.next_power_of_two() * size_of::<WordMemoryAccessV1>();
+    let raw = rows * SHA_WORD_BASE_WIDTH_V1 * size_of::<F>()
+        + rows * (2 * size_of::<Vec<F>>() + size_of::<ShaWordFixedRowV1>())
+        + event_heap
+        + memory_tables;
+    let bound = rows
+        * (SHA_WORD_CAPACITY_BASE_WIDTH_V1
+            + SHA_WORD_CAPACITY_FIXED_WIDTH_V1
+            + SHA_WORD_CAPACITY_AUX_WIDTH_V1
+            + 24)
+        * size_of::<F>()
+        + rows * size_of::<Vec<WordMemoryAccessV1>>()
+        + event_heap
+        + memory_tables;
+    Ok(6 * circuit + raw + bound + (32 << 20))
+}
+
 /// Build the challenge-independent phase of one fixed-capacity SHA call.
 ///
 /// The verifier-visible shape depends only on `maximum_message_len`. The exact message length,
@@ -1250,7 +1344,7 @@ pub(crate) fn build_sha_word_capacity_base_source_v1(
         message_len: message.len(),
         digest: actual_circuit.digest(),
     };
-    let actual = build_sha_word_stark_base_v1(actual_statement, message)?;
+    let mut actual = build_sha_word_stark_base_v1(actual_statement, message)?;
     drop(actual_circuit);
     if actual.local_rows != capacity_local_rows_v1(active_blocks)?
         || actual.execution.len() != capacity_memory_rows_v1(active_blocks)?
@@ -1271,7 +1365,7 @@ pub(crate) fn build_sha_word_capacity_base_source_v1(
     {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    let mut base_rows = Vec::new();
+    let mut base_rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     let mut fixed_rows = Vec::new();
     base_rows
         .try_reserve_exact(maximum_logical_rows)
@@ -1332,8 +1426,16 @@ pub(crate) fn build_sha_word_capacity_base_source_v1(
         base_rows.push(base);
         fixed_rows.push(fixed);
     }
-    drop(actual.base_rows);
-    drop(actual.fixed_rows);
+    for value in actual.base_rows.iter_mut().flatten() {
+        value.zeroize_v1();
+    }
+    drop(core::mem::take(&mut actual.base_rows));
+    for fixed in &mut actual.fixed_rows {
+        if let ShaWordFixedRowV1::Digest { expected, .. } = fixed {
+            zeroize::Zeroize::zeroize(expected);
+        }
+    }
+    drop(core::mem::take(&mut actual.fixed_rows));
     for memory_index in 0..maximum_memory_rows {
         let index = maximum_local_rows + memory_index;
         let memory_active = memory_index < actual.execution.len();
@@ -1372,11 +1474,11 @@ pub(crate) fn build_sha_word_capacity_base_source_v1(
         maximum_memory_rows,
         actual_compute_rows,
         maximum_compute_rows,
-        base_rows,
+        base_rows: base_rows.into_vec(),
         fixed_rows,
-        local_events: actual.local_events,
-        execution: actual.execution,
-        sorted: actual.sorted,
+        local_events: core::mem::take(&mut actual.local_events),
+        execution: core::mem::take(&mut actual.execution),
+        sorted: core::mem::take(&mut actual.sorted),
     })
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1394,7 +1496,10 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
     ) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
         validate_challenges(challenges)?;
         let maximum_logical_rows = self.logical_rows();
-        let mut aux_rows = vec![[F::ZERO; SHA_WORD_CAPACITY_AUX_WIDTH_V1]; maximum_logical_rows];
+        let mut aux_rows = PrivateTableV1::new(
+            vec![[F::ZERO; SHA_WORD_CAPACITY_AUX_WIDTH_V1]; maximum_logical_rows],
+            zeroize_field_rows_v1,
+        );
         let mut local_product = [F::ONE; SHA_WORD_COPY_LANES_V1];
         for index in 0..self.maximum_local_rows {
             let events: &[WordMemoryAccessV1] = if index < self.actual_compute_rows {
@@ -1442,7 +1547,7 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
         if execution_product != sorted_product || execution_product != local_product {
             return Err(ZkX509ShaWordStarkErrorV1::LocalCopy);
         }
-        for row in &mut aux_rows {
+        for row in aux_rows.iter_mut() {
             row[GLOBAL_LOCAL_PRODUCT_END..GLOBAL_LOCAL_PRODUCT_END + SHA_WORD_COPY_LANES_V1]
                 .copy_from_slice(&local_product);
         }
@@ -1489,7 +1594,7 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
             maximum_local_rows: self.maximum_local_rows,
             maximum_memory_rows: self.maximum_memory_rows,
             base_rows: core::mem::take(&mut self.base_rows),
-            aux_rows,
+            aux_rows: aux_rows.into_vec(),
             fixed_rows: core::mem::take(&mut self.fixed_rows),
         })
     }
@@ -1821,9 +1926,21 @@ pub(crate) fn build_sha_word_stark_base_v1(
     {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    let mut rows = Vec::new();
-    let mut fixed = Vec::new();
-    let mut events = Vec::new();
+    let expected_blocks = capacity_blocks_v1(statement.message_len)?;
+    let expected_rows = capacity_local_rows_v1(expected_blocks)?
+        .checked_add(capacity_memory_rows_v1(expected_blocks)?)
+        .ok_or(ZkX509ShaWordStarkErrorV1::Resource)?;
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
+    let mut fixed = PrivateTableV1::new(Vec::new(), zeroize_sha_word_private_fixed_v1);
+    let mut events = PrivateTableV1::new(Vec::new(), zeroize_sha_word_event_rows_v1);
+    rows.try_reserve_exact(expected_rows)
+        .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
+    fixed
+        .try_reserve_exact(expected_rows)
+        .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
+    events
+        .try_reserve_exact(expected_rows)
+        .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
     let mut word_cursor = 0_usize;
     let mut operation_outputs = BTreeSet::new();
     for operation in circuit.stark_operations_v1() {
@@ -1880,9 +1997,27 @@ pub(crate) fn build_sha_word_stark_base_v1(
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
     let local_rows = rows.len();
-    let execution = events.iter().flatten().copied().collect::<Vec<_>>();
-    let mut sorted = execution.clone();
-    sorted.sort_by_key(|access| {
+    let event_count = events.iter().try_fold(0_usize, |count, row| {
+        count
+            .checked_add(row.len())
+            .ok_or(ZkX509ShaWordStarkErrorV1::Resource)
+    })?;
+    let mut execution = PrivateTableV1::new(Vec::new(), zeroize_sha_word_events_v1);
+    execution
+        .try_reserve_exact(event_count)
+        .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
+    for row in events.iter() {
+        execution.extend_from_slice(row);
+    }
+    let mut sorted = PrivateTableV1::new(Vec::new(), zeroize_sha_word_events_v1);
+    sorted
+        .try_reserve_exact(event_count)
+        .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?;
+    sorted.extend_from_slice(&execution);
+    // Each word address has one immutable value. Equal address/write keys
+    // therefore have identical event tuples; unstable sorting preserves the
+    // canonical bytes without a heap scratch copy of private events.
+    sorted.sort_unstable_by_key(|access| {
         (
             access.address.0,
             if access.is_write == F::ONE {
@@ -1892,7 +2027,7 @@ pub(crate) fn build_sha_word_stark_base_v1(
             },
         )
     });
-    if sorted != circuit.stark_memory_v1().sorted {
+    if sorted.as_slice() != circuit.stark_memory_v1().sorted.as_slice() {
         return Err(ZkX509ShaWordStarkErrorV1::LocalCopy);
     }
     for index in 0..execution.len() {
@@ -1923,6 +2058,9 @@ pub(crate) fn build_sha_word_stark_base_v1(
     }
     let segment_rows = SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1;
     let total_rows = rows.len();
+    if total_rows != expected_rows {
+        return Err(ZkX509ShaWordStarkErrorV1::Topology);
+    }
     let segment_count = total_rows.div_ceil(segment_rows);
     if segment_count == 0 || segment_count > SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Resource);
@@ -1935,14 +2073,17 @@ pub(crate) fn build_sha_word_stark_base_v1(
                 .min(segment_rows)
         })
         .collect();
+    // The suffix contains only empty memory-row event vectors. Move the local
+    // events into their clearing owner rather than cloning private event cells.
+    events.truncate(local_rows);
     Ok(ZkX509ShaWordStarkBaseV1 {
         #[cfg(test)]
         statement,
-        base_rows: rows,
-        fixed_rows: fixed,
-        local_events: events[..local_rows].to_vec(),
-        execution,
-        sorted,
+        base_rows: rows.into_vec(),
+        fixed_rows: fixed.into_vec(),
+        local_events: events.into_vec(),
+        execution: execution.into_vec(),
+        sorted: sorted.into_vec(),
         local_rows,
         #[cfg(test)]
         segment_rows,
@@ -2072,7 +2213,7 @@ fn aggregate_slots_v1(
 pub(crate) fn compile_zk_x509_sha_word_stark_fixed_schedule_v1(
     statement: ZkX509ShaWordStarkStatementV1,
 ) -> Result<ZkX509ShaWordStarkFixedScheduleV1, ZkX509ShaWordStarkErrorV1> {
-    let expected = expected_fixed_topology(statement)?;
+    let mut expected = expected_fixed_topology(statement)?;
     let logical_rows = expected.base_rows.len();
     if expected.segment_rows != SHA_WORD_LOGICAL_SLOT_ROWS_V1
         || logical_rows != expected.fixed_rows.len()
@@ -2084,7 +2225,7 @@ pub(crate) fn compile_zk_x509_sha_word_stark_fixed_schedule_v1(
     Ok(ZkX509ShaWordStarkFixedScheduleV1 {
         #[cfg(test)]
         statement,
-        fixed_rows: expected.fixed_rows,
+        fixed_rows: core::mem::take(&mut expected.fixed_rows),
         local_rows: expected.local_rows,
         logical_rows,
         slots,
@@ -3797,6 +3938,219 @@ pub(crate) fn validate_sha_word_stark_trace_v1(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn word_event_sort_ties_are_identical_and_in_place_order_matches_reference() {
+        for message in [b"abc".to_vec(), (0_u8..97).collect::<Vec<_>>()] {
+            let circuit = build_sha256_word_circuit_v1(&message).unwrap();
+            let raw = build_sha_word_stark_base_v1(
+                ZkX509ShaWordStarkStatementV1 {
+                    message_len: message.len(),
+                    digest: circuit.digest(),
+                },
+                &message,
+            )
+            .unwrap();
+            let key =
+                |event: &WordMemoryAccessV1| (event.address.0, u8::from(event.is_write != F::ONE));
+            let mut reference = raw.execution.clone();
+            reference.sort_by_key(key);
+            let mut ties = 0;
+            for pair in reference.windows(2) {
+                if key(&pair[0]) == key(&pair[1]) {
+                    ties += 1;
+                    assert_eq!(pair[0], pair[1]);
+                }
+            }
+            assert!(ties > 0);
+            assert_eq!(raw.sorted, reference);
+            assert_eq!(raw.sorted, circuit.stark_memory_v1().sorted);
+        }
+    }
+
+    #[test]
+    fn failed_sha_memory_binding_erases_populated_auxiliary_table() {
+        use super::super::private_table::inspection::observe_v1;
+
+        let mut base = build_sha_word_capacity_base_source_v1(b"abc", 63, false).unwrap();
+        let expected_cells = base.logical_rows() * SHA_WORD_CAPACITY_AUX_WIDTH_V1;
+        // This corrupts the late permutation equality after the entire private
+        // auxiliary table has been filled, rather than failing at admission.
+        base.execution[0].value = base.execution[0].value.add(F::ONE);
+        let (result, erasures) = observe_v1(|| base.bind_memory_challenges_v1(challenges()));
+        assert!(matches!(result, Err(ZkX509ShaWordStarkErrorV1::LocalCopy)));
+        assert!(erasures.iter().any(|erasure| {
+            erasure.cells == expected_cells
+                && erasure.nonzero_before > 0
+                && erasure.nonzero_after == 0
+        }));
+    }
+
+    #[test]
+    fn retained_sha_source_erasure_clears_live_cells_and_preserves_public_fixed_rows() {
+        let clean_events = |events: &[WordMemoryAccessV1]| {
+            events.iter().all(|event| {
+                event.address == F::ZERO && event.value == F::ZERO && event.is_write == F::ZERO
+            })
+        };
+        let mut raw = fixture().base.clone();
+        let raw_rows = raw.base_rows.len();
+        raw.zeroize_private_cells_v1();
+        assert_eq!(raw.base_rows.len(), raw_rows);
+        assert!(
+            raw.base_rows
+                .iter()
+                .flatten()
+                .all(|value| *value == F::ZERO)
+        );
+        assert!(raw.local_events.iter().all(|events| clean_events(events)));
+        assert!(clean_events(&raw.execution) && clean_events(&raw.sorted));
+        assert!(raw.fixed_rows.iter().all(|fixed| match fixed {
+            ShaWordFixedRowV1::Digest { expected, .. } => *expected == 0,
+            _ => true,
+        }));
+        let mut base = build_sha_word_capacity_base_source_v1(b"abc", 63, false).unwrap();
+        let fixed = base.fixed_rows.clone();
+        let base_rows = base.base_rows.len();
+        base.zeroize_private_cells_v1();
+        assert_eq!(base.base_rows.len(), base_rows);
+        assert!(
+            base.base_rows
+                .iter()
+                .flatten()
+                .all(|value| *value == F::ZERO)
+        );
+        assert!(base.local_events.iter().all(|events| clean_events(events)));
+        assert!(clean_events(&base.execution) && clean_events(&base.sorted));
+        assert_eq!(base.fixed_rows, fixed);
+        assert_eq!(
+            (
+                base.message_len,
+                base.active_blocks,
+                base.actual_compute_rows
+            ),
+            (0, 0, 0)
+        );
+        let mut bound = build_sha_word_capacity_trace_v1(b"abc", 63, false, challenges()).unwrap();
+        let fixed = bound.fixed_rows.clone();
+        let bound_rows = bound.aux_rows.len();
+        bound.zeroize_private_cells_v1();
+        assert_eq!(bound.aux_rows.len(), bound_rows);
+        assert!(
+            bound
+                .base_rows
+                .iter()
+                .flatten()
+                .all(|value| *value == F::ZERO)
+        );
+        assert!(
+            bound
+                .aux_rows
+                .iter()
+                .flatten()
+                .all(|value| *value == F::ZERO)
+        );
+        assert_eq!(bound.fixed_rows, fixed);
+        assert_eq!((bound.message_len, bound.active_blocks), (0, 0));
+    }
+
+    #[test]
+    fn maximum_manifest_source_scratch_forecast_fits_declared_gibibyte() {
+        use super::super::{
+            air::U32RangeAirRowV1,
+            sha_call_bus_stark::{ZkX509ShaCallPublicShapeV1, ZkX509ShaCallScheduleV1},
+        };
+        use core::mem::size_of;
+        let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 4,
+        })
+        .unwrap();
+        let maximum = schedule
+            .calls()
+            .iter()
+            .max_by_key(|call| call.maximum_logical_rows())
+            .unwrap();
+        // The framed CRL commitment is larger than the unframed TBS calls.
+        assert_eq!(maximum.maximum_blocks, 66);
+        let local = maximum.maximum_local_rows;
+        let memory = maximum.maximum_memory_rows;
+        let rows = maximum.maximum_logical_rows();
+        assert_eq!((local, memory, rows), (70_240, 140_992, 211_232));
+        // Upper capacity forecasts for the current Vec builders. These are allocation
+        // policy regression bounds, not allocator metadata or measured process RSS.
+        // Every operation/word has at least one local row; six complete circuit
+        // copies overcharge the canonical validation and actual/shape compiler overlap.
+        let circuit = local.next_power_of_two()
+            * (size_of::<U32RangeAirRowV1>() + size_of::<WordOperationV1>())
+            + (maximum.maximum_blocks * 16).next_power_of_two() * size_of::<WordIdV1>()
+            + 2 * memory.next_power_of_two() * size_of::<WordMemoryAccessV1>();
+        let event_heap = 6 * local * size_of::<WordMemoryAccessV1>();
+        let memory_tables = 2 * memory.next_power_of_two() * size_of::<WordMemoryAccessV1>();
+        let raw = rows * SHA_WORD_BASE_WIDTH_V1 * size_of::<F>()
+            + rows.next_power_of_two() * (2 * size_of::<Vec<F>>() + size_of::<ShaWordFixedRowV1>())
+            + event_heap
+            + memory_tables;
+        // The bound call retains 24 call/RFC products in addition to the word
+        // base/fixed/aux matrices. Conservatively keep raw material and all circuit
+        // copies live while charging these final matrices, although their scopes end.
+        let bound = rows
+            * (SHA_WORD_CAPACITY_BASE_WIDTH_V1
+                + SHA_WORD_CAPACITY_FIXED_WIDTH_V1
+                + SHA_WORD_CAPACITY_AUX_WIDTH_V1
+                + 24)
+            * size_of::<F>()
+            + rows.next_power_of_two() * size_of::<Vec<WordMemoryAccessV1>>()
+            + event_heap
+            + memory_tables;
+        // Includes fixed-schedule rows, sort scratch, small word-index containers,
+        // native output and raw circuit headers beyond the charged arrays.
+        let forecast = 6 * circuit + raw + bound + (32 << 20);
+        let production = source_replay_scratch_forecast_v1(maximum.maximum_blocks).unwrap();
+        assert!(production <= forecast);
+        assert!(
+            forecast < super::super::allocation_payload::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1,
+            "SHA replay scratch forecast {forecast}"
+        );
+        assert!(source_replay_scratch_forecast_v1(0).is_err());
+        assert!(source_replay_scratch_forecast_v1(usize::MAX).is_err());
+        eprintln!("maximum SHA replay scratch payload forecast: {forecast}");
+    }
+
+    #[test]
+    fn immutable_input_index_capacity_and_lookup_match_independent_map() {
+        use super::super::allocation_payload::vector_v1;
+        for length in [0, 1, 64, 129] {
+            let mut schedule = compile_sha_word_capacity_fixed_schedule_v1(length, true).unwrap();
+            let circuit = build_sha256_word_circuit_v1(&vec![0; length]).unwrap();
+            let independent: BTreeMap<_, _> = circuit
+                .stark_input_words_v1()
+                .iter()
+                .enumerate()
+                .map(|(index, word)| (word.0, index))
+                .collect();
+            assert_eq!(
+                schedule.input_word_indices,
+                independent
+                    .iter()
+                    .map(|(address, index)| (*address, *index))
+                    .collect::<Vec<_>>()
+            );
+            for (address, expected) in independent {
+                let position = schedule
+                    .input_word_indices
+                    .binary_search_by_key(&address, |entry| entry.0)
+                    .unwrap();
+                assert_eq!(schedule.input_word_indices[position].1, expected);
+            }
+            let before = schedule.allocated_heap_bytes_v1();
+            let old = vector_v1(&schedule.input_word_indices);
+            schedule.input_word_indices.reserve_exact(17);
+            assert_eq!(
+                schedule.allocated_heap_bytes_v1(),
+                before - old + vector_v1(&schedule.input_word_indices)
+            );
+        }
+    }
+
     use super::*;
     use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
     use crate::privacy_engines::zk_x509::sha256_word_air::sha256_word_total_rows_for_message_len_v1;

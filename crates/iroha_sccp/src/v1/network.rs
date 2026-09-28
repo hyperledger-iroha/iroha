@@ -222,14 +222,20 @@ mod tests {
     #[test]
     fn identity_words_match_the_spec_table() {
         assert_eq!(identity_word(SccpNetworkV1::SoraTaira, &TAIRA), TAIRA);
-        assert_eq!(identity_word(SccpNetworkV1::EthereumMainnet, &TAIRA), word_u64(1));
-        assert_eq!(identity_word(SccpNetworkV1::BscMainnet, &TAIRA), word_u64(56));
-        let tron = identity_word(SccpNetworkV1::TronMainnet, &TAIRA);
-        assert_eq!(tron[..28], [0; 28]);
-        assert_eq!(tron[28..], [0x2b, 0x66, 0x53, 0xdc]);
-        let ton = identity_word(SccpNetworkV1::TonMainnet, &TAIRA);
-        assert_eq!(ton[..31], [0xff; 31]);
-        assert_eq!(ton[31], 0x11);
+        assert_eq!(
+            identity_word(SccpNetworkV1::EthereumMainnet, &TAIRA),
+            word_u64(1)
+        );
+        assert_eq!(
+            identity_word(SccpNetworkV1::BscMainnet, &TAIRA),
+            word_u64(56)
+        );
+        let tvm_word = identity_word(SccpNetworkV1::TronMainnet, &TAIRA);
+        assert_eq!(tvm_word[..28], [0; 28]);
+        assert_eq!(tvm_word[28..], [0x2b, 0x66, 0x53, 0xdc]);
+        let ton_word = identity_word(SccpNetworkV1::TonMainnet, &TAIRA);
+        assert_eq!(ton_word[..31], [0xff; 31]);
+        assert_eq!(ton_word[31], 0x11);
     }
 
     #[test]
@@ -283,9 +289,8 @@ mod tests {
 
     #[test]
     fn network_id_bytes_are_the_genesis_hash() {
-        let hash = iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
-            [0x11; 32],
-        ));
+        let hash =
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x11; 32]));
         let network_id = NetworkId::from_genesis_hash(hash);
         assert_eq!(taira_network_id_bytes(&network_id), [0x11; 32]);
     }

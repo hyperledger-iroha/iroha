@@ -508,27 +508,31 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   supervised child so the daemon cannot silently continue with a compromised
   ingest boundary.
 - Completion signing has separate public deployment bindings for the governed
-  signer resolver and leaf external software signer. Configuration gives the resolver its
+  signer resolver and leaf signer. The native software producer resolves both
+  from current finalized State and an explicit owner-only credential file;
+  the injected external adapter uses the same binding and validation contract. Configuration gives the resolver its
   own handle, non-zero revision, and non-zero public-policy digest, then binds
   the signer by its exact handle, non-zero adapter revision, complete chain
   signer-policy tuple, explicit `ed25519` or `ml-dsa` algorithm, and matching
-  canonical public key. It never contains a credential or private key. Startup
+  canonical public key. Configuration contains only the optional credential
+  path; private-key bytes stay in that owner-only runtime file. Startup
   compares both bindings before and after readiness; each resolution and
   signature repeats the applicable handle, qualification, policy, algorithm,
   public-key, and finalized-owner checks. Test-marked, stale, rotated, or
   substituted providers fail closed and returned transaction bytes are not
   accepted after post-operation drift.
-- The broker accepts only the configured session chain and expected owner, an
+- The optional external broker accepts only the configured session chain and expected owner, an
   `Instructions` executable containing exactly one non-zero
   `CompleteReplicationOrder`, and the exact retained signer-policy lineage,
   assignment revision, and finalized anchor. Session admission, broker
   request/result validation, and the durable outbox reject alternate
   executables, extra instructions, proof attachments, even-empty multisig
-  sidecars, invalid signatures, and any context substitution. This closes the
-  source contract only; it does not supply the deployment-owned transport,
-  external software signer, or sealed-CAS backend.
-- The production completion outbox treats the injected external sealed
-  checkpoint store as authoritative. Configuration binds that provider by the
+  sidecars, invalid signatures, and any context substitution. This adapter
+  contract remains available for deployments that explicitly supply a broker.
+  Native mode supplies source transport, completion custody and a durable local
+  checkpoint adapter without that injection.
+- With an injected external checkpoint provider, the production completion
+  outbox treats that sealed checkpoint store as authoritative. Configuration binds that provider by the
   exact stable `checkpoint_store_handle`, non-zero
   `checkpoint_store_revision`, and non-zero
   `checkpoint_store_policy_digest_hex`; it contains no credential or private
@@ -543,12 +547,14 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   `CheckpointCasUnchanged` safe-retry result. Any other head, failed readback,
   or post-CAS provider drift is ambiguous and fails closed rather than guessing
   which checkpoint committed.
-- `provider_ingest_outbox_v1.to` is a no-follow, atomically replaced,
-  revalidated cache only. It may be absent, match the sealed head, or be exactly
+- In external checkpoint mode, `provider_ingest_outbox_v1.to` is a no-follow,
+  atomically replaced, revalidated cache only. It may be absent, match the sealed head, or be exactly
   one predecessor behind that head; it can never seed, replace, or override
-  external state. Enabled startup requires the configured authenticated-source,
-  governed-signer-resolver, and sealed-checkpoint providers and rejects
-  missing, substituted, stale, or test-marked providers. The standard
+  external state. Native software mode instead supplies the owner-only local
+  fsync/CAS store described below; it makes no hardware rollback claim. Enabled
+  startup requires the selected authenticated-source, governed-signer-resolver
+  and checkpoint implementations and rejects missing, substituted, stale, or
+  test-marked providers. The optional injected
   authenticated source-pool coordinator has its own configured production
   handle, non-zero revision, and non-zero public-policy digest; requires at
   least two distinct non-local provider identities and distinct production
@@ -558,24 +564,34 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   inventory across startup readiness, every supervised tick, and every fetch.
   Endpoint, stream-grant, credential, and payload material remains inside
   runtime-only child adapters and is not copied into pool metadata,
-  configuration, or durable state. The commit-owned capture path publishes a
-  bounded Kura-authenticated provider index at every finalized anchor, and the
-  runtime pages that immutable archive rather than scanning the live head. The
-  archive has exact restart reconciliation, typed below-retention-floor
-  failures, and an explicit generation/key/finality-fenced compaction protocol.
+  configuration, or durable state. Current Sumeragi commits capture a bounded
+  provider index from the exact committed State view and its durable Kura
+  `CommitCertificate`; archive qualification uses the same certified-chain
+  reader as native signer authority, including its retained-committee trust
+  boundary. The runtime pages that immutable archive rather than scanning the
+  live head. Capture authenticates network/genesis, block hash, block time and
+  executed result against one frozen durable boundary. Startup reconciles only
+  an exact replay or one missing committed successor after current consensus
+  replay; a larger gap fails. Retention binds the certified block id (header
+  and result), independent of the local quorum's signature subset. No retired
+  sidecar receipt or pending-V2 replay path authorizes archive capture. Typed
+  below-retention-floor failures and generation/key/finality-fenced compaction
+  remain mandatory.
   Preparation is read-only and binds the exact fence, checkpoint digest, and
   complete canonical-checkpoint digest. Installation first advances a separate
   per-chain sealed monotonic CAS record, resolves ambiguous writes by exact
   authoritative readback, and only then publishes the checkpoint and unlinks
   its prefix. Manual mode is the default and rejects every checkpoint candidate
   at startup; authority mode recovers only the exact approved checkpoint and
-  rejects missing, substituted, stale, or test-marked providers. This closes
-  source selection, top-level and child qualification fencing, the public
-  resolver/signer qualification contract, and the local indexed archive and
-  retention-authority protocol only: concrete
-  governance-advert/stream-grant/pinned-HTTPS child transports, a concrete
-  governance-aware external software signer backend with atomic rotation/revocation
-  enforcement, and the deployment-owned sealed-CAS backend remain open.
+  rejects missing, substituted, stale, or test-marked providers. Native ingest
+  uses authenticated publisher staging, assignment-authorized source transport,
+  same-State completion signing and durable local checkpoints. Deployments
+  choosing the external pool, external signer or sealed retention authority
+  must still supply and qualify those optional implementations. Native mode
+  does not qualify a deployment-owned sealed-CAS backend, external stream-grant
+  broker, hardware rollback seal, or atomic gateway quota authority. End-to-end
+  four-validator publication/restart/repair qualification remains a separate
+  required test result, not a consequence of these source contracts.
 - Manual completion tooling must supply that complete context through
   `iroha app sorafs toolkit instruction complete-order`; the retired three-field completion
   form and offline Izanami completion recipe are not accepted.
@@ -728,7 +744,7 @@ order, assignment revision, manifest digest, canonical header digest and one
 chunk ordinal with its bytes. Each request is capped at 4 MiB plus 4 KiB of
 framing. Chunk requests cannot create a reservation and never repeat the full
 file/chunk inventory. The receiver authenticates the pin submitter and exact provider/order/assignment
-revision against one native State view with matching durable revision-4 finality.
+revision against one native State view with matching durable embedded-certificate finality.
 The current approved pin, canonical replication order and inclusive ingestion
 deadline must agree. Both finalized consensus time and local UTC must still be
 within the deadline. The canonical header binds the complete native file/chunk
@@ -763,20 +779,31 @@ paid pin, exact automatic assignment revision and canonical order digest, with
 an independently selected historical block floor and fresh challenge. Its
 completion phase additionally requires every assigned provider's accepted native
 completion. The publisher verifies the exact signed assertion's successful
-execution with `TrustedBlockProofAnchor`, the canonical executed `SignedBlockWire`
-and a contiguous revision-4 finality lineage. `verify_finality_successor` checks
-committee/epoch transitions; a returned height, hash or HTTP success alone is
-insufficient.
+execution with `SumeragiFinalityVerifier` and a contiguous lineage of canonical
+`SumeragiFinalityProof` frames carrying embedded commit certificates. The shared
+verifier authenticates exact execution, parent hash/result and lag-2 committee
+selection. Genesis carries a result-only certificate; it has no fabricated quorum
+certificate. A returned height, hash or HTTP success alone is insufficient.
 
 `sorafs_cli deploy` requires `--finality-checkpoint=PATH`, an independently trusted
-canonical `V2FinalityArtifact` for the configured genesis-derived `network_id`.
+canonical `SumeragiFinalityCheckpoint` for the independently configured
+genesis-derived `network_id` and `chain`. The bounded local file retains the signed
+genesis, selected initial roster, certified tip and at most two predecessor
+decisions required by the shared verifier. It is an explicitly selected trust
+root, never material selected from the response being verified. Input is capped
+at `MAX_FINALITY_CHECKPOINT_BYTES` (68 MiB) before bounded canonical decoding.
 The checkpoint must be within 1,023 blocks of each assertion. The proof route
 retains `CanReadAllLedgerData` because the existing authenticated carrier includes
 a full executed block. Discovery supplies candidate provider Torii origins;
 repeatable `--provider-url=HTTPS_ORIGIN` arguments add explicit candidates.
 Publication has a ten-minute monotonic deadline and a 32 MiB proof-response bound.
 Assignment/completion proof files and the verified next checkpoint are retained
-in the deploy output directory. Success requires both native finalized completion
+in the deploy output directory. Only successful authenticated execution advances
+the checkpoint, using a private same-directory temporary file, file sync, atomic
+replacement and directory sync. The four-validator harness derives its initial
+trust from its independently constructed and validated signed genesis and roster,
+then verifies the current genesis proof and contiguous certified successors.
+Success requires both native finalized completion
 and digest/length verification of every packaged gateway asset. The default
 retention deadline is UTC packaging time plus one day.
 

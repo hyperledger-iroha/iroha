@@ -18,7 +18,6 @@
 //! the returned anchor and continuation before consuming the page.
 use crate::sorafs_provider_ingest_finalized_query::archive_boundary::{
     ArchiveActivationGateV1, ArchiveStartupBoundaryV1, classify_archive_startup_boundary,
-    classify_pending_replay_completion, validate_pending_archive_tip,
 };
 use eyre::{Result, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
@@ -35,7 +34,6 @@ use iroha_core::{
     state::{
         State, StateQueryView, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _,
     },
-    sumeragi::{V2StartupReplayPlan, plan_v2_startup_replay},
 };
 use iroha_data_model::{
     NetworkId,
@@ -96,7 +94,7 @@ const FAILURE_BELOW_ACTIVATION_FLOOR: u8 = 0xA8;
 /// Typed failure while qualifying the configured finalized archive for startup.
 #[derive(Debug)]
 pub(crate) enum ReputationFinalizedArchiveStartupErrorV1 {
-    /// State, Kura, or the authenticated pending-tip plan disagreed.
+    /// Recovered State and the durable current-consensus Kura boundary disagreed.
     StartupBoundary {
         /// Stable payload-free rejection reason.
         reason: &'static str,
@@ -168,28 +166,12 @@ pub(crate) enum ReputationFinalizedArchiveStartupModeV1 {
         /// Subsequent configured live-lag qualification.
         live_qualification: ReputationFinalizedArchiveQualificationV1,
     },
-    /// One authenticated pending V2 tip will finish capture through Apply.
-    PendingTipReplay {
-        /// Exact pending height retained by the validated V2 replay plan.
-        pending_tip_height: u64,
-        /// Current authenticated qualification, absent only for empty
-        /// pre-genesis height zero.
-        qualification: Option<ReputationFinalizedArchiveQualificationV1>,
-        /// Whether startup established a nonhistorical floor at the committed
-        /// State view immediately preceding pending replay.
-        activation_floor_created: bool,
-    },
 }
 impl ReputationFinalizedArchiveStartupModeV1 {
     fn activation_gate(&self) -> ArchiveActivationGateV1 {
         match self {
             Self::BootstrapAwaitingGenesisCapture => ArchiveActivationGateV1::AwaitingGenesis,
             Self::Qualified { .. } => ArchiveActivationGateV1::StrictLive,
-            Self::PendingTipReplay {
-                pending_tip_height, ..
-            } => ArchiveActivationGateV1::PendingTip {
-                height: *pending_tip_height,
-            },
         }
     }
 }
@@ -499,7 +481,7 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
         .map_err(Self::archive_error)?;
         let qualification = self
             .archive
-            .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 0)
+            .qualify_against_certified_tip(&view, self.kura.as_ref(), 0)
             .map_err(Self::archive_error)?;
         if qualification.archive_tip() != &authorization_anchor {
             return Err(
@@ -618,7 +600,7 @@ impl ReputationFinalizedArchiveRetentionControlV1
             .map_err(Self::archive_error)?;
         let proposal = self
             .archive
-            .prepare_kura_authenticated_compaction(&fence, self.kura.as_ref())
+            .prepare_certified_compaction(&fence, &self.state.query_view(), self.kura.as_ref())
             .map_err(Self::archive_error)?;
         let refreshed = self.authorization_snapshot()?.ok_or(
             ReputationFinalizedArchiveRetentionControlErrorV1::Boundary {
@@ -637,8 +619,9 @@ impl ReputationFinalizedArchiveRetentionControlV1
         self.revalidate_authority()?;
         let compaction = self
             .archive
-            .approve_and_install_kura_authenticated_compaction(
+            .approve_and_install_certified_compaction(
                 &proposal,
+                &self.state.query_view(),
                 self.kura.as_ref(),
                 &self.binding,
                 self.authority.as_ref(),
@@ -685,11 +668,6 @@ impl QualifiedReputationRetentionAuthorityV1 {
         Ok(())
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ArchiveActivationBoundaryV1 {
-    state_height: u64,
-    durable_kura_blocks: u64,
-}
 /// Cloneable fail-closed activation probe for deferred reputation assembly.
 #[derive(Clone)]
 pub(crate) struct ReputationFinalizedArchiveActivationV1 {
@@ -715,203 +693,46 @@ impl fmt::Debug for ReputationFinalizedArchiveActivationV1 {
     }
 }
 impl ReputationFinalizedArchiveActivationV1 {
-    /// Return true only after the archive satisfies ordinary configured live
-    /// qualification and any frozen pending tip revalidates as fully
-    /// recovered.
+    /// Qualify one current committed State view before allowing runtime activation.
     ///
-    /// A false result is restricted to the exact bootstrap or pending-tip
-    /// boundary authenticated before Sumeragi started.
-    ///
-    /// # Errors
-    ///
-    /// Rejects substituted State/Kura bindings, stale pending tips, archive
-    /// gaps, forks, and storage failures.
+    /// Empty bootstrap waits for genesis; every nonempty archive must authenticate its exact
+    /// retained coverage through the current certified chain before it becomes visible.
     pub(crate) fn activation_ready(&self) -> Result<bool, ReputationFinalizedArchiveError> {
-        let strict_result = self.archive.qualify_against_kura_tip(
-            &self.network_id,
-            self.kura.as_ref(),
-            self.maximum_kura_tip_lag_blocks,
-        );
-        if self.strict_qualification_is_ready(strict_result.as_ref().ok())? {
-            return Ok(true);
+        let view = self.state.query_view();
+        if !std::ptr::eq(view.kura(), self.kura.as_ref()) || view.network_id() != &self.network_id {
+            return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
+                reason: "reputation activation State has a substituted network or Kura binding",
+            });
         }
-        match self.gate {
-            ArchiveActivationGateV1::StrictLive => {
-                let _ = strict_result?;
-                Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
-                    reason: "reputation archive tip is not visible through committed State",
-                })
-            }
-            ArchiveActivationGateV1::AwaitingGenesis => {
-                self.awaiting_genesis_activation(strict_result)
-            }
-            ArchiveActivationGateV1::PendingTip { height } => self.pending_tip_activation(height),
-        }
-    }
-    fn strict_qualification_is_ready(
-        &self,
-        qualification: Option<&ReputationFinalizedArchiveQualificationV1>,
-    ) -> Result<bool, ReputationFinalizedArchiveError> {
-        let Some(qualification) = qualification else {
-            return Ok(false);
-        };
-        if !self
-            .gate
-            .accepts_visible_archive_tip(qualification.archive_tip().height)
-            || !self.qualification_is_visible(qualification)?
-        {
-            return Ok(false);
-        }
-        match self.gate {
-            ArchiveActivationGateV1::PendingTip { height } => self.pending_replay_complete(height),
-            ArchiveActivationGateV1::StrictLive | ArchiveActivationGateV1::AwaitingGenesis => {
-                Ok(true)
-            }
-        }
-    }
-    fn awaiting_genesis_activation(
-        &self,
-        strict_result: Result<
-            ReputationFinalizedArchiveQualificationV1,
-            ReputationFinalizedArchiveError,
-        >,
-    ) -> Result<bool, ReputationFinalizedArchiveError> {
-        let boundary = self.activation_boundary("read deferred genesis Kura boundary")?;
-        if boundary.state_height == 0 && boundary.durable_kura_blocks <= 1 {
+        if self.gate == ArchiveActivationGateV1::AwaitingGenesis && view.height() == 0 {
             if self.archive.is_empty()? {
                 return Ok(false);
             }
-            let qualification =
-                self.archive
-                    .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 0)?;
-            if boundary.durable_kura_blocks == 1 && qualification.archive_tip().height == 1 {
-                return Ok(false);
-            }
-        }
-        let _ = strict_result?;
-        Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
-            reason: "reputation genesis archive tip is not visible through committed State",
-        })
-    }
-    fn pending_tip_activation(
-        &self,
-        pending_tip_height: u64,
-    ) -> Result<bool, ReputationFinalizedArchiveError> {
-        let boundary = self.activation_boundary("read deferred pending-tip Kura boundary")?;
-        classify_archive_startup_boundary(
-            boundary.state_height,
-            boundary.durable_kura_blocks,
-            Some(pending_tip_height),
-        )
-        .map_err(|reason| ReputationFinalizedArchiveError::FinalityAuthentication { reason })?;
-        if self.archive.is_empty()? {
-            validate_pending_archive_tip(pending_tip_height, boundary.state_height, None).map_err(
-                |reason| ReputationFinalizedArchiveError::FinalityAuthentication { reason },
-            )?;
-            return Ok(false);
-        }
-        let qualification =
-            self.archive
-                .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 1)?;
-        validate_pending_archive_tip(
-            pending_tip_height,
-            boundary.state_height,
-            Some(qualification.archive_tip().height),
-        )
-        .map_err(|reason| ReputationFinalizedArchiveError::FinalityAuthentication { reason })?;
-        Ok(false)
-    }
-    fn activation_boundary(
-        &self,
-        kura_operation: &'static str,
-    ) -> Result<ArchiveActivationBoundaryV1, ReputationFinalizedArchiveError> {
-        let view = self.state.query_view();
-        if !std::ptr::eq(view.kura(), self.kura.as_ref()) {
-            return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "reputation activation State is bound to another Kura instance",
+            return Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
+                reason: "uncommitted bootstrap has a nonempty reputation archive",
             });
         }
-        let state_height = u64::try_from(view.height()).map_err(|_| {
-            ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "reputation activation State height exceeds the supported range",
-            }
-        })?;
-        let kura_height =
-            u64::try_from(self.kura.exact_durable_blocks_count().map_err(|error| {
-                ReputationFinalizedArchiveError::KuraAuthentication {
-                    operation: kura_operation,
-                    detail: error.to_string(),
-                }
-            })?)
-            .map_err(|_| {
-                ReputationFinalizedArchiveError::FinalityAuthentication {
-                    reason: "reputation activation Kura height exceeds the supported range",
-                }
-            })?;
-        Ok(ArchiveActivationBoundaryV1 {
-            state_height,
-            durable_kura_blocks: kura_height,
-        })
-    }
-    fn qualification_is_visible(
-        &self,
-        qualification: &ReputationFinalizedArchiveQualificationV1,
-    ) -> Result<bool, ReputationFinalizedArchiveError> {
-        let view = self.state.query_view();
-        if !std::ptr::eq(view.kura(), self.kura.as_ref()) {
-            return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "reputation activation State is bound to another Kura instance",
-            });
-        }
-        let state_height = u64::try_from(view.height()).map_err(|_| {
-            ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "reputation activation State height exceeds the supported range",
-            }
-        })?;
-        if state_height != qualification.archive_tip().height {
+        let qualification = self.archive.qualify_against_certified_tip(
+            &view,
+            self.kura.as_ref(),
+            self.maximum_kura_tip_lag_blocks,
+        )?;
+        if u64::try_from(view.height()).ok() != Some(qualification.archive_tip().height) {
             return Ok(false);
         }
-        let state_hash = view
-            .latest_block_hash()
-            .map(|hash| *hash.as_ref())
-            .filter(|hash| *hash != [0; 32])
-            .ok_or(ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "reputation activation State has no committed block hash",
-            })?;
-        if state_hash != qualification.archive_tip().block_hash {
+        if view.latest_block_hash().map(|hash| *hash.as_ref())
+            != Some(qualification.archive_tip().block_hash)
+        {
             return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
                 reason: "reputation activation State and archive tips disagree",
             });
         }
         Ok(true)
     }
-    fn pending_replay_complete(
-        &self,
-        expected_height: u64,
-    ) -> Result<bool, ReputationFinalizedArchiveError> {
-        let replay_plan = plan_v2_startup_replay(self.kura.as_ref()).map_err(|error| {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "revalidate deferred pending-tip recovery",
-                detail: error.to_string(),
-            }
-        })?;
-        let durable_height = u64::try_from(replay_plan.durable_height()).map_err(|_| {
-            ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "reputation recovery Kura height exceeds the supported range",
-            }
-        })?;
-        classify_pending_replay_completion(
-            expected_height,
-            durable_height,
-            replay_plan.pending_tip_height(),
-        )
-        .map_err(|reason| ReputationFinalizedArchiveError::FinalityAuthentication { reason })
-    }
 }
 type ArchiveStartupResultV1<T> = std::result::Result<T, ReputationFinalizedArchiveStartupErrorV1>;
 struct AuthenticatedArchiveStartupV1<'state> {
     state_view: StateQueryView<'state>,
-    state_height: u64,
     boundary: ArchiveStartupBoundaryV1,
 }
 fn archive_startup_error(
@@ -926,6 +747,7 @@ fn archive_startup_error(
 fn open_reputation_finalized_archive(
     config: &SorafsReputationRuntime,
     network_id: &NetworkId,
+    state_ro: &impl iroha_core::state::StateReadOnly,
     kura: &Kura,
     authority: Option<Arc<dyn ReputationFinalizedArchiveRetentionAuthorityV1>>,
 ) -> ArchiveStartupResultV1<(
@@ -959,6 +781,7 @@ fn open_reputation_finalized_archive(
                 &config.finalized_archive_root,
                 bounds,
                 network_id,
+                state_ro,
                 kura,
                 &binding,
                 authority.as_ref(),
@@ -991,7 +814,6 @@ fn open_reputation_finalized_archive(
 fn authenticate_archive_startup<'state>(
     state: &'state State,
     kura: &Kura,
-    startup_replay_plan: &V2StartupReplayPlan,
 ) -> ArchiveStartupResultV1<AuthenticatedArchiveStartupV1<'state>> {
     let state_view = state.query_view();
     if !std::ptr::eq(state_view.kura(), kura) {
@@ -1014,111 +836,32 @@ fn authenticate_archive_startup<'state>(
             reason: "durable Kura height exceeds the supported range",
         },
     )?;
-    if u64::try_from(startup_replay_plan.durable_height()).ok() != Some(kura_height) {
-        return Err(ReputationFinalizedArchiveStartupErrorV1::StartupBoundary {
-            reason: "validated V2 startup plan is bound to another durable Kura height",
-        });
-    }
-    let boundary = classify_archive_startup_boundary(
-        state_height,
-        kura_height,
-        startup_replay_plan.pending_tip_height(),
-    )
-    .map_err(|reason| ReputationFinalizedArchiveStartupErrorV1::StartupBoundary { reason })?;
+    let boundary = classify_archive_startup_boundary(state_height, kura_height)
+        .map_err(|reason| ReputationFinalizedArchiveStartupErrorV1::StartupBoundary { reason })?;
     Ok(AuthenticatedArchiveStartupV1 {
         state_view,
-        state_height,
         boundary,
     })
 }
 fn qualify_existing_archive(
     archive: &ReputationFinalizedArchive,
-    network_id: &NetworkId,
     kura: &Kura,
     startup: &AuthenticatedArchiveStartupV1<'_>,
     maximum_kura_tip_lag_blocks: u64,
 ) -> ArchiveStartupResultV1<ReputationFinalizedArchiveStartupModeV1> {
     let reconciliation = archive
-        .reconcile_kura_authenticated_state_tip(&startup.state_view, kura)
+        .reconcile_certified_state_tip(&startup.state_view, kura)
         .map_err(|source| archive_startup_error("exact Kura-tip reconciliation", source))?;
     let live_qualification = archive
-        .qualify_against_kura_tip(network_id, kura, maximum_kura_tip_lag_blocks)
+        .qualify_against_certified_tip(&startup.state_view, kura, maximum_kura_tip_lag_blocks)
         .map_err(|source| archive_startup_error("configured live-lag qualification", source))?;
     Ok(ReputationFinalizedArchiveStartupModeV1::Qualified {
         reconciliation,
         live_qualification,
     })
 }
-fn qualify_pending_archive(
-    archive: &ReputationFinalizedArchive,
-    network_id: &NetworkId,
-    kura: &Kura,
-) -> ArchiveStartupResultV1<ReputationFinalizedArchiveQualificationV1> {
-    archive
-        .qualify_against_kura_tip(network_id, kura, 1)
-        .map_err(|source| archive_startup_error("pending-tip one-block qualification", source))
-}
-fn capture_pending_archive_predecessor(
-    archive: &ReputationFinalizedArchive,
-    kura: &Kura,
-    startup: &AuthenticatedArchiveStartupV1<'_>,
-) -> ArchiveStartupResultV1<()> {
-    let (_, receipt) = kura
-        .v2_finality_artifact_with_receipt(startup.state_height)
-        .map_err(
-            |source| ReputationFinalizedArchiveStartupErrorV1::KuraBoundary {
-                detail: source.to_string(),
-            },
-        )?
-        .ok_or(ReputationFinalizedArchiveStartupErrorV1::StartupBoundary {
-            reason: "committed State predecessor has no authenticated V2 finality receipt",
-        })?;
-    archive
-        .capture_kura_authenticated_view(&startup.state_view, kura, &receipt)
-        .map_err(|source| archive_startup_error("pending-tip predecessor capture", source))?;
-    Ok(())
-}
-fn prepare_pending_archive_mode(
-    archive: &ReputationFinalizedArchive,
-    network_id: &NetworkId,
-    kura: &Kura,
-    startup: &AuthenticatedArchiveStartupV1<'_>,
-    archive_empty: bool,
-    pending_tip_height: u64,
-) -> ArchiveStartupResultV1<ReputationFinalizedArchiveStartupModeV1> {
-    let (qualification, activation_floor_created) = if archive_empty {
-        if startup.state_height == 0 {
-            (None, false)
-        } else {
-            capture_pending_archive_predecessor(archive, kura, startup)?;
-            (
-                Some(qualify_pending_archive(archive, network_id, kura)?),
-                true,
-            )
-        }
-    } else {
-        (
-            Some(qualify_pending_archive(archive, network_id, kura)?),
-            false,
-        )
-    };
-    validate_pending_archive_tip(
-        pending_tip_height,
-        startup.state_height,
-        qualification
-            .as_ref()
-            .map(|qualification| qualification.archive_tip().height),
-    )
-    .map_err(|reason| ReputationFinalizedArchiveStartupErrorV1::StartupBoundary { reason })?;
-    Ok(ReputationFinalizedArchiveStartupModeV1::PendingTipReplay {
-        pending_tip_height,
-        qualification,
-        activation_floor_created,
-    })
-}
 fn prepare_archive_startup_mode(
     archive: &ReputationFinalizedArchive,
-    network_id: &NetworkId,
     kura: &Kura,
     startup: &AuthenticatedArchiveStartupV1<'_>,
     archive_empty: bool,
@@ -1133,15 +876,8 @@ fn prepare_archive_startup_mode(
             }
             Ok(ReputationFinalizedArchiveStartupModeV1::BootstrapAwaitingGenesisCapture)
         }
-        ArchiveStartupBoundaryV1::Qualified => qualify_existing_archive(
-            archive,
-            network_id,
-            kura,
-            startup,
-            maximum_kura_tip_lag_blocks,
-        ),
-        ArchiveStartupBoundaryV1::PendingTip { height } => {
-            prepare_pending_archive_mode(archive, network_id, kura, startup, archive_empty, height)
+        ArchiveStartupBoundaryV1::Qualified => {
+            qualify_existing_archive(archive, kura, startup, maximum_kura_tip_lag_blocks)
         }
     }
 }
@@ -1152,36 +888,42 @@ fn prepare_archive_startup_mode(
 /// existing nonempty chain may establish an explicit activation floor at its
 /// current tip; callers must surface that floor rather than claiming earlier
 /// historical coverage. Height-zero startup accepts only a completely empty
-/// namespace and defers qualification until genesis capture. An authenticated
-/// pending V2 tip admits only the exact pending height or its immediate
-/// predecessor so Apply can finish either side of the archive-capture crash
-/// boundary.
+/// namespace and defers qualification until genesis capture. Startup requires the recovered
+/// committed State height to equal the exact durable Kura height.
 ///
 /// # Errors
 ///
 /// Fails for invalid resource bounds, unsafe durable storage, a substituted
-/// State/Kura/pending-tip boundary, nonempty height-zero storage, incomplete
+/// State/Kura boundary, nonempty height-zero storage, incomplete
 /// archive coverage, or a configured lag violation.
 pub(crate) fn prepare_reputation_finalized_archive_v1(
     config: &SorafsReputationRuntime,
     network_id: &NetworkId,
     state: &Arc<State>,
     kura: &Arc<Kura>,
-    startup_replay_plan: &V2StartupReplayPlan,
     retention_authority: Option<Arc<dyn ReputationFinalizedArchiveRetentionAuthorityV1>>,
 ) -> std::result::Result<
     PreparedReputationFinalizedArchiveV1,
     ReputationFinalizedArchiveStartupErrorV1,
 > {
-    let (archive, retention_authority) =
-        open_reputation_finalized_archive(config, network_id, kura.as_ref(), retention_authority)?;
-    let startup = authenticate_archive_startup(state.as_ref(), kura.as_ref(), startup_replay_plan)?;
+    let startup = authenticate_archive_startup(state.as_ref(), kura.as_ref())?;
+    if startup.state_view.network_id() != network_id {
+        return Err(ReputationFinalizedArchiveStartupErrorV1::StartupBoundary {
+            reason: "configured reputation network differs from committed State",
+        });
+    }
+    let (archive, retention_authority) = open_reputation_finalized_archive(
+        config,
+        network_id,
+        &startup.state_view,
+        kura.as_ref(),
+        retention_authority,
+    )?;
     let archive_empty = archive.is_empty().map_err(|source| {
         archive_startup_error("complete bootstrap namespace validation", source)
     })?;
     let startup_mode = prepare_archive_startup_mode(
         archive.as_ref(),
-        network_id,
         kura.as_ref(),
         &startup,
         archive_empty,
@@ -1847,7 +1589,20 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let network_id = network_id(0x63);
         assert!(matches!(
-            open_reputation_finalized_archive(&config, &network_id, kura.as_ref(), None,),
+            open_reputation_finalized_archive(
+                &config,
+                &network_id,
+                &State::new_with_chain_and_network_id_for_testing(
+                    World::default(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                    iroha_model_base::chain::ChainId::from("reputation-retention-test"),
+                    network_id
+                )
+                .query_view(),
+                kura.as_ref(),
+                None,
+            ),
             Err(ReputationFinalizedArchiveStartupErrorV1::RetentionAuthorityConfiguration { .. })
         ));
     }
@@ -1867,17 +1622,9 @@ mod tests {
             iroha_model_base::chain::ChainId::from("reputation-finalized-query-test"),
             network_id,
         ));
-        let replay_plan =
-            iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref()).expect("startup plan");
-        let prepared = prepare_reputation_finalized_archive_v1(
-            &config,
-            &network_id,
-            &state,
-            &kura,
-            &replay_plan,
-            None,
-        )
-        .expect("fresh empty archive must await genesis capture");
+        let prepared =
+            prepare_reputation_finalized_archive_v1(&config, &network_id, &state, &kura, None)
+                .expect("fresh empty archive must await genesis capture");
         assert!(matches!(
             prepared.startup_mode(),
             ReputationFinalizedArchiveStartupModeV1::BootstrapAwaitingGenesisCapture
@@ -1920,66 +1667,32 @@ mod tests {
             iroha_model_base::chain::ChainId::from("reputation-finalized-query-test"),
             network_id,
         ));
-        let replay_plan =
-            iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref()).expect("startup plan");
-        let error = prepare_reputation_finalized_archive_v1(
-            &config,
-            &network_id,
-            &state,
-            &kura,
-            &replay_plan,
-            None,
-        )
-        .expect_err("height-zero startup must reject any retained archive namespace");
+        let error =
+            prepare_reputation_finalized_archive_v1(&config, &network_id, &state, &kura, None)
+                .expect_err("height-zero startup must reject any retained archive namespace");
         assert!(matches!(
             error,
             ReputationFinalizedArchiveStartupErrorV1::StartupBoundary { .. }
         ));
     }
     #[test]
-    fn pending_boundary_allows_only_exact_tip_or_predecessor() {
+    fn startup_requires_exact_recovered_certified_boundary() {
         assert_eq!(
-            classify_archive_startup_boundary(7, 8, Some(8)),
-            Ok(ArchiveStartupBoundaryV1::PendingTip { height: 8 })
+            classify_archive_startup_boundary(0, 0),
+            Ok(ArchiveStartupBoundaryV1::Bootstrap)
         );
         assert_eq!(
-            classify_archive_startup_boundary(8, 8, Some(8)),
-            Ok(ArchiveStartupBoundaryV1::PendingTip { height: 8 })
+            classify_archive_startup_boundary(8, 8),
+            Ok(ArchiveStartupBoundaryV1::Qualified)
         );
-        assert!(classify_archive_startup_boundary(6, 8, Some(8)).is_err());
-        assert!(classify_archive_startup_boundary(7, 8, None).is_err());
-        assert!(classify_archive_startup_boundary(7, 8, Some(9)).is_err());
-        assert_eq!(validate_pending_archive_tip(8, 7, Some(7)), Ok(()));
-        assert_eq!(validate_pending_archive_tip(8, 7, Some(8)), Ok(()));
-        assert_eq!(validate_pending_archive_tip(8, 8, Some(8)), Ok(()));
-        assert!(validate_pending_archive_tip(8, 8, Some(7)).is_err());
-        assert!(validate_pending_archive_tip(8, 7, Some(6)).is_err());
-        assert!(validate_pending_archive_tip(8, 7, Some(9)).is_err());
-        assert!(validate_pending_archive_tip(8, 7, None).is_err());
-        assert_eq!(validate_pending_archive_tip(1, 0, None), Ok(()));
-        assert!(validate_pending_archive_tip(1, 1, None).is_err());
-        let gate = ArchiveActivationGateV1::PendingTip { height: 8 };
-        assert!(!gate.accepts_visible_archive_tip(7));
-        assert!(gate.accepts_visible_archive_tip(8));
-        assert!(gate.accepts_visible_archive_tip(9));
-        let pending_mode = ReputationFinalizedArchiveStartupModeV1::PendingTipReplay {
-            pending_tip_height: 8,
-            qualification: None,
-            activation_floor_created: false,
-        };
-        assert_eq!(pending_mode.activation_gate(), gate);
+        assert!(classify_archive_startup_boundary(7, 8).is_err());
+        assert!(classify_archive_startup_boundary(8, 7).is_err());
+        assert!(classify_archive_startup_boundary(0, 1).is_err());
         assert_eq!(
             ReputationFinalizedArchiveStartupModeV1::BootstrapAwaitingGenesisCapture
                 .activation_gate(),
             ArchiveActivationGateV1::AwaitingGenesis
         );
-        assert_eq!(classify_pending_replay_completion(8, 8, Some(8)), Ok(false));
-        assert_eq!(classify_pending_replay_completion(8, 8, None), Ok(true));
-        assert_eq!(classify_pending_replay_completion(8, 9, None), Ok(true));
-        assert_eq!(classify_pending_replay_completion(8, 9, Some(9)), Ok(true));
-        assert!(classify_pending_replay_completion(8, 7, None).is_err());
-        assert!(classify_pending_replay_completion(8, 10, Some(9)).is_err());
-        assert!(classify_pending_replay_completion(8, 8, Some(7)).is_err());
     }
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)

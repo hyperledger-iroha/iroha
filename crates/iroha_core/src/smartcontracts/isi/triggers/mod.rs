@@ -309,6 +309,7 @@ pub mod isi {
             | DataEventFilter::Oracle(_)
             | DataEventFilter::Social(_)
             | DataEventFilter::Bridge(_)
+            | DataEventFilter::Sccp(_)
             | DataEventFilter::Governance(_) => false,
         }
     }

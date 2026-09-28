@@ -36,7 +36,7 @@ error. Every negotiated response declares `Vary: Accept`.
   - Every JSON audit item includes the non-null `consensus_admitted_height` and one closed `penalty_status` object. Its exact shape is `{ "status": "pending", "details": null }`, `{ "status": "applied", "details": { "height": <u64> } }`, or `{ "status": "cancelled", "details": { "height": <u64> } }`; the terminal height is the canonical block that applied or cancelled the penalty.
   - The persisted first-release Norito `EvidenceRecord` stores `recorded_at_height`, `recorded_at_view`, `recorded_at_ms`, and the same closed `EvidencePenaltyStatus` sum type. Shortened pre-release records and retired boolean/nullable penalty layouts are rejected rather than default-filled.
   - `EvidenceRecord` is not itself the JSON response DTO. Torii exposes a fixed, closed audit projection; full typed `SumeragiV2EquivocationEvidence` JSON, where embedded in signed data, is also a closed object.
-  - Node-local pending observations have no data-model record and never appear in either endpoint. Governance cancellation is accepted only after the proof has been admitted by a committed block, so a transaction never depends on an observation other validators may not have received.
+  - Node-local pending observations have no data-model record and never appear in either endpoint. No instruction cancels a penalty; the `cancelled` status is never written.
 - Evidence with a subject height older than governed
   `SumeragiNposParameters.reconfig.evidence_horizon_blocks` is dropped on
   ingress; the actor logs the rejection to help operators investigate stale

@@ -99,16 +99,6 @@ fn drain_observation_and_pending_admission_view_retain_all_index_releases() {
         if has_pending {
             watch!(latest_block_header);
             watch!(lane_manifests);
-            let held = state.sccp_registry_cache.lock();
-            let wait = state
-                .sccp_registry_cache
-                .try_lock_or_wait()
-                .err()
-                .expect("actual held cache");
-            original_releases.push(held.release_deferred());
-            let mut future = Box::pin(wait.wait_for_release());
-            assert!(future.as_mut().poll(&mut context).is_pending());
-            pending.push(future);
         }
         let result = {
             let mut releases = LaneLifecycleReleases::new(&state);

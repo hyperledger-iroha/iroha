@@ -59,13 +59,22 @@ fn policy() -> VerificationLimits {
 }
 
 #[test]
-fn public_resource_plan_exposes_incompatible_caps_without_building_a_proof() {
+fn public_resource_plan_exposes_masked_geometry_and_separate_carrier_costs() {
     let one = quantity_artifact_resources(1, 0).unwrap();
     let two = quantity_artifact_resources(2, policy().bundle.max_total_statement_bytes).unwrap();
-    // Even the indispensable row payload cannot meet the unchanged 512 KiB
-    // single-proof or 1 MiB two-child AXT targets; framing only adds bytes.
-    assert!(one.minimum_segment_row_bytes > 512 * 1024);
-    assert!(two.minimum_bundle_row_bytes > 1024 * 1024);
+    // The implemented base-field masking keeps the fixed wire below the existing
+    // ceilings. Row payload alone is not the complete child/carrier budget.
+    assert_eq!(one.queries_per_segment, 64);
+    assert_eq!(one.minimum_segment_row_bytes, 64 * 301 * size_of::<u64>());
+    assert_eq!(
+        two.minimum_bundle_row_bytes,
+        2 * one.minimum_segment_row_bytes
+    );
+    assert_eq!(one.maximum_segment_frame_bytes, 502_895);
+    assert!(one.maximum_segment_frame_bytes <= 512 * 1024);
+    assert!(two.maximum_bundle_frame_bytes <= 1024 * 1024);
+    assert!(one.maximum_segment_frame_bytes > policy().transport.max_bundle_frame_bytes);
+    assert!(two.maximum_total_segment_frame_bytes > policy().bundle.max_total_segment_bytes);
     assert!(one.maximum_segment_frame_bytes > one.minimum_segment_row_bytes);
     assert!(two.maximum_bundle_frame_bytes > two.maximum_total_segment_frame_bytes);
     assert_eq!(two.total_queries, 2 * one.queries_per_segment);
@@ -166,6 +175,45 @@ fn ordinary(statement: FastpqPublicTransferStatementV1, bundle_frame: Vec<u8>) -
         bundle_frame,
     })
     .unwrap()
+}
+
+#[test]
+fn expectations_stream_the_complete_canonical_caller_statement() {
+    let (statement, independent) = fixture();
+    assert_eq!(
+        ExpectedStatement::from_statement(&statement).unwrap(),
+        independent
+    );
+    for flags in
+        (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+    {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            ExpectedStatement::from_statement(&statement).unwrap(),
+            independent
+        );
+        assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+    }
+    for mutate in 0..4 {
+        let mut changed = statement.clone();
+        match mutate {
+            0 => changed.transcripts[0].authority_digest = Hash::new(b"changed authority"),
+            1 => changed.transcripts[0].deltas[0].amount = Quantity::from(2_u128),
+            2 => changed.transitions[0].key.push(0),
+            _ => changed.public_inputs.slot += 1,
+        }
+        let actual = ExpectedStatement::from_statement(&changed).unwrap();
+        assert_ne!(
+            actual.public_statement_digest,
+            independent.public_statement_digest
+        );
+        assert_eq!(actual.inputs, changed.public_inputs);
+        assert_eq!(actual.ordering_hash, changed.ordering_hash);
+        assert_eq!(
+            actual.public_statement_digest,
+            <[u8; 32]>::from(Hash::new(norito::encode_canonical(&changed).unwrap()))
+        );
+    }
 }
 
 fn binding() -> AxtFastpqBinding {
@@ -492,6 +540,9 @@ fn public_verifier_never_accepts_missing_or_empty_child_occurrences() {
 
 #[test]
 fn axt_ingress_rejects_truncated_canonical_artifacts_and_wrong_schemas() {
+    let mut transfer_binding = binding();
+    transfer_binding.claim_type = "tx_predicate".into();
+    fastpq_prover::validate_axt_transfer_claim_binding(&transfer_binding).unwrap();
     for schema in [
         FASTPQ_ORDINARY_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
         FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
@@ -500,18 +551,25 @@ fn axt_ingress_rejects_truncated_canonical_artifacts_and_wrong_schemas() {
         header[6..22].copy_from_slice(&norito::core::schema_hash_for_name(schema));
         header.truncate(norito::core::Header::SIZE);
         header[23..31].copy_from_slice(&u64::MAX.to_le_bytes());
-        let envelope = AxtProofEnvelope {
+        let mut envelope = AxtProofEnvelope {
             dsid: DataSpaceId::new(7),
             manifest_root: [0x42; 32],
             da_commitment: None,
             proof: header,
-            fastpq_binding: Some(binding()),
+            fastpq_binding: Some(transfer_binding.clone()),
             committed_amount: None,
             amount_commitment: None,
         };
         assert!(matches!(
             verify_axt_proof_envelope(&envelope),
-            Err(Error::InvalidAxtBinding { .. })
+            Err(Error::InvalidAxtBinding { details })
+                if details.starts_with("invalid canonical AXT artifact:")
+        ));
+        // Opaque effects fail at the semantic boundary, before artifact decoding.
+        envelope.fastpq_binding = Some(binding());
+        assert!(matches!(
+            verify_axt_proof_envelope(&envelope),
+            Err(Error::InvalidProofSemantics { .. })
         ));
     }
 }

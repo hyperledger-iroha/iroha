@@ -168,18 +168,22 @@ impl AdmissionRegistry {
             paths.push(entry.path());
         }
         paths.sort_unstable();
-        let mut envelope_count = 0_usize;
+        // Admit the complete bounded inventory before reading or decoding any envelope.
+        // Enumeration permits one additional entry for README.md, not another envelope.
+        let mut envelope_paths = Vec::new();
         for path in paths {
             if !validate_registry_entry(&path)? {
                 continue;
             }
-            if envelope_count == MAX_ADMISSION_ENVELOPES {
+            if envelope_paths.len() == MAX_ADMISSION_ENVELOPES {
                 return Err(AdmissionRegistryError::TooManyEntries {
                     dir: dir.into(),
                     limit: MAX_ADMISSION_ENVELOPES,
                 });
             }
-            envelope_count += 1;
+            envelope_paths.push(path);
+        }
+        for path in envelope_paths {
             match load_single_envelope(&path, &network_id, &policy) {
                 Ok((provider_id, record)) => {
                     trace!(?path, "loaded provider admission envelope");
@@ -864,9 +868,27 @@ mod tests {
             File::create(temp.path().join(format!("{index:04}.to"))).expect("create entry");
         }
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(temp.path(), [0xA1; 32], policy),
+            AdmissionRegistry::load_from_dir(temp.path(), [0xA1; 32], policy.clone()),
             Err(AdmissionRegistryError::TooManyEntries { .. })
         ));
+        fs::write(
+            temp.path().join("README.md"),
+            b"offline admission inventory",
+        )
+        .expect("write documented README");
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(temp.path(), [0xA1; 32], policy.clone()),
+            Err(AdmissionRegistryError::TooManyEntries { .. })
+        ));
+        fs::remove_file(temp.path().join(format!("{MAX_ADMISSION_ENVELOPES:04}.to")))
+            .expect("remove excess envelope");
+        assert!(
+            matches!(
+                AdmissionRegistry::load_from_dir(temp.path(), [0xA1; 32], policy),
+                Err(AdmissionRegistryError::LoadEnvelope { .. })
+            ),
+            "exactly the envelope limit plus README must pass inventory admission before rejecting the malformed envelope"
+        );
     }
     #[test]
     fn registry_mutations_require_policy_and_verify_renewal_and_revocation() {

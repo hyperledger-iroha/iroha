@@ -98,16 +98,23 @@ fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
         9_007_199_254_740_991
     );
     let schemas = sccp_schemas();
-    let material_properties = schemas
-        .get("SccpSoraOutboundMaterialV1")
+    let proposal_properties = schemas
+        .get("SccpGovernanceProposalV1")
         .and_then(Value::as_object)
         .and_then(|schema| schema.get("properties"))
         .and_then(Value::as_object)
-        .expect("SCCP outbound material properties");
-    for forbidden in ["private_key", "secret", "signer", "seed", "mnemonic"] {
+        .expect("SCCP governance proposal properties");
+    for forbidden in [
+        "private_key",
+        "secret",
+        "signer",
+        "seed",
+        "mnemonic",
+        "anchor",
+    ] {
         assert!(
-            !material_properties.contains_key(forbidden),
-            "outbound material must not advertise `{forbidden}`"
+            !proposal_properties.contains_key(forbidden),
+            "the SCCP governance proposal must not advertise `{forbidden}`"
         );
     }
     let serialized =
@@ -122,100 +129,114 @@ fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
     }
 }
 #[test]
-fn sccp_ton_openapi_tracks_state_init_and_curve_neutral_wire_contract() {
+fn sccp_governance_openapi_tracks_the_v1_parliament_proposal() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
-    let ton_deployment = schemas
-        .get("SccpTonDestinationDeploymentV1")
-        .and_then(Value::as_object)
-        .expect("TON deployment schema");
-    let properties = ton_deployment
-        .get("properties")
-        .and_then(Value::as_object)
-        .expect("TON deployment properties");
-    let required = ton_deployment
-        .get("required")
-        .and_then(Value::as_array)
-        .expect("TON deployment required fields");
-    for field in ["jetton_master_initial_data_hash", "route_initial_data_hash"] {
-        assert_eq!(
-            properties
-                .get(field)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SccpNonzeroUpperHex32"),
-            "TON StateInit commitment `{field}` must remain a nonzero hash",
-        );
-        assert!(
-            required.iter().any(|entry| entry.as_str() == Some(field)),
-            "TON StateInit commitment `{field}` must remain required",
-        );
-    }
-
-    let expected_max = u64::try_from(iroha_sccp::SCCP_DESTINATION_PROOF_MAX_BASE64_BYTES_V1)
-        .expect("SCCP outer-envelope base64 bound fits u64");
-    for schema_name in [
-        "SccpBridgeProofPrepareRequest",
-        "SccpBridgeProofSignedRequest",
+    for (schema_name, field) in [
+        ("SccpRouteGovernanceProposalDraftRequestV1", "proposal"),
+        (
+            "GovernanceParliamentProposalPayloadSccpRouteGovernanceV1",
+            "proposal",
+        ),
+        ("ExplorerSccpRouteGovernanceInstructionValue", "proposal"),
     ] {
-        let proof = schemas
+        let schema = schemas
             .get(schema_name)
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
+            .unwrap_or_else(|| panic!("{schema_name} schema"));
+        let properties = schema
+            .get("properties")
             .and_then(Value::as_object)
-            .and_then(|properties| properties.get("destination_proof_b64"))
-            .and_then(Value::as_object)
-            .unwrap_or_else(|| panic!("{schema_name} destination proof schema"));
+            .unwrap_or_else(|| panic!("{schema_name} properties"));
         assert_eq!(
-            proof.get("maxLength").and_then(Value::as_u64),
-            Some(expected_max),
-            "submit bound must cover the closed outer destination-proof envelope",
+            properties.keys().map(String::as_str).collect::<Vec<_>>(),
+            [field],
+            "{schema_name} must carry exactly the v1 proposal"
         );
-        let description = proof
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("destination proof description");
-        assert!(description.contains("BridgeSccpDestinationProofV1"));
-        assert!(description.contains("TON BLS12-381"));
+        assert_eq!(
+            properties.get(field),
+            Some(&schema_ref("SccpGovernanceProposalV1")),
+            "{schema_name}.{field}"
+        );
     }
-
-    let proof_request_response = document
-        .get("paths")
+    let proposal = schemas
+        .get("SccpGovernanceProposalV1")
         .and_then(Value::as_object)
-        .and_then(|paths| paths.get("/v1/sccp/proof-requests/{message_id}"))
+        .expect("SCCP governance proposal schema");
+    let actions = proposal
+        .get("properties")
         .and_then(Value::as_object)
-        .and_then(|path| path.get("get"))
+        .and_then(|properties| properties.get("actions"))
         .and_then(Value::as_object)
-        .and_then(|operation| operation.get("responses"))
+        .expect("proposal actions schema");
+    assert_eq!(actions.get("minItems").and_then(Value::as_u64), Some(1));
+    assert_eq!(actions.get("maxItems").and_then(Value::as_u64), Some(16));
+    let tags = schemas
+        .get("SccpGovernanceActionV1")
         .and_then(Value::as_object)
-        .and_then(|responses| responses.get("200"))
-        .and_then(Value::as_object)
-        .and_then(|response| response.get("content"))
-        .and_then(Value::as_object)
-        .expect("SCCP proof-request response content");
+        .and_then(|schema| schema.get("oneOf"))
+        .and_then(Value::as_array)
+        .expect("closed SCCP governance action variants")
+        .iter()
+        .map(|variant| {
+            variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("action"))
+                .and_then(Value::as_object)
+                .and_then(|action| action.get("const"))
+                .and_then(Value::as_str)
+                .expect("closed SCCP governance action tag")
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        proof_request_response
-            .get("application/json")
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("schema")),
-        Some(&schema_ref("SccpProofRequestV1")),
+        tags,
+        [
+            "register_route",
+            "activate_revision",
+            "switch_revision",
+            "deactivate_outbound",
+            "retire_revision",
+            "remove_staged",
+            "release_stranded",
+            "set_taira_paused",
+            "set_destination_paused",
+            "initialize_light_client",
+            "install_trusted_checkpoint",
+            "freeze_light_client",
+            "set_parameters",
+            "clear_bridge_key_fault",
+        ]
     );
-    let binary_description = proof_request_response
-        .get("application/x-norito")
-        .and_then(Value::as_object)
-        .and_then(|content| content.get("schema"))
-        .and_then(Value::as_object)
-        .and_then(|schema| schema.get("description"))
-        .and_then(Value::as_str)
-        .expect("SCCP proof-request binary description");
-    for concrete_type in [
-        "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
-        "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
-        "No enum wrapper",
+    for retired in [
+        "SccpNativeTrustAnchorV1",
+        "SccpProofRequestV1",
+        "SccpBridgeProofSubmitRequest",
+        "SccpSoraOutboundMaterialV1",
     ] {
-        assert!(binary_description.contains(concrete_type));
+        assert!(
+            !schemas.contains_key(retired),
+            "retired SCCP schema {retired} reappeared"
+        );
     }
+    let ton = schemas
+        .get("SccpTonDeploymentV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("required"))
+        .and_then(Value::as_array)
+        .expect("TON deployment required fields")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ton,
+        [
+            "master_account",
+            "minter_code",
+            "wallet_code",
+            "bucket_code"
+        ]
+    );
 }
 #[test]
 fn production_constants_embedded_in_openapi_remain_frozen() {
@@ -992,11 +1013,6 @@ fn generated_spec_includes_documented_paths() {
     {
         assert!(paths.contains_key(path));
     }
-    assert!(paths.contains_key(
-        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
-    ));
-    assert!(paths.contains_key("/v1/bridge/proofs/submit"));
-    assert!(paths.contains_key("/v1/bridge/messages"));
     for path in
         openapi_contract_strings("openapi.generated_spec_includes_documented_paths.path_absent.4")
     {

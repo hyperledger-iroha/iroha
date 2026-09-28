@@ -356,19 +356,6 @@ impl Kura {
 }
 #[cfg(test)]
 impl Kura {
-    /// Persist one canonical test block and its exact retained SCCP archive.
-    pub(crate) fn persist_block_with_retained_archive_for_tests(
-        &self,
-        block: &Arc<SignedBlock>,
-    ) -> Result<()> {
-        self.store_block(Arc::clone(block))?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let height = block.header().height().get();
-        let canonical_hash = block.hash();
-        self.ensure_durable_block_at_height(height, canonical_hash)?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        self.persist_retained_block_record(&blocks_dir, canonical_hash, block.as_ref())
-    }
     pub(crate) fn persist_block_immediate_for_tests(&self, block: &Arc<SignedBlock>) {
         let _write_guard = self.block_store_write_lock.lock();
         let mut store = self.block_store.lock();

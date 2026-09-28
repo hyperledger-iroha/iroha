@@ -1,7 +1,6 @@
 //! Publisher seeding and challenged native publication qualification.
 use super::*;
 use iroha_data_model::{
-    block::consensus_v2::finality::V2FinalityArtifact,
     isi::sorafs::AssertSorafsPublicationV1,
     sorafs::{
         pin_registry::{ReplicationOrderStatus, derive_sorafs_auto_replication_order_id_v1},
@@ -10,6 +9,9 @@ use iroha_data_model::{
             SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
             verify_sorafs_publication_v1,
         },
+    },
+    sumeragi_finality::{
+        MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
     },
     transaction::SignedTransaction,
 };
@@ -27,18 +29,23 @@ const PREPARATION_MAX_BYTES: usize = 2 * 1024 * 1024;
 pub(super) fn load_checkpoint(
     path: &Path,
     network: &NetworkId,
-) -> Result<V2FinalityArtifact, String> {
-    let bytes = read_file_bounded(path, 4 * 1024 * 1024, "trusted finality checkpoint")?;
-    let checkpoint: V2FinalityArtifact = decode(&bytes, 4 * 1024 * 1024)?;
-    if checkpoint.height_context.network_id != *network || checkpoint.height == 0 {
-        return Err(
-            "trusted publication checkpoint belongs to another network or has zero height"
-                .to_owned(),
-        );
-    }
-    checkpoint
-        .verify()
-        .map_err(|_| "trusted publication checkpoint has invalid native finality".to_owned())?;
+    chain_id: &ChainId,
+) -> Result<SumeragiFinalityCheckpoint, String> {
+    let bytes = read_file_bounded(
+        path,
+        MAX_FINALITY_CHECKPOINT_BYTES as u64,
+        "trusted finality checkpoint",
+    )?;
+    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&bytes).map_err(|_| {
+        "trusted publication checkpoint is not canonical current finality".to_owned()
+    })?;
+    // This local file is independently selected by the caller; response material cannot replace
+    // its signed-genesis, network, chain or authenticated lag-2 schedule commitments.
+    SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, network, &chain_id.to_string())
+        .map_err(|_| {
+            "trusted publication checkpoint does not match the configured current network and chain"
+                .to_owned()
+        })?;
     Ok(checkpoint)
 }
 
@@ -295,11 +302,11 @@ fn assert_and_verify(
     base: &Url,
     config: &DeployClientConfig,
     row: &SorafsPublicationPreparationV1,
-    floor: &V2FinalityArtifact,
+    floor: &SumeragiFinalityCheckpoint,
     started: Instant,
     completed: bool,
     out: &Path,
-) -> Result<V2FinalityArtifact, String> {
+) -> Result<SumeragiFinalityCheckpoint, String> {
     ensure_live(started)?;
     let mut challenge = [0; 32];
     rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut challenge)
@@ -314,8 +321,8 @@ fn assert_and_verify(
         canonical_order_digest: *blake3_hash(&row.order.canonical_order).as_bytes(),
         require_complete: completed,
         challenge,
-        minimum_height: floor.height,
-        minimum_block_hash: *floor.block_hash.as_ref(),
+        minimum_height: floor.height(),
+        minimum_block_hash: *floor.block_hash().as_ref(),
     };
     let payload = TransactionBuilder::new(
         config.network_id,
@@ -340,8 +347,8 @@ fn assert_and_verify(
     }
     let request = SorafsPublicationProofRequestV1 {
         entry_hash: *signed.hash_as_entrypoint().as_ref(),
-        floor_height: floor.height,
-        floor_block_hash: *floor.block_hash.as_ref(),
+        floor_height: floor.height(),
+        floor_block_hash: *floor.block_hash().as_ref(),
     };
     let request_bytes = norito::to_bytes(&request)
         .map_err(|_| "publication proof selector encoding failed".to_owned())?;
@@ -384,7 +391,7 @@ pub(super) fn qualify(
     base: &Url,
     config: &DeployClientConfig,
     artifacts: &DeployPackArtifacts,
-    checkpoint: V2FinalityArtifact,
+    checkpoint: SumeragiFinalityCheckpoint,
     provider_urls: &[String],
     out_dir: &Path,
 ) -> Result<Value, String> {
@@ -511,11 +518,20 @@ pub(super) fn qualify(
         true,
         &out_dir.join("publication.completed.proof.to"),
     )?;
-    write_bytes(
-        &out_dir.join("publication.finality.to"),
-        &norito::to_bytes(&finality)
-            .map_err(|_| "publication checkpoint encoding failed".to_owned())?,
-    )?;
+    // Only successfully authenticated execution advances the retained trust root. A private,
+    // same-directory spool makes replacement atomic and removes partial writes on failure.
+    let checkpoint_path = out_dir.join("publication.finality.to");
+    let checkpoint_bytes = finality
+        .encode_canonical()
+        .map_err(|_| "publication checkpoint encoding failed".to_owned())?;
+    let mut checkpoint_spool = fetch_spool::create(Some(&checkpoint_path))?;
+    checkpoint_spool
+        .write_all(&checkpoint_bytes)
+        .map_err(|_| "publication checkpoint write failed".to_owned())?;
+    fetch_spool::publish(checkpoint_spool, &checkpoint_path)?;
+    fs::File::open(out_dir)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "publication checkpoint directory sync failed".to_owned())?;
     Ok(Value::Object(Map::from_iter([
         ("state".into(), Value::from("completed")),
         ("assignment_finalized".into(), Value::from(true)),
@@ -536,10 +552,10 @@ pub(super) fn qualify(
             "provider_count".into(),
             Value::from(order.assignments.len() as u64),
         ),
-        ("finalized_height".into(), Value::from(finality.height)),
+        ("finalized_height".into(), Value::from(finality.height())),
         (
             "finalized_block_hash_hex".into(),
-            Value::from(hex_encode(finality.block_hash.as_ref())),
+            Value::from(hex_encode(finality.block_hash().as_ref())),
         ),
         ("direct_http_ingest".into(), Value::from(false)),
     ])))
@@ -598,6 +614,45 @@ mod tests {
         assert!(ensure_live(Instant::now() - PUBLICATION_TIMEOUT).is_err());
         let temporary = tempfile::NamedTempFile::new().unwrap();
         fs::write(temporary.path(), b"HTTP 200 is not native finality").unwrap();
-        assert!(load_checkpoint(temporary.path(), &network(1)).is_err());
+        assert!(
+            load_checkpoint(
+                temporary.path(),
+                &network(1),
+                &"publication-test".parse().unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn checkpoint_size_is_rejected_before_decode() {
+        let directory = tempfile::tempdir().unwrap();
+        let selected = directory.path().join("selected.to");
+        let file = fs::File::create(&selected).unwrap();
+        file.set_len(MAX_FINALITY_CHECKPOINT_BYTES as u64 + 1)
+            .unwrap();
+        let error = load_checkpoint(&selected, &network(1), &"publication-test".parse().unwrap())
+            .unwrap_err();
+        assert!(error.contains("maximum"), "{error}");
+    }
+
+    #[test]
+    fn deployment_config_retains_independent_chain_label_for_checkpoint_import() {
+        let key = KeyPair::try_from_seed(vec![4; 32], iroha_crypto::Algorithm::Ed25519).unwrap();
+        let chain = "publication-independent-chain";
+        let config = format!(
+            "chain = '{chain}'\nnetwork_id = '{}'\n[account]\npublic_key = '{}'\nprivate_key = '{}'\nchain_discriminant = 777\n",
+            network(1),
+            key.public_key(),
+            iroha_crypto::ExposedPrivateKey(key.private_key().clone())
+                .try_to_multihash_string()
+                .unwrap()
+        );
+        let file = tempfile::NamedTempFile::new().unwrap();
+        fs::write(file.path(), config).unwrap();
+        let parsed = load_deploy_client_config(file.path()).unwrap();
+        assert_eq!(parsed.chain_id.to_string(), chain);
+        assert_eq!(parsed.network_id, network(1));
+        assert_eq!(parsed.chain_discriminant, 777);
     }
 }

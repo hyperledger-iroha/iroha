@@ -948,27 +948,6 @@ fn store_finalized_fixture_block(kura: &Kura, block: Arc<SignedBlock>) {
     persist_v2_finality_chain_through(kura, height);
 }
 
-fn retained_archive_sccp_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
-    iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-        version: 1,
-        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-        nonce,
-        route_revision: 1,
-        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-        asset_id: b"xor".to_vec(),
-        amount: 77,
-        sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-        sender: b"sora:retained-archive".to_vec(),
-        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-        recipient: [0x22; 20].to_vec(),
-        route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-        route_id: iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
-            .as_bytes()
-            .to_vec(),
-    })
-}
 fn retained_archive_empty_block(previous: Option<&SignedBlock>) -> Arc<SignedBlock> {
     Arc::new(
         BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
@@ -978,68 +957,18 @@ fn retained_archive_empty_block(previous: Option<&SignedBlock>) -> Arc<SignedBlo
             .into(),
     )
 }
-fn retained_archive_sccp_block(
-    previous: &SignedBlock,
-    payloads: &[iroha_sccp::SccpPayloadV1],
-) -> Arc<SignedBlock> {
-    let mut commitments = Vec::new();
-    let records = payloads
-        .iter()
-        .map(|payload| {
-            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(payload)
-                .expect("retained archive payload encodes canonically");
-            let record = crate::bridge::test_record_sccp_message(payload_bytes);
-            let validated = crate::bridge::validate_recorded_sccp_message_payload_bytes(
-                record.context,
-                &record.payload_bytes,
-            )
-            .expect("retained archive SCCP fixture validates");
-            commitments.push(validated.commitment);
-            record
-        })
-        .collect::<Vec<_>>();
-    let transaction = TransactionBuilder::new(
-        test_network_id(b"kura-retained-sccp-archive"),
-        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions(records)
-    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-    let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))];
-    let root = iroha_sccp::commitment_merkle_root(&commitments);
-    let mut block: SignedBlock = BlockBuilder::new(accepted)
-        .chain(0, Some(previous))
-        .with_sccp_commitment_root(root)
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-        .unpack(|_| {})
-        .into();
-    attach_ok_results_to_block(&mut block);
-    crate::bridge::validate_sccp_commitment_root_for_signed_block(&block)
-        .expect("retained archive block commits its successful SCCP records");
-    Arc::new(block)
-}
-fn store_retained_archive_chain(
-    kura: &Kura,
-) -> (Vec<Arc<SignedBlock>>, Vec<iroha_sccp::SccpPayloadV1>) {
+/// Store a four-block chain whose retained records carry only canonical block evidence.
+fn store_retained_record_chain(kura: &Kura) -> Vec<Arc<SignedBlock>> {
     let genesis = retained_archive_empty_block(None);
-    let mut payloads = vec![
-        retained_archive_sccp_payload(41),
-        retained_archive_sccp_payload(7),
-    ];
-    let first_id = crate::bridge::test_sccp_outbound_message_key(&payloads[0]).message_id;
-    let second_id = crate::bridge::test_sccp_outbound_message_key(&payloads[1]).message_id;
-    if first_id < second_id {
-        payloads.swap(0, 1);
-    }
-    let sccp = retained_archive_sccp_block(&genesis, &payloads);
-    let third = retained_archive_empty_block(Some(&sccp));
+    let second = retained_archive_empty_block(Some(&genesis));
+    let third = retained_archive_empty_block(Some(&second));
     let fourth = retained_archive_empty_block(Some(&third));
-    let blocks = vec![genesis, sccp, third, fourth];
+    let blocks = vec![genesis, second, third, fourth];
     for block in &blocks {
         kura.store_block(Arc::clone(block))
-            .expect("store retained archive fixture block");
+            .expect("store retained record fixture block");
     }
-    (blocks, payloads)
+    blocks
 }
 fn replace_v2_finality_record_artifact(path: &Path, artifact: V2FinalityArtifact) {
     let bytes = std::fs::read(path).expect("read Kura finality record");
@@ -3926,7 +3855,7 @@ fn v2_finality_cache_invalidates_same_inode_parent_path_relocation() {
     );
 }
 #[test]
-fn bridge_and_sccp_proof_builders_reuse_exact_finality_sidecar_verification() {
+fn bridge_proof_builders_reuse_exact_finality_sidecar_verification() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
     let artifact = v2_finality_artifact_for_block(&block);
@@ -3954,18 +3883,12 @@ fn bridge_and_sccp_proof_builders_reuse_exact_finality_sidecar_verification() {
         let bundle = crate::bridge::build_finality_bundle(&state, artifact.height)
             .expect("build bridge bundle from verified Kura finality");
         assert_eq!(bundle.finality_proof.finality_artifact, artifact);
-        assert!(
-            crate::bridge::validated_sccp_finalized_messages_at_height(&state, artifact.height,)
-                .expect("build SCCP finality projection from verified Kura finality")
-                .is_none(),
-            "a block without an SCCP commitment has no finalized SCCP projection"
-        );
     }
     assert_eq!(
         kura.v2_finality_crypto_verifications
             .load(Ordering::Relaxed),
         1,
-        "bridge and SCCP proof construction must not repeat Kura's BLS verification"
+        "bridge proof construction must not repeat Kura's BLS verification"
     );
 }
 #[test]

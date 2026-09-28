@@ -395,13 +395,6 @@ impl SignedBlock {
             .set_global_beacon_pulse_hash(pulse.as_ref().map(HashOf::new));
         self.payload.global_beacon_pulse = pulse;
     }
-    /// Set or clear the SCCP commitment root finalized in this block.
-    pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
-        if self.payload.header.sccp_commitment_root() != root {
-            self.result = None;
-        }
-        self.payload.header.set_sccp_commitment_root(root);
-    }
     /// Replace the ordered external entrypoints and update Merkle material accordingly.
     pub fn set_external_entrypoints(&mut self, entrypoints: Vec<TransactionEntrypoint>) {
         if self.payload.external_entrypoints != entrypoints {
@@ -457,9 +450,6 @@ impl SignedBlock {
             .as_ref()
             .is_some_and(|context| !context.is_empty())
         {
-            return false;
-        }
-        if self.payload.header.sccp_commitment_root().is_some() {
             return false;
         }
         true

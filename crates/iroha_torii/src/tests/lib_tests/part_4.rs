@@ -313,8 +313,8 @@ async fn proof_json_egress_charges_the_exact_serialized_response_bytes() {
     assert_eq!(actual.as_ref(), expected.as_slice());
 }
 #[tokio::test]
-async fn buffered_sccp_response_egress_charges_exact_bytes_and_preserves_body() {
-    let expected = Bytes::from_static(b"exact-sccp-proof-response");
+async fn buffered_proof_response_egress_charges_exact_bytes_and_preserves_body() {
+    let expected = Bytes::from_static(b"exact-finality-proof-response");
     let response = || {
         let mut response = AxResponse::new(Body::from(expected.clone()));
         response.headers_mut().insert(
@@ -335,16 +335,16 @@ async fn buffered_sccp_response_egress_charges_exact_bytes_and_preserves_body() 
         limited_app.as_ref(),
         &HeaderMap::new(),
         remote,
-        "v1/sccp/proofs/message",
+        "v1/bridge/finality",
         response(),
         true,
     )
     .await
-    .expect_err("one byte below the buffered SCCP response must reject");
+    .expect_err("one byte below the buffered proof response must reject");
     assert!(matches!(
         error,
         Error::ProofRateLimited {
-            endpoint: "v1/sccp/proofs/message",
+            endpoint: "v1/bridge/finality",
             ..
         }
     ));
@@ -359,12 +359,12 @@ async fn buffered_sccp_response_egress_charges_exact_bytes_and_preserves_body() 
         exact_app.as_ref(),
         &HeaderMap::new(),
         remote,
-        "v1/sccp/proofs/message",
+        "v1/bridge/finality",
         response(),
         true,
     )
     .await
-    .expect("exact buffered SCCP response budget must pass");
+    .expect("exact buffered proof response budget must pass");
     assert_eq!(
         admitted
             .headers()
@@ -376,26 +376,6 @@ async fn buffered_sccp_response_egress_charges_exact_bytes_and_preserves_body() 
         .await
         .expect("collect admitted response");
     assert_eq!(actual, expected);
-}
-#[test]
-fn default_proof_egress_burst_covers_worst_case_sccp_hex_expansion() {
-    let binary_ceiling = u64::try_from(SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1)
-        .expect("SCCP binary ceiling fits u64");
-    let json_hex_and_envelope_ceiling = binary_ceiling
-        .checked_mul(2)
-        .and_then(|bytes| {
-            bytes.checked_add(
-                u64::try_from(SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1)
-                    .expect("SCCP JSON allowance fits u64"),
-            )
-        })
-        .expect("first-release SCCP response ceiling fits u64");
-    let burst = iroha_config::parameters::defaults::torii::PROOF_EGRESS_BURST_BYTES
-        .expect("production proof egress shaping is enabled by default");
-    assert!(
-        burst >= json_hex_and_envelope_ceiling,
-        "default proof egress burst must admit one maximum SCCP response"
-    );
 }
 #[tokio::test]
 async fn zk_ivm_prove_get_enforces_response_egress_with_retry_after() {

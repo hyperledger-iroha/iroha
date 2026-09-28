@@ -2419,10 +2419,10 @@ pub mod torii {
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
-    /// This includes SCCP submissions and KAGEMUSHA V1 top-up/redemption commands.
+    /// This includes KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Absolute deadline for reading one admitted proof-bearing request body.
-    /// This includes SCCP submissions and KAGEMUSHA V1 top-up/redemption commands.
+    /// This includes KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(256 * 1024 * 1024); // 256 MiB/s
@@ -2495,42 +2495,6 @@ pub mod torii {
         pub const MAX_TOTAL_BYTES_HARD: u64 = MAX_RECORD_BYTES * MAX_RECORDS_HARD as u64;
         /// First-release terminal-retention hard ceiling.
         pub const TERMINAL_RETENTION_BLOCKS_MAX: u64 = u32::MAX as u64;
-    }
-    /// Independently rebuildable SCCP replay archive defaults.
-    pub mod sccp_replay_archive {
-        use iroha_config_base::util::Bytes;
-        use std::time::Duration;
-
-        /// Replay archive reads are unavailable until an operator supplies the
-        /// complete signed three-replica production policy.
-        pub const ENABLED: bool = false;
-        /// Complete bounded checkpoint-set response.
-        pub const MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
-        /// Maximum encoded bytes in one independently verified snapshot.
-        pub const MAX_SNAPSHOT_BYTES: Bytes = Bytes(32 * 1024 * 1024);
-        /// Maximum leaves retained by one snapshot.
-        pub const MAX_SNAPSHOT_LEAVES: usize = 256 * 1024;
-        /// Maximum route/boundary accumulators in one checkpoint set.
-        pub const MAX_ACCUMULATORS: usize = 4_096;
-        /// Complete deadline for one pinned replica fetch.
-        pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-        /// Delay between bounded refresh attempts after a replica is behind or unavailable.
-        pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
-        /// First-release response-size ceiling.
-        pub const MAX_RESPONSE_BYTES_HARD: u64 = 256 * 1024 * 1024;
-        /// First-release per-snapshot size ceiling.
-        pub const MAX_SNAPSHOT_BYTES_HARD: u64 = 128 * 1024 * 1024;
-        const _: () = assert!(MAX_SNAPSHOT_BYTES_HARD <= super::super::norito::MAX_ARCHIVE_LEN);
-        /// First-release per-snapshot leaf ceiling.
-        pub const MAX_SNAPSHOT_LEAVES_HARD: u64 = 1024 * 1024;
-        /// First-release checkpoint-set cardinality ceiling.
-        pub const MAX_ACCUMULATORS_HARD: u64 = 65_536;
-        /// First-release request deadline ceiling.
-        pub const REQUEST_TIMEOUT_HARD: Duration = Duration::from_secs(60);
-        /// Smallest production refresh interval.
-        pub const REFRESH_INTERVAL_MIN: Duration = Duration::from_secs(1);
-        /// Largest production refresh interval.
-        pub const REFRESH_INTERVAL_HARD: Duration = Duration::from_secs(5 * 60);
     }
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
@@ -3974,24 +3938,12 @@ pub mod accel {
 }
 /// Zero-knowledge subsystem defaults used by Torii and the host runtime.
 pub mod zk {
-    /// SCCP launch policy. Generic deployments preserve the Ethereum mainnet lane default.
-    pub const SCCP_LAUNCH_MODE: &str = "ethereum_mainnet_lane";
     /// SCCP proof-admission and deterministic verifier-work defaults.
     pub mod sccp {
         use nonzero_ext::nonzero;
         use std::num::{NonZeroU32, NonZeroU64};
         /// Maximum closed SCCP proofs in one transaction.
         pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
-        /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-        ///
-        /// This covers 128 completely full 512-message SCCP blocks, providing explicit relay
-        /// outage headroom while hard-bounding consensus-state map overhead.
-        pub const MAX_PENDING_OUTBOUND_MESSAGES: NonZeroU64 = nonzero!(65_536_u64);
-        /// Maximum canonical payload bytes awaiting destination proof acceptance.
-        ///
-        /// The 256 MiB allowance likewise covers 128 full blocks at the fixed 2 MiB/block V1
-        /// payload ceiling. Accepted payloads move immediately to Kura's immutable archive.
-        pub const MAX_PENDING_OUTBOUND_PAYLOAD_BYTES: NonZeroU64 = nonzero!(256_u64 * 1024 * 1024);
         /// Maximum closed SCCP proofs committed in one block.
         pub const MAX_PROOFS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
         /// Maximum canonical bytes retained for one closed SCCP bridge proof.
@@ -4020,17 +3972,6 @@ pub mod zk {
         pub const MAX_SECP256K1_RECOVERIES_PER_TRANSACTION: NonZeroU32 = nonzero!(1_005_u32);
         /// Maximum secp256k1 recoveries committed in one block.
         pub const MAX_SECP256K1_RECOVERIES_PER_BLOCK: NonZeroU32 = nonzero!(4_020_u32);
-        /// Maximum BLS aggregate-signature checks in one transaction.
-        pub const MAX_BLS_AGGREGATE_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_004_u32);
-        /// Maximum BLS aggregate-signature checks committed in one block.
-        pub const MAX_BLS_AGGREGATE_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_016_u32);
-        /// Maximum BLS public-key contributions processed in one transaction.
-        ///
-        /// The exact Ethereum V1 worst case is one 513-key bootstrap plus 128 updates, each with
-        /// 513 next-committee keys and 512 aggregate participants: `513 + 128 * 1_025`.
-        pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_TRANSACTION: NonZeroU32 = nonzero!(131_713_u32);
-        /// Maximum BLS public-key contributions committed in one block.
-        pub const MAX_BLS_SIGNER_CONTRIBUTIONS_PER_BLOCK: NonZeroU32 = nonzero!(526_852_u32);
         /// Maximum Ed25519 signature checks in one transaction.
         ///
         /// A TON V1 native proof carries at most 64 masterchain continuations with at most
@@ -4046,14 +3987,6 @@ pub mod zk {
             nonzero!(198_656_u32);
         /// Maximum TON Ed25519 validator-key checks committed in one block.
         pub const MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(794_624_u32);
-        /// Maximum BN254 Groth16 pairing-product checks in one transaction.
-        pub const MAX_BN254_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
-        /// Maximum BN254 Groth16 pairing-product checks committed in one block.
-        pub const MAX_BN254_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
-        /// Maximum BLS12-381 Groth16 pairing-product checks in one transaction.
-        pub const MAX_BLS12_381_PAIRING_CHECKS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
-        /// Maximum BLS12-381 Groth16 pairing-product checks committed in one block.
-        pub const MAX_BLS12_381_PAIRING_CHECKS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
     }
     /// FASTPQ prover defaults.
     pub mod fastpq {

@@ -1,157 +1,9 @@
 #[tokio::test]
-async fn sccp_recent_endpoint_requires_exact_finality_before_projection() {
-    // Reuse the complete governed route, settlement asset, native trust anchor,
-    // replay forest, and exact archived body/finality from the routing fixture.
-    let (state, kura, message_id) =
-        routing::sccp_first_release_api_tests::exact_persisted_sccp_state_with_kura();
-    let state = Arc::new(state);
-    let network_id = *state.network_id_ref();
-    let mut app = mk_app_state_for_tests_with_world_and_options_and_network_id(
-        World::default(),
-        None,
-        None,
-        None,
-        None,
-        iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
-            .parse()
-            .expect("SCCP Taira chain"),
-        network_id,
-    );
-    let app_mut = Arc::get_mut(&mut app).expect("unique recent-endpoint app fixture");
-    app_mut.state = state;
-    app_mut.kura = kura;
-    let (artifact, receipt) = app
-        .kura
-        .v2_finality_artifact_with_receipt(2)
-        .expect("authenticate original stored SCCP finality")
-        .expect("genuine height-two finality exists");
-    assert_eq!(receipt.block_hash(), artifact.block_hash);
-    assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
-    let message_id_hex = hex::encode(message_id);
-    let sidecar = app.kura.v2_finality_artifact_path_for_testing(2);
-    let saved_sidecar = sidecar.with_extension("recent-test-original");
-    std::fs::rename(&sidecar, &saved_sidecar).expect("hide the exact original finality sidecar");
-    assert!(
-        !sidecar.exists(),
-        "test starts with the original finality absent"
-    );
-    // The authoritative index locates the message, but only the retained
-    // authenticated finality archive permits either metadata or proof projection.
-    for error in [
-        routing::handle_v1_sccp_messages_recent(
-            Arc::clone(&app.state),
-            routing::SccpRecentWindowQuery::default(),
-            utils::ResponseFormat::Json,
-            acquire_query_admission(app.as_ref(), true)
-                .await
-                .expect("acquire missing-recent test admission"),
-        )
-        .await
-        .expect_err("recent metadata requires exact retained finality"),
-        routing::handle_v1_sccp_message_bundle(
-            Arc::clone(&app.state),
-            message_id_hex.clone(),
-            utils::ResponseFormat::Json,
-            acquire_query_admission(app.as_ref(), true)
-                .await
-                .expect("acquire missing-bundle test admission"),
-        )
-        .await
-        .expect_err("an indexed record cannot substitute for exact finality"),
-    ] {
-        let Error::Query(ValidationFail::InternalError(message)) = error else {
-            panic!("missing exact finality must fail closed: {error}");
-        };
-        assert!(message.contains("finality artifact for height 2 not found"));
-    }
-    std::fs::rename(&saved_sidecar, &sidecar)
-        .expect("restore the same genuine four-validator finality sidecar");
-    let (restored_artifact, receipt) = app
-        .kura
-        .v2_finality_artifact_with_receipt(2)
-        .expect("reauthenticate the restored original finality")
-        .expect("restored exact finality exists");
-    assert_eq!(restored_artifact, artifact);
-    assert_eq!(receipt.block_hash(), artifact.block_hash);
-    assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
-    assert!(sidecar.exists());
-    let recent_response = routing::handle_v1_sccp_messages_recent(
-        Arc::clone(&app.state),
-        routing::SccpRecentWindowQuery::default(),
-        utils::ResponseFormat::Json,
-        acquire_query_admission(app.as_ref(), true)
-            .await
-            .expect("acquire recent-message test admission"),
-    )
-    .await
-    .expect("exact finality authenticates recent metadata");
-    let recent_before = torii_body_bytes(recent_response, "recent body").await;
-    let recent =
-        norito::json::from_slice::<norito::json::Value>(&recent_before).expect("recent JSON");
-    let item = recent
-        .get("items")
-        .and_then(norito::json::Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(norito::json::Value::as_object)
-        .expect("one recent item");
-    assert_eq!(
-        item.get("message_id_hex")
-            .and_then(norito::json::Value::as_str),
-        Some(message_id_hex.as_str())
-    );
-    let links = item
-        .get("links")
-        .and_then(norito::json::Value::as_object)
-        .expect("recent links");
-    assert_eq!(links.len(), 2);
-    assert!(links.contains_key("bundle_path"));
-    assert!(links.contains_key("proof_request_path"));
-    let recent_response = routing::handle_v1_sccp_messages_recent(
-        Arc::clone(&app.state),
-        routing::SccpRecentWindowQuery::default(),
-        utils::ResponseFormat::Json,
-        acquire_query_admission(app.as_ref(), true)
-            .await
-            .expect("acquire repeated-recent test admission"),
-    )
-    .await
-    .expect("unchanged authenticated projection remains stable");
-    let recent_after = torii_body_bytes(recent_response, "repeated recent body").await;
-    assert_eq!(recent_after, recent_before);
-    std::fs::write(&sidecar, b"malformed-finality-sidecar")
-        .expect("write adversarial finality sidecar");
-    assert!(matches!(
-        routing::handle_v1_sccp_messages_recent(
-            Arc::clone(&app.state),
-            routing::SccpRecentWindowQuery::default(),
-            utils::ResponseFormat::Json,
-            acquire_query_admission(app.as_ref(), true)
-                .await
-                .expect("acquire corrupted-recent test admission"),
-        )
-        .await,
-        Err(Error::Query(ValidationFail::InternalError(_)))
-    ));
-    assert!(matches!(
-        routing::handle_v1_sccp_message_bundle(
-            app.state.clone(),
-            message_id_hex,
-            utils::ResponseFormat::Json,
-            acquire_query_admission(app.as_ref(), true)
-                .await
-                .expect("acquire corrupted-bundle test admission"),
-        )
-        .await,
-        Err(Error::Query(ValidationFail::InternalError(_)))
-    ));
-}
-#[tokio::test]
-async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
+async fn finality_proof_routes_require_heavy_query_admission() {
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::from_millis(1);
-    let message_id = "11".repeat(32);
     let errors = [
         handler_bridge_finality_proof(
             State(app.clone()),
@@ -162,39 +14,13 @@ async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
         .await
         .expect_err("finality proof must acquire heavy admission"),
         handler_bridge_finality_bundle(
-            State(app.clone()),
+            State(app),
             axum::extract::Path(1),
             HeaderMap::new(),
             crate::loopback_connect_info(),
         )
         .await
         .expect_err("finality bundle must acquire heavy admission"),
-        handler_sccp_message_proof(
-            State(app.clone()),
-            axum::extract::Path(message_id.clone()),
-            axum::extract::RawQuery(Some("retired_route=1".to_owned())),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP message proof must acquire heavy admission"),
-        handler_sccp_proof_request(
-            State(app.clone()),
-            axum::extract::Path(message_id),
-            axum::extract::RawQuery(Some("retired_route=1".to_owned())),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP proof request must acquire heavy admission"),
-        handler_sccp_messages_recent(
-            State(app),
-            axum::extract::RawQuery(Some("retired_route=1".to_owned())),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP recent query must acquire heavy admission"),
     ];
     for error in errors {
         assert!(
@@ -376,8 +202,7 @@ async fn por_history_routes_require_heavy_query_admission_before_projection() {
         );
     }
 }
-async fn heavy_route_auth_errors_for_test(app: SharedAppState, headers: HeaderMap) -> [Error; 5] {
-    let message_id = "11".repeat(32);
+async fn heavy_route_auth_errors_for_test(app: SharedAppState, headers: HeaderMap) -> [Error; 2] {
     [
         handler_bridge_finality_proof(
             State(app.clone()),
@@ -388,66 +213,17 @@ async fn heavy_route_auth_errors_for_test(app: SharedAppState, headers: HeaderMa
         .await
         .expect_err("finality proof authentication must reject"),
         handler_bridge_finality_bundle(
-            State(app.clone()),
+            State(app),
             axum::extract::Path(1),
-            headers.clone(),
+            headers,
             crate::loopback_connect_info(),
         )
         .await
         .expect_err("finality bundle authentication must reject"),
-        handler_sccp_message_proof(
-            State(app.clone()),
-            axum::extract::Path(message_id.clone()),
-            axum::extract::RawQuery(None),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP message authentication must reject"),
-        handler_sccp_proof_request(
-            State(app.clone()),
-            axum::extract::Path(message_id),
-            axum::extract::RawQuery(None),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP request authentication must reject"),
-        handler_sccp_messages_recent(
-            State(app),
-            axum::extract::RawQuery(None),
-            headers,
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP recent authentication must reject"),
-    ]
-}
-async fn light_sccp_route_auth_errors_for_test(
-    app: SharedAppState,
-    headers: HeaderMap,
-) -> [Error; 2] {
-    [
-        handler_sccp_registry(
-            State(app.clone()),
-            axum::extract::RawQuery(Some("retired_route=1".to_owned())),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP registry authentication must reject"),
-        handler_sccp_capabilities(
-            State(app),
-            axum::extract::RawQuery(Some("retired_route=1".to_owned())),
-            headers,
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect_err("SCCP capabilities authentication must reject"),
     ]
 }
 #[tokio::test]
-async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_tokens() {
+async fn bridge_finality_read_routes_fail_closed_on_empty_or_duplicate_tokens() {
     for duplicate in [false, true] {
         let mut app = mk_app_state_for_tests();
         let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
@@ -469,10 +245,8 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
         } else {
             "127.0.0.1".to_owned()
         };
-        let heavy_errors =
-            heavy_route_auth_errors_for_test(Arc::clone(&app), headers.clone()).await;
-        let light_errors = light_sccp_route_auth_errors_for_test(Arc::clone(&app), headers).await;
-        for error in heavy_errors.into_iter().chain(light_errors) {
+        let heavy_errors = heavy_route_auth_errors_for_test(Arc::clone(&app), headers).await;
+        for error in heavy_errors {
             assert!(
                 matches!(&error, Error::Query(ValidationFail::NotPermitted(_))),
                 "unexpected authentication error: {error}"
@@ -497,7 +271,6 @@ async fn heavy_finality_routes_reject_unsupported_accept_before_rate_and_admissi
         axum::http::header::ACCEPT,
         HeaderValue::from_static("image/png"),
     );
-    let message_id = "11".repeat(32);
     let responses = [
         handler_bridge_finality_proof(
             State(app.clone()),
@@ -510,37 +283,11 @@ async fn heavy_finality_routes_reject_unsupported_accept_before_rate_and_admissi
         handler_bridge_finality_bundle(
             State(app.clone()),
             axum::extract::Path(1),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("early finality-bundle negotiation"),
-        handler_sccp_message_proof(
-            State(app.clone()),
-            axum::extract::Path(message_id.clone()),
-            axum::extract::RawQuery(None),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("early SCCP bundle negotiation"),
-        handler_sccp_proof_request(
-            State(app.clone()),
-            axum::extract::Path(message_id),
-            axum::extract::RawQuery(None),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("early SCCP request negotiation"),
-        handler_sccp_messages_recent(
-            State(app.clone()),
-            axum::extract::RawQuery(None),
             headers,
             crate::loopback_connect_info(),
         )
         .await
-        .expect("early SCCP recent negotiation"),
+        .expect("early finality-bundle negotiation"),
     ];
     for response in responses {
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
@@ -975,92 +722,10 @@ async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
         .await
         .expect("weighted accounting remains isolated by caller key");
 }
-#[tokio::test]
-async fn query_free_sccp_handlers_reject_legacy_query_material_before_lookup() {
-    let app = mk_app_state_for_tests();
-    let remote = axum::extract::ConnectInfo(
-        "127.0.0.1:4040"
-            .parse::<std::net::SocketAddr>()
-            .expect("test socket"),
-    );
-    let legacy_query = || {
-        axum::extract::RawQuery(Some(
-            "network_id_hex=11&proof_bytes_hex=22&allow_unready=true".to_owned(),
-        ))
-    };
-    let message_id = "11".repeat(32);
-    let bundle_error = handler_sccp_message_proof(
-        State(app.clone()),
-        axum::extract::Path(message_id.clone()),
-        legacy_query(),
-        HeaderMap::new(),
-        remote,
-    )
-    .await
-    .expect_err("bundle query material must reject");
-    let request_error = handler_sccp_proof_request(
-        State(app.clone()),
-        axum::extract::Path(message_id),
-        legacy_query(),
-        HeaderMap::new(),
-        remote,
-    )
-    .await
-    .expect_err("proof-request query material must reject");
-    let registry_error =
-        handler_sccp_registry(State(app.clone()), legacy_query(), HeaderMap::new(), remote)
-            .await
-            .expect_err("registry query material must reject");
-    let recent_error =
-        handler_sccp_messages_recent(State(app.clone()), legacy_query(), HeaderMap::new(), remote)
-            .await
-            .expect_err("recent-message legacy query material must reject");
-    let capabilities_error =
-        handler_sccp_capabilities(State(app), legacy_query(), HeaderMap::new(), remote)
-            .await
-            .expect_err("capability query material must reject");
-    for error in [
-        bundle_error,
-        request_error,
-        registry_error,
-        recent_error,
-        capabilities_error,
-    ] {
-        let Error::Query(ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-        )) = error
-        else {
-            panic!("unexpected SCCP query rejection: {error}");
-        };
-        assert!(
-            message.contains("does not accept query parameters")
-                || message.contains("is not supported")
-        );
-    }
-}
-#[test]
-fn first_release_sccp_router_has_only_closed_read_surfaces() {
-    let source = include_str!("../../lib.rs");
-    for required in [
-        "/v1/sccp/capabilities",
-        "/v1/sccp/registry",
-        "/v1/sccp/proofs/message/{message_id}",
-        "/v1/sccp/proof-requests/{message_id}",
-        "/v1/sccp/messages/recent",
-        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
-    ] {
-        assert!(source.contains(required), "missing SCCP route: {required}");
-    }
-    for retired in [
-        concat!("/v1/sccp/", "manifests"),
-        concat!("/v1/sccp/", "artifacts/message/{message_id}"),
-        concat!("/v1/sccp/", "jobs/message/{message_id}"),
-    ] {
-        assert!(
-            !source.contains(retired),
-            "retired SCCP route reappeared: {retired}"
-        );
-    }
+fn clone_private_key(
+    src: &iroha_data_model::prelude::ExposedPrivateKey,
+) -> iroha_data_model::prelude::ExposedPrivateKey {
+    iroha_data_model::prelude::ExposedPrivateKey(src.0.clone())
 }
 #[derive(Clone)]
 struct TestLocalReadRuntime {

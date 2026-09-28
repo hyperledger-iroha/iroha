@@ -23,5 +23,8 @@ pub mod http;
 pub mod ton;
 pub mod tron;
 
+pub use beacon::BeaconClient;
 pub use endpoints::{Backoff, EndpointSet, FailoverPolicy, HttpEndpointKind};
+pub use evm::EvmClient;
 pub use http::{HttpConfig, HttpTransport, RpcError};
+pub use tron::TronClient;

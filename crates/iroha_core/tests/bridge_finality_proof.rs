@@ -219,20 +219,6 @@ impl BridgeStateReadOnly for TestState {
             .transpose()
             .map_err(|error| format!("test storage rejected finality artifact: {error}"))
     }
-    fn bridge_verified_v2_finality_with_sccp_archive(
-        &self,
-        height: u64,
-    ) -> Result<
-        Option<(
-            VerifiedV2FinalityArtifact,
-            Vec<iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-        String,
-    > {
-        Ok(self
-            .bridge_verified_v2_finality_artifact(height)?
-            .map(|verified| (verified, Vec::new())))
-    }
 }
 fn state_from_fixture(fixture: &Fixture) -> TestState {
     TestState {

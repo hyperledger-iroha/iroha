@@ -151,8 +151,6 @@ fn replacement_rewind_retains_notifications_through_carrier_capture_and_admissio
             let journals = carrier
                 .prepare_journals(
                     crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                    None,
-                    None,
                     |_| Ok::<_, ()>(()),
                 )
                 .unwrap_or_else(|e| panic!("capture original owner: {e}"));
@@ -163,8 +161,6 @@ fn replacement_rewind_retains_notifications_through_carrier_capture_and_admissio
             let error = carrier
                 .prepare_journals(
                     crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                    None,
-                    None,
                     |_| Err::<(), _>("exact admission refusal"),
                 )
                 .err()
@@ -176,8 +172,6 @@ fn replacement_rewind_retains_notifications_through_carrier_capture_and_admissio
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 carrier.prepare_journals(
                     crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                    None,
-                    None,
                     |_| -> Result<(), ()> { panic!("actual capture admission unwind") },
                 )
             }));

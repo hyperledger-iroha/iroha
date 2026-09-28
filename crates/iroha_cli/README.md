@@ -123,8 +123,8 @@ authorization.
 
 Choose and retain a unique canonical hash for `--request-id`; use that exact
 value when finalizing. `--release-at-ms` must respect the network's configured
-unbonding delay. Finalization additionally waits for consensus liability and
-pending evidence checks. Registration, bonding, and finalization require a
+unbonding delay. Finalization additionally waits for the consensus liability
+window. Registration, bonding, and finalization require a
 Norito JSON `PublicLaneMonetaryPlanV1`; claims require a
 `PublicLaneRewardClaimPlanV1`. These files bind the target network, expiry,
 exact assets and amounts, and current tenure or reward cursor/record commitments.

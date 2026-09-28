@@ -377,6 +377,12 @@ fn framed_byte_word_count_v1(byte_count: usize) -> Option<usize> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GoldilocksDigest384V1([u64; GOLDILOCKS_DIGEST384_LANES_V1]);
 
+impl Zeroize for GoldilocksDigest384V1 {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 impl GoldilocksDigest384V1 {
     /// Construct a digest only when every word is a canonical field element.
     #[must_use]
@@ -1295,6 +1301,13 @@ fn parameter_asset_sha3_256_v1() -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_digest_erasure_clears_all_six_canonical_coordinates() {
+        let mut digest = GoldilocksDigest384V1::new([1, 2, 3, 5, 7, 11]).unwrap();
+        digest.zeroize();
+        assert_eq!(digest.words(), [0; GOLDILOCKS_DIGEST384_LANES_V1]);
+    }
 
     #[test]
     fn private_one_shot_sponge_storage_is_erased_on_return_and_unwind() {

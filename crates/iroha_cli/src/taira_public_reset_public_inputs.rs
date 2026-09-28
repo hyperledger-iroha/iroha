@@ -3,6 +3,9 @@
 //! This command verifies public identity and signatures, not executed genesis results or
 //! release qualification. It never opens private keys or contacts a network. The whole
 //! public bundle is published atomically; the same inputs can be retried without replacement.
+//! Preparation refuses a generated network whose validator `[gov]`/`[torii.faucet]` profile and
+//! genesis citizens cannot seat the SORA Parliament, or whose citizenship escrow is controlled by
+//! a key published in this repository (`specs/sccp.md` §4.14.5).
 
 use super::*;
 use iroha_data_model::NetworkId;
@@ -321,6 +324,10 @@ pub(super) fn prepare(args: &PreparePublicInputs, output: &mut impl Write) -> Re
             "draft canary request differs from its canonical native public identity"
         ));
     }
+    // The Parliament is the only SCCP governance authority: refuse a network whose validator
+    // profile and genesis citizens cannot seat it (specs/sccp.md §4.14.5, §4.18).
+    let manifest: iroha_genesis::RawGenesisTransaction = json::from_slice(&retained[3].1)?;
+    crate::taira::parliament_seating::require_seated_localnet(&args.localnet_dir, &manifest)?;
     if args.output_dir.try_exists()? {
         require(
             load(&args.output_dir)? == record,

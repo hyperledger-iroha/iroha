@@ -188,9 +188,25 @@ fn canonical_output_writer_is_byte_exact_and_refuses_short_cap_before_output() {
 #[test]
 #[ignore = "explicit full 8M-row DEEP producer: over 69M typed hashes; run with measured resource budget"]
 fn complete_native_masked_deep_producer_roundtrip_and_statement_rejection() {
+    complete_masked_producer(DigestExecutionV1::Cpu);
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[test]
+#[ignore = "explicit complete 8M-row proof with required Metal leaves and CPU parents; measure first"]
+fn complete_required_metal_masked_deep_producer_roundtrip_and_statement_rejection() {
+    let _lane = crate::backend::acquire_gpu_lane();
+    complete_masked_producer(DigestExecutionV1::Device(
+        crate::Digest384GpuBackendV1::Metal,
+    ));
+}
+
+fn complete_masked_producer(execution: DigestExecutionV1) {
     use crate::gadgets::{
         compact_smt_air::PhysicalSmtWitness, compact_trace_columns::smt_row_cells,
     };
+    // Required-device failure must precede the diagnostic's private witness too.
+    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
     let siblings: [_; 32] = core::array::from_fn(|level| digest((level + 17) as u8));
     let path = 0xa59c_71e3;
     let first = digest(1);
@@ -224,6 +240,23 @@ fn complete_native_masked_deep_producer_roundtrip_and_statement_rejection() {
         old_root: root,
         new_root: root,
     };
+    let air = CompactTransferAir::new(&statement, Some(b"native producer diagnostic")).unwrap();
+    let defaults = crate::backend::offline_compact::ProvingLimits::default();
+    let plan = ProducerPlan::new(
+        &air,
+        ConstructionLimits {
+            digest_execution: execution,
+            max_payload_bytes: defaults.max_segment_charge_bytes,
+            max_work_units: defaults.max_segment_work_units,
+            max_hash_calls: defaults.max_segment_work_units,
+            max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
+        },
+    )
+    .unwrap();
+    eprintln!(
+        "complete DEEP attempt bound: payload={}, work={}, hashes={}",
+        plan.payload_bytes, plan.work_units, plan.hash_calls
+    );
     let witness = PhysicalSmtWitness::from_inputs(&statement, &[siblings, siblings]).unwrap();
     let mut columns: Vec<_> = (0..342)
         .map(|_| zeroize::Zeroizing::new(Vec::with_capacity(TRACE_ROWS)))
@@ -234,18 +267,19 @@ fn complete_native_masked_deep_producer_roundtrip_and_statement_rejection() {
         }
     }
     drop(witness);
-    let air = CompactTransferAir::new(&statement, Some(b"native producer diagnostic")).unwrap();
     let mut rng = StdRng::from_seed([83; 32]);
     let borrowed = columns
         .iter()
         .map(|column| column.as_slice())
         .collect::<Vec<_>>();
-    let plan = ProducerPlan::new(&air, limits()).unwrap();
-    eprintln!(
-        "complete DEEP attempt bound: payload={}, work={}, hashes={}",
-        plan.payload_bytes, plan.work_units, plan.hash_calls
-    );
+    let started = std::time::Instant::now();
     let proof = plan.build(&borrowed, &mut rng).unwrap();
+    eprintln!(
+        "complete fixed-SMT DEEP proof: bytes={}; build_and_self_check_seconds={:.3}; proof_hash={}",
+        proof.len(),
+        started.elapsed().as_secs_f64(),
+        iroha_crypto::Hash::new(&proof),
+    );
     assert!(proof.len() <= deep_proof::MAX_FRAME_BYTES);
     assert_eq!(
         deep_engine::verify(&air, &proof, deep_proof::PROOF_BYTE_TARGET)
@@ -264,6 +298,213 @@ fn complete_native_masked_deep_producer_roundtrip_and_statement_rejection() {
     let last = altered.len() - 1;
     altered[last] ^= 1;
     assert!(deep_engine::verify(&air, &altered, deep_proof::PROOF_BYTE_TARGET).is_err());
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[test]
+#[ignore = "bounded actual Metal leaf and CPU parent timing before a complete masked proof"]
+fn measured_required_metal_leaf_and_cpu_parent_costs() {
+    use std::time::Instant;
+
+    use crate::backend::deep_leaf_batch;
+
+    let _lane = crate::backend::acquire_gpu_lane();
+    let execution = DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Metal);
+    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
+    let air = CompactTransferAir::new(&statement(), Some(b"native producer diagnostic")).unwrap();
+    let binding = Context::for_relation(&air).unwrap();
+    let mut estimated_hash_seconds = 0.0;
+    for oracle in [
+        Oracle::Row,
+        Oracle::QuotientAndMask,
+        Oracle::Fri(0),
+        Oracle::Fri(1),
+        Oracle::Fri(2),
+        Oracle::Fri(3),
+        Oracle::Fri(4),
+    ] {
+        let (_, _, leaves, width) = oracle.shape().unwrap();
+        let count = leaves.min(deep_leaf_batch::CAPACITY);
+        let batches = 4096 / count;
+        let payload = (0..count * width / 8)
+            .flat_map(|value| (value as u64 + 7).to_le_bytes())
+            .collect::<Vec<_>>();
+        let indices = (0..count).collect::<Vec<_>>();
+        let mut output = SecretPolynomial::<[u64; 6]>::zeroed(indices.len()).unwrap();
+        // Warm this oracle's public prefix cache before measuring its fixed batch.
+        deep_leaf_batch::hash(
+            &binding,
+            oracle,
+            &indices,
+            &payload,
+            width,
+            &mut output,
+            execution,
+        )
+        .unwrap();
+        let started = Instant::now();
+        for _ in 0..batches {
+            deep_leaf_batch::hash(
+                &binding,
+                oracle,
+                &indices,
+                &payload,
+                width,
+                &mut output,
+                execution,
+            )
+            .unwrap();
+        }
+        let leaf_seconds = started.elapsed().as_secs_f64();
+        for index in [0, indices.len() - 1] {
+            assert_eq!(
+                output[index],
+                binding
+                    .hash_leaf(
+                        oracle,
+                        index as u32,
+                        &payload[index * width..(index + 1) * width]
+                    )
+                    .unwrap()
+                    .words()
+            );
+        }
+        let mut left = Digest::new([1, 2, 3, 5, 7, 11]).unwrap();
+        let right = Digest::new([13, 17, 19, 23, 29, 31]).unwrap();
+        left = binding.hash_parent(oracle, 1, 0, left, right).unwrap();
+        let started = Instant::now();
+        for index in 0..4096 {
+            left = binding
+                .hash_parent(oracle, 1, (index % (leaves / 2)) as u32, left, right)
+                .unwrap();
+        }
+        std::hint::black_box(left);
+        let parent_seconds = started.elapsed().as_secs_f64();
+        let estimate = 2.0
+            * (leaf_seconds * leaves as f64 / (batches * count) as f64
+                + parent_seconds * (leaves - 1) as f64 / 4096.0);
+        estimated_hash_seconds += estimate;
+        eprintln!(
+            "oracle={oracle:?}; leaf_samples={}; leaf_seconds={leaf_seconds:.6}; parent_samples=4096; parent_seconds={parent_seconds:.6}; two_tree_hash_seconds_estimate={estimate:.3}",
+            batches * count
+        );
+    }
+    eprintln!(
+        "total_hash_seconds_estimate={estimated_hash_seconds:.3}; excludes transforms, AIR, coefficient work, terminal, verifier and allocation variance; no complete-proof measurement"
+    );
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[test]
+#[ignore = "bounded batch-size comparison of real Metal continuations"]
+fn measured_required_metal_batch_sizes_separate_preparation_and_dispatch() {
+    measure_required_metal_batch_sizes(&[32, 256, 1024], 4096);
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[test]
+#[ignore = "bounded larger typed Metal dispatch measurement; production remains at its fixed capacity"]
+fn measured_required_metal_larger_typed_batches_without_changing_production_capacity() {
+    measure_required_metal_batch_sizes(&[4096, 8192], 8192);
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
+    use std::time::Instant;
+
+    use rayon::prelude::*;
+
+    use crate::digest384_batch::execute_last_fields_with_cpu;
+
+    let _lane = crate::backend::acquire_gpu_lane();
+    let execution = DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Metal);
+    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
+    let air = CompactTransferAir::new(&statement(), Some(b"native producer diagnostic")).unwrap();
+    let binding = Context::for_relation(&air).unwrap();
+    let left = Digest::new([1, 2, 3, 5, 7, 11]).unwrap();
+    let right = Digest::new([13, 17, 19, 23, 29, 31]).unwrap();
+    for (oracle, parent) in [
+        (Oracle::Row, false),
+        (Oracle::QuotientAndMask, false),
+        (Oracle::Fri(0), false),
+        (Oracle::Row, true),
+    ] {
+        let (_, _, _, width) = oracle.shape().unwrap();
+        for &count in counts {
+            assert!(count > 0 && count <= 8192 && samples % count == 0);
+            let payloads = (0..count * width / 8)
+                .flat_map(|value| (value as u64 + 7).to_le_bytes())
+                .collect::<Vec<_>>();
+            let mut preparation = 0.0;
+            let mut dispatch = 0.0;
+            let mut owner_cleanup = 0.0;
+            let mut charged = 0;
+            // One warm iteration, then the same sample count at each batch size.
+            for iteration in 0..=samples / count {
+                let started = Instant::now();
+                let frames = (0..count)
+                    .into_par_iter()
+                    .map(|index| {
+                        if parent {
+                            binding.prepare_parent(oracle, 1, index as u32, left, right)
+                        } else {
+                            binding.prepare_leaf(
+                                oracle,
+                                index as u32,
+                                &payloads[index * width..(index + 1) * width],
+                            )
+                        }
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap();
+                let bytes = frames.iter().map(|frame| frame.payload_len()).sum();
+                // The larger diagnostic does not enter or change the production
+                // batch helper. Its exact actual frame bytes must independently
+                // fit the same typed executor limit before dispatch.
+                let jobs = if count <= super::super::deep_leaf_batch::CAPACITY {
+                    super::super::deep_leaf_batch::prepare_jobs(&frames).unwrap()
+                } else {
+                    frames
+                        .par_iter()
+                        .map(|frame| frame.job())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()
+                        .unwrap()
+                };
+                let preparation_seconds = started.elapsed().as_secs_f64();
+                charged = crate::digest384_batch::last_fields_payload_charge(count, bytes).unwrap();
+                let started = Instant::now();
+                let output = zeroize::Zeroizing::new(
+                    execute_last_fields_with_cpu(
+                        count,
+                        bytes,
+                        execution,
+                        |_| panic!("required-Metal diagnostic cannot use CPU substitution"),
+                        || Ok(jobs),
+                    )
+                    .unwrap(),
+                );
+                let dispatch_seconds = started.elapsed().as_secs_f64();
+                assert_eq!(output.len(), count);
+                for index in [0, count - 1] {
+                    assert_eq!(output[index], frames[index].hash_cpu().unwrap());
+                }
+                let cleanup_started = Instant::now();
+                drop(output);
+                drop(frames);
+                let cleanup_seconds = cleanup_started.elapsed().as_secs_f64();
+                if iteration != 0 {
+                    preparation += preparation_seconds;
+                    dispatch += dispatch_seconds;
+                    owner_cleanup += cleanup_seconds;
+                }
+            }
+            eprintln!(
+                "oracle={oracle:?}; parent={parent}; batch={count}; samples={samples}; frame_and_job_preparation_seconds={preparation:.6}; executor_seconds={dispatch:.6}; returned_owner_cleanup_seconds={owner_cleanup:.6}; executor_payload_charge={charged}; executor includes host packing, GPU execution, readback and internal clearing, not isolated kernel time"
+            );
+        }
+    }
 }
 
 #[test]

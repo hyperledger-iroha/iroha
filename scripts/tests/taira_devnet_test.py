@@ -48,6 +48,84 @@ FAKE_VALIDATOR_AUTHORITIES = (
 )
 FAKE_FAUCET_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 FAKE_FAUCET_AMOUNT = "25000"
+FAKE_CLIENT_PUBLIC_KEY = "ed0120" + "A5" * 32
+# The recommended Taira seating profile (specs/sccp.md §4.14.5) as the native
+# `iroha taira seat-parliament` renders it into every validator config.
+FAKE_CITIZENSHIP_ESCROW = "fake-fresh-citizenship-escrow"
+FAKE_SEATED_GOV = (
+    "[gov]\n"
+    f'citizenship_escrow_account = "{FAKE_CITIZENSHIP_ESCROW}"\n'
+    'citizenship_bond_amount = "1000000"\n'
+    "rules_committee_size = 5\n"
+    "agenda_council_size = 5\n"
+    "interest_panel_size = 5\n"
+    "review_panel_size = 5\n"
+    "coordination_council_size = 5\n"
+    "mpc_committee_size = 5\n"
+    "fma_committee_size = 5\n"
+    "oversight_committee_size = 5\n"
+    "policy_jury_size = 9\n"
+    "confirmation_jury_size = 7\n"
+    "[gov.parliament_timed_ovn]\n"
+    "max_corpus_entries = 16\n"
+    "registration_phase_blocks = 300\n"
+    "survivor_freeze_phase_blocks = 100\n"
+)
+FAKE_ADAPTIVE_FAUCET = (
+    "pow_max_anchor_age_blocks = 6\n"
+    "pow_adaptive_lookback_blocks = 64\n"
+    "pow_adaptive_claims_per_extra_bit = 2\n"
+    "pow_adaptive_max_extra_bits = 8\n"
+)
+
+
+def fake_seat_parliament(target: Path, citizens: int) -> str:
+    """Mirror the native seating command on a fake generated network."""
+
+    for index in range(module.PEER_COUNT):
+        config = target / f"peer{index}.toml"
+        text = config.read_text(encoding="utf-8").replace(
+            f'amount = "{FAKE_FAUCET_AMOUNT}"\n',
+            f'amount = "{FAKE_FAUCET_AMOUNT}"\n' + FAKE_ADAPTIVE_FAUCET,
+        )
+        config.write_text(text + FAKE_SEATED_GOV, encoding="utf-8")
+    directory = target / module.PARLIAMENT_CITIZEN_DIRECTORY
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    entries = []
+    for index in range(citizens):
+        for name in (f"citizen-{index:02d}.private_key", f"citizen-{index:02d}.client.toml"):
+            (directory / name).write_text("secret\n", encoding="utf-8")
+            (directory / name).chmod(0o600)
+        entries.append(
+            {
+                "index": index,
+                "account_id": f"citizen-account-{index}",
+                "public_key": f"citizen-key-{index}",
+                "private_key_file": f"citizen-{index:02d}.private_key",
+                "client_config_file": f"citizen-{index:02d}.client.toml",
+            }
+        )
+    manifest = directory / module.PARLIAMENT_CITIZEN_MANIFEST
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": module.PARLIAMENT_CITIZEN_MANIFEST_SCHEMA,
+                "chain": module.DEFAULT_CHAIN_ID,
+                "citizenship_asset_id": FAKE_FAUCET_ASSET_ID,
+                "citizenship_bond_amount": "1000000",
+                "citizenship_escrow_account": FAKE_CITIZENSHIP_ESCROW,
+                "fee_float": module.PARLIAMENT_FEE_FLOAT_XOR,
+                "sccp_proposer": "operator-account",
+                "citizens": entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+    return json.dumps(
+        {"schema": module.PARLIAMENT_SEAT_REPORT_SCHEMA, "citizens": citizens}
+    ) + "\n"
 
 
 def restart_fixture_account_controller(
@@ -1105,13 +1183,35 @@ class FakeRuntime:
                 f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
                 f'network_id = "{network_id}"\n'
                 f'torii_url = "http://127.0.0.1:{api_port}/"\n'
-                f"[account]\nchain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n",
+                f"[account]\nchain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n"
+                f'public_key = "{FAKE_CLIENT_PUBLIC_KEY}"\n',
                 encoding="utf-8",
             )
             onboarding_token = target / module.LOCALNET_ONBOARDING_TOKEN_FILE
             onboarding_token.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             onboarding_token.write_text("t" * 32, encoding="ascii")
             onboarding_token.chmod(0o600)
+        elif "seat-parliament" in values:
+            target = Path(values[values.index("--localnet-dir") + 1])
+            assert values[values.index("--sccp-proposer-public-key") + 1] == (
+                FAKE_CLIENT_PUBLIC_KEY
+            )
+            return subprocess.CompletedProcess(
+                values,
+                0,
+                fake_seat_parliament(
+                    target, int(values[values.index("--citizens") + 1])
+                ),
+                "",
+            )
+        elif "genesis" in values and "sign" in values:
+            # Kagami publishes the re-signed identity beside the pre-seating one.
+            published = Path(values[values.index("--expected-hash-out") + 1])
+            published.write_text(
+                (published.parent / "genesis.expected_hash").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(values, 0, "", "")
         elif "--check-config" in values:
             config = Path(values[values.index("--config") + 1])
             module.require_canonical_taira_profiles(
@@ -6196,7 +6296,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "http://127.0.0.1:29080/", invalid_tool_cache_hints
             )
 
-    def test_help_exposes_only_up_check_and_down(self) -> None:
+    def test_help_exposes_only_up_check_down_and_citizens(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(MODULE_PATH), "--help"],
             check=False,
@@ -6204,7 +6304,7 @@ class TairaDevnetTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("{up,check,down}", completed.stdout)
+        self.assertIn("{up,check,down,citizens}", completed.stdout)
         self.assertNotIn("promote", completed.stdout.lower())
         self.assertNotIn("publish", completed.stdout.lower())
         up_help = subprocess.run(

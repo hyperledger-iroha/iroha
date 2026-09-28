@@ -1154,7 +1154,7 @@ impl StoredManifest {
     #[must_use]
     pub fn pdp_tree(&self) -> Option<&PdpMerkleTreeV1> {
         self.payload_available()
-            .then(|| self.pdp_tree.as_deref())
+            .then_some(self.pdp_tree.as_deref())
             .flatten()
     }
     /// Exact retained-node-slab bytes charged to the aggregate PDP tree budget.

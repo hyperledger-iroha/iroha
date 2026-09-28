@@ -141,8 +141,8 @@ impl Kura {
                     path,
                 ));
             }
-            let (retained_header, finality, _) = self
-                .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+            let (retained_header, finality) = self
+                .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                     record.canonical_body.height,
                 )?
                 .ok_or_else(|| {

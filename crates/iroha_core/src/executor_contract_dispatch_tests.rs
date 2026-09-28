@@ -1485,20 +1485,19 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
         });
     }
 }
-/// The SCCP registry and validation-fee governance parameters are reserved from generic
-/// `SetParameter`, even for genesis and for holders of `CanSetParameters` or
-/// `CanManageSccpGovernance`; the SCCP manager permission does not substitute for the generic
-/// parameter permission.
+/// SCCP proposal authority admits Parliament proposals without applying their parameter
+/// changes. Generic parameter authority is separate, and validation-fee governance parameters
+/// remain reserved for Parliament enactment even during genesis.
 #[test]
-fn initial_executor_reserves_sccp_and_validation_fee_parameters_from_set_parameter() {
+fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance() {
     let generic_admin = checked_account_id();
-    let sccp_manager = checked_account_id();
+    let sccp_proposer = checked_account_id();
     let genesis_authority = checked_account_id();
     let mut world = World::with(
         [],
         [
             Account::new(generic_admin.clone()).build(&generic_admin),
-            Account::new(sccp_manager.clone()).build(&sccp_manager),
+            Account::new(sccp_proposer.clone()).build(&sccp_proposer),
             Account::new(genesis_authority.clone()).build(&genesis_authority),
         ],
         [],
@@ -1508,8 +1507,8 @@ fn initial_executor_reserves_sccp_and_validation_fee_parameters_from_set_paramet
         BTreeSet::from([executor_permission::parameter::CanSetParameters.into()]),
     );
     world.account_permissions.insert(
-        sccp_manager.clone(),
-        BTreeSet::from([executor_permission::sccp::CanManageSccpGovernance.into()]),
+        sccp_proposer.clone(),
+        BTreeSet::from([executor_permission::sccp::CanProposeSccpRouteGovernance.into()]),
     );
     let set_custom = |id: &str| -> InstructionBox {
         iroha_data_model::isi::SetParameter::new(iroha_data_model::parameter::Parameter::Custom(
@@ -1521,7 +1520,6 @@ fn initial_executor_reserves_sccp_and_validation_fee_parameters_from_set_paramet
         .into()
     };
     let reserved = [
-        "sccp_registry_v1",
         iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID,
         iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::PARAMETER_ID_STR,
         iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID,
@@ -1544,7 +1542,7 @@ fn initial_executor_reserves_sccp_and_validation_fee_parameters_from_set_paramet
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_transaction = block.transaction();
     for id in reserved {
-        for authority in [&generic_admin, &sccp_manager] {
+        for authority in [&generic_admin, &sccp_proposer] {
             let error = super::Executor::Initial
                 .execute_instruction(&mut state_transaction, authority, set_custom(id))
                 .expect_err("reserved parameters must not be set through SetParameter");
@@ -1557,10 +1555,10 @@ fn initial_executor_reserves_sccp_and_validation_fee_parameters_from_set_paramet
     let error = super::Executor::Initial
         .execute_instruction(
             &mut state_transaction,
-            &sccp_manager,
+            &sccp_proposer,
             set_custom("unrelated_parameter"),
         )
-        .expect_err("the SCCP manager permission must not authorize generic parameters");
+        .expect_err("the SCCP route proposal permission must not authorize generic parameters");
     assert!(
         matches!(&error, ValidationFail::NotPermitted(message) if message.contains("CanSetParameters")),
         "{error:?}"
@@ -1572,6 +1570,65 @@ fn initial_executor_reserves_sccp_and_validation_fee_parameters_from_set_paramet
         false,
     )
     .expect("CanSetParameters must authorize an unreserved custom parameter");
+    super::Executor::Initial
+        .execute_instruction(
+            &mut state_transaction,
+            &generic_admin,
+            set_custom("unrelated_parameter"),
+        )
+        .expect("a generic parameter administrator can set an unrelated custom parameter");
+    assert!(state_transaction.world.sccp_parameters().is_none());
+
+    let proposal = crate::smartcontracts::isi::sccp::test_support::sample_proposal(
+        state_transaction.network_id,
+    );
+    let propose = || {
+        InstructionBox::from(
+            iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
+                proposal: proposal.clone(),
+            },
+        )
+    };
+    let error = super::Executor::Initial
+        .execute_instruction(&mut state_transaction, &generic_admin, propose())
+        .expect_err("generic parameter authority must not authorize SCCP proposals");
+    assert!(
+        error
+            .to_string()
+            .contains("CanProposeSccpRouteGovernance required"),
+        "unexpected SCCP proposer rejection: {error:?}"
+    );
+    assert_eq!(
+        state_transaction
+            .world
+            .governance_proposals()
+            .iter()
+            .count(),
+        0
+    );
+    super::Executor::Initial
+        .execute_instruction(&mut state_transaction, &sccp_proposer, propose())
+        .expect("the SCCP proposer permission admits a canonical Parliament proposal");
+    let proposals = state_transaction.world.governance_proposals();
+    assert_eq!(proposals.iter().count(), 1);
+    let (_, record) = proposals.iter().next().expect("the admitted SCCP proposal");
+    assert_eq!(record.proposer, sccp_proposer);
+    assert_eq!(
+        record.status,
+        crate::state::GovernanceProposalStatus::Proposed
+    );
+    assert_eq!(
+        record
+            .as_sccp_route_governance()
+            .expect("the canonical SCCP proposal body")
+            .proposal
+            .as_ref(),
+        &proposal
+    );
+    assert!(
+        state_transaction.world.sccp_parameters().is_none(),
+        "proposing SetParameters must not enact the SCCP parameter change"
+    );
 }
 /// DPN markers are exact unit payloads: malformed payloads fail closed before storage, even when
 /// genesis grants them.

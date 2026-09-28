@@ -418,7 +418,6 @@ state_test! { sync native_candidate_refuses_unsupported_carrier_controls_before_
     for attachments in [
         CandidateAttachments { da_commitments: Some(Default::default()), ..CandidateAttachments::default() },
         CandidateAttachments { da_pin_intents: Some(Default::default()), ..CandidateAttachments::default() },
-        CandidateAttachments { sccp_commitment_root: Some([1; 32]), ..CandidateAttachments::default() },
     ] {
         assert!(matches!(assemble_native_candidate_for_test(&fixture, 16, 2 * 1024 * 1024,
             attachments).unwrap_err(), CandidateError::NativeLaneDecisionInvalid(reason)

@@ -1,4 +1,4 @@
-//! Join original Native execution to this service's archive predecessor owners.
+//! Join original Native execution to this service's finite journal-shell admission.
 //!
 //! The synchronous result still owns State writers. Complete resource admission
 //! and journal detachment are required before retaining it across worker waits;
@@ -7,23 +7,16 @@
 use super::{V2ApplyError, V2ApplyService, VerifiedHeightContext};
 use crate::{
     block::{BlockValidationError, valid::NativeCandidatePreparationError},
-    query::{
-        provider_ingest_finalized::ProviderCandidateCapture,
-        reputation_finalized::ReputationCandidateCapture,
-    },
     state::{MergeLedgerCommitError, PreparedCarrier, PreparedNativeLaneBatchSourceV1},
     sumeragi::v2_body_store::LocalValidationRefusal,
 };
 use iroha_data_model::block::SignedBlock;
 use iroha_primitives::time::TimeSource;
 
-/// One executed candidate and the archive predecessors reserved before execution.
-/// Field order retires all State writers before either logical archive owner.
+/// One executed candidate and its original finite journal-shell admission.
 #[must_use = "detach the original journals synchronously or abandon the complete candidate"]
 pub(crate) struct PreparedNativeServiceCandidate<'state> {
     carrier: PreparedCarrier<'state>,
-    provider: Option<ProviderCandidateCapture>,
-    reputation: Option<ReputationCandidateCapture>,
     shell_admission: super::native_validation::CarrierShellAdmission,
 }
 
@@ -34,23 +27,16 @@ impl<'state> PreparedNativeServiceCandidate<'state> {
         self,
     ) -> (
         PreparedCarrier<'state>,
-        Option<ProviderCandidateCapture>,
-        Option<ReputationCandidateCapture>,
         super::native_validation::CarrierShellAdmission,
     ) {
-        (
-            self.carrier,
-            self.provider,
-            self.reputation,
-            self.shell_admission,
-        )
+        (self.carrier, self.shell_admission)
     }
 }
 
 impl V2ApplyService {
-    /// Execute authenticated Native sources once after reserving both archives.
+    /// Execute authenticated Native sources once under the original finite admission.
     /// A stale source returns no owner and never becomes an invalid-body marker.
-    /// The exact State and proposal are checked before any archive reservation;
+    /// The exact State, Kura and proposal are checked before execution;
     /// callers cannot pair a foreign source with an otherwise identical service.
     pub(crate) fn prepare_native_source<'state>(
         &'state self,
@@ -80,10 +66,7 @@ impl V2ApplyService {
         if !std::ptr::eq(state, self.state.as_ref()) || original != body {
             return Err(V2ApplyError::TaskMismatch);
         }
-        let archives = self.try_reserve_candidate_archives(context.context(), body)?;
-        let (provider, reputation) = archives
-            .into_captures(self, context.context(), body)
-            .map_err(|(_, error)| error)?;
+        self.validate_candidate_state_binding(context.context(), body)?;
         #[cfg(test)]
         self.test_failures
             .candidate_executions
@@ -103,8 +86,6 @@ impl V2ApplyService {
         };
         Ok(Some(PreparedNativeServiceCandidate {
             carrier,
-            provider,
-            reputation,
             shell_admission: shell_admission
                 .take()
                 .expect("Native shell admission remains owned until execution succeeds"),
@@ -112,7 +93,7 @@ impl V2ApplyService {
     }
 
     /// Execute genesis, direct ordinary inputs, or current control work through the common
-    /// authenticated validator, keeping the same pre-execution shell/archive owners.
+    /// authenticated validator, keeping the same pre-execution shell admission.
     /// The source-class boundary excludes retired payloads and Native mixtures
     /// before this producer is selected. Common validation still checks
     /// signatures, commitments, exact State/context, useful work and every control.
@@ -127,10 +108,7 @@ impl V2ApplyService {
                 "control service execution recorder ownership conflict: {reason}"
             ))
         })?;
-        let archives = self.try_reserve_candidate_archives(context.context(), body)?;
-        let (provider, reputation) = archives
-            .into_captures(self, context.context(), body)
-            .map_err(|(_, error)| error)?;
+        self.validate_candidate_state_binding(context.context(), body)?;
         let topology = crate::sumeragi::network_topology::Topology::new(
             context
                 .context()
@@ -159,13 +137,44 @@ impl V2ApplyService {
             })?;
         Ok(PreparedNativeServiceCandidate {
             carrier,
-            provider,
-            reputation,
             shell_admission,
         })
     }
 
-    /// Count actual execution attempts, excluding source and archive refusals.
+    /// Preserve the exact native owner and proposal checks after retiring the old archive hook.
+    fn validate_candidate_state_binding(
+        &self,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+        body: &SignedBlock,
+    ) -> Result<(), V2ApplyError> {
+        if !self.state.matches_kura_instance(&self.kura) {
+            return Err(LocalValidationRefusal::RecoveryRequired(
+                "candidate execution requires the original State/Kura pair".into(),
+            )
+            .into());
+        }
+        if !body.is_resultless_proposal() {
+            return Err(V2ApplyError::ResultBearingProposal);
+        }
+        let parent = context
+            .parent_commit_qc
+            .as_ref()
+            .map(|certificate| certificate.subject.block_hash)
+            .or_else(|| {
+                context
+                    .snapshot_bootstrap
+                    .map(|anchor| anchor.snapshot_block_hash)
+            });
+        if context.network_id != self.network_id
+            || body.header().height().get() != context.height
+            || body.header().prev_block_hash() != parent
+        {
+            return Err(V2ApplyError::TaskMismatch);
+        }
+        Ok(())
+    }
+
+    /// Count actual execution attempts, excluding source and admission refusals.
     #[cfg(test)]
     pub(crate) fn candidate_executions_for_test(&self) -> usize {
         self.test_failures

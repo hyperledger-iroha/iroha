@@ -16,7 +16,7 @@ and physical-device evidence cannot be replaced by self-issued certificates.
 
 | ID | Status | Owner / outcome | Completion criteria |
 | --- | --- | --- | --- |
-| ZK01 | In progress | Vega / secret-safe proving | Every private commitment uses public work dimensions and constant-time secret arithmetic; no raw uncleared witness copies cross the MSM boundary. Differential arithmetic, zero/partial/full row, failure/cleanup and worker-bound tests pass. Report resource limits only when actually enforced. Review other reachable secret hashing scratch, including ZK-ACE. |
+| ZK01 | Complete (implementation) | Vega / secret-safe proving | Every private commitment uses public work dimensions and constant-time secret arithmetic; no raw uncleared witness copies cross the MSM boundary. Differential arithmetic, zero/partial/full row, failure/cleanup and worker-bound tests pass. Report resource limits only when actually enforced. Review other reachable secret hashing scratch, including ZK-ACE. Target timing and independent qualification remain ZK06. |
 | ZK02 | In progress | Confidential circuits / optional inputs | One owned note can be fully redeemed at maximum tree capacity. Absent inputs require no empty-leaf membership or caller-created dummy witness. Ownership, nonzero/duplicate-nullifier, range and conservation constraints remain enforced. Regenerate all changed circuit keys, digests and dependent fixtures; reject superseded keys. Positive and adversarial circuit/native/SDK tests pass. |
 | ZK03 | In progress | Core / honest proof semantics | Binding, replay-validated computation and private semantic proofs have explicit distinct contracts. Generic verification cannot confer a stronger guarantee than its compiled relation. Preserve mandatory IVM replay until a real IVM transition relation is implemented and independently reviewed. Remove first-release misleading APIs without compatibility aliases and migrate all consumers. |
 | ZK04 | In progress | FASTPQ / bounded private verification | Implement a sound source-state-bound relation with reviewed trace/composition masking and bounded verifier work; fit unchanged proof and total resource limits. Produce and verify real maximum-shape proofs, negative source/witness/statement cases, and CPU/accelerator parity. Full replay and unmasked offline compact proofs do not satisfy this goal. |
@@ -59,7 +59,14 @@ and physical-device evidence cannot be replaced by self-issued certificates.
 
 - Vega private rows now use the shared fixed-window secret MSM and clearing
   scalar owners. Removed the unused memory-ceiling API. Twenty-five native
-  arithmetic, erasure and worker tests pass; no activation change.
+  arithmetic, erasure and worker tests pass; no activation change. A September 28
+  current-source call-site review confirms that private row/evaluation/mask
+  commitments use exact-capacity secret MSM, public padding dimensions and fixed
+  digit scans. Remaining variable-time MSM callers process public transcript or
+  verifier values. Secret scalar/point/table owners clear, nested T256 parallel
+  fan-out is disabled, and worker bounds are enforced. Together with the ZK-ACE
+  checks below, this closes ZK01's software defect scope; compiler-created copies,
+  device timing and independent cryptographic qualification remain ZK06.
 - Optional-input transfer/full/change circuits gate root equality by presence.
   Path builders accept one path per actual input. Native golden/key regeneration
   and full-capacity/adversarial validation are in progress.
@@ -82,11 +89,18 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   native workflow controls are queued. These produce local proof artifacts;
   they do not restore retired ledger instructions or authorize value movement.
   Secret note/path and internal witness Debug output is redacted. JavaScript's
-  `ConfidentialProver` now delegates to that Core owner, without caller circuit
-  or key selection; transfer/full/change workflows, exact amounts, failures,
-  key-copy disposal and TypeScript shapes pass 12 focused checks. Its new native
-  entrypoints and clearing hex/string decoding are queued for Rust validation.
-  Managed JavaScript witness strings do not carry an erasure guarantee.
+  `ConfidentialProver` delegates to that Core owner, without caller circuit
+  or key selection. Its proof methods now return promises and execute native
+  proof work on a worker; the native job owns clearing input copies and consumes
+  them exactly once. Disposing the wallet closes future work while queued jobs
+  finish independently. Thirteen current JavaScript/cardinality/TypeScript checks
+  pass, including deferred success, worker rejection, immediate FFI-key cleanup,
+  reentrant disposal and non-Error input failures.
+  Nine native worker and parsing tests pass, including a real full-redemption
+  proof that is self-verified on a worker thread. Packaged-addon execution remains
+  unqualified. Managed JavaScript witness strings do not carry an erasure guarantee.
+  The [September 28 wallet/kernel receipt](../docs/history/2026-09-28/zk-wallet-and-x509-kernels.md)
+  separates mocked API, real native wallet, arithmetic and source-contract evidence.
   The rewritten public anonymous-transaction page and 20 translations pass their
   scoped i18n/content checks; independent language and native SDK qualification
   remain open.
@@ -111,15 +125,35 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   buffers and repeated passes are separately charged. Its actual canonical child
   envelope is 502,895 bytes under the unchanged 524,288-byte cap. The 2 GiB segment
   charge and 2^42 work-unit default are preserved; impossible plans fail closed.
-  Bulk leaf hashing uses bounded 32-job batches and explicit CPU/required-device
-  policy; parents and transcript hashes use CPU. Public device readiness precedes
-  private work. There is no required-device fallback. The earlier 80 native
-  kernel passes predate this merged public route and do not validate it. Fresh
-  normal-library and focused native validation are queued; the current geometry,
-  hiding-screen and source-budget Python selection passes 37 checks. Independent
+  Exact required-Metal measurements support bounded 1,024-job batches. The current
+  candidate batches both leaves and independent lower Merkle parents; upper
+  parents retain canonical row order on CPU. Exhaustive root/frontier parity,
+  partial-failure and actual-capacity tests pass in the current 134-check native
+  selection (nine diagnostics excluded); three required-device Metal checks
+  pass separately. Public device readiness precedes private work, with no
+  required-device fallback. The refreshed optimized build passes on the recorded
+  203-file source snapshot. The earlier full 8M-row four-lane FFT/inverse
+  diagnostic passes in 69 seconds with
+  553,549,824 bytes maximum RSS. This measures one transform pair, not a proof.
+  The current geometry, hiding-screen and source-budget Python selection passes
+  37 checks. Exact commands and scoped digests are in the
+  [September 28 receipt](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
+  Independent
   sequencing review found no blocker in the retained masked construction. The
-  full-size diagnostic, measured resource/performance results, complete hiding
-  and soundness review, and authoritative source-state admission remain open.
+  full-size RequiredMetal child-proof run has started under unchanged limits;
+  no result or peak memory is inferred from kernel timing. Whole-proof
+  memory/time measurements, complete hiding
+  and soundness review, and source-bound network qualification remain open.
+  Core's ordinary lane uses the canonical masked artifact against its exact
+  finalized statement; its roots cover the touched-balance tree. Relay records
+  separately authenticate finalized QC-bound roots. AXT artifact consistency
+  alone grants no remote-spend or business-effect authority.
+  Developers can derive exact verifier expectations through
+  `ExpectedStatement::from_statement`, which streams the canonical frame without
+  retaining an encoded copy. All 11 external API checks pass, including ambient
+  codec flags and complete-statement mutation controls. The API includes a
+  bounded prove/verify example and explicit worker, busy and device-error guidance.
+  Its Rustdoc example compiles successfully.
 - Reviewed Halo2/note-STARK/FASTPQ source-contract repairs pass their focused
   29-check Python selection. The retired-codec guard passes. The current JS
   confidential input and TypeScript checks pass 6 cases including mocked
@@ -132,8 +166,12 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   only the authenticated current rows; full Fp4 DEEP checks bind both current
   and native-next claims before the shared FRI verifier. Paired FRI leaves and
   this layout give a codec-derived combined maximum of 9,204,362 bytes, leaving
-  232,822 bytes under the unchanged ceiling. Eight geometry checks pass;
-  fresh native proof and mutation tests are queued. No maximum-shape proof or
+  232,822 bytes under the unchanged ceiling. Eight geometry checks pass. Fresh
+  real compact-CA proof roundtrip, credential-context, public/root/DEEP/FRI/query/
+  frontier mutation and resource-gate controls pass. Native I/O and projection
+  proofs verify and re-encode canonically; their obsolete KAT literals and the
+  independently computed 29-field engine pin are updated, with fresh pinned
+  assertions pending. No maximum-shape proof or
   resource qualification is claimed from this bound. Independent code review
   found no reduced-opening arithmetic or joined-root binding blocker.
   All component-family polynomial kernels and verifier-derived fixed schedules
@@ -143,6 +181,22 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   degree ceiling, masking and quotient chunk counts. Activation still requires
   independent soundness and hiding review, real proof vectors, and resource
   evidence on the final candidate.
+  The whole-prover audit found that retaining all masked coefficients alone used
+  16,226,947,392 bytes, above the unchanged 12 GiB ceiling. The implementation now
+  retains the original 81,690,944 bytes of masks and replays columns from closed
+  immutable source owners, preserving entropy order and committed polynomials.
+  Quotient evaluation uses interleaved stripes of at most 2^19 rows, including
+  all higher masked coefficients and exact native-next translation. Six isolated
+  native tests using the actual field/FFT, stripe and private-owner source pass;
+  the complete
+  Core integration remains pending. Private replay/quotient/composition owners
+  now use guaranteed zeroization. The transformed-buffer ledger and recursive
+  borrowed assembly/P256/DER capacity checks are implemented. Preconstruction
+  forecasts admit source dimensions against separate source/scratch allowances;
+  actual capacities are rechecked before masking, binding and finishing. Native
+  integration, maximum-shape assembly admission and actual peak memory/time
+  measurements remain open. No whole-prover memory compliance is inferred from
+  reduced coefficient storage or the explicit runtime reserve.
 - The first Core build stopped on variant-size lints before producing key
   digests. The typed-error enum and an explicitly justified bounded inline
   consensus-parent enum expectation resolve those source blockers. The rebuilt
@@ -152,6 +206,10 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   locked rerun and the additional native commitment suites now pass. The next
   Core compile found a compact-CA alpha shape mismatch and a concurrent SoraFS
   fixture mutation error; both sources are repaired and the fresh run is queued.
+  The September 28 build reached Core but encountered a concurrent reputation/
+  archive API migration before executing tests. It yields no new profile/KAT
+  capture or Core pass; the source-contract/geometry selection separately passes
+  21 checks.
 - The renamed CLI graph checks pass 5 focused tests under Python 3.12. Its wider
   10-test module has four observed mock-boundary failures (`/fixed/cargo`), and
   the workspace target inventory reports a concurrently added KAGEMUSHA binary

@@ -3396,7 +3396,7 @@ async fn ledger_headers_respect_from_and_limit() {
 }
 #[tokio::test]
 async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
-    let (app, _, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
+    let (app, expected_artifact) = app_with_finalized_block_for_test(true);
     let expected_root = expected_artifact
         .commit_qc
         .execution_commitment
@@ -3518,7 +3518,7 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         routing::get,
     };
     use tower::ServiceExt as _;
-    let (app, _, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
+    let (app, expected_artifact) = app_with_finalized_block_for_test(true);
     let expected_root = expected_artifact
         .commit_qc
         .execution_commitment
@@ -3573,7 +3573,7 @@ fn assert_ledger_state_handler_status(error: Error, expected: StatusCode) {
 }
 #[tokio::test]
 async fn ledger_state_endpoints_require_v2_finality() {
-    let (app, _, _) = app_with_indexed_sccp_message_for_test(false);
+    let (app, _) = app_with_finalized_block_for_test(false);
     let root_error = handler_ledger_state_root(
         State(Arc::clone(&app)),
         axum::extract::Path(1),
@@ -3590,7 +3590,7 @@ async fn ledger_state_endpoints_require_v2_finality() {
 }
 #[tokio::test]
 async fn ledger_state_endpoints_reject_wrong_height_finality_record() {
-    let (app, _, artifact) = app_with_indexed_sccp_message_for_test(true);
+    let (app, artifact) = app_with_finalized_block_for_test(true);
     let (block, _) = make_signed_block(2, Some(artifact.block_hash));
     let block_header = block.header();
     let block_hash = store_block(&app, block);
@@ -3614,7 +3614,7 @@ async fn ledger_state_endpoints_reject_wrong_height_finality_record() {
 }
 #[tokio::test]
 async fn ledger_state_endpoints_reject_forged_v2_finality_signature() {
-    let (app, _, artifact) = app_with_indexed_sccp_message_for_test(true);
+    let (app, artifact) = app_with_finalized_block_for_test(true);
     let path = app.kura.v2_finality_artifact_path_for_testing(1);
     let mut bytes = std::fs::read(&path).expect("read finality record");
     let signature = artifact.commit_qc.aggregate_signature.as_slice();
@@ -3938,7 +3938,8 @@ fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
         );
     }
 }
-include!("part_5b_sccp_bundle.rs");
+
+include!("part_5b_finalized_block.rs");
 
 #[cfg(feature = "connect")]
 include!("part_5_threshold_key_lifecycle.rs");

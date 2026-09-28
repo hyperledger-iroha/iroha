@@ -144,6 +144,18 @@ pub fn control_leaf(
     Ok(keccak256(&[&preimage]))
 }
 
+/// Lowercase hex of `bytes` without a prefix (key file names, logs and diagnostics).
+#[must_use]
+pub fn to_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(2 * bytes.len());
+    for byte in bytes {
+        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    out
+}
+
 /// `node(l, r) = keccak256("SCCP/NODE/V1" ‖ l ‖ r)` (§3.4).
 #[must_use]
 pub fn node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
@@ -166,7 +178,13 @@ mod tests {
     use super::*;
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        to_hex(bytes)
+    }
+
+    #[test]
+    fn to_hex_is_lowercase_and_unprefixed() {
+        assert_eq!(to_hex(&[]), "");
+        assert_eq!(to_hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
     }
 
     fn example_destination() -> [u8; 32] {
@@ -255,7 +273,14 @@ mod tests {
     fn control_leaf_rejects_bad_fields() {
         let destination = example_destination();
         assert_eq!(
-            control_leaf(&[0x11; 32], SccpNetworkV1::SoraTaira, &destination, 1, 1, true),
+            control_leaf(
+                &[0x11; 32],
+                SccpNetworkV1::SoraTaira,
+                &destination,
+                1,
+                1,
+                true
+            ),
             Err(LeafError::TargetNotExternal)
         );
         assert_eq!(

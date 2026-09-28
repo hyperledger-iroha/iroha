@@ -27,56 +27,13 @@ fn busy(
     LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(field, wait.clone(), wake.clone()))
 }
 
-fn archive_refusal(
-    error: &super::super::CarrierArchivePreparationError,
-    wake: &Waker,
-) -> LocalValidationRefusal {
-    use super::super::CarrierArchivePreparationError as E;
-    use crate::query::{
-        provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as P,
-        reputation_finalized::ReputationFinalizedArchiveError as R,
-    };
-    match error {
-        E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. }) => {
-            let P::IndexBusy { wait } = error.as_ref() else {
-                unreachable!()
-            };
-            busy("provider_archive_index", wait, wake)
-        }
-        E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. }) => {
-            let R::IndexBusy { wait } = error.as_ref() else {
-                unreachable!()
-            };
-            busy("reputation_archive_index", wait, wake)
-        }
-        E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. }) => {
-            let P::CaptureReserved { wait } = error.as_ref() else {
-                unreachable!()
-            };
-            busy("provider_archive_capture", wait.release_wait(), wake)
-        }
-        E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. }) => {
-            let R::CaptureReserved { wait } = error.as_ref() else {
-                unreachable!()
-            };
-            busy("reputation_archive_capture", wait.release_wait(), wake)
-        }
-        _ => LocalValidationRefusal::RecoveryRequired(error.to_string()),
-    }
-}
-
 fn physical_refusal(
     error: &CarrierPhysicalPreparationError,
     wake: &Waker,
 ) -> LocalValidationRefusal {
     use super::super::runtime_journals::RuntimePublicationError as R;
-    use super::archive_publication::CarrierArchivePublicationError as A;
     use super::physical_publication::CarrierPhysicalPreparationError as E;
     use crate::kura::KuraPublicationPreparationError as K;
-    use crate::query::{
-        provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as P,
-        reputation_finalized::ReputationFinalizedArchiveError as RArch,
-    };
     use crate::state::carrier_preparation::queue_retirement::CarrierQueueRetirementError as Q;
     use crate::state::world_journals::publication::WorldPublicationError as W;
     use mv::PublicationPreparationError as M;
@@ -103,13 +60,6 @@ fn physical_refusal(
                 LocalValidationRefusal::RecoveryRequired(format!("carrier publication: {error:?}"))
             }
         },
-        E::Provider(P::IndexBusy { wait }) | E::Archive(A::Provider(P::IndexBusy { wait })) => {
-            busy("provider_archive_index", wait, wake)
-        }
-        E::Reputation(RArch::IndexBusy { wait })
-        | E::Archive(A::Reputation(RArch::IndexBusy { wait })) => {
-            busy("reputation_archive_index", wait, wake)
-        }
         _ => LocalValidationRefusal::RecoveryRequired(format!("carrier publication: {error:?}")),
     }
 }
@@ -125,12 +75,8 @@ impl<A> RetainedCarrier<A> {
         finality: VerifiedV2FinalityArtifact,
         wake: Waker,
     ) -> Result<PublishedCarrier<A>, (Self, LocalValidationRefusal)> {
-        let original = match self.resume_capture() {
-            Ok(owner) => owner,
-            Err((owner, error)) => return Err((owner, archive_refusal(&error, &wake))),
-        };
+        let original = self;
         let matches_target = match &original {
-            Self::Capturing(_) => unreachable!("capture completed above"),
             Self::Validated(journals) => {
                 target.matches_kura_instance(&journals.kura)
                     && journals

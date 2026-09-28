@@ -164,34 +164,6 @@ fn sorafs_app_state_with_appeal_finance_governance_publisher()
 }
 fn sorafs_app_state_with_privacy_aggregate_schedule()
 -> (SharedAppState, TempDir, OrderbookAuthFixture) {
-    struct TestPrivacyCyclePrfProvider;
-
-    impl sorafs_node::PrivacyCyclePrfProviderV1 for TestPrivacyCyclePrfProvider {
-        fn derive_cycle_output(
-            &self,
-            request: &sorafs_node::PrivacyCyclePrfRequestV1,
-        ) -> Result<sorafs_node::PrivacyCyclePrfOutputV1, sorafs_node::PrivacyCyclePrfProviderErrorV1>
-        {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(b"sorafs.torii.test-privacy-cycle-prf.v1");
-            hasher.update(&request.binding_digest());
-            sorafs_node::PrivacyCyclePrfOutputV1::new(*hasher.finalize().as_bytes())
-                .map_err(|_| sorafs_node::PrivacyCyclePrfProviderErrorV1::Internal)
-        }
-    }
-
-    impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyCyclePrfProvider {
-        fn handle(&self) -> &str {
-            "threshold-prf:transparency:primary"
-        }
-
-        fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
-            Ok(TransparencyRuntimeProviderQualificationV1::new(
-                1, [0xC7; 32],
-            ))
-        }
-    }
-
     #[derive(Default)]
     struct TestPrivacyReleaseAnchor {
         heads: Mutex<BTreeMap<[u8; 32], PrivacyReleaseAnchorHeadV1>>,
@@ -369,14 +341,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
                 publish_delay_seconds: 10,
             }))
             .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config()))
-            .privacy_cycle_prf_provider_binding(Some(
-                TransparencyRuntimeProviderBindingV1::try_new(
-                    "threshold-prf:transparency:primary",
-                    1,
-                    [0xC7; 32],
-                )
-                .expect("valid test threshold-PRF provider binding"),
-            ))
             .privacy_release_anchor_provider_binding(Some(
                 TransparencyRuntimeProviderBindingV1::try_new(
                     "governance-dag:transparency:primary",
@@ -403,7 +367,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
             )),
         with_test_fenced_privacy_runtime(
             NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider))
                 .with_privacy_release_anchor(Arc::new(TestPrivacyReleaseAnchor::default()))
                 .with_transparency_leader_lease_provider(Arc::new(
                     TestTransparencyLeaderLeaseProvider::default(),
@@ -963,8 +926,7 @@ fn seed_appeal_finance_asset_lock(
         0,
     );
     let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(Hash::prehashed([0xAF; Hash::LENGTH]));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xAF; Hash::LENGTH]));
     OpenAssetLock::with_options(
         expected.escrow_id,
         expected.asset_definition_id.clone(),
@@ -1018,8 +980,7 @@ fn drawdown_appeal_finance_asset_lock(
         0,
     );
     let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(Hash::prehashed([0xB1; Hash::LENGTH]));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
     DrawdownAssetLock::new(expected.escrow_id, amount, expected_remaining_amount)
         .execute(authority, &mut tx)
         .expect("drawdown appeal finance asset lock");
@@ -1051,8 +1012,7 @@ fn cancel_appeal_finance_asset_lock(
         0,
     );
     let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(Hash::prehashed([0xB2; Hash::LENGTH]));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
     CancelAssetLock::new(expected.escrow_id, expected_remaining_amount)
         .execute(authority, &mut tx)
         .expect("cancel appeal finance asset lock");

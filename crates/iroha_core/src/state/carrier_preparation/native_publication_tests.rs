@@ -160,8 +160,6 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |inputs| {
                 let bytes = inputs
                     .world_journal_shell_bytes()?
@@ -584,8 +582,6 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>, whol
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(()),
         )
         .unwrap();
@@ -893,8 +889,6 @@ fn publish_unrelated_native_terminal_fixture(
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(()),
         )
         .unwrap();
@@ -987,8 +981,6 @@ fn assert_native_terminal_publication(
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(()),
         )
         .unwrap();

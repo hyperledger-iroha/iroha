@@ -10,7 +10,7 @@ use native_execution::authenticated_native_execution;
 
 #[path = "catalog_recovery.rs"]
 pub(super) mod real_custody;
-use iroha_core::queue::{RoutingDecision, RoutingPlan};
+use iroha_core::queue::RoutingDecision;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,

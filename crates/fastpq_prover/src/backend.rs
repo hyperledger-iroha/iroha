@@ -115,6 +115,8 @@ mod deep_engine;
 mod deep_geometry;
 #[path = "backend/deep_leaf_batch.rs"]
 mod deep_leaf_batch;
+#[path = "backend/deep_parent_batch.rs"]
+mod deep_parent_batch;
 #[path = "backend/deep_masked_quotient.rs"]
 mod deep_masked_quotient;
 #[path = "backend/deep_masked_replay.rs"]

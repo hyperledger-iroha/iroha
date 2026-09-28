@@ -31,8 +31,10 @@
 //!
 //! **Committees.** The committee of height `x` is `C_x` of the lag-2 schedule (§10.1). `R_{x-2}`
 //! commits `committee_digest(C_x)` (`next_committee_digest`), so the reader authenticates a
-//! candidate committee against the digest in the result preimage stored at `x - 2`; `C_{g+1}` is
-//! the committee the signed genesis registers. The candidates are the committees of the World
+//! candidate committee against the digest in the result preimage stored at `x - 2`, bound to the
+//! certified header of `x` through the header of `x - 1` (its hash is the certified header's
+//! `parent_hash`, and it binds `R_{x-2}` as `parent_result`); `C_{g+1}` is the committee the
+//! signed genesis registers. The candidates are the committees of the World
 //! schedule window and the genesis committee, each with its members' proofs of possession
 //! (aggregate verification only admits `PoP`-verified keys). A historical committee that is
 //! neither — the chain has since rotated validators — is not reconstructible from the retained
@@ -550,8 +552,10 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let selected = if height == GENESIS_HEIGHT {
             candidates.genesis
         } else {
+            let (header, _) = self.certificate_parts(height)?;
+            let header = header.ok_or(ChainReadError::NotCommitted { height })?;
             let committee =
-                self.committee_of(height)?
+                self.committee_of(&header)?
                     .ok_or_else(|| ChainReadError::Committee {
                         height,
                         reason: "historical committee is not independently reconstructible"
@@ -652,9 +656,11 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .map_err(Clone::clone)
     }
 
-    /// `C_height`, authenticated against the digest `R_{height-2}` commits (`C_{g+1}`: the
-    /// genesis committee), with its keys admitted; `None` if no candidate matches.
-    fn committee_of(&self, height: u64) -> Result<Option<&Committee>, ChainReadError> {
+    /// `C_height` of the stored core `header` of `height`, authenticated against the digest
+    /// `R_{height-2}` commits (`C_{g+1}`: the genesis committee), with its keys admitted; `None`
+    /// if no candidate matches.
+    fn committee_of(&self, header: &BlockHeader) -> Result<Option<&Committee>, ChainReadError> {
+        let height = header.height;
         let candidates = self.candidates()?;
         let first = GENESIS_HEIGHT.saturating_add(1);
         let expected = if height == first {
@@ -664,11 +670,15 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
                 .checked_sub(schedule::LAG)
                 .filter(|scheduler| *scheduler >= GENESIS_HEIGHT)
                 .ok_or(ChainReadError::NotCommitted { height })?;
-            // `R_{height-2}`'s preimage, cross-checked against the certified header of
-            // `height - 1`, which binds it as `parent_result`.
+            // `R_{height-2}`'s preimage, authenticated through the headers the `CommitQC` of
+            // `height` certifies: `header` binds its parent's hash, and that parent (the header of
+            // `height - 1`) binds `R_{height-2}` as `parent_result`.
             let (_, preimage) = self.certificate_parts(scheduler)?;
-            let (successor, _) = self.certificate_parts(scheduler.saturating_add(1))?;
-            if successor.map(|header| header.parent_result) != Some(result_of_preimage(&preimage)) {
+            let (parent, _) = self.certificate_parts(scheduler.saturating_add(1))?;
+            let parent = parent
+                .filter(|parent| parent.hash(&BlsCrypto::new()) == header.parent_hash)
+                .ok_or(ChainReadError::Discontinuous { height })?;
+            if parent.parent_result != result_of_preimage(&preimage) {
                 return Err(ChainReadError::ResultMismatch { height: scheduler });
             }
             ExecutionResultCommitment::decode(&preimage)
@@ -763,7 +773,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         if header.instance != self.instance || commit_qc.instance != self.instance {
             return Err(ChainReadError::WrongInstance { height });
         }
-        let verification = match self.committee_of(height)? {
+        let verification = match self.committee_of(header)? {
             Some(committee) => {
                 let checked = match self.attestations {
                     Some(verifier) => {

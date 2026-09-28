@@ -436,31 +436,39 @@ def test_provider_indexed_committed_archive_is_the_only_daemon_reader() -> None:
 
     for contract in (
         "pub struct ProviderIngestFinalizedArchiveV1",
-        "pub fn capture_kura_authenticated_view(",
-        "pub fn qualify_against_kura_tip(",
+        "pub fn capture_certified_view(",
+        "pub fn qualify_against_certified_tip(",
         "pub fn read_provider_page(",
-        "pub fn prepare_kura_authenticated_compaction(",
-        "pub fn approve_and_install_kura_authenticated_compaction(",
+        "pub fn prepare_certified_compaction(",
+        "pub fn approve_and_install_certified_compaction(",
+        "CertifiedArchiveView::new(state_ro, kura)",
+        "authenticate_archive_anchor(",
+        "pub fn reconcile_certified_state_tip(",
+        "certified_block_id",
         "RetentionAuthorityRequired",
         "require_exact_retention_readback(",
     ):
         assert contract in archive
+    for retired in ("KuraV2CommitReceipt", "v2_finality_artifact_with_receipt", "ProviderCandidateCapture"):
+        assert retired not in archive
 
 
-def test_provider_ingest_docs_separate_pool_closure_from_external_blockers() -> None:
+def test_provider_ingest_docs_distinguish_native_implementations_from_optional_external_authority() -> None:
     combined = f"{_read(STORAGE_DOC)}\n{_read(CLOSURE_LEDGER)}"
 
     for contract in (
         "at least two non-local",
         "before and after fetch",
         "not copied into pool metadata",
-        "governance-advert/stream-grant/pinned-HTTPS child transports",
+        "assignment-authorized source transport",
         "own configured production",
         "completion-signer",
-        "governance-aware external software signer backend",
+        "same-State completion signing",
+        "fsync/CAS store",
+        "makes no hardware rollback claim",
         "provider-indexed immutable archive",
         "deployment-owned sealed-CAS backend",
-        "retention-authority protocol",
+        "generation/key/finality-fenced compaction",
     ):
         assert contract in combined
 

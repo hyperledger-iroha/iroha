@@ -210,8 +210,6 @@ fn completed_tail_retains_prefix_under_whole_candidate_admission_and_static_hand
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |inputs| {
                 calls += 1;
                 assert_eq!(inputs.prefix.sources().entries().as_ptr() as usize, sources);

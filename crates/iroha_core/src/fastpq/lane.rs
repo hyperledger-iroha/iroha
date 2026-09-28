@@ -102,7 +102,7 @@ impl FastpqProofEngine for RealProofEngine {
         &self,
         statement: &FastpqPublicTransferStatementV1,
     ) -> Result<FastpqProofOutput, ProvingError> {
-        let expected = expected_statement(statement)?;
+        let expected = ExpectedStatement::from_statement(statement)?;
         let proof_bytes = offline_compact::prove_quantity_ordinary_artifact(
             statement,
             expected,
@@ -119,16 +119,6 @@ impl FastpqProofEngine for RealProofEngine {
             identity: verified.identity().clone(),
         })
     }
-}
-fn expected_statement(
-    statement: &FastpqPublicTransferStatementV1,
-) -> fastpq_prover::Result<ExpectedStatement> {
-    let encoded = norito::encode_canonical(statement).map_err(fastpq_prover::Error::Encode)?;
-    Ok(ExpectedStatement {
-        inputs: statement.public_inputs,
-        ordering_hash: statement.ordering_hash,
-        public_statement_digest: Hash::new(encoded).into(),
-    })
 }
 struct RegisteredFastpqLane {
     generation: u64,
@@ -1134,7 +1124,7 @@ mod tests {
         FastpqArtifactIdentityDescriptionV1 {
             proof_kind: FastpqProofKindV1::OrdinaryCompact,
             profile_id: offline_compact::quantity_profile_id(),
-            public_statement_digest: expected_statement(statement)
+            public_statement_digest: ExpectedStatement::from_statement(statement)
                 .unwrap()
                 .public_statement_digest,
             artifact_digest: Hash::new(bytes).into(),
@@ -1248,7 +1238,7 @@ mod tests {
     fn statement_expectations_are_canonical_and_bind_every_ambient_layout() {
         let statement = statements_for_job(&sample_job()).unwrap().remove(0).1;
         let canonical = norito::encode_canonical(&statement).unwrap();
-        let expected = expected_statement(&statement).unwrap();
+        let expected = ExpectedStatement::from_statement(&statement).unwrap();
         assert_eq!(
             expected.public_statement_digest,
             <[u8; 32]>::from(Hash::new(&canonical))
@@ -1257,12 +1247,18 @@ mod tests {
             (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
         {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
-            assert_eq!(expected_statement(&statement).unwrap(), expected);
+            assert_eq!(
+                ExpectedStatement::from_statement(&statement).unwrap(),
+                expected
+            );
             assert_eq!(norito::core::effective_decode_flags(), Some(flags));
         }
         let mut changed = statement;
         changed.ordering_hash[0] ^= 1;
-        assert_ne!(expected_statement(&changed).unwrap(), expected);
+        assert_ne!(
+            ExpectedStatement::from_statement(&changed).unwrap(),
+            expected
+        );
     }
     #[test]
     fn real_engine_enforces_artifact_output_limit_before_proof_work() {

@@ -142,8 +142,9 @@ mod scheduler_variant_tests {
     }
 
     #[test]
-    fn sccp_verifier_quota_fence_keeps_sequential_and_parallel_order_identical() {
-        use crate::pipeline::access::{AccessSet, SCCP_VERIFIER_QUOTA_KEY};
+    fn shared_write_fence_keeps_sequential_and_parallel_order_identical() {
+        use crate::pipeline::access::AccessSet;
+        const SHARED_FENCE_KEY: &str = "verifier.quota:fence";
 
         let access = |writes: &[&str]| {
             let mut set = AccessSet::new();
@@ -153,17 +154,13 @@ mod scheduler_variant_tests {
             set
         };
         // Transaction 0 precedes proof A through an authority-local key. Proofs
-        // A and B otherwise target distinct exact SCCP records. The quota fence
+        // A and B otherwise target distinct exact records. The shared fence
         // must join both proof attempts into that component, preventing the
         // parallel layer scheduler from advancing proof B ahead of proof A.
         let sets = vec![
             access(&["tx.sequence:a"]),
-            access(&[
-                "tx.sequence:a",
-                SCCP_VERIFIER_QUOTA_KEY,
-                "sccp.proof:route-a",
-            ]),
-            access(&[SCCP_VERIFIER_QUOTA_KEY, "sccp.proof:route-b"]),
+            access(&["tx.sequence:a", SHARED_FENCE_KEY, "proof:route-a"]),
+            access(&[SHARED_FENCE_KEY, "proof:route-b"]),
         ];
         let (adjacency, indegree) = super::build_conflict_graph(&sets);
         assert_eq!(indegree, vec![0, 1, 1]);

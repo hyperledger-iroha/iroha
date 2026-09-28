@@ -92,12 +92,7 @@ impl State {
         );
         {
             let view = self.query_view();
-            let digest = super::compute_confidential_feature_digest(
-                view.world(),
-                view.zk(),
-                view.sccp_registry(),
-                1,
-            );
+            let digest = super::compute_confidential_feature_digest(view.world(), view.zk(), 1);
             header.set_confidential_features((!digest.is_empty()).then_some(digest));
         }
         let mut builder = BlockBuilder::new(header);
@@ -275,13 +270,15 @@ impl State {
                     leader_seed: [0xD2; 32],
                 },
                 next_epoch_snapshot: None,
-                nexus_amx_context_hash: crate::sumeragi::genesis_meta::staged_genesis_nexus_amx_context_hash(
-                    &state_block,
-                ),
-                execution_policy_hash: crate::sumeragi::genesis_meta::staged_genesis_execution_policy_hash(
-                    &state_block,
-                )
-                .map_err(|error| error.to_string())?,
+                nexus_amx_context_hash:
+                    crate::sumeragi::genesis_meta::staged_genesis_nexus_amx_context_hash(
+                        &state_block,
+                    ),
+                execution_policy_hash:
+                    crate::sumeragi::genesis_meta::staged_genesis_execution_policy_hash(
+                        &state_block,
+                    )
+                    .map_err(|error| error.to_string())?,
                 da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
             })
             .map_err(|error| error.to_string())?

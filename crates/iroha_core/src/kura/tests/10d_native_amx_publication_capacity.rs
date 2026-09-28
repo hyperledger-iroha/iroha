@@ -4137,50 +4137,116 @@ fn native_amx_empty_prepublication_requires_current_durable_finality() {
 
 #[test]
 fn native_amx_live_custody_wrappers_unlock_together_before_callbacks() {
-    use std::{future::Future, pin::Pin, sync::atomic::AtomicUsize, task::{Context, Wake, Waker}};
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::atomic::AtomicUsize,
+        task::{Context, Wake, Waker},
+    };
     struct Reenter {
         kura: Arc<Kura>,
         wakes: AtomicUsize,
     }
     impl Wake for Reenter {
         fn wake(self: Arc<Self>) {
-            for lock in [&self.kura.prune_lock, &self.kura.canonical_chain_lock,
-                         &self.kura.lane_geometry_lock, &self.kura.sidecar_lock] {
-                assert!(lock.try_lock_or_wait().is_ok(), "live custody still holds a sibling fence");
+            for lock in [
+                &self.kura.prune_lock,
+                &self.kura.canonical_chain_lock,
+                &self.kura.lane_geometry_lock,
+                &self.kura.sidecar_lock,
+            ] {
+                assert!(
+                    lock.try_lock_or_wait().is_ok(),
+                    "live custody still holds a sibling fence"
+                );
             }
             self.wakes.fetch_add(1, Ordering::SeqCst);
         }
     }
     let fixture = native_amx_publication_capacity_fixture();
-    fixture.kura.store_block(Arc::clone(&fixture.block)).unwrap();
-    let receipt = fixture.kura.store_v2_finality_artifact(&fixture.finality).unwrap();
-    let token = fixture.kura.prepublish_native_amx_participant_application_evidence(&fixture.block, None).unwrap();
-    let frontiers = crate::state::State::native_amx_participant_frontier_markers(&fixture.block).unwrap();
+    fixture
+        .kura
+        .store_block(Arc::clone(&fixture.block))
+        .unwrap();
+    let receipt = fixture
+        .kura
+        .store_v2_finality_artifact(&fixture.finality)
+        .unwrap();
+    assert_eq!(receipt.height(), fixture.block.header().height().get());
+    assert_eq!(receipt.block_hash(), fixture.block.hash());
+    let token = fixture
+        .kura
+        .prepublish_native_amx_participant_application_evidence(&fixture.block, None)
+        .unwrap();
+    let frontiers =
+        crate::state::State::native_amx_participant_frontier_markers(&fixture.block).unwrap();
     let files = snapshot_regular_files_recursively(&fixture.kura.store_root);
-    for (archive, invalid) in [(false, false), (false, true), (true, true)] {
+    for invalid in [false, true] {
         let sidecar = fixture.kura.sidecar_lock.lock();
-        let mut wait = fixture.kura.sidecar_lock.try_lock_or_wait().err().unwrap().wait_for_release();
+        let mut wait = fixture
+            .kura
+            .sidecar_lock
+            .try_lock_or_wait()
+            .err()
+            .unwrap()
+            .wait_for_release();
         let initial = sidecar.release_deferred();
-        let callback = Arc::new(Reenter { kura: Arc::clone(&fixture.kura), wakes: AtomicUsize::new(0) });
+        let callback = Arc::new(Reenter {
+            kura: Arc::clone(&fixture.kura),
+            wakes: AtomicUsize::new(0),
+        });
         let waker = Waker::from(Arc::clone(&callback));
-        assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)).is_pending());
-        let passed = if archive {
-            fixture.kura.authenticate_archive_capture(
-                fixture.finality.height_context.network_id.clone(),
-                fixture.block.header().height().get(),
-                [0; 32], 0, &receipt,
-            ).is_ok()
-        } else {
-            fixture.kura.reauthenticate_native_amx_prepublication(
-                &token, &fixture.block, &fixture.manifest, &fixture.finality,
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        let passed = fixture
+            .kura
+            .reauthenticate_native_amx_prepublication(
+                &token,
+                &fixture.block,
+                &fixture.manifest,
+                &fixture.finality,
                 if invalid { &frontiers[..2] } else { &frontiers },
-            ).is_ok()
-        };
+            )
+            .is_ok();
         assert_eq!(passed, !invalid);
         assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
-        assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(Waker::noop())).is_ready());
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
         drop(wait);
         drop(initial);
     }
-    assert_eq!(snapshot_regular_files_recursively(&fixture.kura.store_root), files);
+    assert_eq!(
+        snapshot_regular_files_recursively(&fixture.kura.store_root),
+        files
+    );
+}
+
+#[test]
+fn certified_archive_reads_release_kura_custody_on_success_and_refusal() {
+    use crate::{
+        query::archive_finality::CertifiedArchiveView,
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig},
+    };
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit_with(Some(2_000), Vec::new(), Signers::BelowQuorum);
+    let boundary = chain.kura().exact_replay_boundary().unwrap();
+    let view = chain.state().view();
+    let certified = CertifiedArchiveView::new(&view, chain.kura()).unwrap();
+    for (height, succeeds) in [(1, true), (0, false), (2, false), (3, false)] {
+        assert_eq!(certified.block(height).is_ok(), succeeds);
+        // Current archive reads retain no prune/canonical/geometry/sidecar lease, including
+        // after an invalid certificate or coordinate. The actual joint lease must reenter.
+        let lease = chain.kura().try_publication_lease().unwrap();
+        assert!(lease.belongs_to(chain.kura()));
+        drop(lease);
+        assert_eq!(chain.kura().exact_replay_boundary().unwrap(), boundary);
+    }
+    certified.verify_unchanged().unwrap();
 }

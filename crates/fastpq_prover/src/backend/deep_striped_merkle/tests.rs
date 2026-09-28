@@ -43,6 +43,176 @@ fn reference(leaves: &[Digest]) -> Vec<Vec<Digest>> {
     }
 }
 
+fn batch_hash(
+    level: usize,
+    indices: &[usize],
+    left: &[[u64; 6]],
+    right: &mut [[u64; 6]],
+) -> Result<()> {
+    for ((&index, &left), right) in indices.iter().zip(left).zip(right.iter_mut()) {
+        *right = hash(level, index, digest(left), digest(*right))?.words();
+    }
+    Ok(())
+}
+
+#[test]
+fn batched_rows_preserve_every_small_frontier_and_canonical_parent_coordinate() {
+    for count in [1, 2, 4, 8] {
+        let leaves = leaves(count);
+        let expected = reference(&leaves);
+        for mask in 0_usize..1 << count {
+            let queries = (0..count)
+                .filter(|i| mask & (1 << i) != 0)
+                .collect::<Vec<_>>();
+            for stripes in [1, 2, 4, 8].into_iter().filter(|&n| n <= count) {
+                for capacity in [1, 3, 8] {
+                    let plan = StripedMerklePlan::new(count, stripes, &queries, limits()).unwrap();
+                    let frontier = plan
+                        .openings
+                        .as_ref()
+                        .map(|p| {
+                            p.sibling_positions()
+                                .iter()
+                                .map(|p| expected[p.level][p.index])
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let mut stream = plan.start().unwrap();
+                    for stripe in 0..stripes {
+                        for start in (0..count / stripes).step_by(capacity) {
+                            let length = (count / stripes - start).min(capacity);
+                            let indices = (start..start + length)
+                                .map(|row| stripe + row * stripes)
+                                .collect::<Vec<_>>();
+                            let mut values = SecretPolynomial::zeroed(length).unwrap();
+                            for (&index, value) in indices.iter().zip(values.iter_mut()) {
+                                *value = leaves[index].words();
+                            }
+                            stream
+                                .push_batch(&indices, &mut values, batch_hash, hash)
+                                .unwrap();
+                        }
+                    }
+                    let actual = stream.finish(hash).unwrap();
+                    assert_eq!(actual.root, expected.last().unwrap()[0]);
+                    assert_eq!(actual.siblings, frontier);
+                    assert_eq!(actual.parent_hashes, (count - 1).max(1));
+                    assert_eq!(actual.leaf_hashes, count);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
+    for indices in [vec![], vec![0, 1], vec![0, 2, 4], vec![2]] {
+        let mut stream = StripedMerklePlan::new(4, 2, &[], limits())
+            .unwrap()
+            .start()
+            .unwrap();
+        let mut values = SecretPolynomial::zeroed(indices.len()).unwrap();
+        assert!(
+            stream
+                .push_batch(&indices, &mut values, batch_hash, hash)
+                .is_err()
+        );
+        assert!(
+            stream
+                .push_batch(&[0], &mut [[0; 6]], batch_hash, hash)
+                .is_err()
+        );
+        assert!(stream.finish(hash).is_err());
+    }
+    let mut stream = StripedMerklePlan::new(4, 2, &[], limits())
+        .unwrap()
+        .start()
+        .unwrap();
+    assert!(
+        stream
+            .push_batch(
+                &[0],
+                &mut [[super::super::GOLDILOCKS_MODULUS; 6]],
+                batch_hash,
+                hash
+            )
+            .is_err()
+    );
+    assert!(stream.finish(hash).is_err());
+
+    for malformed_output in [false, true] {
+        let mut stream = StripedMerklePlan::new(4, 2, &[], limits())
+            .unwrap()
+            .start()
+            .unwrap();
+        stream
+            .push_batch(&[0, 2], &mut [[1; 6]; 2], batch_hash, hash)
+            .unwrap();
+        let partial = |_: usize, _: &[usize], _: &[[u64; 6]], right: &mut [[u64; 6]]| {
+            right[0] = [super::super::GOLDILOCKS_MODULUS; 6];
+            if malformed_output {
+                Ok(())
+            } else {
+                Err(invalid("partial parent failure"))
+            }
+        };
+        assert!(
+            stream
+                .push_batch(&[1, 3], &mut [[2; 6]; 2], partial, hash)
+                .is_err()
+        );
+        assert!(stream.finish(hash).is_err());
+    }
+    let mut stream = StripedMerklePlan::new(2, 1, &[], limits())
+        .unwrap()
+        .start()
+        .unwrap();
+    assert!(
+        stream
+            .push_batch(&[0, 1], &mut [[1; 6]; 2], batch_hash, |_, _, _, _| Err(
+                invalid("upper hash failure")
+            ))
+            .is_err()
+    );
+    assert!(stream.finish(hash).is_err());
+}
+
+#[test]
+fn full_capacity_batches_preserve_sparse_frontiers_across_run_boundaries() {
+    let count = super::super::deep_leaf_batch::CAPACITY * 4;
+    let values = leaves(count);
+    let expected = reference(&values);
+    let queries = [0, 1, count / 2 - 1, count / 2, count - 2, count - 1];
+    let plan = StripedMerklePlan::new(count, 2, &queries, limits()).unwrap();
+    let positions = plan.openings.as_ref().unwrap().sibling_positions().to_vec();
+    let mut stream = plan.start().unwrap();
+    for stripe in 0..2 {
+        for start in (0..count / 2).step_by(super::super::deep_leaf_batch::CAPACITY) {
+            let indices = (start..start + super::super::deep_leaf_batch::CAPACITY)
+                .map(|row| stripe + 2 * row)
+                .collect::<Vec<_>>();
+            let mut batch = SecretPolynomial::zeroed(indices.len()).unwrap();
+            for (&index, value) in indices.iter().zip(batch.iter_mut()) {
+                *value = values[index].words();
+            }
+            stream
+                .push_batch(&indices, &mut batch, batch_hash, hash)
+                .unwrap();
+        }
+    }
+    let result = stream.finish(hash).unwrap();
+    assert_eq!(result.root, expected.last().unwrap()[0]);
+    assert_eq!(
+        result.siblings,
+        positions
+            .iter()
+            .map(|p| expected[p.level][p.index])
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(result.parent_hashes, count - 1);
+    assert_eq!(result.leaf_hashes, count);
+}
+
 #[test]
 fn every_small_frontier_and_stripe_shape_matches_the_existing_tree() {
     for count in [1, 2, 4, 8] {

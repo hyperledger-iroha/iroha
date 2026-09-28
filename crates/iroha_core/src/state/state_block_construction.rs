@@ -50,7 +50,6 @@ impl State {
         #[cfg(feature = "telemetry")]
         let mut pending_parliament_telemetry_events;
         let mut pending_public_lane_slash_observability;
-        let mut sccp_verifier_work_in_block;
         #[cfg(feature = "zk-preverify")]
         let mut zk_dedup;
         let mut original = Some(acquired);
@@ -114,7 +113,6 @@ impl State {
             pending_parliament_telemetry_events = Some(Vec::new());
         }
         pending_public_lane_slash_observability = Some(Vec::new());
-        sccp_verifier_work_in_block = Some(SccpVerifierWorkV1::default());
         #[cfg(feature = "zk-preverify")]
         {
             zk_dedup = Some(Default::default());
@@ -161,7 +159,6 @@ impl State {
         #[cfg(feature = "telemetry")]
         assert!(pending_parliament_telemetry_events.is_some());
         assert!(pending_public_lane_slash_observability.is_some());
-        assert!(sccp_verifier_work_in_block.is_some());
         #[cfg(feature = "zk-preverify")]
         assert!(zk_dedup.is_some());
         // No World-sized owner is copied into a closure payload. Its only
@@ -175,7 +172,6 @@ impl State {
                 lane_consensus_contexts,
                 canonical_runtime,
                 projection,
-                sccp_registry,
                 block_hashes,
                 da_rewind_releases,
             } = original
@@ -221,7 +217,6 @@ impl State {
                 runtime_policy: runtime_policy.take().expect("prepared State input"),
                 fraud_monitoring: fraud_monitoring.take().expect("prepared State input"),
                 zk: zk.take().expect("prepared State input"),
-                sccp_registry,
                 gov: gov.take().expect("prepared State input"),
                 content: content.take().expect("prepared State input"),
                 settlement: settlement.take().expect("prepared State input"),
@@ -303,9 +298,6 @@ impl State {
                 zk_confidential_ops_in_block: 0,
                 zk_verify_calls_in_block: 0,
                 zk_proof_bytes_in_block: 0,
-                sccp_verifier_work_in_block: sccp_verifier_work_in_block
-                    .take()
-                    .expect("prepared State input"),
                 privacy_budget_in_block: privacy_budget_in_block
                     .take()
                     .expect("prepared State input"),

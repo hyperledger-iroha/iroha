@@ -1374,6 +1374,7 @@ fn fee_exempt_payload(
 ) -> bool {
     nexus_fee_exempt_payload(payload)
         || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)
+        || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload)
 }
 fn fee_exempt_transaction(
     world: &impl WorldReadOnly,
@@ -1381,8 +1382,11 @@ fn fee_exempt_transaction(
     transaction: &SignedTransaction,
     observation_time_ms: u64,
 ) -> bool {
+    // SCCP exemptions hold on success only (`specs/sccp.md` §4.19).
+    // TODO(ws31): charge the ordinary Nexus fee when an SCCP-exempt transaction fails.
     nexus_fee_exempt_transaction(transaction)
         || successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms)
+        || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, transaction.payload())
 }
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
@@ -5627,7 +5631,6 @@ impl Executor {
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         gas_limit_md: Option<u64>,
         require_gas_limit: bool,
-        sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<FeeSponsorProgramId>,
         skip_nexus_fee: bool,
@@ -5740,9 +5743,6 @@ impl Executor {
         }
         let instruction_count = instructions.len();
         // 3) Execute ISIs in order.
-        let prior_sccp_ivm_proved_execution_binding =
-            state_transaction.sccp_ivm_proved_execution_binding.clone();
-        state_transaction.sccp_ivm_proved_execution_binding = sccp_ivm_proved_execution_binding;
         let execution_result = (|| -> Result<(), ValidationFail> {
             if let Some(replay) = ivm_proved_replay {
                 for queued in replay.queued {
@@ -5905,8 +5905,6 @@ impl Executor {
             }
             Ok(())
         })();
-        state_transaction.sccp_ivm_proved_execution_binding =
-            prior_sccp_ivm_proved_execution_binding;
         execution_result?;
         // 4) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
@@ -6645,7 +6643,6 @@ impl Executor {
         }
         let mut proved_contract_runtime_context = None;
         let mut proved_entrypoint_authorization = None;
-        let mut sccp_ivm_proved_execution_binding = None;
         // Full verification for proof-carrying IVM executables must run before we move the
         // transaction payload out of `SignedTransaction`.
         let ivm_proved_replay = if let Executable::IvmProved(proved) = transaction.instructions() {
@@ -6734,15 +6731,11 @@ impl Executor {
                     "verified replay lost its actual gas owner".into(),
                 ));
             }
-            sccp_ivm_proved_execution_binding = Some(
-                crate::pipeline::overlay::sccp_ivm_proved_execution_binding(
-                    state_transaction,
-                    &transaction,
-                    proved,
-                    replay.gas_used,
-                )
-                .map_err(overlay_build_error_to_validation_fail)?,
-            );
+            crate::pipeline::overlay::require_ivm_proved_gas_within_limit(
+                &transaction,
+                replay.gas_used,
+            )
+            .map_err(overlay_build_error_to_validation_fail)?;
             Some(replay)
         } else {
             None
@@ -6767,7 +6760,6 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     false,
-                    None,
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
@@ -6793,7 +6785,6 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     true,
-                    sccp_ivm_proved_execution_binding,
                     gas_asset_opt,
                     fee_sponsor,
                     false,
@@ -8544,6 +8535,7 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",
     "CanManageKagemushaReserve",
+    "CanProposeSccpRouteGovernance",
 ];
 include!("executor_initial_permission_authority.rs");
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
@@ -10530,228 +10522,6 @@ mod tests {
             );
         }
     }
-    fn initial_executor_consensus_evidence_fixture() -> iroha_data_model::block::consensus::Evidence
-    {
-        use iroha_data_model::block::{
-            consensus::{Evidence, SumeragiV2EquivocationEvidence},
-            consensus_v2::{
-                ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum, HeightContext,
-                PROTOCOL_VERSION, PayloadEncoding, SumeragiV2Equivocation, TimeoutVote,
-                ValidatorPower,
-            },
-        };
-
-        let peer = |seed: u8| {
-            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                .expect("derive checked Initial-executor evidence peer keypair");
-            iroha_model_base::peer::PeerId::new(key_pair.public_key().clone())
-        };
-        let mut peers = (0xE1_u8..=0xE4).map(peer).collect::<Vec<_>>();
-        peers.sort();
-        let roster = peers
-            .into_iter()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
-        );
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network_id, 1, &roster,
-            );
-        let context = HeightContext {
-            network_id,
-            protocol_version: PROTOCOL_VERSION,
-            height: 1,
-            epoch: 0,
-            epoch_end_height: 1,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-            roster,
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            nexus_amx_context_hash: Hash::new(b"Initial executor evidence nexus context"),
-            execution_policy_hash: Hash::new(b"Initial executor evidence execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 4,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 1024,
-                max_chunk_count: 512,
-            },
-            leader_seed: [0xA5; 32],
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        Evidence {
-            equivocation: SumeragiV2EquivocationEvidence {
-                context,
-                proofs_of_possession: vec![vec![0xC1; 96]; 4],
-                conflict: SumeragiV2Equivocation::TimeoutVote {
-                    first: TimeoutVote {
-                        round,
-                        highest_prepare_qc: None,
-                        signer: 0,
-                        signature: vec![0xD1; 96],
-                    },
-                    second: TimeoutVote {
-                        round,
-                        highest_prepare_qc: None,
-                        signer: 0,
-                        signature: vec![0xD2; 96],
-                    },
-                },
-            },
-        }
-    }
-    fn initial_executor_seed_pending_consensus_evidence(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        evidence: &iroha_data_model::block::consensus::Evidence,
-    ) -> Hash {
-        use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
-
-        let key = crate::sumeragi::v2_evidence::evidence_key(evidence);
-        // These authorization unit tests exercise an already-admitted record
-        // projection; durable evidence authentication has its own fixture suite.
-        state_transaction.world.consensus_evidence.insert(
-            key.clone(),
-            EvidenceRecord {
-                evidence: evidence.clone(),
-                recorded_at_height: 1,
-                recorded_at_view: 0,
-                recorded_at_ms: 0,
-                penalty_status: EvidencePenaltyStatus::Pending,
-            },
-        );
-        key
-    }
-    #[test]
-    fn initial_executor_denies_evidence_penalty_cancel_without_can_manage_peers() {
-        use iroha_data_model::{
-            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
-        };
-
-        let authority = checked_account_id();
-        let evidence = initial_executor_consensus_evidence_fixture();
-        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
-        let mut state_transaction = block.transaction();
-        let evidence_key =
-            initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
-
-        let error = super::Executor::Initial
-            .execute_instruction(
-                &mut state_transaction,
-                &authority,
-                CancelConsensusEvidencePenalty { evidence }.into(),
-            )
-            .expect_err("post-genesis cancellation must require CanManagePeers");
-        assert!(matches!(
-            error,
-            ValidationFail::NotPermitted(ref message)
-                if message == "consensus evidence penalty cancellation requires CanManagePeers"
-        ));
-        assert_eq!(
-            state_transaction
-                .world
-                .consensus_evidence
-                .get(&evidence_key)
-                .expect("pending evidence record")
-                .penalty_status,
-            EvidencePenaltyStatus::Pending,
-            "denied cancellation must not mutate the penalty record"
-        );
-    }
-    #[test]
-    fn initial_executor_routes_evidence_penalty_cancel_with_direct_can_manage_peers() {
-        use iroha_data_model::{
-            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
-        };
-
-        let authority = checked_account_id();
-        let evidence = initial_executor_consensus_evidence_fixture();
-        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        world.account_permissions.insert(
-            authority.clone(),
-            BTreeSet::from([Permission::from(executor_permission::peer::CanManagePeers)]),
-        );
-        let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
-        let mut state_transaction = block.transaction();
-        let evidence_key =
-            initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
-
-        super::Executor::Initial
-            .execute_instruction(
-                &mut state_transaction,
-                &authority,
-                CancelConsensusEvidencePenalty { evidence }.into(),
-            )
-            .expect("exact direct CanManagePeers must route cancellation through Core");
-        assert_eq!(
-            state_transaction
-                .world
-                .consensus_evidence
-                .get(&evidence_key)
-                .expect("cancelled evidence record")
-                .penalty_status,
-            EvidencePenaltyStatus::Cancelled { height: 2 }
-        );
-    }
-    #[test]
-    fn initial_executor_routes_evidence_penalty_cancel_with_role_can_manage_peers() {
-        use iroha_data_model::{
-            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
-        };
-
-        let authority = checked_account_id();
-        let evidence = initial_executor_consensus_evidence_fixture();
-        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let role_id: RoleId = "consensus_evidence_penalty_manager"
-            .parse()
-            .expect("role id");
-        let role = Role::new(role_id.clone(), authority.clone())
-            .add_permission(Permission::from(executor_permission::peer::CanManagePeers))
-            .build(&authority);
-        world.roles.insert(role_id.clone(), role);
-        world.account_roles.insert(
-            crate::role::RoleIdWithOwner::new(authority.clone(), role_id),
-            (),
-        );
-        let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
-        let mut state_transaction = block.transaction();
-        let evidence_key =
-            initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
-
-        super::Executor::Initial
-            .execute_instruction(
-                &mut state_transaction,
-                &authority,
-                CancelConsensusEvidencePenalty { evidence }.into(),
-            )
-            .expect("role-held exact CanManagePeers must route cancellation through Core");
-        assert_eq!(
-            state_transaction
-                .world
-                .consensus_evidence
-                .get(&evidence_key)
-                .expect("cancelled evidence record")
-                .penalty_status,
-            EvidencePenaltyStatus::Cancelled { height: 2 }
-        );
-    }
     #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorization() {
@@ -11168,6 +10938,18 @@ mod tests {
         );
     }
     #[test]
+    fn initial_executor_treats_sccp_proposer_permission_as_genesis_only() {
+        let permission: Permission =
+            executor_permission::sccp::CanProposeSccpRouteGovernance.into();
+        assert!(is_builtin_initial_permission_name(
+            permission.name().as_ref()
+        ));
+        assert!(
+            initial_permission_is_genesis_only(&permission),
+            "SCCP route governance proposers are granted and revoked only in genesis"
+        );
+    }
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
         use iroha_data_model::{
@@ -11262,7 +11044,6 @@ mod tests {
                 executor_permission::smart_contract::CanManageSmartContractCode.into(),
                 executor_permission::settlement::CanManageFxCorridors.into(),
                 manifest_root,
-                executor_permission::sccp::CanManageSccpGovernance.into(),
                 contract_proposal_permission.clone(),
                 runtime_proposal_permission.clone(),
                 ballot_permission.clone(),
@@ -11634,11 +11415,6 @@ mod tests {
                 true,
             ),
             (
-                "CanProposeSccpRouteGovernance",
-                executor_permission::sccp::CanProposeSccpRouteGovernance.into(),
-                true,
-            ),
-            (
                 "CanProposeContractDeployment",
                 contract_proposal_permission,
                 false,
@@ -11652,7 +11428,7 @@ mod tests {
             ("CanSlashGovernanceLock", slash_permission, false),
             ("CanRestituteGovernanceLock", restitute_permission, false),
         ];
-        assert_eq!(cases.len(), 47, "update this table for every scoped arm");
+        assert_eq!(cases.len(), 46, "update this table for every scoped arm");
         assert_eq!(
             cases
                 .iter()
@@ -12968,7 +12744,6 @@ mod tests {
                 true,
                 None,
                 None,
-                None,
                 true,
             )
             .expect("empty proved overlay should retain replay gas");
@@ -13062,7 +12837,6 @@ mod tests {
                 true,
                 None,
                 None,
-                None,
                 true,
             )
             .expect("proved replay applies its authorized durable write");
@@ -13103,7 +12877,6 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,
@@ -13162,7 +12935,6 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,
@@ -13225,7 +12997,6 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,
@@ -13325,7 +13096,6 @@ mod tests {
                 signed.hash(),
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,

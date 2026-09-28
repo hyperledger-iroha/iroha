@@ -23,7 +23,6 @@ mod current_source_stream_token_custody;
 
 use archive_boundary::{
     ArchiveActivationGateV1, ArchiveStartupBoundaryV1, classify_archive_startup_boundary,
-    classify_pending_replay_completion, validate_pending_archive_tip,
 };
 
 pub use current_source_assignment::ProviderIngestCurrentSourceAssignmentV1;
@@ -46,7 +45,6 @@ use iroha_core::{
         ProviderIngestFinalizedArchiveRetentionAuthorityV1, ProviderIngestFinalizedArchiveV1,
     },
     state::{State, StateQueryView, StateReadOnly as _},
-    sumeragi::{V2StartupReplayPlan, plan_v2_startup_replay},
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use iroha_data_model::{
@@ -162,26 +160,12 @@ pub(crate) enum ProviderIngestFinalizedArchiveStartupModeV1 {
         /// Subsequent configured live-lag qualification.
         live_qualification: ProviderIngestFinalizedArchiveQualificationV1,
     },
-    /// One authenticated pending V2 tip will finish capture through Apply.
-    PendingTipReplay {
-        /// Exact pending height retained by the validated V2 replay plan.
-        pending_tip_height: u64,
-        /// Current authenticated qualification, absent only for empty
-        /// pre-genesis height zero.
-        qualification: Option<ProviderIngestFinalizedArchiveQualificationV1>,
-        /// Whether startup established a nonhistorical floor at the committed
-        /// State view immediately preceding pending replay.
-        activation_floor_created: bool,
-    },
 }
 /// Exact archive qualification retained after daemon startup.
 #[derive(Debug)]
 #[must_use]
 pub(crate) struct PreparedProviderIngestFinalizedArchiveV1 {
     startup_mode: ProviderIngestFinalizedArchiveStartupModeV1,
-    // TODO(WP6-sorafs): compile outside tests once Sumeragi's executor captures commits into
-    // this single-writer archive; until then only the startup tests read it back.
-    #[cfg(test)]
     archive: Arc<ProviderIngestFinalizedArchiveV1>,
     query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     runtime_query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
@@ -195,7 +179,6 @@ impl PreparedProviderIngestFinalizedArchiveV1 {
     }
     /// Return the single-writer archive installed in the consensus commit
     /// corridor.
-    #[cfg(test)]
     pub(crate) const fn archive(&self) -> &Arc<ProviderIngestFinalizedArchiveV1> {
         &self.archive
     }
@@ -275,31 +258,25 @@ impl QualifiedProviderIngestRetentionAuthorityV1 {
 }
 struct AuthenticatedArchiveStartupBoundaryV1<'state> {
     state_view: StateQueryView<'state>,
-    state_height: u64,
     kind: ArchiveStartupBoundaryV1,
 }
 /// Open and qualify the daemon-owned provider-ingest archive before consensus.
 ///
-/// The recovered State tip is reconciled against its non-forgeable Kura
-/// receipt with a zero-gap barrier. The configured lag allowance is evaluated
+/// The recovered State tip is reconciled against its same-State certified
+/// Kura block with a zero-gap barrier. The configured lag allowance is evaluated
 /// only after that exact reconciliation succeeds. An empty archive may
 /// establish an explicit activation floor at the current authenticated tip;
 /// it never claims historical coverage below that floor. Height-zero startup
 /// accepts only a completely empty namespace and defers qualification until
-/// genesis capture. An authenticated pending V2 tip admits only the exact
-/// pending height or its immediate predecessor so Apply can finish either
-/// side of the archive-capture crash boundary.
+/// genesis capture. Current consensus replay must finish before this boundary;
+/// a crash may leave only one committed successor missing from an existing archive.
 ///
 /// # Errors
 ///
 /// Fails for an escaping or unresolvable relative root, invalid bounds, unsafe
-/// durable storage, a substituted State/Kura/pending-tip boundary, nonempty
+/// durable storage, a substituted State/Kura boundary, nonempty
 /// height-zero storage, incomplete coverage, a fork, or a configured lag
 /// violation.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "startup binds the complete authenticated State/Kura archive boundary"
-)]
 pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     config: &SorafsProviderIngestFinalizedArchive,
     network_id: NetworkId,
@@ -307,7 +284,6 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     daemon_storage_root: &Path,
     state: &Arc<State>,
     kura: &Arc<Kura>,
-    startup_replay_plan: &V2StartupReplayPlan,
     retention_authority: Option<Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>>,
 ) -> Result<PreparedProviderIngestFinalizedArchiveV1, ProviderIngestFinalizedArchiveStartupErrorV1>
 {
@@ -321,12 +297,12 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     let (archive, retention_authority) = open_provider_ingest_finalized_archive(
         config,
         &network_id,
+        &state.query_view(),
         kura.as_ref(),
         daemon_storage_root,
         retention_authority,
     )?;
-    let boundary =
-        authenticate_archive_startup_boundary(state.as_ref(), kura.as_ref(), startup_replay_plan)?;
+    let boundary = authenticate_archive_startup_boundary(state.as_ref(), kura.as_ref())?;
     let archive_empty = archive.is_empty().map_err(|source| {
         ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
             stage: "complete bootstrap namespace validation",
@@ -335,7 +311,6 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     })?;
     let startup_mode = select_archive_startup_mode(
         config,
-        &network_id,
         archive.as_ref(),
         kura.as_ref(),
         &boundary,
@@ -364,7 +339,6 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         Some(ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(reader_args));
     Ok(PreparedProviderIngestFinalizedArchiveV1 {
         startup_mode,
-        #[cfg(test)]
         archive,
         query,
         runtime_query,
@@ -375,6 +349,7 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
 fn open_provider_ingest_finalized_archive(
     config: &SorafsProviderIngestFinalizedArchive,
     network_id: &NetworkId,
+    state_view: &StateQueryView<'_>,
     kura: &Kura,
     daemon_storage_root: &Path,
     authority: Option<Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>>,
@@ -424,6 +399,7 @@ fn open_provider_ingest_finalized_archive(
                 root,
                 bounds,
                 network_id,
+                state_view,
                 kura,
                 &binding,
                 authority.as_ref(),
@@ -461,7 +437,6 @@ fn open_provider_ingest_finalized_archive(
 fn authenticate_archive_startup_boundary<'state>(
     state: &'state State,
     kura: &Kura,
-    startup_replay_plan: &V2StartupReplayPlan,
 ) -> Result<
     AuthenticatedArchiveStartupBoundaryV1<'state>,
     ProviderIngestFinalizedArchiveStartupErrorV1,
@@ -489,28 +464,13 @@ fn authenticate_archive_startup_boundary<'state>(
             reason: "durable Kura height exceeds the supported range",
         },
     )?;
-    if u64::try_from(startup_replay_plan.durable_height()).ok() != Some(kura_height) {
-        return Err(
-            ProviderIngestFinalizedArchiveStartupErrorV1::StartupBoundary {
-                reason: "validated V2 startup plan is bound to another durable Kura height",
-            },
-        );
-    }
-    let kind = classify_archive_startup_boundary(
-        state_height,
-        kura_height,
-        startup_replay_plan.pending_tip_height(),
-    )
-    .map_err(|reason| ProviderIngestFinalizedArchiveStartupErrorV1::StartupBoundary { reason })?;
-    Ok(AuthenticatedArchiveStartupBoundaryV1 {
-        state_view,
-        state_height,
-        kind,
-    })
+    let kind = classify_archive_startup_boundary(state_height, kura_height).map_err(|reason| {
+        ProviderIngestFinalizedArchiveStartupErrorV1::StartupBoundary { reason }
+    })?;
+    Ok(AuthenticatedArchiveStartupBoundaryV1 { state_view, kind })
 }
 fn select_archive_startup_mode(
     config: &SorafsProviderIngestFinalizedArchive,
-    network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
     kura: &Kura,
     boundary: &AuthenticatedArchiveStartupBoundaryV1<'_>,
@@ -529,29 +489,19 @@ fn select_archive_startup_mode(
             Ok(ProviderIngestFinalizedArchiveStartupModeV1::BootstrapAwaitingGenesisCapture)
         }
         ArchiveStartupBoundaryV1::Qualified => {
-            prepare_qualified_archive_mode(config, network_id, archive, kura, &boundary.state_view)
+            prepare_qualified_archive_mode(config, archive, kura, &boundary.state_view)
         }
-        ArchiveStartupBoundaryV1::PendingTip { height } => prepare_pending_tip_archive_mode(
-            network_id,
-            archive,
-            kura,
-            &boundary.state_view,
-            boundary.state_height,
-            height,
-            archive_empty,
-        ),
     }
 }
 fn prepare_qualified_archive_mode(
     config: &SorafsProviderIngestFinalizedArchive,
-    network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
     kura: &Kura,
     state_view: &StateQueryView<'_>,
 ) -> Result<ProviderIngestFinalizedArchiveStartupModeV1, ProviderIngestFinalizedArchiveStartupErrorV1>
 {
     let reconciliation = archive
-        .reconcile_kura_authenticated_state_tip(state_view, kura)
+        .reconcile_certified_state_tip(state_view, kura)
         .map_err(
             |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
                 stage: "exact Kura-tip reconciliation",
@@ -559,7 +509,7 @@ fn prepare_qualified_archive_mode(
             },
         )?;
     let live_qualification = archive
-        .qualify_against_kura_tip(network_id, kura, config.max_kura_tip_lag_blocks)
+        .qualify_against_certified_tip(state_view, kura, config.max_kura_tip_lag_blocks)
         .map_err(
             |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
                 stage: "configured live-lag qualification",
@@ -571,80 +521,6 @@ fn prepare_qualified_archive_mode(
         live_qualification,
     })
 }
-fn prepare_pending_tip_archive_mode(
-    network_id: &NetworkId,
-    archive: &ProviderIngestFinalizedArchiveV1,
-    kura: &Kura,
-    state_view: &StateQueryView<'_>,
-    state_height: u64,
-    pending_tip_height: u64,
-    archive_empty: bool,
-) -> Result<ProviderIngestFinalizedArchiveStartupModeV1, ProviderIngestFinalizedArchiveStartupErrorV1>
-{
-    let (qualification, activation_floor_created) = if archive_empty && state_height == 0 {
-        (None, false)
-    } else if archive_empty {
-        let (_, receipt) = kura
-            .v2_finality_artifact_with_receipt(state_height)
-            .map_err(
-                |source| ProviderIngestFinalizedArchiveStartupErrorV1::KuraBoundary {
-                    detail: source.to_string(),
-                },
-            )?
-            .ok_or(
-                ProviderIngestFinalizedArchiveStartupErrorV1::StartupBoundary {
-                    reason: "committed State predecessor has no authenticated V2 finality receipt",
-                },
-            )?;
-        archive
-            .capture_kura_authenticated_view(state_view, kura, &receipt)
-            .map_err(
-                |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
-                    stage: "pending-tip predecessor capture",
-                    source: Box::new(source),
-                },
-            )?;
-        let qualification = qualify_pending_tip_archive(network_id, archive, kura)?;
-        (Some(qualification), true)
-    } else {
-        (
-            Some(qualify_pending_tip_archive(network_id, archive, kura)?),
-            false,
-        )
-    };
-    validate_pending_archive_tip(
-        pending_tip_height,
-        state_height,
-        qualification
-            .as_ref()
-            .map(|qualification| qualification.archive_tip().height),
-    )
-    .map_err(|reason| ProviderIngestFinalizedArchiveStartupErrorV1::StartupBoundary { reason })?;
-    Ok(
-        ProviderIngestFinalizedArchiveStartupModeV1::PendingTipReplay {
-            pending_tip_height,
-            qualification,
-            activation_floor_created,
-        },
-    )
-}
-fn qualify_pending_tip_archive(
-    network_id: &NetworkId,
-    archive: &ProviderIngestFinalizedArchiveV1,
-    kura: &Kura,
-) -> Result<
-    ProviderIngestFinalizedArchiveQualificationV1,
-    ProviderIngestFinalizedArchiveStartupErrorV1,
-> {
-    archive
-        .qualify_against_kura_tip(network_id, kura, 1)
-        .map_err(
-            |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
-                stage: "pending-tip one-block qualification",
-                source: Box::new(source),
-            },
-        )
-}
 fn activation_gate_for_startup_mode(
     startup_mode: &ProviderIngestFinalizedArchiveStartupModeV1,
 ) -> ArchiveActivationGateV1 {
@@ -655,12 +531,6 @@ fn activation_gate_for_startup_mode(
         ProviderIngestFinalizedArchiveStartupModeV1::Qualified { .. } => {
             ArchiveActivationGateV1::StrictLive
         }
-        ProviderIngestFinalizedArchiveStartupModeV1::PendingTipReplay {
-            pending_tip_height,
-            ..
-        } => ArchiveActivationGateV1::PendingTip {
-            height: *pending_tip_height,
-        },
     }
 }
 fn resolve_daemon_archive_root(
@@ -968,8 +838,16 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
     ) -> Result<ProviderIngestFinalizedArchiveQualificationV1, ProviderIngestFinalizedArchiveErrorV1>
     {
         for _ in 0..LIVE_SELECTION_ATTEMPTS_V1 {
-            match self.archive.qualify_against_kura_tip(
-                &self.network_id,
+            let view = self.state.query_view();
+            if view.network_id() != &self.network_id {
+                return Err(
+                    ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
+                        reason: "provider-ingest reader network differs from its native State",
+                    },
+                );
+            }
+            match self.archive.qualify_against_certified_tip(
+                &view,
                 self.kura.as_ref(),
                 self.max_kura_tip_lag_blocks,
             ) {
@@ -988,11 +866,8 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
     /// Validate adapter identity readiness without requiring a first commit to
     /// have completed before Sumeragi starts.
     ///
-    /// The deferred result is accepted only for the exact bootstrap or
-    /// authenticated pending-tip gate frozen during archive preparation.
-    /// Ordinary callers remain subject to configured live-lag qualification,
-    /// and a frozen pending tip cannot activate until Kura revalidates it as
-    /// fully recovered.
+    /// The deferred result is accepted only for the exact empty bootstrap gate.
+    /// Ordinary callers remain subject to configured live-lag qualification.
     pub(crate) fn activation_ready(&self) -> Result<bool, ProviderIngestFinalizedArchiveErrorV1> {
         let strict_result = self.qualify_live();
         if self.strict_qualification_is_activated(&strict_result)? {
@@ -1008,9 +883,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             ArchiveActivationGateV1::AwaitingGenesis => {
                 self.awaiting_genesis_activation_ready(strict_result)
             }
-            ArchiveActivationGateV1::PendingTip { height } => {
-                self.pending_tip_activation_ready(height)
-            }
         }
     }
     fn strict_qualification_is_activated(
@@ -1023,20 +895,12 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         let Ok(qualification) = strict_result else {
             return Ok(false);
         };
-        if !self
-            .activation_gate
-            .accepts_visible_archive_tip(qualification.archive_tip().height)
-            || !self.qualification_is_visible(qualification)?
-        {
+        if !self.qualification_is_visible(qualification)? {
             return Ok(false);
         }
-        match self.activation_gate {
-            ArchiveActivationGateV1::PendingTip { height } => self.pending_replay_complete(height),
-            ArchiveActivationGateV1::StrictLive | ArchiveActivationGateV1::AwaitingGenesis => {
-                Ok(true)
-            }
-        }
+        Ok(true)
     }
+
     fn awaiting_genesis_activation_ready(
         &self,
         strict_result: Result<
@@ -1046,50 +910,13 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
     ) -> Result<bool, ProviderIngestFinalizedArchiveErrorV1> {
         let (_view, state_height) = self.activation_state_view()?;
         let kura_height = self.activation_kura_height("read deferred genesis Kura boundary")?;
-        if state_height == 0 && kura_height <= 1 {
-            if self.archive.is_empty()? {
-                return Ok(false);
-            }
-            let qualification =
-                self.archive
-                    .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 0)?;
-            if kura_height == 1 && qualification.archive_tip().height == 1 {
-                return Ok(false);
-            }
+        if state_height == 0 && kura_height <= 1 && self.archive.is_empty()? {
+            return Ok(false);
         }
         let _ = strict_result?;
         Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
             reason: "provider-ingest genesis archive tip is not visible through committed State",
         })
-    }
-    fn pending_tip_activation_ready(
-        &self,
-        pending_tip_height: u64,
-    ) -> Result<bool, ProviderIngestFinalizedArchiveErrorV1> {
-        let (_view, state_height) = self.activation_state_view()?;
-        let kura_height = self.activation_kura_height("read deferred pending-tip Kura boundary")?;
-        classify_archive_startup_boundary(state_height, kura_height, Some(pending_tip_height))
-            .map_err(
-                |reason| ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { reason },
-            )?;
-        if self.archive.is_empty()? {
-            validate_pending_archive_tip(pending_tip_height, state_height, None).map_err(
-                |reason| ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { reason },
-            )?;
-            return Ok(false);
-        }
-        let qualification =
-            self.archive
-                .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 1)?;
-        validate_pending_archive_tip(
-            pending_tip_height,
-            state_height,
-            Some(qualification.archive_tip().height),
-        )
-        .map_err(|reason| {
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { reason }
-        })?;
-        Ok(false)
     }
     fn activation_state_view(
         &self,
@@ -1162,28 +989,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             );
         }
         Ok(true)
-    }
-    fn pending_replay_complete(
-        &self,
-        expected_height: u64,
-    ) -> Result<bool, ProviderIngestFinalizedArchiveErrorV1> {
-        let replay_plan = plan_v2_startup_replay(self.kura.as_ref()).map_err(|error| {
-            ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                operation: "revalidate deferred pending-tip recovery",
-                detail: error.to_string(),
-            }
-        })?;
-        let durable_height = u64::try_from(replay_plan.durable_height()).map_err(|_| {
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                reason: "provider-ingest recovery Kura height exceeds the supported range",
-            }
-        })?;
-        classify_pending_replay_completion(
-            expected_height,
-            durable_height,
-            replay_plan.pending_tip_height(),
-        )
-        .map_err(|reason| ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { reason })
     }
     fn select_visible_committed_key(
         &self,
@@ -2220,6 +2025,7 @@ mod tests {
             open_provider_ingest_finalized_archive(
                 &config,
                 &test_network_id(0x41),
+                &empty_state(&ChainId::from("retention"), &kura).query_view(),
                 kura.as_ref(),
                 daemon_root.path(),
                 None,
@@ -2239,8 +2045,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let chain_id = ChainId::from("provider-ingest-empty-state");
         let state = empty_state(&chain_id, &kura);
-        let replay_plan =
-            iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref()).expect("startup plan");
         let network_id = *state.network_id_ref();
         let mut prepared = prepare_provider_ingest_finalized_archive_v1(
             &archive_config(),
@@ -2249,7 +2053,6 @@ mod tests {
             daemon_root.path(),
             &state,
             &kura,
-            &replay_plan,
             None,
         )
         .expect("fresh empty archive must await genesis capture");
@@ -2343,38 +2146,70 @@ mod tests {
         );
     }
     #[test]
-    fn pending_boundary_allows_only_exact_tip_or_predecessor() {
+    fn archive_startup_requires_complete_current_consensus_replay() {
         assert_eq!(
-            classify_archive_startup_boundary(7, 8, Some(8)),
-            Ok(ArchiveStartupBoundaryV1::PendingTip { height: 8 })
+            classify_archive_startup_boundary(0, 0),
+            Ok(ArchiveStartupBoundaryV1::Bootstrap)
         );
         assert_eq!(
-            classify_archive_startup_boundary(8, 8, Some(8)),
-            Ok(ArchiveStartupBoundaryV1::PendingTip { height: 8 })
+            classify_archive_startup_boundary(8, 8),
+            Ok(ArchiveStartupBoundaryV1::Qualified)
         );
-        assert!(classify_archive_startup_boundary(6, 8, Some(8)).is_err());
-        assert!(classify_archive_startup_boundary(7, 8, None).is_err());
-        assert!(classify_archive_startup_boundary(7, 8, Some(9)).is_err());
-        assert_eq!(validate_pending_archive_tip(8, 7, Some(7)), Ok(()));
-        assert_eq!(validate_pending_archive_tip(8, 7, Some(8)), Ok(()));
-        assert_eq!(validate_pending_archive_tip(8, 8, Some(8)), Ok(()));
-        assert!(validate_pending_archive_tip(8, 8, Some(7)).is_err());
-        assert!(validate_pending_archive_tip(8, 7, Some(6)).is_err());
-        assert!(validate_pending_archive_tip(8, 7, Some(9)).is_err());
-        assert!(validate_pending_archive_tip(8, 7, None).is_err());
-        assert_eq!(validate_pending_archive_tip(1, 0, None), Ok(()));
-        assert!(validate_pending_archive_tip(1, 1, None).is_err());
-        let gate = ArchiveActivationGateV1::PendingTip { height: 8 };
-        assert!(!gate.accepts_visible_archive_tip(7));
-        assert!(gate.accepts_visible_archive_tip(8));
-        assert!(gate.accepts_visible_archive_tip(9));
-        assert_eq!(classify_pending_replay_completion(8, 8, Some(8)), Ok(false));
-        assert_eq!(classify_pending_replay_completion(8, 8, None), Ok(true));
-        assert_eq!(classify_pending_replay_completion(8, 9, None), Ok(true));
-        assert_eq!(classify_pending_replay_completion(8, 9, Some(9)), Ok(true));
-        assert!(classify_pending_replay_completion(8, 7, None).is_err());
-        assert!(classify_pending_replay_completion(8, 10, Some(9)).is_err());
-        assert!(classify_pending_replay_completion(8, 8, Some(7)).is_err());
+        assert!(classify_archive_startup_boundary(7, 8).is_err());
+        assert!(classify_archive_startup_boundary(8, 7).is_err());
+    }
+
+    #[test]
+    fn current_certified_startup_activates_and_recovers_one_commit_without_sidecars() {
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        let root = physical_tempdir().unwrap();
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        let prepare = |chain: &CertifiedTestChain| {
+            prepare_provider_ingest_finalized_archive_v1(
+                &archive_config(),
+                chain.network_id(),
+                ProviderId::new([0x51; 32]),
+                root.path(),
+                chain.state(),
+                chain.kura(),
+                None,
+            )
+        };
+        let first = prepare(&chain).unwrap();
+        assert!(first.runtime_query().activation_ready().unwrap());
+        assert_eq!(
+            first.query().qualify_live().unwrap().archive_tip().height,
+            1
+        );
+        let generation = first.archive().health_generation().unwrap();
+        drop(first);
+        // Simulate the only allowed crash gap: Kura and State commit one block before capture.
+        chain.commit_at(2_000, Vec::new());
+        let recovered = prepare(&chain).unwrap();
+        assert!(recovered.runtime_query().activation_ready().unwrap());
+        assert_eq!(
+            recovered
+                .query()
+                .qualify_live()
+                .unwrap()
+                .archive_tip()
+                .height,
+            2
+        );
+        assert_eq!(
+            recovered.archive().health_generation().unwrap(),
+            generation + 1
+        );
+        drop(recovered);
+        let replayed = prepare(&chain).unwrap();
+        assert_eq!(
+            replayed.archive().health_generation().unwrap(),
+            generation + 1
+        );
     }
     #[test]
     fn query_rejects_unbounded_page_before_archive_access() {

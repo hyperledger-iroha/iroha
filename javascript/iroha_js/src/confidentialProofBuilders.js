@@ -620,12 +620,12 @@ export function createConfidentialProverClass(nativeRuntime) {
         this.#native = native;
       } catch (cause) {
         this.#key?.fill(0);
-        throw new ConfidentialProverError("INVALID_INPUT", cause.message, { cause });
+        throw new ConfidentialProverError("INVALID_INPUT", cause instanceof Error ? cause.message : "Invalid confidential wallet options", { cause });
       }
       Object.freeze(this);
     }
 
-    /** Erase this prover's owned key copy and permanently close it. */
+    /** Erase this prover's key and close it; already queued native jobs finish independently. */
     dispose() {
       this.#key?.fill(0);
       this.#key = undefined;
@@ -649,11 +649,20 @@ export function createConfidentialProverClass(nativeRuntime) {
       return { inputs, leaves, root: normalizeFixed32HexLiteral(request.rootHex, "rootHex"), total: walletTotal(inputs, "inputs") };
     }
 
-    #prove(relation, prepared, outputs, invoke) {
-      // The native owner clears its private copy; clear our FFI copy on every outcome too.
+    async #prove(relation, prepared, outputs, invoke) {
+      // A request getter can dispose the wallet during synchronous normalization.
+      if (!this.#key) throw new ConfidentialProverError("DISPOSED", "Confidential prover has been disposed");
+      // Native preparation synchronously takes its own clearing copy before
+      // returning a promise. Do not retain this FFI copy for the worker lifetime.
       const key = Buffer.from(this.#key);
       try {
-        const result = normalizeNativeProofResult(invoke(key), "confidential proof", true);
+        let pending;
+        try {
+          pending = invoke(key);
+        } finally {
+          key.fill(0);
+        }
+        const result = normalizeNativeProofResult(await pending, "confidential proof", true);
         if (result.nullifiers.length !== prepared.inputs.length || result.outputCommitments.length !== outputs ||
             result.root.toString("hex") !== prepared.root) {
           throw new Error("Native confidential proof returned inconsistent public outputs");
@@ -661,13 +670,11 @@ export function createConfidentialProverClass(nativeRuntime) {
         return { relation, ...result };
       } catch (cause) {
         throw new ConfidentialProverError("PROVING_FAILED", "Confidential proof generation or verification failed", { cause });
-      } finally {
-        key.fill(0);
       }
     }
 
     /** Prove and locally verify a transfer using internally selected circuit and key. */
-    proveTransfer(request) {
+    async proveTransfer(request) {
       let prepared;
       let outputs;
       try {
@@ -678,7 +685,7 @@ export function createConfidentialProverClass(nativeRuntime) {
         if (walletTotal(outputs, "outputs") !== prepared.total) throw new TypeError("transfer input and output totals must match");
       } catch (cause) {
         if (cause instanceof ConfidentialProverError) throw cause;
-        throw new ConfidentialProverError("INVALID_INPUT", cause.message, { cause });
+        throw new ConfidentialProverError("INVALID_INPUT", cause instanceof Error ? cause.message : "Invalid confidential transfer input", { cause });
       }
       return this.#prove("confidential-transfer", prepared, outputs.length, (key) =>
         this.#native.proveConfidentialTransfer(this.#network, this.#asset, key,
@@ -686,7 +693,7 @@ export function createConfidentialProverClass(nativeRuntime) {
     }
 
     /** Redeem a positive amount, selecting the full or private-change relation internally. */
-    proveRedemption(request) {
+    async proveRedemption(request) {
       let prepared;
       let amount;
       let change;
@@ -705,7 +712,7 @@ export function createConfidentialProverClass(nativeRuntime) {
         }
       } catch (cause) {
         if (cause instanceof ConfidentialProverError) throw cause;
-        throw new ConfidentialProverError("INVALID_INPUT", cause.message, { cause });
+        throw new ConfidentialProverError("INVALID_INPUT", cause instanceof Error ? cause.message : "Invalid confidential redemption input", { cause });
       }
       return this.#prove(change === undefined ? "confidential-redemption" : "confidential-redemption-with-change",
         prepared, change === undefined ? 0 : 1, (key) =>

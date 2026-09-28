@@ -526,15 +526,8 @@ mod tests {
     }
 
     fn inbound(network: SccpNetworkV1) -> SccpTransferPayloadV1 {
-        SccpTransferPayloadV1::inbound(
-            network,
-            3,
-            2,
-            5,
-            external_account(network),
-            taira_account(),
-        )
-        .expect("inbound payload")
+        SccpTransferPayloadV1::inbound(network, 3, 2, 5, external_account(network), taira_account())
+            .expect("inbound payload")
     }
 
     #[test]
@@ -583,7 +576,10 @@ mod tests {
         let mut trailing = valid.clone();
         trailing.push(0);
         assert_eq!(decode(&trailing), Err(PayloadError::TrailingBytes));
-        assert_eq!(decode(&valid[..valid.len() - 1]), Err(PayloadError::Truncated));
+        assert_eq!(
+            decode(&valid[..valid.len() - 1]),
+            Err(PayloadError::Truncated)
+        );
         assert_eq!(decode(&[]), Err(PayloadError::Truncated));
         let mutate = |index: usize, value: u8| {
             let mut bytes = valid.clone();
@@ -677,17 +673,17 @@ mod tests {
         assert!(!is_valid_account(2, &[1; 21]));
         assert!(!is_valid_account(3, &[]));
         assert!(is_valid_account(3, &[0; 1024]));
-        let mut tron = vec![0x41];
-        tron.extend_from_slice(&[0; 20]);
-        assert!(!is_valid_account(5, &tron));
-        tron[20] = 1;
-        assert!(is_valid_account(5, &tron));
-        let mut ton = vec![0; 36];
-        assert!(!is_valid_account(7, &ton));
-        ton[35] = 1;
-        assert!(is_valid_account(7, &ton));
-        ton[0] = 0xff;
-        assert!(!is_valid_account(7, &ton));
+        let mut tvm_account = vec![0x41];
+        tvm_account.extend_from_slice(&[0; 20]);
+        assert!(!is_valid_account(5, &tvm_account));
+        tvm_account[20] = 1;
+        assert!(is_valid_account(5, &tvm_account));
+        let mut ton_account = vec![0; 36];
+        assert!(!is_valid_account(7, &ton_account));
+        ton_account[35] = 1;
+        assert!(is_valid_account(7, &ton_account));
+        ton_account[0] = 0xff;
+        assert!(!is_valid_account(7, &ton_account));
         for unassigned in [0_u8, 4, 6, 8, 255] {
             assert!(!is_valid_account(unassigned, &[1; 20]));
         }

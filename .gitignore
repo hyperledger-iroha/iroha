@@ -317,6 +317,9 @@ integration_tests/fixtures/sumeragi_da*
 # Ad-hoc backup files from local editing sessions
 *.bak-*
 
+# Vim swap files
+.*.sw[a-p]
+
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 

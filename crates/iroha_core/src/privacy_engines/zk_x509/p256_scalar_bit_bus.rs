@@ -989,6 +989,12 @@ impl core::fmt::Debug for P256ScalarBitBusBaseSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBaseSourceV1 {
+    /// Allocated committed scalar rows, including unused capacity.
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        self.material.as_ref().map_or(0, |material| {
+            super::allocation_payload::vector_v1(&material.rows)
+        })
+    }
     /// Validate source bindings and enter the challenge-independent phase.
     pub(crate) fn new_v1(
         windows: &[P256WindowTraceV1],
@@ -1119,6 +1125,12 @@ impl core::fmt::Debug for P256ScalarBitBusBoundSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ScalarBitBusBoundSourceV1 {
+    /// Allocated committed scalar rows, including unused capacity.
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        self.material.as_ref().map_or(0, |material| {
+            super::allocation_payload::vector_v1(&material.rows)
+        })
+    }
     fn material_v1(&self) -> Result<&P256ScalarBitBusBaseMaterialV1, P256ScalarBitBusErrorV1> {
         self.material.as_ref().ok_or(P256ScalarBitBusErrorV1::Phase)
     }

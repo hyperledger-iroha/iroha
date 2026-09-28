@@ -25,7 +25,7 @@ pub use asset_definition::{
     visit_transfer_asset_definition, visit_unregister_asset_definition,
 };
 /// Re-export bridge visitor helpers.
-pub use bridge::{visit_apply_sccp_route_governance, visit_record_bridge_receipt};
+pub use bridge::visit_record_bridge_receipt;
 /// Re-export domain visitor helpers used by the default executor.
 pub use domain::{
     visit_register_domain, visit_remove_domain_key_value, visit_set_domain_key_value,
@@ -71,7 +71,7 @@ use iroha_smart_contract::data_model::{
             RebindAccountAlias, RenewAliasLease,
         },
         asset_alias::SetAssetDefinitionAlias,
-        bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
+        bridge::RecordBridgeReceipt,
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{
@@ -89,6 +89,12 @@ use iroha_smart_contract::data_model::{
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
+        sccp::{
+            AdvanceSccpLightClientV1, InitializeSccpV1, RecordSccpMessage,
+            ReportSccpLightClientEquivocationV1, SetSccpBridgeKeyV1, SettleSccpV1,
+            SubmitSccpAttestationFaultV1, SubmitSccpAttestationsV1, SubmitSccpInboundMessageV1,
+            SubmitSccpOutboundVoidV1,
+        },
         settlement::SettlementInstructionBox,
         smart_contract_code::{
             AcceptContractOwnership, ActivateContractInstance, CancelContractOwnershipOffer,
@@ -569,6 +575,39 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<RefundExpiredVpnLease>() {
             execute!(executor, isi);
         }
+        // Core enforces every SCCP v1 rule (`specs/sccp.md` §4.19): signatures, bridge-key
+        // authority, admission pre-verification, escrow custody and Parliament enactment. The
+        // default executor forwards all ten SCCP instructions so those consensus checks run.
+        if let Some(isi) = any.downcast_ref::<InitializeSccpV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SetSccpBridgeKeyV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpAttestationsV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpAttestationFaultV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RecordSccpMessage>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpInboundMessageV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SettleSccpV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSccpOutboundVoidV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<AdvanceSccpLightClientV1>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ReportSccpLightClientEquivocationV1>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
             visit_set_asset_key_value(executor, isi);
             return;
@@ -781,10 +820,6 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<RecordBridgeReceipt>() {
             bridge::visit_record_bridge_receipt(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<ApplySccpRouteGovernance>() {
-            bridge::visit_apply_sccp_route_governance(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<ProposeSccpRouteGovernance>() {
@@ -2358,7 +2393,6 @@ pub mod domain {
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanSetHijiriParameters(_)
-            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
@@ -2840,7 +2874,6 @@ pub mod account {
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanSetHijiriParameters(_)
-            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
@@ -3189,7 +3222,6 @@ pub mod asset_definition {
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanSetHijiriParameters(_)
-            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
@@ -4298,14 +4330,6 @@ pub mod parameter {
     use iroha_executor_data_model::permission::parameter::{
         CanSetHijiriParameters, CanSetParameters,
     };
-    const SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
-    fn updates_sccp_governance(isi: &SetParameter) -> bool {
-        matches!(
-            isi.inner(),
-            Parameter::Custom(parameter)
-                if parameter.id().name().as_ref() == SCCP_REGISTRY_PARAMETER_ID
-        )
-    }
     fn updates_validation_fee_governance(isi: &SetParameter) -> bool {
         matches!(
             isi.inner(),
@@ -4330,12 +4354,6 @@ pub mod parameter {
             if custom.id() == &iroha_data_model::nexus::ValidatorCommitteeOperationV1::parameter_id())
         {
             execute!(executor, isi);
-        }
-        if updates_sccp_governance(isi) {
-            deny!(
-                executor,
-                "The reserved SCCP registry cannot be changed through SetParameter; an exact due Parliament certificate must apply the typed SCCP action"
-            );
         }
         if updates_validation_fee_governance(isi) {
             deny!(
@@ -4849,7 +4867,6 @@ pub mod trigger {
             | AnyPermission::CanSetAssetHoldingLimit(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanSetHijiriParameters(_)
-            | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
             | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
@@ -4927,7 +4944,6 @@ pub mod trigger {
                 CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
                 CanPublishSpaceDirectoryManifestForAccountDomain,
             },
-            sccp::CanManageSccpGovernance,
             settlement::CanExecuteSettlement,
             sorafs::{
                 CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
@@ -4987,6 +5003,38 @@ pub mod trigger {
                 !is_permission_trigger_associated(&permission, &trigger_id),
                 "asset-metadata permission must not bind to triggers"
             );
+        }
+        #[test]
+        fn default_executor_forwards_every_sccp_instruction() {
+            let source = include_str!("mod.rs");
+            let start = source
+                .find("// Core enforces every SCCP v1 rule (`specs/sccp.md` §4.19)")
+                .expect("SCCP dispatch marker");
+            let tail = &source[start..];
+            let end = tail
+                .find("if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>()")
+                .expect("SCCP dispatch terminator");
+            let dispatch = &tail[..end];
+            for instruction in [
+                "InitializeSccpV1",
+                "SetSccpBridgeKeyV1",
+                "SubmitSccpAttestationsV1",
+                "SubmitSccpAttestationFaultV1",
+                "RecordSccpMessage",
+                "SubmitSccpInboundMessageV1",
+                "SettleSccpV1",
+                "SubmitSccpOutboundVoidV1",
+                "AdvanceSccpLightClientV1",
+                "ReportSccpLightClientEquivocationV1",
+            ] {
+                let forward = format!(
+                    "if let Some(isi) = any.downcast_ref::<{instruction}>() {{\n            execute!(executor, isi);"
+                );
+                assert!(
+                    dispatch.contains(&forward),
+                    "default executor SCCP dispatch omitted {instruction}"
+                );
+            }
         }
         #[test]
         fn default_executor_forwards_the_complete_vpn_lifecycle() {
@@ -5284,15 +5332,5 @@ pub mod bridge {
     declare_execute_visitors! {
         /// Records a bridge receipt without additional permission gates.
         visit_record_bridge_receipt(RecordBridgeReceipt);
-    }
-    /// Applies one typed governed SCCP registry action.
-    pub fn visit_apply_sccp_route_governance<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _isi: &ApplySccpRouteGovernance,
-    ) {
-        deny!(
-            executor,
-            "direct SCCP route mutation is retired; an exact due Parliament certificate must apply the action"
-        )
     }
 }

@@ -34,10 +34,11 @@ fn json_admin_envelopes_are_rejected_for_every_a0_tag_without_mutation() {
         .alloc_input_tlv(&make_tlv(PointerType::Json, &payload))
         .expect("allocate JSON envelope");
     vm.set_register(10, pointer);
+    // Tag 2 was the retired contract-originated SCCP send and is an unknown tag now.
     for tag in [
         0,
         syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+        2,
         99,
     ] {
         vm.set_register(11, tag);

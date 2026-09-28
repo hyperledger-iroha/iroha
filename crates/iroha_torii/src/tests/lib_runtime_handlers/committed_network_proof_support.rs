@@ -1,5 +1,5 @@
 // Exact-wire proof transport fixtures. These certificates authenticate test outputs;
-// they do not claim State execution or SCCP/native producer activation.
+// they do not claim State execution or native producer activation.
 
 use crate::test_utils::torii_proof_finality_for_block;
 
@@ -114,7 +114,6 @@ fn committed_network_proof_app_for_test() -> (SharedAppState, Arc<SignedBlock>, 
         )
         .unwrap();
     assert_eq!(block.canonical_resultless_proposal(), proposal);
-    assert!(block.header().sccp_commitment_root().is_none());
     let artifact = torii_proof_finality_for_block(&block, *app.state.network_id_ref(), None);
     let block = Arc::new(block);
     app.kura.store_block(Arc::clone(&block)).unwrap();

@@ -437,9 +437,8 @@ impl State {
             // Capture immutable index inputs before acquiring any native writer.
             // Their release callbacks may retry those writers synchronously. The
             // final generation check joins the manifest baseline to the acquired
-            // World; SCCP still validates that World's exact current/undo wire.
+            // World.
             let baseline = self.lane_manifests.read().clone();
-            let mut registry_cache = self.sccp_registry_cache.lock().clone();
             // All constructors use the same order. Every guard is dropped before
             // retry; a World-only generation check cannot bind the predecessor.
             // Hash construction detaches its private tree before waiting for World.
@@ -449,7 +448,6 @@ impl State {
             // and unwind. Every Cell slot remains in this caller while initializing.
             let projection_result;
             let mut projection;
-            let mut sccp_registry;
             let mut pending =
                 acquisition::RuntimeBlockAcquisition::new(self, block_hashes, membership);
             if let Err(error) = pending.initialize(replacement) {
@@ -463,15 +461,10 @@ impl State {
                 pending.world(),
                 &baseline,
             );
-            sccp_registry = Some(Self::sccp_registry_snapshot_from_cache(
-                pending.world().sccp_registry.get(),
-                &mut registry_cache,
-            ));
             if !is_stable_state_view_generation(generation, self.state_view_generation()) {
                 // One owner unlocks all physical siblings before any native wake,
                 // payload cleanup, or original hash-budget refund can run.
                 drop(pending);
-                drop(sccp_registry);
                 drop(projection_result);
                 std::thread::yield_now();
                 continue;
@@ -485,7 +478,7 @@ impl State {
                 .nexus
                 .dataspace_catalog
                 .clone();
-            return Ok(pending.finish(&mut projection, &mut sccp_registry));
+            return Ok(pending.finish(&mut projection));
         }
     }
 }

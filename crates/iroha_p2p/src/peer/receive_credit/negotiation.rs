@@ -73,7 +73,7 @@ impl Offer {
             }
             if class == Class::Safety
                 && offer.private_bytes[i]
-                < charged.checked_mul(3).ok_or(Error::FrameTooLarge)? as u64
+                    < charged.checked_mul(3).ok_or(Error::FrameTooLarge)? as u64
             {
                 return Err(Error::Format);
             }

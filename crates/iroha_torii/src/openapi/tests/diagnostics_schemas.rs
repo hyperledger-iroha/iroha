@@ -225,12 +225,7 @@ fn npos_schema_excludes_retired_process_local_and_vrf_surfaces() {
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "epoch_length_blocks",
-            "epoch_seed",
-            "prf_height",
-            "prf_view",
-        ])
+        BTreeSet::from(["epoch_length_blocks", "epoch_seed"])
     );
     for field in retired {
         assert!(

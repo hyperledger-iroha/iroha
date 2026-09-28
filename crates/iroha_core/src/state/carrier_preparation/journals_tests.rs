@@ -1,7 +1,6 @@
 //! Actual candidate journal ownership, drop and resource-admission controls.
 
 use super::*;
-use crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveBoundsV1;
 use mv::storage::StorageReadOnly;
 
 std::thread_local! {
@@ -14,46 +13,6 @@ std::thread_local! {
 // memory-accounting policy or a claim about nested effects allocations.
 pub(super) fn observe_effects_allocation_attempt() {
     EFFECTS_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
-}
-
-fn reserve_provider_for_test(
-    archive: &Arc<ProviderIngestFinalizedArchiveV1>,
-    state: &State,
-    proposal: &iroha_data_model::block::SignedBlock,
-    context: &iroha_data_model::block::consensus_v2::HeightContext,
-) -> ProviderCandidateCapture {
-    archive
-        .try_reserve_candidate(
-            crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1::try_new(
-                context.network_id,
-                proposal.header().height().get(),
-                *proposal.hash().as_ref(),
-                proposal.header().creation_time_ms,
-            )
-            .unwrap(),
-            &state.kura,
-        )
-        .unwrap()
-}
-
-fn reserve_reputation_for_test(
-    archive: &Arc<ReputationFinalizedArchive>,
-    state: &State,
-    proposal: &iroha_data_model::block::SignedBlock,
-    context: &iroha_data_model::block::consensus_v2::HeightContext,
-) -> ReputationCandidateCapture {
-    archive
-        .try_reserve_candidate(
-            crate::query::reputation_finalized::ReputationFinalizedArchiveKeyV1::try_new(
-                context.network_id,
-                proposal.header().height().get(),
-                *proposal.hash().as_ref(),
-            )
-            .unwrap(),
-            proposal.header().creation_time_ms,
-            &state.kura,
-        )
-        .unwrap()
 }
 
 fn admit_runtime_for_test(
@@ -114,7 +73,7 @@ fn retained_validation_match_binds_original_context_and_signed_proposal() {
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let journals = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare original candidate: {error}"))
-        .prepare_journals(journal_shells, None, None, admit_journals_for_test)
+        .prepare_journals(journal_shells, admit_journals_for_test)
         .unwrap_or_else(|error| panic!("capture original candidate: {error}"));
 
     assert!(journals.matches_validation_candidate(&context, &proposal));
@@ -131,10 +90,7 @@ fn retained_validation_match_binds_original_context_and_signed_proposal() {
     assert_eq!(proposal.hash(), other_signed_proposal.hash());
     assert!(!journals.matches_validation_candidate(&context, &other_signed_proposal));
     assert!(journals.matches_validation_candidate(&context, &proposal));
-    assert_eq!(
-        budget.reserved_bytes(),
-        shell_bytes - std::alloc::Layout::new::<StagedCarrierCapture<()>>().size()
-    );
+    assert_eq!(budget.reserved_bytes(), shell_bytes);
     drop(journals);
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(
@@ -155,8 +111,6 @@ fn journal_admission_refusal_prevents_cold_tiered_capture() {
         let error = prepared
             .prepare_journals(
                 crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                None,
-                None,
                 |original| {
                     assert_eq!(counts.captured(), 0);
                     assert_eq!(
@@ -231,8 +185,6 @@ fn admitted_cold_tiered_capture_retains_exact_world_and_drops_before_reservation
         let journals = prepared
             .prepare_journals(
                 crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                None,
-                None,
                 |original| {
                     assert_eq!(counts.captured(), 0);
                     // Independent persistence of the exact immutable prepared World
@@ -289,22 +241,13 @@ fn admitted_cold_tiered_capture_retains_exact_world_and_drops_before_reservation
 }
 
 #[test]
-fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() {
+fn journal_admission_refusal_returns_original_carrier_and_capacity() {
     #[derive(Debug, PartialEq, Eq)]
     enum Capacity {
         Exhausted,
     }
     let (state, proposal, topology, context) = super::super::tests::fixture();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let directory = tempfile::tempdir().unwrap();
-    let directory_path = directory.path().canonicalize().unwrap();
-    let bounds =
-        ProviderIngestFinalizedArchiveBoundsV1::try_new(1 << 20, 16, 16 << 20, 16, 16, 256, 16)
-            .unwrap();
-    let archive = Arc::new(
-        ProviderIngestFinalizedArchiveV1::try_open(directory_path.join("archive"), bounds).unwrap(),
-    );
-    let original_archive = reserve_provider_for_test(&archive, &state, &proposal, &context);
     let mut prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
     // A retained allocation can exceed its serialized contents. Admission must
@@ -352,12 +295,8 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
     };
     let result = prepared.prepare_journals(
         crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-        Some(original_archive),
-        None,
         |original| {
             inspect_original(&original);
-            assert!(original.provider.is_some());
-            assert!(original.reputation.is_none());
             assert!(!called);
             called = true;
             assert_eq!(
@@ -381,8 +320,6 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
     );
     let Err(CarrierJournalPreparationError::JournalAdmission {
         carrier,
-        provider,
-        reputation,
         error: Capacity::Exhausted,
         journal_shells,
     }) = result
@@ -403,24 +340,9 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         state.block_hashes.writer_available(),
         "private execution retains no hash writer"
     );
-    let reserved = archive
-        .try_reserve_candidate(
-            crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1::try_new(
-                context.network_id,
-                proposal.header().height().get(),
-                *proposal.hash().as_ref(),
-                proposal.header().creation_time_ms,
-            )
-            .unwrap(),
-            &state.kura,
-        )
-        .err()
-        .expect("returned predecessor remains reserved");
-    assert!(matches!(reserved,
-        crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { .. }));
     // Retry synchronously on the original borrowed owner; no second execution.
     let journals = carrier
-        .prepare_journals(journal_shells, provider, reputation, |original| {
+        .prepare_journals(journal_shells, |original| {
             inspect_original(&original);
             admit_journals_for_test(original)
         })
@@ -444,12 +366,6 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
     assert_eq!(journals.publication_events.capacity(), events_capacity);
     drop(journals);
     assert!(called);
-    assert_eq!(
-        std::fs::read_dir(directory_path.join("archive/records"))
-            .unwrap()
-            .count(),
-        0
-    );
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
@@ -556,8 +472,6 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |original| {
                 admissions += 1;
                 let original_state = original.state;
@@ -589,7 +503,7 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     );
     assert!(journals.components.runtime.matches_current(&state));
     // All original World and runtime writers are free while their captured
-    // values and archive plans remain owned by this candidate.
+    // values remain owned by this candidate.
     drop(state.canonical_runtime.block());
     drop(state.commit_topology.block());
     drop(state.prev_commit_topology.block());
@@ -622,7 +536,7 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
             .touched_values,
         1
     );
-    assert_eq!(journals.components.world.field_count(), 285);
+    assert_eq!(journals.components.world.field_count(), 307);
     assert_eq!(journals.components.world.mode(), mv::BlockMode::Ordinary);
     assert!(journals.components.world.matches_current(&state.world));
     assert_eq!(
@@ -698,8 +612,6 @@ fn prepared_journals_capture_dirty_telemetry_from_original_world() {
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |original| {
                 assert!(original.state.world.parliament_attempt_counts.is_dirty());
                 assert!(original.state.world.citizens.is_dirty());
@@ -773,8 +685,6 @@ fn prepared_journals_preserve_clean_parliament_gauge_suppression() {
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             admit_journals_for_test,
         )
         .unwrap();
@@ -802,8 +712,6 @@ fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_droppe
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             admit_journals_for_test,
         )
         .unwrap();
@@ -815,7 +723,7 @@ fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_droppe
     let returned = std::thread::spawn(move || {
         assert_eq!(journals.execution_prefix_commitment(), prefix);
         assert_eq!(journals.valid.as_ref().hash(), proposal.hash());
-        assert_eq!(journals.components.world.field_count(), 285);
+        assert_eq!(journals.components.world.field_count(), 307);
         assert!(!journals.publication_events.is_empty());
         journals
     })
@@ -828,7 +736,7 @@ fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_droppe
 }
 
 #[test]
-fn archive_capacity_failure_retains_static_original_journals_without_artifact_writes() {
+fn admitted_journals_retain_capacity_and_original_effects_across_static_handoff() {
     use std::sync::atomic::{AtomicBool, Ordering};
     struct Reservation(Arc<AtomicBool>);
     impl Drop for Reservation {
@@ -837,44 +745,25 @@ fn archive_capacity_failure_retains_static_original_journals_without_artifact_wr
         }
     }
     fn assert_static_send<T: Send + 'static>() {}
-    assert_static_send::<StagedCarrierCapture<Reservation>>();
+    assert_static_send::<PreparedCarrierJournals<Reservation>>();
     let (state, proposal, topology, context) = super::super::tests::fixture();
     let state: Arc<State> = Arc::from(state);
     let original_state = Arc::downgrade(&state);
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let directory = tempfile::tempdir().unwrap();
-    let directory_path = directory.path().canonicalize().unwrap();
-    let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(1, 1, 1, 1, 1, 1, 1).unwrap();
-    let archive = Arc::new(
-        ProviderIngestFinalizedArchiveV1::try_open(directory_path.join("archive"), bounds).unwrap(),
-    );
-    let predecessor = reserve_provider_for_test(&archive, &state, &proposal, &context);
     let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
     let prefix = prepared.execution_prefix_commitment();
+    let inventory = Arc::clone(prepared.source_prefix.inventory());
     let released = Arc::new(AtomicBool::new(false));
-    let (carrier, error) = {
-        let failure = prepared
-            .prepare_journals(
-                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                Some(predecessor),
-                None,
-                |_| Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released))),
-            )
-            .err()
-            .expect("configured archive bound refuses");
-        match failure {
-            CarrierJournalPreparationError::ArchivePreparation { carrier, error } => {
-                (carrier, error)
-            }
-            _ => panic!("archive refusal must retain static execution"),
-        }
-    };
-    assert!(
-        matches!(&error, CarrierArchivePreparationError::Provider(error)
-        if matches!(error.as_ref(), crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1::RecordTooLarge { observed, maximum: 1 } if *observed > 1)),
-        "{error}"
-    );
+    let (_, shell_bytes) = CarrierJournalShellReservation::<Reservation>::demand().unwrap();
+    let budget = mv::allocation::AllocationBudget::new(shell_bytes);
+    let journals = prepared
+        .prepare_journals(
+            PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
+            |_| Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released))),
+        )
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), shell_bytes);
     assert!(!released.load(Ordering::SeqCst));
     assert!(state.block_hashes.writer_available());
     drop(state.world.block());
@@ -883,29 +772,25 @@ fn archive_capacity_failure_retains_static_original_journals_without_artifact_wr
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
     );
-    assert_eq!(
-        std::fs::read_dir(directory_path.join("archive/records"))
-            .unwrap()
-            .count(),
-        0
-    );
-    let original_box = std::ptr::from_ref(carrier.as_ref());
+    let effects_pointer = std::ptr::from_ref(journals.effects.as_ref());
     drop(state);
     assert!(original_state.upgrade().is_none());
-    let carrier = std::thread::spawn(move || {
-        assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
-        let (carrier, _) = carrier
-            .try_complete()
-            .err()
-            .expect("unchanged limit still refuses");
-        assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
-        carrier
+    let journals = std::thread::spawn(move || {
+        assert_eq!(journals.execution_prefix_commitment(), prefix);
+        assert!(Arc::ptr_eq(journals.source_prefix.inventory(), &inventory));
+        assert_eq!(journals.kura.blocks_count(), 0);
+        journals
     })
     .join()
     .unwrap();
-    assert_eq!(std::ptr::from_ref(carrier.as_ref()), original_box);
+    assert_eq!(
+        std::ptr::from_ref(journals.effects.as_ref()),
+        effects_pointer
+    );
+    assert_eq!(budget.reserved_bytes(), shell_bytes);
     assert!(!released.load(Ordering::SeqCst));
-    drop(carrier);
+    drop(journals);
+    assert_eq!(budget.reserved_bytes(), 0);
     assert!(released.load(Ordering::SeqCst));
 }
 
@@ -1032,298 +917,9 @@ fn archive_fixture_instructions() -> Vec<iroha_data_model::isi::InstructionBox> 
     ]
 }
 
-#[test]
-fn prepared_archive_projections_survive_state_journal_decomposition() {
-    use crate::query::reputation_finalized::ReputationFinalizedArchiveBounds;
-
-    let (state, proposal, topology, context) = archive_fixture();
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let directory = tempfile::tempdir().unwrap();
-    let directory_path = directory.path().canonicalize().unwrap();
-    let provider = Arc::new(
-        ProviderIngestFinalizedArchiveV1::try_open(
-            directory_path.join("provider"),
-            ProviderIngestFinalizedArchiveBoundsV1::try_new(1 << 20, 16, 16 << 20, 16, 16, 256, 16)
-                .unwrap(),
-        )
-        .unwrap(),
-    );
-    let reputation = Arc::new(
-        ReputationFinalizedArchive::try_open(
-            directory_path.join("reputation"),
-            ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20).unwrap(),
-        )
-        .unwrap(),
-    );
-    for _ in 0..2 {
-        let provider_owner = reserve_provider_for_test(&provider, &state, &proposal, &context);
-        let reputation_owner =
-            reserve_reputation_for_test(&reputation, &state, &proposal, &context);
-        let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
-            .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
-        let journals = prepared
-            .prepare_journals(
-                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                Some(provider_owner),
-                Some(reputation_owner),
-                |original| {
-                    assert!(original.provider.is_some());
-                    assert!(original.reputation.is_some());
-                    admit_journals_for_test(original)
-                },
-            )
-            .unwrap();
-        assert!(journals.provider_capture.is_some());
-        assert!(journals.reputation_capture.is_some());
-        assert!(provider.is_empty().unwrap());
-        assert!(reputation.is_empty().unwrap());
-        assert_eq!(state.committed_height(), 0);
-        assert_eq!(state.kura.blocks_count(), 0);
-        for relative in [
-            "provider/records",
-            "reputation/anchors",
-            "reputation/policies",
-        ] {
-            assert_eq!(
-                std::fs::read_dir(directory_path.join(relative))
-                    .unwrap()
-                    .count(),
-                0
-            );
-        }
-        // Dropping also releases both reservations, allowing the exact candidate
-        // to be prepared again without inventing a receipt or replaying effects.
-        drop(journals);
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
-            before
-        );
-    }
-}
-
-#[test]
-fn archive_index_refusal_retains_same_static_execution_and_completed_provider_plan() {
-    use crate::query::reputation_finalized::{
-        ReputationFinalizedArchiveBounds, ReputationFinalizedArchiveError,
-    };
-    use std::{
-        future::Future,
-        task::{Context, Poll, Waker},
-    };
-
-    let (state, proposal, topology, context) = archive_fixture();
-    let state: Arc<State> = Arc::from(state);
-    let original_state = Arc::downgrade(&state);
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().canonicalize().unwrap();
-    let provider = Arc::new(
-        ProviderIngestFinalizedArchiveV1::try_open(
-            root.join("provider"),
-            ProviderIngestFinalizedArchiveBoundsV1::try_new(1 << 20, 16, 16 << 20, 16, 16, 256, 16)
-                .unwrap(),
-        )
-        .unwrap(),
-    );
-    let reputation = Arc::new(
-        ReputationFinalizedArchive::try_open(
-            root.join("reputation"),
-            ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20).unwrap(),
-        )
-        .unwrap(),
-    );
-    let provider_owner = reserve_provider_for_test(&provider, &state, &proposal, &context);
-    let reputation_owner = reserve_reputation_for_test(&reputation, &state, &proposal, &context);
-    let (_, shell_bytes) = CarrierJournalShellReservation::<()>::demand().unwrap();
-    let budget = mv::allocation::AllocationBudget::new(shell_bytes);
-    let journal_shells = PreparedCarrier::reserve_journal_shells(&budget).unwrap();
-    let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
-        .unwrap_or_else(|(_, error)| panic!("prepare archive candidate: {error}"));
-    let prefix = prepared.execution_prefix_commitment();
-    let original_inventory = Arc::clone(prepared.source_prefix.inventory());
-    // Original capture must complete without reading this held index. Only the
-    // later detached insertion preparation may observe its actual release wait.
-    let (carrier, error) = {
-        let failure = reputation
-            .with_index_reader_for_test(|| {
-                prepared.prepare_journals(
-                    journal_shells,
-                    Some(provider_owner),
-                    Some(reputation_owner),
-                    admit_journals_for_test,
-                )
-            })
-            .err()
-            .expect("held reputation reader refuses publication preparation");
-        match failure {
-            CarrierJournalPreparationError::ArchivePreparation { carrier, error } => {
-                (carrier, error)
-            }
-            _ => panic!("index refusal must retain detached execution"),
-        }
-    };
-    let CarrierArchivePreparationError::Reputation(error) = error else {
-        panic!("provider must have completed before reputation contention");
-    };
-    let ReputationFinalizedArchiveError::IndexBusy { wait } = error.as_ref() else {
-        panic!("actual index reader must supply its release observation: {error}");
-    };
-    let mut released = Box::pin(wait.clone().wait_for_release());
-    assert!(matches!(
-        released
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop())),
-        Poll::Ready(())
-    ));
-    assert_eq!(budget.reserved_bytes(), shell_bytes);
-    let original_box = std::ptr::from_ref(carrier.as_ref());
-    let provider_bytes = carrier
-        .provider
-        .as_ref()
-        .unwrap()
-        .prepared_bytes_identity_for_test()
-        .expect("original provider insertion is prepared");
-    assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
-    assert!(Arc::ptr_eq(
-        carrier.journals.source_prefix.inventory(),
-        &original_inventory
-    ));
-    assert!(state.block_hashes.writer_available());
-    drop(state.world.block());
-    drop(state.transactions.block());
-    drop(state.canonical_runtime.block());
-    drop(state);
-    assert!(
-        original_state.upgrade().is_none(),
-        "staged owner retains no hidden State"
-    );
-    let (carrier, _) = reputation
-        .with_index_reader_for_test(|| carrier.try_complete())
-        .err()
-        .expect("another real reader still refuses the same owner");
-    assert_eq!(std::ptr::from_ref(carrier.as_ref()), original_box);
-    assert_eq!(
-        budget.reserved_bytes(),
-        shell_bytes,
-        "retry retains the same charged Box"
-    );
-    assert_eq!(
-        carrier
-            .provider
-            .as_ref()
-            .unwrap()
-            .prepared_bytes_identity_for_test(),
-        Some(provider_bytes)
-    );
-    let journals = std::thread::spawn(move || {
-        carrier
-            .try_complete()
-            .unwrap_or_else(|(_, error)| panic!("resume exact detached execution: {error}"))
-    })
-    .join()
-    .unwrap();
-    assert_eq!(
-        budget.reserved_bytes(),
-        shell_bytes - std::alloc::Layout::new::<StagedCarrierCapture<()>>().size()
-    );
-    assert_eq!(journals.execution_prefix_commitment(), prefix);
-    assert!(Arc::ptr_eq(
-        journals.source_prefix.inventory(),
-        &original_inventory
-    ));
-    assert!(journals.provider_capture.is_some());
-    assert!(journals.reputation_capture.is_some());
-    assert!(provider.is_empty().unwrap());
-    assert!(reputation.is_empty().unwrap());
-    for relative in [
-        "provider/records",
-        "reputation/anchors",
-        "reputation/policies",
-    ] {
-        assert_eq!(std::fs::read_dir(root.join(relative)).unwrap().count(), 0);
-    }
-    drop(journals);
-    assert_eq!(budget.reserved_bytes(), 0);
-}
-
-#[test]
-fn archive_original_capture_identity_refusal_retains_static_recovery_owner() {
-    use crate::query::reputation_finalized::{
-        ReputationFinalizedArchiveBounds, ReputationFinalizedArchiveError,
-        ReputationFinalizedArchiveKeyV1,
-    };
-    let (state, proposal, topology, context) = archive_fixture();
-    let directory = tempfile::tempdir().unwrap();
-    let archive = Arc::new(
-        ReputationFinalizedArchive::try_open(
-            directory.path().canonicalize().unwrap().join("reputation"),
-            ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20).unwrap(),
-        )
-        .unwrap(),
-    );
-    for wrong_hash in [false, true] {
-        let mut hash = *proposal.hash().as_ref();
-        let mut time = proposal.header().creation_time_ms;
-        if wrong_hash {
-            hash[0] ^= 1;
-        } else {
-            time += 1;
-        }
-        let owner = archive
-            .try_reserve_candidate(
-                ReputationFinalizedArchiveKeyV1::try_new(
-                    context.network_id,
-                    proposal.header().height().get(),
-                    hash,
-                )
-                .unwrap(),
-                time,
-                &state.kura,
-            )
-            .unwrap();
-        let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
-            .unwrap_or_else(|(_, error)| panic!("prepare original candidate: {error}"));
-        let prefix = prepared.execution_prefix_commitment();
-        let failure = prepared
-            .prepare_journals(
-                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                None,
-                Some(owner),
-                admit_journals_for_test,
-            )
-            .err()
-            .expect("reserved identity must match original State exactly");
-        let CarrierJournalPreparationError::ArchivePreparation { carrier, error } = failure else {
-            panic!("capture failure keeps original detached execution");
-        };
-        let CarrierArchivePreparationError::Reputation(original_error) = error else {
-            panic!("exact reputation source mismatch");
-        };
-        assert!(matches!(
-            original_error.as_ref(),
-            ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "candidate reputation State differs from its reserved exact identity"
-            }
-        ));
-        assert!(state.block_hashes.writer_available());
-        drop(state.world.block());
-        let original_box = std::ptr::from_ref(carrier.as_ref());
-        let (carrier, repeated) = carrier
-            .try_complete()
-            .err()
-            .expect("failed capture is recovery-required");
-        assert_eq!(std::ptr::from_ref(carrier.as_ref()), original_box);
-        let CarrierArchivePreparationError::Reputation(repeated) = repeated else {
-            panic!("same exact refusal");
-        };
-        assert!(
-            Arc::ptr_eq(&original_error, &repeated),
-            "retry cannot reread another State"
-        );
-        assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
-        assert!(archive.is_empty().unwrap());
-        drop(carrier);
-    }
-}
+// Archive capture occurs after a certified commit, outside candidate journals. Coverage moved
+// to query/provider_ingest_finalized/certified_capture_tests.rs and the current executor's
+// pending-completion tests; candidate capture cannot reserve or publish an archive anymore.
 
 #[test]
 fn journal_resource_refusal_precedes_geometry_projection() {
@@ -1343,8 +939,6 @@ fn journal_resource_refusal_precedes_geometry_projection() {
     let error = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| {
                 called = true;
                 Err::<(), _>(Capacity::Exhausted)
@@ -1395,8 +989,6 @@ fn geometry_refusal_drops_originals_before_capture_reservation() {
     let error = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| {
                 Ok::<_, std::convert::Infallible>(Reservation {
                     state: &state,
@@ -1420,7 +1012,7 @@ fn geometry_refusal_drops_originals_before_capture_reservation() {
 #[test]
 fn carrier_journal_shell_plan_precedes_execution_and_survives_capture() {
     // This reservation is deliberately scoped to actual World shells. The
-    // fixture supplies the separate execution/runtime/archive payload owners.
+    // fixture supplies the separate execution/runtime payload owners.
     let bytes = PreparedCarrier::world_journal_shell_bytes().unwrap();
     let budget = mv::allocation::AllocationBudget::new(bytes);
     let reservation = budget.try_reserve_bytes(bytes).unwrap();
@@ -1431,8 +1023,6 @@ fn carrier_journal_shell_plan_precedes_execution_and_survives_capture() {
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |inputs| {
                 assert_eq!(inputs.world_journal_shell_bytes().unwrap(), bytes);
                 assert_eq!(budget.reserved_bytes(), bytes);

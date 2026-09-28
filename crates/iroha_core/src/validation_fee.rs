@@ -4104,16 +4104,14 @@ fn native_instruction_ds_effect_disposition(
     // Narrow allowlist of native families whose handlers only mutate metadata, permissions,
     // control-plane records, or deferred-execution bookkeeping.
     audited_no_ds_effect!(
-        // These staking handlers only update validator tenure/peer records, move already
-        // escrowed stake between bonded and pending accounting, or cancel a retained
-        // evidence penalty. Their lifecycle sweeps never transfer, burn, mint or reserve
-        // additional assets. Monetary staking and reward reservations use the signed
+        // These staking handlers only update validator tenure/peer records or move already
+        // escrowed stake between bonded and pending accounting. Their lifecycle sweeps never
+        // transfer, burn, mint or reserve additional assets. Monetary staking and reward reservations use the signed
         // effect classifier above; Core still enforces each action's authority.
         iroha_data_model::isi::staking::SchedulePublicLaneUnbond,
         iroha_data_model::isi::staking::ActivatePublicLaneValidator,
         iroha_data_model::isi::staking::ExitPublicLaneValidator,
         iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer,
-        iroha_data_model::isi::staking::CancelConsensusEvidencePenalty,
         iroha_data_model::isi::register::RegisterPeerWithPop,
         iroha_data_model::isi::register::RegisterCommitteePeerWithPop,
         // Configure/enroll/revoke write only bounded native custody records and indexes.
@@ -4182,6 +4180,9 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::SetAssetDefinitionAlias,
         SetKeyValue<Trigger>,
     );
+    if let Some(disposition) = sccp_native_ds_effect_disposition(instruction) {
+        return disposition;
+    }
     // Consult orthogonal, reviewed metadata only after payload-dependent asset guards.
     // No Initial-executor authority disposition implies any fee-policy exemption.
     if let Some((type_name, effect)) =
@@ -4203,6 +4204,47 @@ fn native_instruction_ds_effect_disposition(
         }
         None => NativeInstructionDsEffectDisposition::Unknown,
     }
+}
+/// Classify the SCCP v1 instructions (`specs/sccp.md` §4.19).
+///
+/// Attestations, fault evidence, light-client advances and equivocation reports write only SCCP
+/// control records. Bridge-key registration and genesis initialization register accounts with
+/// the effect of `Register<Account>`. The value-moving instructions lock, release or refund XOR
+/// through route escrows, which is not a signed transparent transfer coordinate, so they stay
+/// rejected while a validation-fee policy is active.
+// TODO(ws31): refine the value-moving dispositions once the escrow effects have an effect plan.
+fn sccp_native_ds_effect_disposition(
+    instruction: &InstructionBox,
+) -> Option<NativeInstructionDsEffectDisposition> {
+    use iroha_data_model::isi::sccp;
+    let any = instruction.as_any();
+    if any.is::<sccp::SubmitSccpAttestationsV1>()
+        || any.is::<sccp::SubmitSccpAttestationFaultV1>()
+        || any.is::<sccp::AdvanceSccpLightClientV1>()
+        || any.is::<sccp::ReportSccpLightClientEquivocationV1>()
+        || any.is::<sccp::SetSccpBridgeKeyV1>()
+        || any.is::<sccp::InitializeSccpV1>()
+    {
+        return Some(NativeInstructionDsEffectDisposition::AuditedNoDsEffect);
+    }
+    macro_rules! value_moving {
+        ($($ty:ty),+ $(,)?) => {
+            $(
+                if any.is::<$ty>() {
+                    return Some(NativeInstructionDsEffectDisposition::RejectKnownDsCapable(
+                        core::any::type_name::<$ty>(),
+                    ));
+                }
+            )+
+        };
+    }
+    value_moving!(
+        sccp::RecordSccpMessage,
+        sccp::SubmitSccpInboundMessageV1,
+        sccp::SettleSccpV1,
+        sccp::SubmitSccpOutboundVoidV1,
+    );
+    None
 }
 fn collect_instruction_asset_transfers(
     instructions: &[InstructionBox],
@@ -4474,87 +4516,13 @@ pub(crate) mod tests {
     include!("validation_fee/multisig_batch_tests.rs");
 
     fn staking_lifecycle_fee_instructions() -> Vec<InstructionBox> {
-        use iroha_data_model::{
-            block::{
-                consensus::{Evidence, SumeragiV2EquivocationEvidence},
-                consensus_v2::{
-                    BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout,
-                    DualQuorum, ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION,
-                    PayloadEncoding, SumeragiV2Equivocation, ValidatorPower, Vote,
-                },
-            },
-            isi::staking::{
-                ActivatePublicLaneValidator, CancelConsensusEvidencePenalty,
-                ExitPublicLaneValidator, RebindPublicLaneValidatorPeer, SchedulePublicLaneUnbond,
-            },
+        use iroha_data_model::isi::staking::{
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
+            SchedulePublicLaneUnbond,
         };
         use iroha_model_base::{peer::PeerId, topology::LaneId};
 
-        let mut roster = (21..25)
-            .map(|seed| ValidatorPower {
-                validator: PeerId::new(key_pair(seed).public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = validation_fee_test_network_id();
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network_id, 2, &roster,
-            );
-        let context = HeightContext {
-            network_id,
-            protocol_version: PROTOCOL_VERSION,
-            height: 1,
-            epoch: 0,
-            epoch_end_height: 2,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("four equal seats"),
-            roster,
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            nexus_amx_context_hash: Hash::new(b"staking fee fixture nexus"),
-            execution_policy_hash: Hash::new(b"staking fee fixture execution"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 4,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 1024,
-                max_chunk_count: 512,
-            },
-            leader_seed: [31; Hash::LENGTH],
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: 1,
-            view: 0,
-        };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"staking fee fixture parent"),
-            Hash::new(b"staking fee fixture post"),
-            Hash::new(b"staking fee fixture writes"),
-            1,
-            Hash::new(b"staking fee fixture block"),
-        );
-        // Fee classification does not authenticate evidence. Core independently requires
-        // an exact previously admitted pending record before cancellation can execute.
-        let vote = |seed| Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Prepare,
-            subject: BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new([seed])),
-                payload_hash: Hash::new([seed]),
-            },
-            execution_commitment,
-            signer: 0,
-            signature: vec![seed; 96],
-        };
         let lane_id = LaneId::SINGLE;
         let rebind_key = key_pair(2);
         let rebind_peer = PeerId::new(rebind_key.public_key().clone());
@@ -4591,19 +4559,6 @@ pub(crate) mod tests {
                 iroha_crypto::SignatureOf::try_new(rebind_key.private_key(), &rebind_consent)
                     .expect("fee classification fixture peer consent"),
             )
-            .into(),
-            CancelConsensusEvidencePenalty {
-                evidence: Evidence {
-                    equivocation: SumeragiV2EquivocationEvidence {
-                        context,
-                        proofs_of_possession: vec![vec![31; 96]; 4],
-                        conflict: SumeragiV2Equivocation::PhaseVote {
-                            first: vote(32),
-                            second: vote(33),
-                        },
-                    },
-                },
-            }
             .into(),
         ]
     }
@@ -5101,3 +5056,35 @@ pub(crate) mod tests {
 #[cfg(test)]
 #[path = "validation_fee_atomic_tests.rs"]
 mod atomic_settlement_fee_tests;
+
+#[cfg(test)]
+mod sccp_ds_effect_tests {
+    use super::*;
+
+    #[test]
+    fn every_sccp_instruction_has_an_explicit_ds_effect_disposition() {
+        let samples = crate::smartcontracts::isi::sccp::test_support::SampleInstructions::all();
+        assert_eq!(samples.len(), 10);
+        let mut rejected = Vec::new();
+        for instruction in &samples {
+            match sccp_native_ds_effect_disposition(instruction) {
+                Some(NativeInstructionDsEffectDisposition::AuditedNoDsEffect) => {}
+                Some(NativeInstructionDsEffectDisposition::RejectKnownDsCapable(name)) => {
+                    rejected.push(name);
+                }
+                other => panic!("unclassified SCCP instruction {instruction:?}: {other:?}"),
+            }
+        }
+        assert_eq!(
+            rejected,
+            vec![
+                core::any::type_name::<iroha_data_model::isi::sccp::RecordSccpMessage>(),
+                core::any::type_name::<iroha_data_model::isi::sccp::SubmitSccpInboundMessageV1>(),
+                core::any::type_name::<iroha_data_model::isi::sccp::SettleSccpV1>(),
+                core::any::type_name::<iroha_data_model::isi::sccp::SubmitSccpOutboundVoidV1>(),
+            ]
+        );
+        let log = InstructionBox::from(Log::new(Level::INFO, "not SCCP".to_owned()));
+        assert_eq!(sccp_native_ds_effect_disposition(&log), None);
+    }
+}

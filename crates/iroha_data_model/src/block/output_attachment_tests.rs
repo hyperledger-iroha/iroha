@@ -138,9 +138,8 @@ fn cached_output_substitution_is_refused_without_repair_or_mutation() {
     assert_eq!(block.encode_wire().unwrap(), before);
 }
 #[test]
-fn full_output_attachment_preserves_sccp_header_and_exact_proposal() {
+fn full_output_attachment_preserves_header_and_exact_proposal() {
     let mut block = fixture::proposal(1);
-    block.set_sccp_commitment_root(Some([0x72; 32]));
     let proposal = block.clone();
     let outputs = rows(&block);
     fixture::install(&mut block, outputs, 9).unwrap();

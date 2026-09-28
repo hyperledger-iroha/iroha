@@ -203,19 +203,18 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         assert!(!serialized.contains(&format!("\"{retired}\"")), "retired bridge field `{retired}`");
     }
 }
+#[cfg(feature = "app_api")]
 #[test]
 fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
-    let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-    let proof = iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof).expect("decode SCCP v2 fixture");
+    let (app, _) = crate::tests_runtime_handlers::app_with_finalized_block_for_test(true);
+    let proof = iroha_core::bridge::build_finality_proof(app.state.as_ref(), 1).expect("finalized-block fixture proof");
     let value = norito::json::to_value(&proof).expect("serialize finality proof");
     let proof_object = value.as_object().expect("proof object");
     set_contracts! { object_field_set(proof_object) => asset_field_set("bridge.proof.required"); }
     let header = contract_object(proof_object.get("block_header"), "block header");
-    member_contracts! { header; Present => contract_strings("fixture.header.required"); Absent => ["result_merkle_root"]; }
-    assert!( header .get("npos_effects_hash") .and_then(Value::as_str) .is_some(), "the exact SCCP V1 fixture must carry the active NPoS effects commitment" );
-    assert!( header .get("execution_context_hash") .is_some_and(Value::is_null), "the exact SCCP V1 fixture must carry the required nullable execution-context slot" );
-    let expected_root = hex::encode_upper(fixture.bundle.commitment_root);
-    scalar_contracts! { header.get("sccp_commitment_root") => Text(expected_root.as_str()); }
+    member_contracts! { header; Present => contract_strings("fixture.header.required"); Absent => ["result_merkle_root", "sccp_commitment_root"]; }
+    assert!( header .get("npos_effects_hash") .is_some_and(|hash| hash.is_null() || hash.is_string()), "the finalized-block fixture must carry the nullable NPoS effects slot" );
+    assert!( header .get("execution_context_hash") .is_some_and(Value::is_null), "the finalized-block fixture must carry the required nullable execution-context slot" );
     let document = generate_spec();
     let schemas = component_schemas(&document);
     let bytes32 = contract_schema(schemas, "SumeragiV2Bytes32");
@@ -229,7 +228,7 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
     let context = contract_object(artifact.get("height_context"), "height context");
     scalar_contracts! { context.get("protocol_version") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)); }
     for nullable in contract_strings("height.context.nullable") {
-        assert!( context.get(nullable).is_some_and(Value::is_null), "exact SCCP V1 fixture must carry null height-context slot `{nullable}`" );
+        assert!( context.get(nullable).is_some_and(Value::is_null), "finalized-block fixture must carry null height-context slot `{nullable}`" );
     }
     let mode = contract_object(context.get("mode"), "consensus mode");
     scalar_contracts! { mode.get("mode") => Text("npos"); }
@@ -269,7 +268,7 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         assert!(execution.get(root).and_then(Value::as_str).is_some_and(|hash| hash.starts_with("hash:") && hash.len() == 74), "canonical {root}");
     }
     for nullable in contract_strings("execution.nullable") {
-        assert_eq!( execution.get(nullable), Some(&Value::Null), "exact SCCP V1 fixture must carry null execution slot `{nullable}`" );
+        assert_eq!( execution.get(nullable), Some(&Value::Null), "finalized-block fixture must carry null execution slot `{nullable}`" );
     }
     assert!(execution.get("executed_block_wire_len").and_then(Value::as_u64).is_some_and(|length| length > 0));
     scalar_contracts! { execution.get("kagemusha_top_up_count") => Unsigned(0); execution.get("native_amx_application_manifest_version") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)); execution.get("native_amx_application_manifest_count") => Unsigned(0); }
@@ -372,12 +371,8 @@ fn signed_status_documents_actual_driver_fields() {
     let schemas = openapi_schemas();
     let schema = contract_schema(&schemas, "SumeragiStatusResponse");
     let properties = contract_object(schema.get("properties"), "current status properties");
-    for field in native.as_object().unwrap().keys() {
-        assert!(properties.contains_key(field), "native field {field} is not documented");
-    }
-    for absent in contract_words("beacon_horizon protocol_version restart_required height_context last_committed_subject") {
-        assert!(!properties.contains_key(absent), "retired status field {absent}");
-    }
+    assert_eq!(object_field_set(native.as_object().expect("current status object")), object_field_set(properties));
+    member_contracts! { properties; Absent => contract_strings("status.absent"); }
     assert_eq!(native.get("instance").and_then(Value::as_str), Some("07".repeat(32).as_str()));
     let footprint = native.get("footprint").and_then(Value::as_object).unwrap();
     assert_eq!(object_field_set(footprint), object_field_set(contract_object(contract_schema(&schemas, "SumeragiFootprint").get("properties"), "footprint properties")));
@@ -438,15 +433,9 @@ fn generated_spec_documents_exact_current_sumeragi_status() {
         let actual = document.get("paths").and_then(Value::as_object).and_then(|paths| paths.get(path)).and_then(Value::as_object).and_then(|item| item.get("get")).and_then(Value::as_object).map(|operation| operation_response_schema_ref(operation, "200", path));
         assert_eq!(actual, catalog_openapi_route_enabled(CatalogHttpMethod::Get, path).then_some(expected), "{label} catalog projection");
     }
-    let status = contract_schema(schemas, "SumeragiStatusResponse");
-    scalar_contracts! { status.get("additionalProperties") => Flag(false); }
-    let properties = contract_object(status.get("properties"), "status properties");
-    for field in contract_words("instance height view stage leader proxy_tail high_qc_view level start_level t_retx_ms committed_height applied_height awaiting signer unanchored abstaining halted footprint") {
-        assert!(properties.contains_key(field), "current status field {field}");
-    }
-    for field in contract_words("protocol_version node_fingerprint config_fingerprint build_fingerprint phase height_context_id last_commit_qc beacon_horizon") {
-        assert!(!properties.contains_key(field), "retired status field {field}");
-    }
+    assert_exact_closed_required_schema_fields(schemas, "SumeragiStatusResponse", &contract_strings("status.required"));
+    let properties = contract_object(contract_schema(schemas, "SumeragiStatusResponse").get("properties"), "status properties");
+    member_contracts! { properties; Absent => contract_strings("status.absent"); }
     scalar_contracts! { properties.get("footprint").and_then(|schema| schema.get("$ref")) => Text("#/components/schemas/SumeragiFootprint"); }
     let diagnostics = contract_schema(schemas, "SumeragiDiagnosticsResponse");
     scalar_contracts! { diagnostics.get("additionalProperties") => Flag(false); }

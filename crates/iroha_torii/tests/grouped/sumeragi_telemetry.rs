@@ -21,12 +21,8 @@ mod sumeragi_evidence;
 mod sumeragi_evidence_count_endpoint;
 #[path = "../sumeragi_evidence_list_endpoint.rs"]
 mod sumeragi_evidence_list_endpoint;
-#[path = "../sumeragi_leader_endpoint.rs"]
-mod sumeragi_leader_endpoint;
 #[path = "../sumeragi_params_endpoint.rs"]
 mod sumeragi_params_endpoint;
-#[path = "../sumeragi_qc_endpoint.rs"]
-mod sumeragi_qc_endpoint;
 #[path = "../sumeragi_status_endpoint.rs"]
 mod sumeragi_status_endpoint;
 #[path = "../sumeragi_status_sse.rs"]

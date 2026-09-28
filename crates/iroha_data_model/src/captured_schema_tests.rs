@@ -12,10 +12,10 @@ use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json::Value};
 use sha2::{Digest, Sha256};
 
 /// Number of retained nominal codec identities in the reviewed fixture.
-const EXPECTED_CODEC_COUNT: usize = 1_769;
+const EXPECTED_CODEC_COUNT: usize = 1_705;
 const CAPTURE_REPORT_SHA256: &str =
     "be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd";
-const FIXTURE_SHA256: &str = "401ab9a98b133209da45719af72fadfd72340e3a7516c04f434803361a3e516b";
+const FIXTURE_SHA256: &str = "012a5ad90ffb6f21d721faae97a88a917db63de1a6a4a915a036183aeba371be";
 
 fn fixture() -> &'static BTreeMap<String, Value> {
     static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
@@ -82,7 +82,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
                 "capture names must be unique"
             );
         }
-        assert_eq!(direction_counts, [1_694, 68, 7]);
+        assert_eq!(direction_counts, [1_630, 68, 7]);
         names
     })
 }

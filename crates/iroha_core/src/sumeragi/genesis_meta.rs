@@ -83,7 +83,11 @@ pub(crate) mod tests {
     use iroha_primitives::numeric::Quantity;
     use std::num::NonZeroU64;
 
-    pub(crate) fn lane_record(peer: &PeerId, lane: LaneId, stake: u64) -> PublicLaneValidatorRecord {
+    pub(crate) fn lane_record(
+        peer: &PeerId,
+        lane: LaneId,
+        stake: u64,
+    ) -> PublicLaneValidatorRecord {
         let validator = AccountId::new(peer.public_key().clone());
         PublicLaneValidatorRecord {
             lane_id: lane,

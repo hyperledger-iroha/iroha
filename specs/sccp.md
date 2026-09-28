@@ -1138,10 +1138,9 @@ destination-chain calldata.
 
 **Phase 2 (TODO):** apply the existing indexed consensus penalty
 (`apply_indexed_consensus_slash_to_validator`, after `slashing_delay_blocks`)
-to the validator bonded under the faulty peer, cancellable by the standard
-`CancelConsensusEvidencePenalty`. Validators exit freely (§4.3.3), so a
-penalty reaches only stake that is still bonded when it applies; SCCP adds no
-bond to extend that. Evidence against an exited validator still records the
+to the validator bonded under the faulty peer. Validators exit freely
+(§4.3.3), so a penalty reaches only stake that is still bonded when it applies;
+SCCP adds no bond to extend that. Evidence against an exited validator still records the
 fault, evicts the key and bars the peer. On Taira today the unbonding delay is
 0, so the time bounds of §9.9, not slashing, are the operative protection.
 

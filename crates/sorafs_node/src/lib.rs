@@ -64,11 +64,11 @@ pub fn validate_private_local_storage_acl(
 ) -> std::io::Result<()> {
     #[cfg(windows)]
     {
-        return governance_rooted_fs::validate_retained_private_storage_acl(handle, path);
+        governance_rooted_fs::validate_retained_private_storage_acl(handle, path)
     }
     #[cfg(unix)]
     {
-        return governance_rooted_fs::validate_retained_directory_acl(handle, path);
+        governance_rooted_fs::validate_retained_directory_acl(handle, path)
     }
     #[cfg(not(any(unix, windows)))]
     {

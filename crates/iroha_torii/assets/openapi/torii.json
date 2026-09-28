@@ -4656,16 +4656,6 @@
               }
             ]
           },
-          "sccp_commitment_root": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SumeragiV2Bytes32"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "view_change_index": {
             "description": "Consensus view index assigned to the block.",
             "format": "uint64",
@@ -4682,7 +4672,6 @@
           "da_commitments_hash",
           "da_pin_intents_hash",
           "npos_effects_hash",
-          "sccp_commitment_root",
           "creation_time_ms",
           "view_change_index",
           "confidential_features",
@@ -9754,7 +9743,7 @@
                   },
                   "payload": {
                     "$ref": "#/components/schemas/ExplorerInstructionPayload",
-                    "description": "Typed public instruction payload. ProposeSccpRouteGovernance is exposed with its exact network-bound action; signer secrets and caller-selected lifecycle controls are never part of this payload."
+                    "description": "Typed public instruction payload. ProposeSccpRouteGovernance is exposed with its exact network-bound v1 proposal; signer secrets and caller-selected lifecycle controls are never part of this payload."
                   },
                   "wire_id": {
                     "minLength": 1,
@@ -9903,28 +9892,14 @@
       },
       "ExplorerSccpRouteGovernanceInstructionValue": {
         "additionalProperties": false,
-        "description": "Exact network-bound action of one certificate-only ProposeSccpRouteGovernance instruction; no lifecycle control or signing material is included.",
+        "description": "Exact v1 proposal of one certificate-only ProposeSccpRouteGovernance instruction; no lifecycle control or signing material is included.",
         "properties": {
-          "anchor": {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "$ref": "#/components/schemas/SccpRouteGovernanceActionV1"
-              },
-              "network_id": {
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "network_id",
-              "action"
-            ],
-            "type": "object"
+          "proposal": {
+            "$ref": "#/components/schemas/SccpGovernanceProposalV1"
           }
         },
         "required": [
-          "anchor"
+          "proposal"
         ],
         "type": "object"
       },
@@ -15942,32 +15917,15 @@
         ],
         "type": "object"
       },
-      "GovernanceParliamentProposalPayloadSccpRouteGovernanceAnchorV1": {
-        "additionalProperties": false,
-        "description": "Complete network- and action-bound SCCP Parliament effect preimage.",
-        "properties": {
-          "action": {
-            "$ref": "#/components/schemas/SccpRouteGovernanceActionV1"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/NetworkId"
-          }
-        },
-        "required": [
-          "network_id",
-          "action"
-        ],
-        "type": "object"
-      },
       "GovernanceParliamentProposalPayloadSccpRouteGovernanceV1": {
         "additionalProperties": false,
         "properties": {
-          "anchor": {
-            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSccpRouteGovernanceAnchorV1"
+          "proposal": {
+            "$ref": "#/components/schemas/SccpGovernanceProposalV1"
           }
         },
         "required": [
-          "anchor"
+          "proposal"
         ],
         "type": "object"
       },
@@ -36080,579 +36038,37 @@
           }
         ]
       },
-      "SccpAdvanceTrustAnchorActionV1": {
-        "additionalProperties": false,
-        "properties": {
-          "expected_current": {
-            "$ref": "#/components/schemas/SccpNativeTrustAnchorV1"
-          },
-          "lane_id": {
-            "$ref": "#/components/schemas/SccpInboundLaneIdV1"
-          },
-          "next": {
-            "$ref": "#/components/schemas/SccpNativeTrustAnchorV1"
-          }
-        },
-        "required": [
-          "lane_id",
-          "expected_current",
-          "next"
-        ],
-        "type": "object"
-      },
-      "SccpBls12381G1CompressedV1": {
-        "description": "Canonical non-identity compressed BLS12-381 G1 point, encoded as uppercase hexadecimal without a prefix.",
-        "maxLength": 96,
-        "minLength": 96,
-        "pattern": "^[89AB][0-9A-F]{95}$",
-        "type": "string"
-      },
-      "SccpBls12381G2CompressedV1": {
-        "description": "Canonical non-identity compressed BLS12-381 G2 point, encoded as uppercase hexadecimal without a prefix.",
-        "maxLength": 192,
-        "minLength": 192,
-        "pattern": "^[89AB][0-9A-F]{191}$",
-        "type": "string"
-      },
-      "SccpBn254G1PointV1": {
-        "additionalProperties": false,
-        "properties": {
-          "x": {
-            "$ref": "#/components/schemas/SccpUpperHex32"
-          },
-          "y": {
-            "$ref": "#/components/schemas/SccpUpperHex32"
-          }
-        },
-        "required": [
-          "x",
-          "y"
-        ],
-        "type": "object"
-      },
-      "SccpBn254G2PointV1": {
-        "additionalProperties": false,
-        "properties": {
-          "x_c0": {
-            "$ref": "#/components/schemas/SccpUpperHex32"
-          },
-          "x_c1": {
-            "$ref": "#/components/schemas/SccpUpperHex32"
-          },
-          "y_c0": {
-            "$ref": "#/components/schemas/SccpUpperHex32"
-          },
-          "y_c1": {
-            "$ref": "#/components/schemas/SccpUpperHex32"
-          }
-        },
-        "required": [
-          "x_c0",
-          "x_c1",
-          "y_c0",
-          "y_c1"
-        ],
-        "type": "object"
-      },
-      "SccpBridgeMessagePrepareRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "authority": {
-            "$ref": "#/components/schemas/SccpTairaI105Account"
-          },
-          "creation_time_ms": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "fee_payment": {
-            "$ref": "#/components/schemas/FeePaymentIntent"
-          },
-          "native_proof_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical Norito native SCCP admission proof bytes.",
-            "maxLength": 22369624
-          },
-          "replay_witness_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical Norito sparse replay non-membership witness bytes.",
-            "maxLength": 21848
-          },
-          "signature_b64": {
-            "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null.",
-            "type": "null"
-          },
-          "transaction_payload_b64": {
-            "description": "Preparation carries no prepared transaction payload; canonical DTO JSON may encode the absent optional field as null.",
-            "type": "null"
-          }
-        },
-        "required": [
-          "authority",
-          "fee_payment",
-          "native_proof_b64",
-          "replay_witness_b64"
-        ],
-        "type": "object"
-      },
-      "SccpBridgeMessageSignedRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "authority": {
-            "$ref": "#/components/schemas/SccpTairaI105Account"
-          },
-          "creation_time_ms": {
-            "description": "Exact timestamp returned with the prepared payload.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "fee_payment": {
-            "$ref": "#/components/schemas/FeePaymentIntent"
-          },
-          "native_proof_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical Norito native SCCP admission proof bytes.",
-            "maxLength": 22369624
-          },
-          "replay_witness_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical Norito sparse replay non-membership witness bytes.",
-            "maxLength": 21848
-          },
-          "signature_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical algorithm-specific detached signature bytes for authority.",
-            "maxLength": 21848
-          },
-          "transaction_payload_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Byte-identical canonical transaction payload returned by preparation.",
-            "maxLength": 22369624
-          }
-        },
-        "required": [
-          "authority",
-          "fee_payment",
-          "signature_b64",
-          "transaction_payload_b64",
-          "native_proof_b64",
-          "replay_witness_b64",
-          "creation_time_ms"
-        ],
-        "type": "object"
-      },
-      "SccpBridgeMessageSubmitRequest": {
-        "description": "Closed two-state request: preparation includes the exact fee payer/program and gas selection to quote before signing; direct submission has both signing fields and an explicit positive creation timestamp.",
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/SccpBridgeMessagePrepareRequest"
-          },
-          {
-            "$ref": "#/components/schemas/SccpBridgeMessageSignedRequest"
-          }
-        ]
-      },
-      "SccpBridgeProofPrepareRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "authority": {
-            "$ref": "#/components/schemas/SccpTairaI105Account"
-          },
-          "creation_time_ms": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "destination_proof_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical padded-base64 Norito BridgeSccpDestinationProofV1 bytes selecting the governed BN254 or TON BLS12-381 backend.",
-            "maxLength": 22544384
-          },
-          "fee_payment": {
-            "$ref": "#/components/schemas/FeePaymentIntent"
-          },
-          "signature_b64": {
-            "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null.",
-            "type": "null"
-          },
-          "transaction_payload_b64": {
-            "description": "Preparation carries no prepared transaction payload; canonical DTO JSON may encode the absent optional field as null.",
-            "type": "null"
-          }
-        },
-        "required": [
-          "authority",
-          "fee_payment",
-          "destination_proof_b64"
-        ],
-        "type": "object"
-      },
-      "SccpBridgeProofSignedRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "authority": {
-            "$ref": "#/components/schemas/SccpTairaI105Account"
-          },
-          "creation_time_ms": {
-            "description": "Exact timestamp returned with the prepared payload.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "destination_proof_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical padded-base64 Norito BridgeSccpDestinationProofV1 bytes selecting the governed BN254 or TON BLS12-381 backend.",
-            "maxLength": 22544384
-          },
-          "fee_payment": {
-            "$ref": "#/components/schemas/FeePaymentIntent"
-          },
-          "signature_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Canonical algorithm-specific detached signature bytes for authority.",
-            "maxLength": 21848
-          },
-          "transaction_payload_b64": {
-            "$ref": "#/components/schemas/SccpCanonicalBase64",
-            "description": "Byte-identical canonical transaction payload returned by preparation.",
-            "maxLength": 22369624
-          }
-        },
-        "required": [
-          "authority",
-          "fee_payment",
-          "signature_b64",
-          "transaction_payload_b64",
-          "destination_proof_b64",
-          "creation_time_ms"
-        ],
-        "type": "object"
-      },
-      "SccpBridgeProofSubmitRequest": {
-        "description": "Closed two-state request: preparation includes the exact fee payer/program and gas selection to quote before signing; direct submission has both signing fields and an explicit positive creation timestamp.",
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/SccpBridgeProofPrepareRequest"
-          },
-          {
-            "$ref": "#/components/schemas/SccpBridgeProofSignedRequest"
-          }
-        ]
-      },
-      "SccpBridgeSubmitResponseV1": {
-        "additionalProperties": false,
-        "description": "Prepared responses carry only the canonical transaction payload and its exact 32-byte signing prehash; submitted responses carry only the transaction hash.",
-        "oneOf": [
-          {
-            "properties": {
-              "signing_message_b64": {
-                "$ref": "#/components/schemas/SccpSigningMessageBase64"
-              },
-              "submitted": {
-                "const": false
-              },
-              "transaction_payload_b64": {
-                "$ref": "#/components/schemas/SccpCanonicalBase64"
-              },
-              "tx_hash_hex": {
-                "type": "null"
-              }
-            }
-          },
-          {
-            "properties": {
-              "signing_message_b64": {
-                "type": "null"
-              },
-              "submitted": {
-                "const": true
-              },
-              "transaction_payload_b64": {
-                "type": "null"
-              },
-              "tx_hash_hex": {
-                "$ref": "#/components/schemas/SccpHex32"
-              }
-            }
-          }
-        ],
-        "properties": {
-          "backend": {
-            "enum": [
-              "evm-groth16-bn254-v1",
-              "tron-groth16-bn254-v1",
-              "ton-groth16-bls12381-v1",
-              "bridge/sccp/native/ethereum-beacon-v1",
-              "bridge/sccp/native/bsc-parlia-v1",
-              "bridge/sccp/native/ton-masterchain-v1",
-              "bridge/sccp/native/tron-dpos-v1"
-            ],
-            "type": "string"
-          },
-          "counterparty_chain": {
-            "enum": [
-              "ethereum-mainnet",
-              "bsc-mainnet",
-              "ton-mainnet",
-              "tron-mainnet"
-            ],
-            "type": "string"
-          },
-          "counterparty_domain": {
-            "enum": [
-              1,
-              2,
-              4,
-              5
-            ],
-            "type": "integer"
-          },
-          "creation_time_ms": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "message_id_hex": {
-            "$ref": "#/components/schemas/SccpHex32"
-          },
-          "payload_kind": {
-            "const": "transfer"
-          },
-          "range_end_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "range_start_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "route_configuration_hash_hex": {
-            "$ref": "#/components/schemas/SccpHex32"
-          },
-          "signing_message_b64": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpSigningMessageBase64"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "submitted": {
-            "type": "boolean"
-          },
-          "transaction_payload_b64": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpCanonicalBase64",
-                "maxLength": 22369624
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "tx_hash_hex": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpHex32"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "submitted",
-          "payload_kind",
-          "message_id_hex",
-          "backend",
-          "counterparty_domain",
-          "counterparty_chain",
-          "route_configuration_hash_hex",
-          "range_start_height",
-          "range_end_height",
-          "creation_time_ms",
-          "tx_hash_hex",
-          "transaction_payload_b64",
-          "signing_message_b64"
-        ],
-        "type": "object"
-      },
       "SccpCanonicalBase64": {
         "description": "Nonempty canonical RFC 4648 standard base64 with required padding and no whitespace.",
         "minLength": 4,
         "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
         "type": "string"
       },
-      "SccpCanonicalTextValueV1": {
+      "SccpClearBridgeKeyFaultActionV1": {
         "additionalProperties": false,
+        "description": "Clear a validator's bridge-key fault bar while it still names exactly this fault.",
         "properties": {
-          "CanonicalText": {
-            "additionalProperties": false,
-            "properties": {
-              "value": {
-                "maxLength": 512,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "value"
-            ],
-            "type": "object"
+          "fault": {
+            "$ref": "#/components/schemas/SccpFaultRefV1"
+          },
+          "peer": {
+            "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
           }
         },
         "required": [
-          "CanonicalText"
+          "peer",
+          "fault"
         ],
         "type": "object"
       },
-      "SccpCapabilitiesV1": {
-        "additionalProperties": false,
-        "dependentRequired": {
-          "native_message_submit_path": [
-            "proof_submit_path"
-          ],
-          "proof_submit_path": [
-            "native_message_submit_path"
-          ]
-        },
-        "properties": {
-          "message_bundle_path": {
-            "const": "/v1/sccp/proofs/message/{message_id}"
-          },
-          "native_message_submit_path": {
-            "const": "/v1/bridge/messages"
-          },
-          "proof_request_path": {
-            "const": "/v1/sccp/proof-requests/{message_id}"
-          },
-          "proof_submit_path": {
-            "const": "/v1/bridge/proofs/submit"
-          },
-          "recent_messages_path": {
-            "const": "/v1/sccp/messages/recent"
-          },
-          "registry_limits": {
-            "$ref": "#/components/schemas/SccpRegistryLimitsV1"
-          },
-          "registry_path": {
-            "const": "/v1/sccp/registry"
-          },
-          "registry_revision": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "resource_limits": {
-            "$ref": "#/components/schemas/SccpResourceLimitsV1"
-          },
-          "sora_outbound_material_path": {
-            "const": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "registry_revision",
-          "registry_path",
-          "message_bundle_path",
-          "proof_request_path",
-          "recent_messages_path",
-          "sora_outbound_material_path",
-          "registry_limits",
-          "resource_limits"
-        ],
-        "type": "object"
-      },
-      "SccpDestinationDeploymentDetailsV1": {
-        "additionalProperties": false,
-        "properties": {
-          "max_wrapped_supply": {
-            "description": "Positive immutable wrapped-token supply cap in destination base units.",
-            "format": "uint128",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "outbound_proof_policy": {
-            "$ref": "#/components/schemas/SccpOutboundProofPolicyV1"
-          },
-          "route_address": {
-            "$ref": "#/components/schemas/SccpUpperHex20"
-          },
-          "route_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "taira_to_token_multiplier": {
-            "enum": [
-              1000000000
-            ],
-            "format": "uint64",
-            "type": "integer"
-          },
-          "token_address": {
-            "$ref": "#/components/schemas/SccpUpperHex20"
-          },
-          "token_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifier_address": {
-            "$ref": "#/components/schemas/SccpUpperHex20"
-          },
-          "verifier_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifier_key_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifying_key": {
-            "$ref": "#/components/schemas/SccpGroth16Bn254VerifyingKeyV1"
-          }
-        },
-        "required": [
-          "token_address",
-          "token_code_hash",
-          "verifier_address",
-          "verifier_code_hash",
-          "verifying_key",
-          "verifier_key_hash",
-          "outbound_proof_policy",
-          "route_address",
-          "route_code_hash",
-          "max_wrapped_supply",
-          "taira_to_token_multiplier"
-        ],
-        "type": "object"
-      },
-      "SccpDestinationDeploymentV1": {
+      "SccpDeploymentV1": {
+        "description": "Destination contract bound by one route revision.",
         "oneOf": [
           {
             "additionalProperties": false,
             "properties": {
               "deployment": {
-                "$ref": "#/components/schemas/SccpDestinationDeploymentDetailsV1"
+                "$ref": "#/components/schemas/SccpEvmDeploymentV1"
               },
               "family": {
                 "const": "evm"
@@ -36668,7 +36084,7 @@
             "additionalProperties": false,
             "properties": {
               "deployment": {
-                "$ref": "#/components/schemas/SccpDestinationDeploymentDetailsV1"
+                "$ref": "#/components/schemas/SccpTronDeploymentV1"
               },
               "family": {
                 "const": "tron"
@@ -36684,7 +36100,7 @@
             "additionalProperties": false,
             "properties": {
               "deployment": {
-                "$ref": "#/components/schemas/SccpTonDestinationDeploymentV1"
+                "$ref": "#/components/schemas/SccpTonDeploymentV1"
               },
               "family": {
                 "const": "ton"
@@ -36698,75 +36114,20 @@
           }
         ]
       },
-      "SccpDestinationProofBackendV1": {
+      "SccpEvmDeploymentV1": {
         "additionalProperties": false,
+        "description": "Ethereum or BSC bridge-token contract and the Keccak-256 of its runtime bytecode.",
         "properties": {
-          "backend": {
-            "enum": [
-              "evm_groth16_bn254_v1",
-              "tron_groth16_bn254_v1",
-              "ton_groth16_bls12381_v1"
-            ],
-            "type": "string"
+          "address": {
+            "$ref": "#/components/schemas/SccpUpperHex20"
           },
-          "family": {
-            "type": "null"
+          "runtime_code_hash": {
+            "$ref": "#/components/schemas/SccpUpperHex32"
           }
         },
         "required": [
-          "backend",
-          "family"
-        ],
-        "type": "object"
-      },
-      "SccpEvmAddressValueV1": {
-        "additionalProperties": false,
-        "properties": {
-          "EvmAddress20": {
-            "additionalProperties": false,
-            "properties": {
-              "bytes": {
-                "maxLength": 42,
-                "minLength": 42,
-                "pattern": "^0x[0-9a-f]{40}$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "bytes"
-            ],
-            "type": "object"
-          }
-        },
-        "required": [
-          "EvmAddress20"
-        ],
-        "type": "object"
-      },
-      "SccpExactRouteValueV1": {
-        "additionalProperties": false,
-        "properties": {
-          "CanonicalText": {
-            "additionalProperties": false,
-            "properties": {
-              "value": {
-                "enum": [
-                  "taira_eth_xor",
-                  "taira_bsc_xor",
-                  "taira_ton_xor",
-                  "taira_tron_xor"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "value"
-            ],
-            "type": "object"
-          }
-        },
-        "required": [
-          "CanonicalText"
+          "address",
+          "runtime_code_hash"
         ],
         "type": "object"
       },
@@ -36792,764 +36153,613 @@
         ],
         "type": "object"
       },
-      "SccpGovernedLaneV1": {
+      "SccpFaultRefV1": {
         "additionalProperties": false,
+        "description": "Bridge-key fault identity: the faulted key address and the Taira height of the fault.",
         "properties": {
-          "current_native_trust_anchor_hash": {
-            "description": "Hash of the final/highest retained checkpoint, or null only when the history is empty.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
+          "address": {
+            "$ref": "#/components/schemas/SccpUpperHex20"
+          },
+          "height": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
+          }
+        },
+        "required": [
+          "address",
+          "height"
+        ],
+        "type": "object"
+      },
+      "SccpFreezeLightClientActionV1": {
+        "additionalProperties": false,
+        "description": "Freeze one inbound light client.",
+        "properties": {
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
+          }
+        },
+        "required": [
+          "network"
+        ],
+        "type": "object"
+      },
+      "SccpGovernanceActionV1": {
+        "description": "One Parliament-enacted SCCP action; each action has exactly one subject.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "register_route"
               },
-              {
-                "type": "null"
+              "payload": {
+                "$ref": "#/components/schemas/SccpRegisterRouteActionV1"
               }
-            ]
-          },
-          "lane_id": {
-            "$ref": "#/components/schemas/SccpInboundLaneIdV1"
-          },
-          "native_trust_anchors": {
-            "description": "Append-only checkpoints ordered by a strictly increasing backend-specific consensus-progress coordinate; governance rejects rather than evicts at the 4,096-entry bound.",
-            "items": {
-              "$ref": "#/components/schemas/SccpNativeTrustAnchorV1"
             },
-            "maxItems": 4096,
-            "type": "array"
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
           },
-          "routes": {
-            "description": "Up to 64 immutable revisions are retained without eviction; at most eight nonterminal revisions may coexist on one lane.",
-            "items": {
-              "$ref": "#/components/schemas/SccpGovernedRouteV1"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "activate_revision"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpRouteRevisionActionV1"
+              }
             },
-            "maxItems": 64,
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "switch_revision"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpSwitchRevisionActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "deactivate_outbound"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpRouteRevisionActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "retire_revision"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpRouteRevisionActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "remove_staged"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpRouteRevisionActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "release_stranded"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpReleaseStrandedActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "set_taira_paused"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpSetTairaPausedActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "set_destination_paused"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpSetDestinationPausedActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "initialize_light_client"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpInitializeLightClientActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "install_trusted_checkpoint"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpInstallTrustedCheckpointActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "freeze_light_client"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpFreezeLightClientActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "set_parameters"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpSetParametersActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "clear_bridge_key_fault"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SccpClearBridgeKeyFaultActionV1"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SccpGovernanceBaseRevisionV1": {
+        "additionalProperties": false,
+        "description": "One proposal subject and the governance revision the proposer saw.",
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/SccpGovernanceSubjectV1"
+          }
+        },
+        "required": [
+          "subject",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "SccpGovernanceProposalV1": {
+        "additionalProperties": false,
+        "description": "Complete SCCP v1 Parliament proposal (specs/sccp.md section 4.14.3), bound to the live NetworkId.",
+        "properties": {
+          "actions": {
+            "description": "Actions applied atomically in this order at enactment.",
+            "items": {
+              "$ref": "#/components/schemas/SccpGovernanceActionV1"
+            },
+            "maxItems": 16,
             "minItems": 1,
             "type": "array"
+          },
+          "base_revisions": {
+            "description": "Exactly the sorted, deduplicated action subjects S(P), each with the governance revision the proposer saw.",
+            "items": {
+              "$ref": "#/components/schemas/SccpGovernanceBaseRevisionV1"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           }
         },
         "required": [
-          "lane_id",
-          "native_trust_anchors",
-          "current_native_trust_anchor_hash",
-          "routes"
+          "network_id",
+          "base_revisions",
+          "actions"
         ],
         "type": "object"
       },
-      "SccpGovernedRouteV1": {
-        "additionalProperties": false,
-        "properties": {
-          "activation": {
-            "$ref": "#/components/schemas/SccpRouteActivationV1"
-          },
-          "asset_key": {
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$",
-            "type": "string"
-          },
-          "destination": {
-            "$ref": "#/components/schemas/SccpDestinationDeploymentV1"
-          },
-          "inbound_finality_cutoff": {
-            "description": "Present exactly for Retired routes; delayed claims at or below the cutoff remain admissible.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpInboundFinalityCutoffV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "lane_id": {
-            "$ref": "#/components/schemas/SccpInboundLaneIdV1"
-          },
-          "revision": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "route_id": {
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$",
-            "type": "string"
-          },
-          "settlement": {
-            "$ref": "#/components/schemas/SccpSoraSettlementV1"
-          },
-          "sora_outbound_execution_policy": {
-            "$ref": "#/components/schemas/SccpSoraOutboundExecutionPolicyV1"
-          },
-          "source_identity": {
-            "$ref": "#/components/schemas/SccpSourceIdentityV1"
-          }
-        },
-        "required": [
-          "lane_id",
-          "route_id",
-          "asset_key",
-          "revision",
-          "activation",
-          "inbound_finality_cutoff",
-          "source_identity",
-          "destination",
-          "sora_outbound_execution_policy",
-          "settlement"
-        ],
-        "type": "object"
-      },
-      "SccpGroth16Bls12381IcV1": {
-        "additionalProperties": false,
-        "properties": {
-          "constant": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_0": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_1": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_10": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_2": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_3": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_4": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_5": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_6": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_7": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_8": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "signal_9": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          }
-        },
-        "required": [
-          "constant",
-          "signal_0",
-          "signal_1",
-          "signal_2",
-          "signal_3",
-          "signal_4",
-          "signal_5",
-          "signal_6",
-          "signal_7",
-          "signal_8",
-          "signal_9",
-          "signal_10"
-        ],
-        "type": "object"
-      },
-      "SccpGroth16Bls12381PublicSignalsV1": {
-        "additionalProperties": false,
-        "properties": {
-          "commitment_root": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "destination_binding_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "finality_block_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "finality_height": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "message_id": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "payload_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "route_configuration_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "sora_finality_anchor_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "source_domain": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "statement_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          },
-          "target_domain": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32Scalar"
-          }
-        },
-        "required": [
-          "message_id",
-          "payload_hash",
-          "target_domain",
-          "commitment_root",
-          "finality_height",
-          "finality_block_hash",
-          "source_domain",
-          "statement_hash",
-          "destination_binding_hash",
-          "route_configuration_hash",
-          "sora_finality_anchor_hash"
-        ],
-        "type": "object"
-      },
-      "SccpGroth16Bls12381VerifyingKeyV1": {
-        "additionalProperties": false,
-        "properties": {
-          "alpha1": {
-            "$ref": "#/components/schemas/SccpBls12381G1CompressedV1"
-          },
-          "beta2": {
-            "$ref": "#/components/schemas/SccpBls12381G2CompressedV1"
-          },
-          "delta2": {
-            "$ref": "#/components/schemas/SccpBls12381G2CompressedV1"
-          },
-          "gamma2": {
-            "$ref": "#/components/schemas/SccpBls12381G2CompressedV1"
-          },
-          "ic": {
-            "$ref": "#/components/schemas/SccpGroth16Bls12381IcV1"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "alpha1",
-          "beta2",
-          "gamma2",
-          "delta2",
-          "ic"
-        ],
-        "type": "object"
-      },
-      "SccpGroth16Bn254IcV1": {
-        "additionalProperties": false,
-        "properties": {
-          "constant": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_0": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_1": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_10": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_2": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_3": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_4": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_5": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_6": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_7": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_8": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          },
-          "signal_9": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
-          }
-        },
-        "required": [
-          "constant",
-          "signal_0",
-          "signal_1",
-          "signal_2",
-          "signal_3",
-          "signal_4",
-          "signal_5",
-          "signal_6",
-          "signal_7",
-          "signal_8",
-          "signal_9",
-          "signal_10"
-        ],
-        "type": "object"
-      },
-      "SccpGroth16Bn254ProofRequestV1": {
-        "additionalProperties": false,
-        "description": "Exact query-free Taira-to-external Groth16 request. The target family, backend, target domain, and all role-separated hashes must agree.",
-        "properties": {
-          "backend": {
+      "SccpGovernanceSubjectV1": {
+        "description": "State an SCCP governance action is scoped to; the key of sccp_governance_revisions.",
+        "oneOf": [
+          {
             "additionalProperties": false,
             "properties": {
-              "backend": {
-                "enum": [
-                  "evm_groth16_bn254_v1",
-                  "tron_groth16_bn254_v1"
-                ],
-                "type": "string"
+              "key": {
+                "$ref": "#/components/schemas/SccpExternalNetworkV1"
               },
-              "family": {
-                "type": "null"
+              "subject": {
+                "const": "route"
               }
             },
             "required": [
-              "backend",
-              "family"
+              "subject",
+              "key"
             ],
             "type": "object"
           },
-          "bundle_bytes": {
-            "maxLength": 33554434,
-            "minLength": 4,
-            "pattern": "^0x(?:[0-9a-f]{2})+$",
-            "type": "string"
-          },
-          "destination_binding_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "public_inputs": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SccpMessagePublicInputsV1"
-              },
-              {
-                "properties": {
-                  "target_domain": {
-                    "enum": [
-                      1,
-                      2,
-                      5
-                    ]
-                  }
-                }
-              }
-            ]
-          },
-          "request_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "route_configuration_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "semantic_proof_profile": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SccpSemanticProofProfileV1"
-              },
-              {
-                "properties": {
-                  "profile": {
-                    "const": "sora_taira_finality_inclusion_groth16_bn254"
-                  }
-                }
-              }
-            ]
-          },
-          "semantic_proof_profile_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "sora_finality_anchor": {
-            "$ref": "#/components/schemas/SccpSoraFinalityAnchorV1"
-          },
-          "sora_finality_anchor_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "source_network": {
-            "$ref": "#/components/schemas/SccpTairaNetworkV1"
-          },
-          "statement_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "target_network": {
+          {
             "additionalProperties": false,
             "properties": {
-              "network": {
-                "enum": [
-                  "ethereum_mainnet",
-                  "bsc_mainnet",
-                  "tron_mainnet"
-                ],
-                "type": "string"
+              "key": {
+                "$ref": "#/components/schemas/SccpExternalNetworkV1"
               },
-              "profile": {
-                "type": "null"
+              "subject": {
+                "const": "route_control"
               }
             },
             "required": [
-              "network",
-              "profile"
+              "subject",
+              "key"
             ],
             "type": "object"
           },
-          "verifier_key_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "verifying_key": {
-            "$ref": "#/components/schemas/SccpGroth16Bn254VerifyingKeyV1"
-          },
-          "version": {
-            "enum": [
-              1
+          {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "$ref": "#/components/schemas/SccpExternalNetworkV1"
+              },
+              "subject": {
+                "const": "light_client"
+              }
+            },
+            "required": [
+              "subject",
+              "key"
             ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "backend",
-          "source_network",
-          "target_network",
-          "public_inputs",
-          "verifying_key",
-          "verifier_key_hash",
-          "semantic_proof_profile",
-          "semantic_proof_profile_hash",
-          "sora_finality_anchor",
-          "sora_finality_anchor_hash",
-          "bundle_bytes",
-          "statement_hash",
-          "destination_binding_hash",
-          "route_configuration_hash",
-          "request_hash"
-        ],
-        "type": "object"
-      },
-      "SccpGroth16Bn254VerifyingKeyV1": {
-        "additionalProperties": false,
-        "properties": {
-          "alpha1": {
-            "$ref": "#/components/schemas/SccpBn254G1PointV1"
+            "type": "object"
           },
-          "beta2": {
-            "$ref": "#/components/schemas/SccpBn254G2PointV1"
-          },
-          "delta2": {
-            "$ref": "#/components/schemas/SccpBn254G2PointV1"
-          },
-          "gamma2": {
-            "$ref": "#/components/schemas/SccpBn254G2PointV1"
-          },
-          "ic": {
-            "$ref": "#/components/schemas/SccpGroth16Bn254IcV1"
-          },
-          "version": {
-            "enum": [
-              1
+          {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "type": "null"
+              },
+              "subject": {
+                "const": "parameters"
+              }
+            },
+            "required": [
+              "subject",
+              "key"
             ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "alpha1",
-          "beta2",
-          "gamma2",
-          "delta2",
-          "ic"
-        ],
-        "type": "object"
-      },
-      "SccpHex32": {
-        "description": "Canonical lowercase nonzero 32-byte hexadecimal value without a prefix.",
-        "maxLength": 64,
-        "minLength": 64,
-        "not": {
-          "pattern": "^0{64}$"
-        },
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "SccpInboundFinalityCutoffV1": {
-        "additionalProperties": false,
-        "properties": {
-          "max_anchor_interval_height": {
-            "description": "Inclusive successor-checkpoint boundary in the backend's authenticated consensus-progress coordinate.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
+            "type": "object"
           },
-          "trust_anchor_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
+              },
+              "subject": {
+                "const": "bridge_key_fault"
+              }
+            },
+            "required": [
+              "subject",
+              "key"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "trust_anchor_hash",
-          "max_anchor_interval_height"
-        ],
-        "type": "object"
+        ]
       },
-      "SccpInboundLaneIdV1": {
+      "SccpInitializeLightClientActionV1": {
         "additionalProperties": false,
-        "description": "Exact first-release external-to-Taira SCCP lane.",
+        "description": "Install or re-install one inbound light client.",
         "properties": {
-          "source": {
+          "bootstrap": {
+            "$ref": "#/components/schemas/SccpLcBootstrapV1"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/SccpLcInitExpectationV1"
+          },
+          "network": {
             "$ref": "#/components/schemas/SccpExternalNetworkV1"
           },
-          "target": {
-            "$ref": "#/components/schemas/SccpTairaNetworkV1"
+          "params": {
+            "$ref": "#/components/schemas/SccpLightClientParamsV1"
           }
         },
         "required": [
-          "source",
-          "target"
+          "network",
+          "expected",
+          "params",
+          "bootstrap"
         ],
         "type": "object"
       },
-      "SccpInitializeTrustAnchorActionV1": {
+      "SccpInstallTrustedCheckpointActionV1": {
         "additionalProperties": false,
+        "description": "Install a Parliament-trusted light-client checkpoint.",
         "properties": {
-          "expected_current": {
-            "type": "null"
+          "checkpoint": {
+            "$ref": "#/components/schemas/SccpLcCheckpointDataV1"
           },
-          "initial": {
-            "$ref": "#/components/schemas/SccpNativeTrustAnchorV1"
-          },
-          "lane_id": {
-            "$ref": "#/components/schemas/SccpInboundLaneIdV1"
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
           }
         },
         "required": [
-          "lane_id",
-          "expected_current",
-          "initial"
+          "network",
+          "checkpoint"
         ],
         "type": "object"
       },
-      "SccpMessageBundleV1": {
+      "SccpJsonSafeU64V1": {
+        "description": "Unsigned integer carried by an SCCP Parliament proposal; at most 2^53 - 1 so it stays exact in binary64 JSON runtimes.",
+        "format": "uint64",
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "SccpLcBootstrapV1": {
         "additionalProperties": false,
+        "description": "Weak-subjectivity bootstrap of one inbound light client.",
         "properties": {
-          "commitment": {
+          "bytes": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SccpCanonicalBase64"
+              }
+            ],
+            "description": "Opaque per-chain bootstrap (a BoC for TON), 1..=1048576 bytes.",
+            "maxLength": 1398104
+          },
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
+          }
+        },
+        "required": [
+          "network",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "SccpLcCheckpointDataV1": {
+        "additionalProperties": false,
+        "description": "Finalized source-chain point installed as a trusted checkpoint.",
+        "properties": {
+          "block_hash": {
+            "$ref": "#/components/schemas/SccpUpperHex32"
+          },
+          "receipts_or_tx_root": {
+            "$ref": "#/components/schemas/SccpUpperHex32"
+          },
+          "source_height": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
+          },
+          "source_time_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
+          },
+          "state_root": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SccpUpperHex32"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_height",
+          "block_hash",
+          "state_root",
+          "receipts_or_tx_root",
+          "source_time_ms"
+        ],
+        "type": "object"
+      },
+      "SccpLcInitExpectationV1": {
+        "description": "Light-client state the Parliament expects before installation.",
+        "oneOf": [
+          {
             "additionalProperties": false,
             "properties": {
-              "context": {
-                "additionalProperties": false,
-                "properties": {
-                  "destination_binding_hash": {
-                    "$ref": "#/components/schemas/SccpPrefixedHex32"
-                  },
-                  "lane": {
-                    "$ref": "#/components/schemas/SccpOutboundLaneIdV1"
-                  },
-                  "route_configuration_hash": {
-                    "$ref": "#/components/schemas/SccpPrefixedHex32"
-                  }
-                },
-                "required": [
-                  "lane",
-                  "destination_binding_hash",
-                  "route_configuration_hash"
-                ],
-                "type": "object"
+              "detail": {
+                "type": "null"
               },
-              "kind": {
-                "const": "Transfer"
-              },
-              "message_id": {
-                "$ref": "#/components/schemas/SccpPrefixedHex32"
-              },
-              "payload_hash": {
-                "$ref": "#/components/schemas/SccpPrefixedHex32"
-              },
-              "version": {
-                "enum": [
-                  1
-                ],
-                "type": "integer"
+              "expected": {
+                "const": "absent"
               }
             },
             "required": [
-              "version",
-              "kind",
-              "context",
-              "message_id",
-              "payload_hash"
+              "expected",
+              "detail"
             ],
             "type": "object"
           },
-          "commitment_root": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "finality_proof": {
-            "maxLength": 33554434,
-            "minLength": 4,
-            "pattern": "^0x(?:[0-9a-f]{2})+$",
-            "type": "string"
-          },
-          "merkle_proof": {
+          {
             "additionalProperties": false,
             "properties": {
-              "steps": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "sibling_hash": {
-                      "$ref": "#/components/schemas/SccpPrefixedHex32"
-                    },
-                    "sibling_is_left": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "sibling_hash",
-                    "sibling_is_left"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 64,
-                "type": "array"
+              "detail": {
+                "type": "null"
+              },
+              "expected": {
+                "const": "unusable"
               }
             },
             "required": [
-              "steps"
+              "expected",
+              "detail"
             ],
             "type": "object"
-          },
-          "payload": {
-            "additionalProperties": false,
-            "properties": {
-              "Transfer": {
-                "$ref": "#/components/schemas/SccpRawTransferPayloadV1"
-              }
-            },
-            "required": [
-              "Transfer"
-            ],
-            "type": "object"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
           }
-        },
-        "required": [
-          "version",
-          "commitment_root",
-          "commitment",
-          "merkle_proof",
-          "payload",
-          "finality_proof"
-        ],
-        "type": "object"
+        ]
       },
-      "SccpMessagePublicInputsV1": {
+      "SccpLightClientParamsV1": {
         "additionalProperties": false,
+        "description": "Stored parameters of one inbound light client.",
         "properties": {
-          "commitment_root": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
+          "checkpoint_prune_after_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           },
-          "finality_block_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
+          "checkpoint_stride": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           },
-          "finality_height": {
-            "maxLength": 20,
-            "minLength": 1,
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "message_id": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "payload_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "target_domain": {
-            "enum": [
-              1,
-              2,
-              4,
-              5
-            ],
+          "max_advance_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
           },
-          "version": {
-            "enum": [
-              1
-            ],
+          "max_ancestry_headers": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
+          },
+          "max_backfill_headers": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_proof_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_segment_headers": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_updates_per_advance": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
+          },
+          "set_retention_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
+          },
+          "ws_bound_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           }
         },
         "required": [
-          "version",
-          "message_id",
-          "payload_hash",
-          "target_domain",
-          "commitment_root",
-          "finality_height",
-          "finality_block_hash"
-        ],
-        "type": "object"
-      },
-      "SccpNativeProofBackendV1": {
-        "additionalProperties": false,
-        "properties": {
-          "backend": {
-            "enum": [
-              "ethereum_beacon_v1",
-              "bsc_parlia_v1",
-              "ton_masterchain_v1",
-              "tron_dpos_v1"
-            ],
-            "type": "string"
-          },
-          "protocol": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "backend",
-          "protocol"
-        ],
-        "type": "object"
-      },
-      "SccpNativeTrustAnchorV1": {
-        "additionalProperties": false,
-        "properties": {
-          "anchor_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "backend": {
-            "$ref": "#/components/schemas/SccpNativeProofBackendV1"
-          },
-          "checkpoint_height": {
-            "description": "Backend-specific consensus-progress coordinate: finalized beacon slot for Ethereum, finalized block height for BSC and TRON, and finalized masterchain sequence number for TON.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "backend",
-          "anchor_hash",
-          "checkpoint_height"
+          "network",
+          "ws_bound_ms",
+          "set_retention_ms",
+          "checkpoint_stride",
+          "checkpoint_prune_after_ms",
+          "max_updates_per_advance",
+          "max_segment_headers",
+          "max_ancestry_headers",
+          "max_backfill_headers",
+          "max_advance_bytes",
+          "max_proof_bytes"
         ],
         "type": "object"
       },
@@ -37566,876 +36776,137 @@
         ],
         "description": "Canonical nonzero uppercase 32-byte hexadecimal commitment."
       },
-      "SccpNormalizedCodecValueV1": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/SccpCanonicalTextValueV1"
-          },
-          {
-            "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-          },
-          {
-            "$ref": "#/components/schemas/SccpTonAccountValueV1"
-          },
-          {
-            "$ref": "#/components/schemas/SccpTronAddressValueV1"
-          }
-        ]
-      },
-      "SccpOutboundLaneIdV1": {
+      "SccpParametersV1": {
         "additionalProperties": false,
-        "description": "Exact first-release Taira-to-external SCCP lane.",
+        "description": "SCCP consensus parameters; Taira enforces every bound of specs/sccp.md section 4.1 at proposal and enactment.",
         "properties": {
-          "source": {
-            "$ref": "#/components/schemas/SccpTairaNetworkV1"
+          "attestation_retention_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           },
-          "target": {
-            "$ref": "#/components/schemas/SccpExternalNetworkV1"
-          }
-        },
-        "required": [
-          "source",
-          "target"
-        ],
-        "type": "object"
-      },
-      "SccpOutboundProofPolicyV1": {
-        "additionalProperties": false,
-        "properties": {
-          "semantic_profile": {
-            "$ref": "#/components/schemas/SccpSemanticProofProfileV1"
+          "attestation_stall_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           },
-          "sora_finality_anchor": {
-            "$ref": "#/components/schemas/SccpSoraFinalityAnchorV1"
+          "enabled": {
+            "type": "boolean"
           },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "semantic_profile",
-          "sora_finality_anchor"
-        ],
-        "type": "object"
-      },
-      "SccpPayloadProjectionV1": {
-        "additionalProperties": false,
-        "properties": {
-          "Transfer": {
-            "$ref": "#/components/schemas/SccpTransferProjectionV1"
-          }
-        },
-        "required": [
-          "Transfer"
-        ],
-        "type": "object"
-      },
-      "SccpPortableVerifyingKeyRefV1": {
-        "additionalProperties": false,
-        "properties": {
-          "backend": {
-            "maxLength": 256,
-            "minLength": 1,
-            "pattern": "^[a-z0-9](?:[a-z0-9_/:.-]*[a-z0-9])?$",
-            "type": "string"
+          "inbound_self_claim_fee": {
+            "$ref": "#/components/schemas/SccpU128DecimalV1"
           },
-          "commitment": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "name": {
-            "maxLength": 256,
-            "minLength": 1,
-            "pattern": "^[a-z0-9](?:[a-z0-9_/:.-]*[a-z0-9])?$",
-            "type": "string"
-          },
-          "version": {
+          "max_attestation_entries_per_instruction": {
             "format": "uint32",
             "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "backend",
-          "name",
-          "version",
-          "commitment"
-        ],
-        "type": "object"
-      },
-      "SccpPrefixedHex32": {
-        "description": "Canonical lowercase nonzero 32-byte hexadecimal value with an exact 0x prefix.",
-        "maxLength": 66,
-        "minLength": 66,
-        "not": {
-          "pattern": "^0x0{64}$"
-        },
-        "pattern": "^0x[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "SccpPrefixedHex32Scalar": {
-        "description": "Canonical lowercase 32-byte BLS12-381 scalar-field signal with an exact 0x prefix; zero is valid after field reduction.",
-        "maxLength": 66,
-        "minLength": 66,
-        "pattern": "^0x[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "SccpProofRequestV1": {
-        "description": "Exact query-free Taira-to-external Groth16 request selected by the governed destination family.",
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/SccpGroth16Bn254ProofRequestV1"
-          },
-          {
-            "$ref": "#/components/schemas/SccpTonGroth16Bls12381ProofRequestV1"
-          }
-        ]
-      },
-      "SccpRawTransferPayloadV1": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 1
-              },
-              "recipient_codec": {
-                "const": 2
-              },
-              "route_id": {
-                "const": "0x74616972615f6574685f786f72"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 2
-              },
-              "recipient_codec": {
-                "const": 2
-              },
-              "route_id": {
-                "const": "0x74616972615f6273635f786f72"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 4
-              },
-              "recipient": {
-                "maxLength": 74,
-                "minLength": 74,
-                "not": {
-                  "pattern": "^0x0{72}$"
-                },
-                "pattern": "^0x00000000[0-9a-f]{64}$",
-                "type": "string"
-              },
-              "recipient_codec": {
-                "const": 7
-              },
-              "route_id": {
-                "const": "0x74616972615f746f6e5f786f72"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 5
-              },
-              "recipient_codec": {
-                "const": 5
-              },
-              "route_id": {
-                "const": "0x74616972615f74726f6e5f786f72"
-              }
-            }
-          }
-        ],
-        "properties": {
-          "amount": {
-            "maxLength": 39,
-            "minLength": 1,
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "asset_home_domain": {
-            "const": 0,
-            "type": "integer"
-          },
-          "asset_id": {
-            "const": "0x786f72"
-          },
-          "asset_id_codec": {
-            "const": 1,
-            "type": "integer"
-          },
-          "dest_domain": {
-            "enum": [
-              1,
-              2,
-              4,
-              5
-            ],
-            "type": "integer"
-          },
-          "nonce": {
-            "maxLength": 20,
-            "minLength": 1,
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
-          },
-          "recipient": {
-            "oneOf": [
-              {
-                "maxLength": 42,
-                "minLength": 42,
-                "not": {
-                  "pattern": "^0x0{40}$"
-                },
-                "pattern": "^0x[0-9a-f]{40}$",
-                "type": "string"
-              },
-              {
-                "maxLength": 44,
-                "minLength": 44,
-                "not": {
-                  "pattern": "^0x410{40}$"
-                },
-                "pattern": "^0x41[0-9a-f]{40}$",
-                "type": "string"
-              },
-              {
-                "maxLength": 74,
-                "minLength": 74,
-                "not": {
-                  "pattern": "^0x0{72}$"
-                },
-                "pattern": "^0x00000000[0-9a-f]{64}$",
-                "type": "string"
-              }
-            ]
-          },
-          "recipient_codec": {
-            "enum": [
-              2,
-              5,
-              7
-            ],
-            "type": "integer"
-          },
-          "route_id": {
-            "enum": [
-              "0x74616972615f6574685f786f72",
-              "0x74616972615f6273635f786f72",
-              "0x74616972615f746f6e5f786f72",
-              "0x74616972615f74726f6e5f786f72"
-            ],
-            "type": "string"
-          },
-          "route_id_codec": {
-            "const": 1,
-            "type": "integer"
-          },
-          "route_revision": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "sender": {
-            "maxLength": 514,
-            "minLength": 4,
-            "pattern": "^0x(?:[0-9a-f]{2})+$",
-            "type": "string"
-          },
-          "sender_codec": {
-            "const": 1,
-            "type": "integer"
-          },
-          "source_domain": {
-            "const": 0,
-            "type": "integer"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "source_domain",
-          "dest_domain",
-          "nonce",
-          "route_revision",
-          "asset_home_domain",
-          "asset_id_codec",
-          "asset_id",
-          "amount",
-          "sender_codec",
-          "sender",
-          "recipient_codec",
-          "recipient",
-          "route_id_codec",
-          "route_id"
-        ],
-        "type": "object"
-      },
-      "SccpRecentCursorV1": {
-        "additionalProperties": false,
-        "properties": {
-          "after_index": {
-            "format": "uint32",
-            "maximum": 511,
             "minimum": 0,
             "type": "integer"
           },
-          "from": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "from",
-          "after_index"
-        ],
-        "type": "object"
-      },
-      "SccpRecentMessageLinksV1": {
-        "additionalProperties": false,
-        "properties": {
-          "bundle_path": {
-            "pattern": "^/v1/sccp/proofs/message/[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "proof_request_path": {
-            "pattern": "^/v1/sccp/proof-requests/[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "bundle_path",
-          "proof_request_path"
-        ],
-        "type": "object"
-      },
-      "SccpRecentMessageV1": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "description": "Canonical positive unsigned 128-bit decimal string.",
-            "maxLength": 39,
-            "minLength": 1,
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "asset_id": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "commitment_index": {
+          "max_exempt_transactions_per_block": {
             "format": "uint32",
-            "maximum": 511,
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
-          "destination_binding_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
+          "min_outbound_amount": {
+            "$ref": "#/components/schemas/SccpU128DecimalV1"
           },
-          "height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
+          "outbound_ttl_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           },
-          "kind": {
-            "const": "transfer"
+          "roster_max_age_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           },
-          "links": {
-            "$ref": "#/components/schemas/SccpRecentMessageLinksV1"
-          },
-          "message_id_hex": {
-            "$ref": "#/components/schemas/SccpHex32"
-          },
-          "payload_projection": {
-            "$ref": "#/components/schemas/SccpPayloadProjectionV1"
-          },
-          "recipient": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "route_configuration_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "route_id": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "type": "string"
-          },
-          "source_profile": {
-            "const": "sora-taira"
-          },
-          "target_domain": {
-            "enum": [
-              1,
-              2,
-              4,
-              5
-            ],
-            "type": "integer"
-          },
-          "target_profile": {
-            "enum": [
-              "ethereum-mainnet",
-              "bsc-mainnet",
-              "ton-mainnet",
-              "tron-mainnet"
-            ],
-            "type": "string"
+          "roster_validity_ms": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           }
         },
         "required": [
-          "height",
-          "commitment_index",
-          "message_id_hex",
-          "kind",
-          "source_profile",
-          "target_profile",
-          "destination_binding_hash",
-          "route_configuration_hash",
-          "target_domain",
-          "amount",
-          "payload_projection",
-          "links"
+          "enabled",
+          "roster_max_age_ms",
+          "roster_validity_ms",
+          "outbound_ttl_ms",
+          "min_outbound_amount",
+          "inbound_self_claim_fee",
+          "attestation_retention_ms",
+          "attestation_stall_ms",
+          "max_attestation_entries_per_instruction",
+          "max_exempt_transactions_per_block"
         ],
         "type": "object"
       },
-      "SccpRecentMessagesV1": {
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "description": "Unique messages ordered by descending block height and ascending commitment index.",
-            "items": {
-              "$ref": "#/components/schemas/SccpRecentMessageV1"
-            },
-            "maxItems": 50,
-            "type": "array"
-          },
-          "next": {
-            "$ref": "#/components/schemas/SccpRecentCursorV1"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "type": "object"
+      "SccpPositiveU128DecimalV1": {
+        "description": "Canonical positive unsigned 128-bit integer as a decimal string without sign, leading zeros or separators.",
+        "maxLength": 39,
+        "minLength": 1,
+        "pattern": "^[1-9][0-9]{0,38}$",
+        "type": "string"
       },
       "SccpRegisterRouteActionV1": {
         "additionalProperties": false,
+        "description": "Stage a new route revision bound to one destination deployment.",
         "properties": {
-          "native_trust_anchor": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpNativeTrustAnchorV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "deployment": {
+            "$ref": "#/components/schemas/SccpDeploymentV1"
           },
-          "route": {
-            "$ref": "#/components/schemas/SccpGovernedRouteV1"
-          }
-        },
-        "required": [
-          "route",
-          "native_trust_anchor"
-        ],
-        "type": "object"
-      },
-      "SccpRegistryLimitsV1": {
-        "additionalProperties": false,
-        "properties": {
-          "max_governed_lanes": {
-            "const": 16,
-            "type": "integer"
+          "initial_roster_generation": {
+            "$ref": "#/components/schemas/SccpJsonSafeU64V1"
           },
-          "max_live_governed_routes": {
-            "const": 64,
-            "type": "integer"
+          "max_wrapped_supply": {
+            "$ref": "#/components/schemas/SccpPositiveU128DecimalV1"
           },
-          "max_live_routes_per_lane": {
-            "const": 8,
-            "type": "integer"
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
           },
-          "max_retained_native_trust_anchors_per_lane": {
-            "const": 4096,
-            "type": "integer"
-          },
-          "max_retained_routes_per_lane": {
-            "const": 64,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "max_governed_lanes",
-          "max_live_governed_routes",
-          "max_live_routes_per_lane",
-          "max_retained_routes_per_lane",
-          "max_retained_native_trust_anchors_per_lane"
-        ],
-        "type": "object"
-      },
-      "SccpRegistryV1": {
-        "additionalProperties": false,
-        "properties": {
-          "lanes": {
-            "description": "At most 16 unique lanes and 64 nonterminal governed routes in total; terminal history remains retained for exact message resolution.",
-            "items": {
-              "$ref": "#/components/schemas/SccpGovernedLaneV1"
-            },
-            "maxItems": 16,
-            "type": "array"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "lanes"
-        ],
-        "type": "object"
-      },
-      "SccpResourceLimitsV1": {
-        "additionalProperties": false,
-        "properties": {
-          "max_bls12_381_pairing_checks_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_bls12_381_pairing_checks_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_bls_aggregate_checks_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_bls_aggregate_checks_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_bls_signer_contributions_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_bls_signer_contributions_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_bn254_pairing_checks_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_bn254_pairing_checks_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_ed25519_signature_checks_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_ed25519_signature_checks_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_ed25519_validator_key_checks_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_ed25519_validator_key_checks_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_ethereum_light_client_updates_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_ethereum_light_client_updates_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_native_header_bytes_per_block": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_native_header_bytes_per_transaction": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_native_headers_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_native_headers_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_outbound_message_payload_bytes": {
-            "const": 4096,
-            "type": "integer"
-          },
-          "max_outbound_messages_per_block": {
-            "const": 512,
-            "type": "integer"
-          },
-          "max_pending_outbound_messages": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_pending_outbound_payload_bytes": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_proof_bytes_per_block": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_proof_bytes_per_proof": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_proof_bytes_per_transaction": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_proofs_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_proofs_per_transaction": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_secp256k1_recoveries_per_block": {
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_secp256k1_recoveries_per_transaction": {
+          "revision": {
+            "format": "uint32",
             "maximum": 4294967295,
             "minimum": 1,
             "type": "integer"
           }
         },
         "required": [
-          "max_outbound_messages_per_block",
-          "max_outbound_message_payload_bytes",
-          "max_pending_outbound_messages",
-          "max_pending_outbound_payload_bytes",
-          "max_proofs_per_transaction",
-          "max_proofs_per_block",
-          "max_proof_bytes_per_proof",
-          "max_proof_bytes_per_transaction",
-          "max_proof_bytes_per_block",
-          "max_native_headers_per_transaction",
-          "max_native_headers_per_block",
-          "max_ethereum_light_client_updates_per_transaction",
-          "max_ethereum_light_client_updates_per_block",
-          "max_native_header_bytes_per_transaction",
-          "max_native_header_bytes_per_block",
-          "max_secp256k1_recoveries_per_transaction",
-          "max_secp256k1_recoveries_per_block",
-          "max_bls_aggregate_checks_per_transaction",
-          "max_bls_aggregate_checks_per_block",
-          "max_bls_signer_contributions_per_transaction",
-          "max_bls_signer_contributions_per_block",
-          "max_ed25519_signature_checks_per_transaction",
-          "max_ed25519_signature_checks_per_block",
-          "max_ed25519_validator_key_checks_per_transaction",
-          "max_ed25519_validator_key_checks_per_block",
-          "max_bn254_pairing_checks_per_transaction",
-          "max_bn254_pairing_checks_per_block",
-          "max_bls12_381_pairing_checks_per_transaction",
-          "max_bls12_381_pairing_checks_per_block"
+          "network",
+          "revision",
+          "deployment",
+          "max_wrapped_supply",
+          "initial_roster_generation"
         ],
         "type": "object"
       },
-      "SccpRouteActivationV1": {
+      "SccpReleaseStrandedActionV1": {
         "additionalProperties": false,
+        "description": "Release stranded route value to a recipient.",
         "properties": {
-          "activation": {
-            "enum": [
-              "staged",
-              "bidirectional",
-              "inbound_only",
-              "paused",
-              "retired"
-            ],
+          "amount": {
+            "$ref": "#/components/schemas/SccpPositiveU128DecimalV1"
+          },
+          "memo": {
+            "description": "At most 256 UTF-8 bytes.",
+            "maxLength": 256,
             "type": "string"
           },
-          "direction": {
-            "type": "null"
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
           }
         },
         "required": [
-          "activation",
-          "direction"
+          "network",
+          "amount",
+          "recipient",
+          "memo"
         ],
         "type": "object"
-      },
-      "SccpRouteGovernanceActionV1": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "const": "Register"
-              },
-              "route": {
-                "$ref": "#/components/schemas/SccpRegisterRouteActionV1"
-              }
-            },
-            "required": [
-              "action",
-              "route"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "const": "SetActivation"
-              },
-              "route": {
-                "$ref": "#/components/schemas/SccpSetRouteActivationActionV1"
-              }
-            },
-            "required": [
-              "action",
-              "route"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "const": "SwitchRevision"
-              },
-              "route": {
-                "$ref": "#/components/schemas/SccpSwitchRouteRevisionActionV1"
-              }
-            },
-            "required": [
-              "action",
-              "route"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "const": "InitializeTrustAnchor"
-              },
-              "route": {
-                "$ref": "#/components/schemas/SccpInitializeTrustAnchorActionV1"
-              }
-            },
-            "required": [
-              "action",
-              "route"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "const": "AdvanceTrustAnchor"
-              },
-              "route": {
-                "$ref": "#/components/schemas/SccpAdvanceTrustAnchorActionV1"
-              }
-            },
-            "required": [
-              "action",
-              "route"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "const": "Remove"
-              },
-              "route": {
-                "$ref": "#/components/schemas/SccpRouteKeyV1"
-              }
-            },
-            "required": [
-              "action",
-              "route"
-            ],
-            "type": "object"
-          }
-        ]
       },
       "SccpRouteGovernanceProposalDraftRequestV1": {
         "additionalProperties": false,
+        "description": "Certificate-only draft request for one ProposeSccpRouteGovernance instruction; Torii rejects a proposal that fails any state-independent Propose check against its live NetworkId.",
         "properties": {
-          "action": {
-            "$ref": "#/components/schemas/SccpRouteGovernanceActionV1"
+          "proposal": {
+            "$ref": "#/components/schemas/SccpGovernanceProposalV1"
           }
         },
         "required": [
-          "action"
+          "proposal"
         ],
         "type": "object"
       },
@@ -38481,1010 +36952,185 @@
         ],
         "type": "object"
       },
-      "SccpRouteKeyV1": {
+      "SccpRouteRevisionActionV1": {
         "additionalProperties": false,
+        "description": "One route revision addressed by network.",
         "properties": {
-          "asset_key": {
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$",
-            "type": "string"
-          },
-          "lane_id": {
-            "$ref": "#/components/schemas/SccpInboundLaneIdV1"
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
           },
           "revision": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 1,
             "type": "integer"
-          },
-          "route_id": {
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "lane_id",
-          "route_id",
-          "asset_key",
-          "revision"
-        ],
-        "type": "object"
-      },
-      "SccpSemanticProofProfileV1": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "commitments": {
-                "additionalProperties": false,
-                "properties": {
-                  "circuit_commitment": {
-                    "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-                  },
-                  "public_signal_schema_hash": {
-                    "const": "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB"
-                  },
-                  "version": {
-                    "enum": [
-                      1
-                    ],
-                    "type": "integer"
-                  },
-                  "witness_generator_commitment": {
-                    "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-                  }
-                },
-                "required": [
-                  "version",
-                  "circuit_commitment",
-                  "witness_generator_commitment",
-                  "public_signal_schema_hash"
-                ],
-                "type": "object"
-              },
-              "profile": {
-                "const": "sora_taira_finality_inclusion_groth16_bn254"
-              }
-            },
-            "required": [
-              "profile",
-              "commitments"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "commitments": {
-                "additionalProperties": false,
-                "properties": {
-                  "circuit_commitment": {
-                    "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-                  },
-                  "public_signal_schema_hash": {
-                    "const": "A4DB9F6AAC0ECD22AC107BFDAFBF30DD01087147517EFE285D345F3F1182B874"
-                  },
-                  "version": {
-                    "enum": [
-                      1
-                    ],
-                    "type": "integer"
-                  },
-                  "witness_generator_commitment": {
-                    "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-                  }
-                },
-                "required": [
-                  "version",
-                  "circuit_commitment",
-                  "witness_generator_commitment",
-                  "public_signal_schema_hash"
-                ],
-                "type": "object"
-              },
-              "profile": {
-                "const": "sora_taira_finality_inclusion_groth16_bls12381"
-              }
-            },
-            "required": [
-              "profile",
-              "commitments"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "SccpSetRouteActivationActionV1": {
-        "additionalProperties": false,
-        "properties": {
-          "expected_current": {
-            "$ref": "#/components/schemas/SccpRouteActivationV1"
-          },
-          "inbound_finality_cutoff": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpInboundFinalityCutoffV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "key": {
-            "$ref": "#/components/schemas/SccpRouteKeyV1"
-          },
-          "next": {
-            "$ref": "#/components/schemas/SccpRouteActivationV1"
-          }
-        },
-        "required": [
-          "key",
-          "expected_current",
-          "next",
-          "inbound_finality_cutoff"
-        ],
-        "type": "object"
-      },
-      "SccpSigningMessageBase64": {
-        "description": "Canonical padded base64 encoding of the exact 32-byte transaction signing prehash.",
-        "maxLength": 44,
-        "minLength": 44,
-        "pattern": "^[A-Za-z0-9+/]{43}=$",
-        "type": "string"
-      },
-      "SccpSoraFinalityAnchorV1": {
-        "additionalProperties": false,
-        "properties": {
-          "chain_id_hash": {
-            "const": "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
-          },
-          "checkpoint_block_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "checkpoint_context_id": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "checkpoint_finality_artifact_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "checkpoint_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "protocol_version": {
-            "enum": [
-              3,
-              4
-            ],
-            "type": "integer"
-          },
-          "source_network": {
-            "$ref": "#/components/schemas/SccpTairaNetworkV1"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "source_network",
-          "protocol_version",
-          "chain_id_hash",
-          "checkpoint_height",
-          "checkpoint_block_hash",
-          "checkpoint_context_id",
-          "checkpoint_finality_artifact_hash"
-        ],
-        "type": "object"
-      },
-      "SccpSoraOutboundExecutionPolicyV1": {
-        "additionalProperties": false,
-        "properties": {
-          "contract_artifact_sha256": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "gas_limit": {
-            "format": "uint64",
-            "maximum": 1000000000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "semantics": {
-            "const": "ivm_proved_record_sccp_message_v1"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          },
-          "vk_ref": {
-            "$ref": "#/components/schemas/SccpPortableVerifyingKeyRefV1"
-          }
-        },
-        "required": [
-          "version",
-          "semantics",
-          "contract_artifact_sha256",
-          "vk_ref",
-          "gas_limit"
-        ],
-        "type": "object"
-      },
-      "SccpSoraOutboundMaterialV1": {
-        "additionalProperties": false,
-        "properties": {
-          "contract_artifact_b64": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SccpCanonicalBase64"
-              }
-            ],
-            "maxLength": 11184812
-          },
-          "contract_code_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "destination_binding_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "policy": {
-            "$ref": "#/components/schemas/SccpSoraOutboundExecutionPolicyV1"
-          },
-          "registry_revision": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "route_configuration_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "route_key": {
-            "$ref": "#/components/schemas/SccpRouteKeyV1"
-          },
-          "settlement_asset_definition_id": {
-            "const": "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
-          },
-          "verifying_key_version": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "registry_revision",
-          "route_key",
-          "route_configuration_hash",
-          "destination_binding_hash",
-          "settlement_asset_definition_id",
-          "policy",
-          "contract_artifact_b64",
-          "contract_code_hash",
-          "verifying_key_version"
-        ],
-        "type": "object"
-      },
-      "SccpSoraSettlementV1": {
-        "additionalProperties": false,
-        "properties": {
-          "asset_definition_id": {
-            "const": "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
-          },
-          "custody_owner": {
-            "$ref": "#/components/schemas/SccpTairaI105Account"
-          },
-          "max_outstanding_liability": {
-            "description": "Positive maximum outstanding SORA liability in Taira base units.",
-            "format": "uint128",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "payload_amount_scale": {
-            "enum": [
-              9
-            ],
-            "type": "integer"
-          }
-        },
-        "required": [
-          "asset_definition_id",
-          "custody_owner",
-          "max_outstanding_liability",
-          "payload_amount_scale"
-        ],
-        "type": "object"
-      },
-      "SccpSourceEmitterIdentityV1": {
-        "additionalProperties": false,
-        "properties": {
-          "address": {
-            "$ref": "#/components/schemas/SccpUpperHex20"
-          },
-          "route_config_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "runtime_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          }
-        },
-        "required": [
-          "address",
-          "runtime_code_hash",
-          "route_config_hash"
-        ],
-        "type": "object"
-      },
-      "SccpSourceEmitterV1": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "emitter": {
-                "const": "evm"
-              },
-              "identity": {
-                "$ref": "#/components/schemas/SccpSourceEmitterIdentityV1"
-              }
-            },
-            "required": [
-              "emitter",
-              "identity"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "emitter": {
-                "const": "tron"
-              },
-              "identity": {
-                "$ref": "#/components/schemas/SccpSourceEmitterIdentityV1"
-              }
-            },
-            "required": [
-              "emitter",
-              "identity"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "emitter": {
-                "const": "ton"
-              },
-              "identity": {
-                "$ref": "#/components/schemas/SccpTonSourceEmitterIdentityV1"
-              }
-            },
-            "required": [
-              "emitter",
-              "identity"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "SccpSourceIdentityV1": {
-        "additionalProperties": false,
-        "properties": {
-          "emitter": {
-            "$ref": "#/components/schemas/SccpSourceEmitterV1"
-          },
-          "lane": {
-            "$ref": "#/components/schemas/SccpInboundLaneIdV1"
-          }
-        },
-        "required": [
-          "lane",
-          "emitter"
-        ],
-        "type": "object"
-      },
-      "SccpSwitchRouteRevisionActionV1": {
-        "additionalProperties": false,
-        "properties": {
-          "expected_previous": {
-            "$ref": "#/components/schemas/SccpRouteActivationV1"
-          },
-          "previous_inbound_finality_cutoff": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpInboundFinalityCutoffV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "previous_key": {
-            "$ref": "#/components/schemas/SccpRouteKeyV1"
-          },
-          "previous_next": {
-            "$ref": "#/components/schemas/SccpRouteActivationV1"
-          },
-          "successor_key": {
-            "$ref": "#/components/schemas/SccpRouteKeyV1"
-          },
-          "successor_next": {
-            "$ref": "#/components/schemas/SccpRouteActivationV1"
-          }
-        },
-        "required": [
-          "previous_key",
-          "expected_previous",
-          "previous_next",
-          "previous_inbound_finality_cutoff",
-          "successor_key",
-          "successor_next"
-        ],
-        "type": "object"
-      },
-      "SccpTairaI105Account": {
-        "description": "Exact canonical I105 account literal for Taira discriminant 369 (0x0171). Runtime admission verifies the complete alphabet, minimal base-105 form, checksum, controller layout, and byte-for-byte canonical re-rendering.",
-        "maxLength": 512,
-        "minLength": 12,
-        "pattern": "^test",
-        "type": "string"
-      },
-      "SccpTairaNetworkV1": {
-        "additionalProperties": false,
-        "properties": {
-          "network": {
-            "const": "sora_taira"
-          },
-          "profile": {
-            "type": "null"
           }
         },
         "required": [
           "network",
-          "profile"
+          "revision"
         ],
         "type": "object"
       },
-      "SccpTonAccountValueV1": {
+      "SccpSetDestinationPausedActionV1": {
         "additionalProperties": false,
+        "description": "Record a destination pause or resume control message.",
         "properties": {
-          "TonAccount36": {
-            "additionalProperties": false,
-            "properties": {
-              "account": {
-                "maxLength": 66,
-                "minLength": 66,
-                "not": {
-                  "pattern": "^0x0{64}$"
-                },
-                "pattern": "^0x[0-9a-f]{64}$",
-                "type": "string"
-              },
-              "workchain": {
-                "const": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "workchain",
-              "account"
-            ],
-            "type": "object"
-          }
-        },
-        "required": [
-          "TonAccount36"
-        ],
-        "type": "object"
-      },
-      "SccpTonAddressV1": {
-        "additionalProperties": false,
-        "properties": {
-          "account": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
           },
-          "workchain": {
-            "const": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "workchain",
-          "account"
-        ],
-        "type": "object"
-      },
-      "SccpTonDestinationDeploymentV1": {
-        "additionalProperties": false,
-        "properties": {
-          "embedded_verifier_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
+          "paused": {
+            "type": "boolean"
           },
-          "jetton_master_address": {
-            "$ref": "#/components/schemas/SccpTonAddressV1"
-          },
-          "jetton_master_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "jetton_master_initial_data_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "jetton_wallet_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "max_wrapped_supply": {
-            "description": "Positive immutable wrapped-token supply cap in destination base units.",
-            "format": "uint128",
+          "revision": {
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 1,
             "type": "integer"
-          },
-          "outbound_proof_policy": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SccpOutboundProofPolicyV1"
-              },
-              {
-                "properties": {
-                  "semantic_profile": {
-                    "properties": {
-                      "profile": {
-                        "const": "sora_taira_finality_inclusion_groth16_bls12381"
-                      }
-                    }
-                  }
-                }
-              }
-            ]
-          },
-          "proof_profile_commitment": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_address": {
-            "$ref": "#/components/schemas/SccpTonAddressV1"
-          },
-          "route_code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_initial_data_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "taira_to_token_multiplier": {
-            "enum": [
-              1
-            ],
-            "format": "uint64",
-            "type": "integer"
-          },
-          "verifier_circuit_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifier_key_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "verifying_key": {
-            "$ref": "#/components/schemas/SccpGroth16Bls12381VerifyingKeyV1"
           }
         },
         "required": [
-          "jetton_master_address",
-          "jetton_master_code_hash",
-          "jetton_master_initial_data_hash",
-          "jetton_wallet_code_hash",
-          "route_address",
-          "route_code_hash",
-          "route_initial_data_hash",
-          "embedded_verifier_code_hash",
-          "verifier_circuit_hash",
-          "verifying_key",
-          "verifier_key_hash",
-          "proof_profile_commitment",
-          "outbound_proof_policy",
-          "max_wrapped_supply",
-          "taira_to_token_multiplier"
+          "network",
+          "revision",
+          "paused"
         ],
         "type": "object"
       },
-      "SccpTonGroth16Bls12381ProofRequestV1": {
+      "SccpSetParametersActionV1": {
         "additionalProperties": false,
-        "description": "Exact state-derived Taira-to-TON BLS12-381 Groth16 prover request.",
+        "description": "Replace the SCCP parameters.",
         "properties": {
-          "backend": {
-            "additionalProperties": false,
-            "properties": {
-              "backend": {
-                "const": "ton_groth16_bls12381_v1"
-              },
-              "family": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "backend",
-              "family"
-            ],
-            "type": "object"
-          },
-          "bundle_bytes": {
-            "maxLength": 33554434,
-            "minLength": 4,
-            "pattern": "^0x(?:[0-9a-f]{2})+$",
-            "type": "string"
-          },
-          "destination_binding_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "proof_profile_commitment": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "public_inputs": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SccpMessagePublicInputsV1"
-              },
-              {
-                "properties": {
-                  "target_domain": {
-                    "const": 4
-                  }
-                }
-              }
-            ]
-          },
-          "public_signals": {
-            "$ref": "#/components/schemas/SccpGroth16Bls12381PublicSignalsV1"
-          },
-          "request_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "route_configuration_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "semantic_proof_profile": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SccpSemanticProofProfileV1"
-              },
-              {
-                "properties": {
-                  "profile": {
-                    "const": "sora_taira_finality_inclusion_groth16_bls12381"
-                  }
-                }
-              }
-            ]
-          },
-          "semantic_proof_profile_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "sora_finality_anchor": {
-            "$ref": "#/components/schemas/SccpSoraFinalityAnchorV1"
-          },
-          "sora_finality_anchor_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "source_network": {
-            "$ref": "#/components/schemas/SccpTairaNetworkV1"
-          },
-          "statement_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "target_network": {
-            "additionalProperties": false,
-            "properties": {
-              "network": {
-                "enum": [
-                  "ton_mainnet"
-                ],
-                "type": "string"
-              },
-              "profile": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "network",
-              "profile"
-            ],
-            "type": "object"
-          },
-          "verifier_circuit_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "verifier_key_hash": {
-            "$ref": "#/components/schemas/SccpPrefixedHex32"
-          },
-          "verifying_key": {
-            "$ref": "#/components/schemas/SccpGroth16Bls12381VerifyingKeyV1"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "type": "integer"
+          "next": {
+            "$ref": "#/components/schemas/SccpParametersV1"
           }
         },
         "required": [
-          "version",
-          "backend",
-          "source_network",
-          "target_network",
-          "public_inputs",
-          "public_signals",
-          "verifying_key",
-          "verifier_key_hash",
-          "verifier_circuit_hash",
-          "proof_profile_commitment",
-          "semantic_proof_profile",
-          "semantic_proof_profile_hash",
-          "sora_finality_anchor",
-          "sora_finality_anchor_hash",
-          "bundle_bytes",
-          "statement_hash",
-          "destination_binding_hash",
-          "route_configuration_hash",
-          "request_hash"
+          "next"
         ],
         "type": "object"
       },
-      "SccpTonSourceEmitterIdentityV1": {
+      "SccpSetTairaPausedActionV1": {
         "additionalProperties": false,
+        "description": "Ensure the route's active revision is paused or resumed on Taira.",
         "properties": {
-          "address": {
-            "$ref": "#/components/schemas/SccpTonAddressV1"
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
           },
-          "code_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
-          },
-          "route_config_hash": {
-            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
+          "paused": {
+            "type": "boolean"
           }
         },
         "required": [
-          "address",
-          "code_hash",
-          "route_config_hash"
+          "network",
+          "paused"
         ],
         "type": "object"
       },
-      "SccpTransferProjectionV1": {
+      "SccpSwitchRevisionActionV1": {
         "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 1
-              },
-              "recipient": {
-                "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-              },
-              "route_id": {
-                "properties": {
-                  "CanonicalText": {
-                    "properties": {
-                      "value": {
-                        "const": "taira_eth_xor"
-                      }
-                    },
-                    "required": [
-                      "value"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "CanonicalText"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 2
-              },
-              "recipient": {
-                "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-              },
-              "route_id": {
-                "properties": {
-                  "CanonicalText": {
-                    "properties": {
-                      "value": {
-                        "const": "taira_bsc_xor"
-                      }
-                    },
-                    "required": [
-                      "value"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "CanonicalText"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 4
-              },
-              "recipient": {
-                "$ref": "#/components/schemas/SccpTonAccountValueV1"
-              },
-              "route_id": {
-                "properties": {
-                  "CanonicalText": {
-                    "properties": {
-                      "value": {
-                        "const": "taira_ton_xor"
-                      }
-                    },
-                    "required": [
-                      "value"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "CanonicalText"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          {
-            "properties": {
-              "dest_domain": {
-                "const": 5
-              },
-              "recipient": {
-                "$ref": "#/components/schemas/SccpTronAddressValueV1"
-              },
-              "route_id": {
-                "properties": {
-                  "CanonicalText": {
-                    "properties": {
-                      "value": {
-                        "const": "taira_tron_xor"
-                      }
-                    },
-                    "required": [
-                      "value"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "CanonicalText"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        ],
+        "description": "Switch outbound traffic from one route revision to a staged one.",
         "properties": {
-          "amount": {
-            "description": "Canonical positive unsigned 128-bit transfer amount.",
-            "maxLength": 39,
-            "minLength": 1,
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "asset_home_domain": {
-            "const": 0,
-            "type": "integer"
-          },
-          "asset_id": {
-            "$ref": "#/components/schemas/SccpXorAssetValueV1"
-          },
-          "dest_domain": {
-            "enum": [
-              1,
-              2,
-              4,
-              5
-            ],
-            "type": "integer"
-          },
-          "nonce": {
-            "description": "Canonical unsigned 64-bit decimal string.",
-            "maxLength": 20,
-            "minLength": 1,
-            "pattern": "^(?:0|[1-9][0-9]*)$",
-            "type": "string"
-          },
-          "recipient": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SccpEvmAddressValueV1"
-              },
-              {
-                "$ref": "#/components/schemas/SccpTonAccountValueV1"
-              },
-              {
-                "$ref": "#/components/schemas/SccpTronAddressValueV1"
-              }
-            ]
-          },
-          "route_id": {
-            "$ref": "#/components/schemas/SccpExactRouteValueV1"
-          },
-          "route_revision": {
+          "from": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 1,
             "type": "integer"
           },
-          "sender": {
-            "$ref": "#/components/schemas/SccpCanonicalTextValueV1"
+          "network": {
+            "$ref": "#/components/schemas/SccpExternalNetworkV1"
           },
-          "source_domain": {
-            "const": 0,
-            "type": "integer"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
+          "to": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 1,
             "type": "integer"
           }
         },
         "required": [
-          "version",
-          "source_domain",
-          "dest_domain",
-          "nonce",
-          "route_revision",
-          "asset_home_domain",
-          "asset_id",
-          "amount",
-          "sender",
-          "recipient",
-          "route_id"
+          "network",
+          "from",
+          "to"
         ],
         "type": "object"
       },
-      "SccpTronAddressValueV1": {
+      "SccpTonCodeRefV1": {
         "additionalProperties": false,
+        "description": "TON code cell reference: representation hash and depth.",
         "properties": {
-          "TronAddress21": {
-            "additionalProperties": false,
-            "properties": {
-              "bytes": {
-                "maxLength": 44,
-                "minLength": 44,
-                "pattern": "^0x41[0-9a-f]{40}$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "bytes"
-            ],
-            "type": "object"
+          "depth": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hash": {
+            "$ref": "#/components/schemas/SccpUpperHex32"
           }
         },
         "required": [
-          "TronAddress21"
+          "hash",
+          "depth"
         ],
         "type": "object"
+      },
+      "SccpTonDeploymentV1": {
+        "additionalProperties": false,
+        "description": "TON Jetton master account id and its minter, wallet and replay-bucket code references.",
+        "properties": {
+          "bucket_code": {
+            "$ref": "#/components/schemas/SccpTonCodeRefV1"
+          },
+          "master_account": {
+            "$ref": "#/components/schemas/SccpNonzeroUpperHex32"
+          },
+          "minter_code": {
+            "$ref": "#/components/schemas/SccpTonCodeRefV1"
+          },
+          "wallet_code": {
+            "$ref": "#/components/schemas/SccpTonCodeRefV1"
+          }
+        },
+        "required": [
+          "master_account",
+          "minter_code",
+          "wallet_code",
+          "bucket_code"
+        ],
+        "type": "object"
+      },
+      "SccpTronAddressHex21V1": {
+        "description": "Canonical uppercase 21-byte TRON address without a prefix; the first byte is 0x41 and the remainder is nonzero.",
+        "maxLength": 42,
+        "minLength": 42,
+        "not": {
+          "pattern": "^410{40}$"
+        },
+        "pattern": "^41[0-9A-F]{40}$",
+        "type": "string"
+      },
+      "SccpTronDeploymentV1": {
+        "additionalProperties": false,
+        "description": "TRON bridge-token contract and the Keccak-256 of its runtime bytecode.",
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/SccpTronAddressHex21V1"
+          },
+          "runtime_code_hash": {
+            "$ref": "#/components/schemas/SccpUpperHex32"
+          }
+        },
+        "required": [
+          "address",
+          "runtime_code_hash"
+        ],
+        "type": "object"
+      },
+      "SccpU128DecimalV1": {
+        "description": "Canonical unsigned 128-bit integer as a decimal string without sign, leading zeros or separators.",
+        "maxLength": 39,
+        "minLength": 1,
+        "pattern": "^(?:0|[1-9][0-9]{0,38})$",
+        "type": "string"
       },
       "SccpUpperHex20": {
         "description": "Canonical uppercase 20-byte hexadecimal address without a prefix.",
@@ -39502,27 +37148,6 @@
         "minLength": 64,
         "pattern": "^[0-9A-F]{64}$",
         "type": "string"
-      },
-      "SccpXorAssetValueV1": {
-        "additionalProperties": false,
-        "properties": {
-          "CanonicalText": {
-            "additionalProperties": false,
-            "properties": {
-              "value": {
-                "const": "xor"
-              }
-            },
-            "required": [
-              "value"
-            ],
-            "type": "object"
-          }
-        },
-        "required": [
-          "CanonicalText"
-        ],
-        "type": "object"
       },
       "SecretEnvelopeEncryptionV1": {
         "oneOf": [
@@ -63283,268 +60908,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/bridge/messages": {
-      "post": {
-        "description": "The JSON-only request carries one canonical native proof. Preparation provides neither detached-signing value (the optional fields may be absent or null); direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
-        "operationId": "bridgeMessageSubmit",
-        "parameters": [
-          {
-            "description": "Optional deployment API token; required only when the node enables API-token enforcement.",
-            "in": "header",
-            "name": "X-API-Token",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SccpBridgeMessageSubmitRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpBridgeSubmitResponseV1"
-                }
-              }
-            },
-            "description": "Canonical prepared or submitted SCCP transaction state.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Malformed, noncanonical, stale, mixed-state, or proof-invalid SCCP request.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "415": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The detached-submit routes accept JSON request bodies only.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The deployment API rate limit rejected the request.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Prepare or submit a protocol-native SCCP admission transaction.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_account_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "contracts.bridge_messages_post"
-        },
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/bridge/proofs/submit": {
-      "post": {
-        "description": "The JSON-only request carries a canonical destination proof. Preparation provides neither detached-signing value (the optional fields may be absent or null); direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
-        "operationId": "bridgeProofSubmit",
-        "parameters": [
-          {
-            "description": "Optional deployment API token; required only when the node enables API-token enforcement.",
-            "in": "header",
-            "name": "X-API-Token",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SccpBridgeProofSubmitRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpBridgeSubmitResponseV1"
-                }
-              }
-            },
-            "description": "Canonical prepared or submitted SCCP transaction state.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Malformed, noncanonical, stale, mixed-state, or proof-invalid SCCP request.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "415": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The detached-submit routes accept JSON request bodies only.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The deployment API rate limit rejected the request.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Prepare or submit an SCCP destination-proof transaction.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_account_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "contracts.bridge_proofs_submit_post"
-        },
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/confidential/assets/{definition_id}/transitions": {
       "get": {
         "description": "Fetch confidential asset transition history for an asset definition.",
@@ -70861,7 +68224,7 @@
     },
     "/v1/explorer/instructions/{hash}/{index}": {
       "get": {
-        "description": "Fetch instruction detail for explorer usage. Registered SCCP governance proposals include their exact network-bound anchor payload; signer secrets are never returned.",
+        "description": "Fetch instruction detail for explorer usage. Registered SCCP governance proposals include their exact network-bound v1 proposal payload; signer secrets are never returned.",
         "parameters": [
           {
             "description": "Transaction hash.",
@@ -74730,7 +72093,7 @@
     },
     "/v1/gov/proposals/sccp-route-governance": {
       "post": {
-        "description": "Accepts exactly one typed SCCP registry action. The endpoint returns one canonical proposal instruction draft for the attempt-based private Parliament pipeline and never accepts a referendum window, voting mode, signer, or private-key material.",
+        "description": "Accepts exactly one SCCP v1 Parliament proposal (network_id, base_revisions and 1..=16 actions) and rejects it with 400 when any state-independent Propose check against the live NetworkId fails. The endpoint returns one canonical proposal instruction draft for the attempt-based private Parliament pipeline and never accepts a referendum window, voting mode, signer, or private-key material.",
         "operationId": "proposeSccpRouteGovernance",
         "parameters": [
           {
@@ -90659,775 +88022,6 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.rwas_query_post"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/capabilities": {
-      "get": {
-        "description": "Returns only the stable first-release registry, bundle, proof-request, submission, and native-admission endpoint paths, bound to the current authoritative registry revision.",
-        "operationId": "sccpCapabilities",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpCapabilitiesV1"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "SCCP capability snapshot."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Discover SCCP proof capabilities.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.capability.list"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/messages/recent": {
-      "get": {
-        "description": "Returns at most 50 newest messages from the authoritative height-ordered outbound index. Use the returned compound cursor as paired `from` and `after_index` fields; values outside the documented window and unpaired `after_index` values are rejected.",
-        "parameters": [
-          {
-            "description": "Optional inclusive maximum recorded block height.",
-            "in": "query",
-            "name": "from",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "minimum": 1,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional last-consumed commitment index at `from`; requires `from` and resumes at the next position.",
-            "in": "query",
-            "name": "after_index",
-            "required": false,
-            "schema": {
-              "format": "uint32",
-              "maximum": 511,
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional result limit in the inclusive range 1 through 50.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "maximum": 50,
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpRecentMessagesV1"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Recent finalized SCCP outbound messages."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "List recent finalized SCCP outbound messages.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.message.list_recent"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/proof-requests/{message_id}": {
-      "get": {
-        "description": "Derives the canonical proof request from the finalized message record and the unique historical governed route selected by both its destination-binding and route-configuration hashes. Caller-selected route or proof query fields are rejected.",
-        "operationId": "sccpProofRequest",
-        "parameters": [
-          {
-            "description": "Canonical nonzero SCCP message id encoded as exactly 64 lowercase hexadecimal characters.",
-            "in": "path",
-            "name": "message_id",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/SccpHex32"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpProofRequestV1"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of exactly one concrete route-selected payload: iroha_sccp::SccpGroth16Bn254ProofRequestV1 or iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1. No enum wrapper is present.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Canonical state-derived SCCP Groth16 proof request."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "SCCP message not found."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch an exact SCCP Groth16 proof request.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.proof_request.read"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/proofs/message/{message_id}": {
-      "get": {
-        "description": "Resolves the global outbound locator, reads exactly its indexed finalized block, and returns the canonical Merkle and finality bundle. The endpoint accepts no query parameters and supports JSON or Norito content negotiation.",
-        "operationId": "sccpMessageBundle",
-        "parameters": [
-          {
-            "description": "Canonical nonzero SCCP message id encoded as exactly 64 lowercase hexadecimal characters.",
-            "in": "path",
-            "name": "message_id",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/SccpHex32"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpMessageBundleV1"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Canonical finalized SCCP message bundle."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "SCCP message not found."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch a finalized SCCP message bundle.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.message_proof.read"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/registry": {
-      "get": {
-        "description": "Returns the complete consensus-governed exact-lane registry. Static Torii manifests and caller-selected deployment material are not part of the first-release API.",
-        "operationId": "sccpRegistry",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpRegistryV1"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Authoritative SCCP registry."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch the authoritative typed SCCP registry.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.registry.read"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root": {
-      "get": {
-        "description": "Return one canonical Norito replay-root response only after Torii has authenticated the complete three-replica checkpoint inventory against its current Core and Kura head.",
-        "operationId": "sccpReplayRoot",
-        "parameters": [
-          {
-            "description": "Exact public SORA replay boundary.",
-            "in": "path",
-            "name": "boundary",
-            "required": true,
-            "schema": {
-              "enum": [
-                "sora-outbound-lock",
-                "sora-inbound-release"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical external SCCP network profile key.",
-            "in": "path",
-            "name": "source_profile",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical governed SCCP route identifier.",
-            "in": "path",
-            "name": "route_id",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical governed SCCP asset key.",
-            "in": "path",
-            "name": "asset_key",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Nonzero immutable governed route revision.",
-            "in": "path",
-            "name": "revision",
-            "required": true,
-            "schema": {
-              "format": "uint32",
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito `SccpReplayRootResponseV1` bytes.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Authenticated signed replay-root evidence.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Replay proofs are always served without storage by intermediaries.",
-                "required": true,
-                "schema": {
-                  "const": "no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The replay accumulator path is not canonical."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated inventory contains no matching accumulator."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/x-norito."
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Locally retained replay evidence failed integrity validation."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The replay archive is disabled or has no authenticated current projection."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch an authenticated SCCP replay root.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.replay.root.read"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}": {
-      "get": {
-        "description": "Return one canonical Norito replay membership or non-membership witness and the authenticated signed root from the same locally rebuilt replay head.",
-        "operationId": "sccpReplayWitness",
-        "parameters": [
-          {
-            "description": "Exact public SORA replay boundary.",
-            "in": "path",
-            "name": "boundary",
-            "required": true,
-            "schema": {
-              "enum": [
-                "sora-outbound-lock",
-                "sora-inbound-release"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical external SCCP network profile key.",
-            "in": "path",
-            "name": "source_profile",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical governed SCCP route identifier.",
-            "in": "path",
-            "name": "route_id",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical governed SCCP asset key.",
-            "in": "path",
-            "name": "asset_key",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 1,
-              "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Nonzero immutable governed route revision.",
-            "in": "path",
-            "name": "revision",
-            "required": true,
-            "schema": {
-              "format": "uint32",
-              "minimum": 1,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Exact lowercase 32-byte replay key. The all-zero key requests an ordinary non-membership proof.",
-            "in": "path",
-            "name": "replay_key",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 64,
-              "pattern": "^[0-9a-f]{64}$",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito `SccpReplayWitnessResponseV1` bytes.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Authenticated replay root and canonical witness.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Replay proofs are always served without storage by intermediaries.",
-                "required": true,
-                "schema": {
-                  "const": "no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The replay accumulator path or replay key is not canonical."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated inventory contains no matching accumulator."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/x-norito."
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Locally retained replay evidence failed integrity validation."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The replay archive is disabled or has no authenticated current projection."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch an authenticated SCCP replay witness.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.replay.witness.read"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material": {
-      "get": {
-        "description": "Resolves one exact enabled typed route and returns only the separately registered IVM contract artifact whose SHA-256 matches the route policy. The referenced verifier key must be active; caller-selected bytecode, verifier keys, gas limits, and query parameters are never accepted.",
-        "operationId": "sccpSoraOutboundMaterial",
-        "parameters": [
-          {
-            "description": "Exact external SCCP source profile, for example ethereum-mainnet.",
-            "in": "path",
-            "name": "source_profile",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical governed SCCP route identifier.",
-            "in": "path",
-            "name": "route_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical governed SCCP asset key.",
-            "in": "path",
-            "name": "asset_key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Nonzero immutable governed route revision.",
-            "in": "path",
-            "name": "revision",
-            "required": true,
-            "schema": {
-              "format": "uint32",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SccpSoraOutboundMaterialV1"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Exact registered SORA outbound material for the enabled route."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The exact route is not outbound-enabled or its governed contract/VK material is unavailable."
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch one enabled route's registered SORA outbound IVM material.",
-        "tags": [
-          "Bridge"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "sccp.sora_outbound_material.read"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -110813,7 +107407,7 @@
     },
     "/v1/sorafs/publish/proof": {
       "post": {
-        "description": "Return SorafsPublicationProofV1 containing at most 1024 consecutive signed RS16 native finality artifacts from the caller's independent checkpoint and the exact executed SignedBlockWire carrier. CanReadAllLedgerData is required because the carrier includes the full block. The caller must verify its independently retained network/checkpoint, every successor, exact signed challenged assertion and successful execution output within its monotonic deadline. HTTP success and returned finality without this verification are not publication evidence.",
+        "description": "Return SorafsPublicationProofV1 containing only lineage: at most 1024 consecutive SumeragiFinalityProof frames including the caller's independent checkpoint floor. Each frame carries its complete result-bearing SignedBlockWire and embedded current commit certificate. CanReadAllLedgerData is required because the frames include full blocks. The caller must independently select a bounded canonical SumeragiFinalityCheckpoint, validate its configured network and chain label, and authenticate every successor through the retained parent/result and lag-2 committee commitments. A response cannot select its own trust root. The exact signed challenged assertion and successful execution output must verify within the caller's monotonic deadline before retaining an advanced checkpoint. HTTP success alone is not publication evidence.",
         "requestBody": {
           "content": {
             "application/x-norito": {

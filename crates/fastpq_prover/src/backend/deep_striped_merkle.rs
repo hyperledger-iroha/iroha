@@ -162,6 +162,7 @@ pub(super) struct StreamedCommitment {
 impl StripedMerkle {
     /// Accept each natural index exactly once in the declared stripe order.
     /// The hash callback receives unchanged natural binary parent coordinates.
+    #[cfg(test)]
     pub(super) fn push(
         &mut self,
         index: usize,
@@ -212,6 +213,99 @@ impl StripedMerkle {
         }
         self.upper[upper] = value.words();
         self.seen += 1;
+        self.failed = false;
+        Ok(())
+    }
+
+    /// Merge a bounded run from one stripe. Lower parents at a given level are
+    /// independent across rows and can be hashed together; the final upper stack
+    /// retains its canonical row order. Caller-owned clearing leaf storage is
+    /// reused for the intermediate parents. Any malformed run or callback error
+    /// poisons this traversal before another root can be returned.
+    pub(super) fn push_batch(
+        &mut self,
+        indices: &[usize],
+        values: &mut [[u64; 6]],
+        mut lower_hash: impl FnMut(usize, &[usize], &[[u64; 6]], &mut [[u64; 6]]) -> Result<()>,
+        mut upper_hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
+    ) -> Result<()> {
+        if self.failed || self.seen >= self.plan.leaves {
+            return Err(invalid(
+                "striped commitment stream is failed or already complete",
+            ));
+        }
+        self.failed = true;
+        let stripe = self.seen / self.plan.rows;
+        let row = self.seen % self.plan.rows;
+        if indices.is_empty()
+            || indices.len() > super::deep_leaf_batch::CAPACITY
+            || indices.len() != values.len()
+            || indices.len() > self.plan.rows - row
+            || indices
+                .iter()
+                .enumerate()
+                .any(|(offset, &index)| index != stripe + (row + offset) * self.plan.stripes)
+            || values.iter().any(|&words| Digest::new(words).is_none())
+        {
+            return Err(invalid(
+                "striped commitment batch differs from canonical replay order",
+            ));
+        }
+        for (&index, &words) in indices.iter().zip(values.iter()) {
+            self.capture(0, index, digest(words));
+        }
+        let mut parent_indices = [0; super::deep_leaf_batch::CAPACITY];
+        for level in 0..self.plan.lower_levels {
+            let start = level * self.plan.rows + row;
+            let end = start + values.len();
+            if (stripe >> level) & 1 == 0 {
+                self.lower[start..end].copy_from_slice(values);
+                self.seen += values.len();
+                self.failed = false;
+                return Ok(());
+            }
+            for (parent, &index) in parent_indices.iter_mut().zip(indices) {
+                *parent = index >> (level + 1);
+            }
+            lower_hash(
+                level + 1,
+                &parent_indices[..values.len()],
+                &self.lower[start..end],
+                values,
+            )?;
+            // The fixed allocation remains guarded on both success and failure.
+            // Clear consumed slots now without shrinking the guarded owner.
+            use zeroize::Zeroize;
+            for consumed in &mut self.lower[start..end] {
+                consumed.zeroize();
+            }
+            if values.iter().any(|&words| Digest::new(words).is_none()) {
+                return Err(invalid(
+                    "striped parent executor returned a noncanonical digest",
+                ));
+            }
+            self.parents += values.len();
+            for (&index, &words) in parent_indices.iter().zip(values.iter()) {
+                self.capture(level + 1, index, digest(words));
+            }
+        }
+        for (offset, (&index, words)) in indices.iter().zip(values.iter_mut()).enumerate() {
+            let mut value = digest(*words);
+            let mut upper = 0;
+            let mut level = self.plan.lower_levels;
+            while ((row + offset) >> upper) & 1 == 1 {
+                let left = digest(self.upper[upper]);
+                self.upper[upper] = [0; 6];
+                upper += 1;
+                level += 1;
+                value = upper_hash(level, index >> level, left, value)?;
+                self.parents += 1;
+                self.capture(level, index >> level, value);
+            }
+            *words = value.words();
+            self.upper[upper] = *words;
+        }
+        self.seen += values.len();
         self.failed = false;
         Ok(())
     }
@@ -337,7 +431,7 @@ fn row_payload(
     tree_bytes: usize,
 ) -> Result<usize> {
     use super::{compact_public_columns::COMMITTED_COLUMN_COUNT as WIDTH, deep_binding::Oracle};
-    let batch = super::deep_leaf_batch::payload_bytes(binding, Oracle::Row, WIDTH * 8)?;
+    let batch = super::deep_leaf_batch::payload_bytes(binding, Oracle::Row, (WIDTH * 8).max(96))?;
     // Current scalar row, selected guarded rows + final row DTOs,
     // and one transient Vec consumed by RowValues::new during final conversion.
     let rows = add(
@@ -413,9 +507,22 @@ fn stream_rows(
                 &mut leaves[..count],
                 execution,
             )?;
-            for (&index, &words) in indices[..count].iter().zip(leaves[..count].iter()) {
-                stream.push(index, digest(words), parent)?;
-            }
+            stream.push_batch(
+                &indices[..count],
+                &mut leaves[..count],
+                |level, indices, left, right| {
+                    super::deep_parent_batch::hash_in_place(
+                        binding,
+                        Oracle::Row,
+                        level,
+                        indices,
+                        left,
+                        right,
+                        execution,
+                    )
+                },
+                parent,
+            )?;
         }
         Ok(())
     })?;

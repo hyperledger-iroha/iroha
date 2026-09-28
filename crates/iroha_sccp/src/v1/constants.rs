@@ -262,8 +262,16 @@ pub const SELECTORS: [(&str, &str, [u8; 4]); 22] = [
     ("voidFrozen", SIG_VOID_FROZEN, SELECTOR_VOID_FROZEN),
     ("rosterState", SIG_ROSTER_STATE, SELECTOR_ROSTER_STATE),
     ("isConsumed", SIG_IS_CONSUMED, SELECTOR_IS_CONSUMED),
-    ("transferNonces", SIG_TRANSFER_NONCES, SELECTOR_TRANSFER_NONCES),
-    ("tairaNetworkId", SIG_TAIRA_NETWORK_ID, SELECTOR_TAIRA_NETWORK_ID),
+    (
+        "transferNonces",
+        SIG_TRANSFER_NONCES,
+        SELECTOR_TRANSFER_NONCES,
+    ),
+    (
+        "tairaNetworkId",
+        SIG_TAIRA_NETWORK_ID,
+        SELECTOR_TAIRA_NETWORK_ID,
+    ),
     ("routeRevision", SIG_ROUTE_REVISION, SELECTOR_ROUTE_REVISION),
     (
         "maxWrappedSupply",
@@ -272,7 +280,11 @@ pub const SELECTORS: [(&str, &str, [u8; 4]); 22] = [
     ),
     ("mintingPaused", SIG_MINTING_PAUSED, SELECTOR_MINTING_PAUSED),
     ("controlNonce", SIG_CONTROL_NONCE, SELECTOR_CONTROL_NONCE),
-    ("domainSeparator", SIG_DOMAIN_SEPARATOR, SELECTOR_DOMAIN_SEPARATOR),
+    (
+        "domainSeparator",
+        SIG_DOMAIN_SEPARATOR,
+        SELECTOR_DOMAIN_SEPARATOR,
+    ),
     (
         "initialRosterDigest",
         SIG_INITIAL_ROSTER_DIGEST,
@@ -449,17 +461,17 @@ mod tests {
 
     #[test]
     fn eip712_hashes_match_their_strings() {
-        assert_eq!(
-            keccak256(&[EIP712_DOMAIN_TYPE.as_bytes()]),
-            DOMAIN_TYPEHASH
-        );
+        assert_eq!(keccak256(&[EIP712_DOMAIN_TYPE.as_bytes()]), DOMAIN_TYPEHASH);
         assert_eq!(keccak256(&[EIP712_NAME.as_bytes()]), NAME_HASH);
         assert_eq!(keccak256(&[EIP712_VERSION.as_bytes()]), VERSION_HASH);
         assert_eq!(
             keccak256(&[ATTESTATION_TYPE.as_bytes()]),
             ATTESTATION_TYPEHASH
         );
-        assert_eq!(keccak256(&[BRIDGE_KEY_TYPE.as_bytes()]), BRIDGE_KEY_TYPEHASH);
+        assert_eq!(
+            keccak256(&[BRIDGE_KEY_TYPE.as_bytes()]),
+            BRIDGE_KEY_TYPEHASH
+        );
     }
 
     #[test]
@@ -560,7 +572,7 @@ mod tests {
         let mut carry = 1_u16;
         for index in (0..32).rev() {
             let value = u16::from(SECP256K1_HALF_N[index]) * 2 + carry;
-            doubled[index] = (value & 0xff) as u8;
+            doubled[index] = u8::try_from(value & 0xff).expect("one byte");
             carry = value >> 8;
         }
         assert_eq!(carry, 0);

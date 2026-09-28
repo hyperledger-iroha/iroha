@@ -460,9 +460,9 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
     public let treeDepth: Int
     /// Inclusion path for the padded zero leaf at `frontierLen`.
     ///
-    /// One-input confidential proofs require this second path for their
-    /// disabled input slot. Keeping it in the typed response avoids fetching
-    /// or reconstructing the complete confidential tree on the wallet.
+    /// This frontier path supports appending a commitment without fetching the
+    /// complete tree. It is absent when the tree is full. Confidential spending
+    /// requires paths only for actual notes, including a single input in a full tree.
     public let nextZeroPath: ToriiZkMerklePathEntry?
     public let paths: [ToriiZkMerklePathEntry]
 
@@ -636,8 +636,8 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
         return out
     }
 
-    /// Return and cryptographically verify the authoritative padded-zero path
-    /// used as the second path in one-input confidential proofs.
+    /// Return and cryptographically verify the authoritative insertion frontier.
+    /// This is not an input to a one-note confidential spend.
     public func validatedNextZeroPath() throws -> ZkAssetMerklePath {
         guard let entry = nextZeroPath else {
             throw ZkAssetMerklePathError.invalidField("next_zero_path")

@@ -56,9 +56,10 @@ pub fn executable_self_registers_authority(executable: &Executable, authority: &
 
 /// Return whether admission may accept an authority that is absent from world state.
 ///
-/// This includes exact first-instruction account self-registration and the existing multisig
+/// This includes exact first-instruction account self-registration, the existing multisig
 /// proposal envelope path, whose authorisation is established from multisig membership rather
-/// than a materialised authority account.
+/// than a materialised authority account, and the SCCP bridge-key registration from the new
+/// key's own account (`specs/sccp.md` §4.2.3).
 #[must_use]
 pub fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
     executable_self_registers_authority(executable, authority)
@@ -66,6 +67,9 @@ pub fn allows_unregistered_authority(executable: &Executable, authority: &Accoun
             executable,
             Executable::Instructions(instructions)
                 if instructions_allow_multisig_envelope_authority(instructions)
+        )
+        || crate::smartcontracts::isi::sccp::admission::allows_unregistered_authority(
+            executable, authority,
         )
 }
 
@@ -81,4 +85,43 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
                     | Ok(MultisigInstructionBox::Cancel(_))
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair =
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("deterministic seed");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn only_the_listed_shapes_admit_an_absent_authority() {
+        let authority = account(1);
+        let self_registration = Executable::Instructions(
+            vec![InstructionBox::from(
+                iroha_data_model::isi::Register::account(Account::new(authority.clone())),
+            )]
+            .into(),
+        );
+        assert!(allows_unregistered_authority(
+            &self_registration,
+            &authority
+        ));
+        assert!(!allows_unregistered_authority(
+            &self_registration,
+            &account(2)
+        ));
+        let log = Executable::Instructions(
+            vec![InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "not a registration".to_owned(),
+            ))]
+            .into(),
+        );
+        assert!(!allows_unregistered_authority(&log, &authority));
+    }
 }

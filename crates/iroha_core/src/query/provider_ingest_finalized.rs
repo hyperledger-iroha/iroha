@@ -1,8 +1,8 @@
 //! Durable provider-indexed archive for finalized SoraFS replication orders.
 //!
 //! The archive is a committed projection, never a source of finality or mutation authority. A
-//! commit-owned caller supplies one immutable [`StateReadOnly`] view and the matching non-forgeable
-//! Kura receipt. Each immutable record stores only changed provider projections, links the exact
+//! commit-owned caller supplies one immutable [`StateReadOnly`] view and the same-State
+//! certified-chain reader. Each immutable record stores only changed provider projections, links the exact
 //! preceding height, and commits to the complete provider-indexed state.
 //!
 //! The first record for a network is an explicit activation floor. Authenticated retention may
@@ -16,7 +16,7 @@
 //! explicit `None` for generic orders. Pre-release archive bytes that lack that field also use a
 //! retired state-root domain and cannot pass canonical decode/validation; operators must reset that
 //! disposable archive namespace rather than migrate it.
-use super::archive_capture::{ArchiveCaptureGate, ArchiveCaptureReservation, ArchiveCaptureWait};
+use super::archive_finality::{ArchiveFinalityError, CertifiedArchiveView};
 use super::archive_index::{
     ArchiveIndexLock, ArchiveIndexLockError, ArchiveIndexReadGuard, ArchiveIndexWriteGuard,
 };
@@ -29,9 +29,7 @@ use super::finalized_archive_fs::{
     create_unix_staged_file, unix_staged_file_has_canonical_target, unix_stat_matches_metadata,
 };
 use crate::{
-    kura::{
-        Kura, KuraArchiveCaptureAuthenticationError, KuraPublicationLease, KuraV2CommitReceipt,
-    },
+    kura::Kura,
     secure_file_metadata::{self, SecureMetadata},
     state::{StateReadOnly, WorldReadOnly as _},
 };
@@ -64,7 +62,6 @@ use std::{
     io::{self, Read},
     num::NonZeroUsize,
     path::{Component, Path, PathBuf},
-    sync::Arc,
 };
 use thiserror::Error;
 const ARCHIVE_VERSION_V1: u16 = 1;
@@ -540,7 +537,7 @@ pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
 }
 /// Exact finalized boundary authorized for provider-archive retention.
 ///
-/// The finality-artifact hash is supplied by the commit-owned caller and is
+/// The certified block id is supplied by the commit-owned caller and is
 /// reauthenticated against Kura before any prefix is removed.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -549,7 +546,7 @@ pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionFenceV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
-    kura_finality_artifact_hash: [u8; 32],
+    certified_block_id: [u8; 32],
     expected_archive_generation: u64,
 }
 impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
@@ -557,24 +554,24 @@ impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a malformed exact key or a zero finality-artifact hash. The
+    /// Rejects a malformed exact key or a zero certified block id. The
     /// generation is checked atomically by the compaction operation.
     pub fn try_new(
         key: ProviderIngestFinalizedArchiveKeyV1,
-        kura_finality_artifact_hash: [u8; 32],
+        certified_block_id: [u8; 32],
         expected_archive_generation: u64,
     ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
         key.validate()?;
-        if kura_finality_artifact_hash == [0; 32] {
+        if certified_block_id == [0; 32] {
             return Err(
                 ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionFence {
-                    reason: "Kura finality-artifact hash must be non-zero",
+                    reason: "certified block id must be non-zero",
                 },
             );
         }
         Ok(Self {
             key,
-            kura_finality_artifact_hash,
+            certified_block_id,
             expected_archive_generation,
         })
     }
@@ -583,10 +580,10 @@ impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
     pub const fn key(&self) -> &ProviderIngestFinalizedArchiveKeyV1 {
         &self.key
     }
-    /// Return the Kura artifact identity authenticating the retention floor.
+    /// Return the certified block identity authenticating the retention floor.
     #[must_use]
-    pub const fn kura_finality_artifact_hash(&self) -> [u8; 32] {
-        self.kura_finality_artifact_hash
+    pub const fn certified_block_id(&self) -> [u8; 32] {
+        self.certified_block_id
     }
     /// Return the exact archive generation observed by the retention decider.
     #[must_use]
@@ -720,7 +717,7 @@ impl ProviderIngestFinalizedArchiveCompactionProposalV1 {
     fn validate(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         self.material.fence.key.validate()?;
         if self.material.version != ARCHIVE_VERSION_V1
-            || self.material.fence.kura_finality_artifact_hash == [0; 32]
+            || self.material.fence.certified_block_id == [0; 32]
             || self.material.checkpoint_digest == [0; 32]
             || self.material.checkpoint_canonical_digest == [0; 32]
             || canonical_domain_digest(RETENTION_PROPOSAL_DIGEST_DOMAIN_V1, &self.material)?
@@ -1227,7 +1224,7 @@ impl ProviderIngestFinalizedArchiveCheckpointV1 {
             || material
                 .prior_checkpoint_digest
                 .is_some_and(|digest| digest == [0; 32])
-            || material.kura_finality_artifact_hash == [0; 32]
+            || material.certified_block_id == [0; 32]
             || material.pruned_entries != expected_pruned_entries
             || material.pruned_bytes == 0
             || material.total_generation < material.pruned_entries
@@ -1312,7 +1309,7 @@ struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     policy_history: Vec<ProviderPolicyHistoryCheckpointV1>,
     active_order_ids: Vec<ReplicationOrderId>,
     seen_order_ids: Vec<ReplicationOrderId>,
-    kura_finality_artifact_hash: [u8; 32],
+    certified_block_id: [u8; 32],
 }
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
@@ -1368,141 +1365,6 @@ pub struct ProviderIngestFinalizedArchiveV1 {
     writer_lock_identity: ArchiveFileIdentity,
     writer_lock: fs::File,
     index: ArchiveIndexLock<ArchiveIndexV1>,
-    capture_gate: ArchiveCaptureGate,
-}
-/// An admitted immutable capture retaining the exact archive and Kura owners.
-///
-/// The logical reservation protects the original predecessor and capacity while
-/// every physical index guard is released. Kura durability and committed archive
-/// readers can progress independently. Dropping custody publishes nothing.
-pub(crate) struct PreparedProviderIngestCapture {
-    insertion: PreparedProviderInsertion,
-    kura: Arc<Kura>,
-}
-/// Original archive predecessor reserved before the candidate owns State writers.
-///
-/// Capture reads its one original State scope without an archive index guard.
-/// Planning later borrows that retained projection under a nonblocking reserved
-/// writer. Neither stage supplies finality or aggregate resource admission.
-pub(crate) struct ProviderCandidateCapture {
-    archive: Arc<ProviderIngestFinalizedArchiveV1>,
-    kura: Arc<Kura>,
-    key: ProviderIngestFinalizedArchiveKeyV1,
-    capture_attempted: bool,
-    projection: Option<ProviderIngestFinalizedProjectionV1>,
-    plan: Option<ProviderInsertionPlan>,
-    // The exact predecessor stays reserved until all original payloads drop.
-    reservation: ArchiveCaptureReservation,
-}
-
-impl ProviderCandidateCapture {
-    /// Observe retained bytes in carrier tests without exposing publication authority.
-    #[cfg(test)]
-    pub(crate) fn prepared_bytes_identity_for_test(&self) -> Option<usize> {
-        self.plan
-            .as_ref()?
-            .record
-            .as_ref()
-            .map(|record| record.bytes.as_ptr() as usize)
-    }
-
-    /// Capture the original candidate once, without acquiring any archive writer.
-    /// Even a failed capture cannot be retried against another State scope.
-    pub(crate) fn capture_original(
-        &mut self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-        if self.capture_attempted {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
-                reason: "candidate archive capture was already attempted",
-            });
-        }
-        self.capture_attempted = true;
-        let key = candidate_capture_key(state_ro, &self.kura)?;
-        if key != self.key {
-            return Err(
-                ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                    reason: "candidate differs from its reserved exact archive key",
-                },
-            );
-        }
-        self.projection = Some(capture_projection(state_ro, key, self.archive.bounds)?);
-        Ok(())
-    }
-
-    /// Admit the retained projection after State writers have been released.
-    /// Refusal retains the same projection and predecessor reservation for retry.
-    pub(crate) fn try_prepare(&mut self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-        if self.plan.is_some() {
-            return Ok(());
-        }
-        let projection = self.projection.as_ref().ok_or(
-            ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
-                reason: "candidate archive has no successful original capture",
-            },
-        )?;
-        let index = self.archive.try_write_reserved_index(&self.reservation)?;
-        self.plan = Some(self.archive.prepare_insert_locked(projection, &index)?);
-        Ok(())
-    }
-
-    /// Transfer the actual admitted plan and original reservation only when ready.
-    pub(crate) fn into_prepared(mut self) -> Result<PreparedProviderIngestCapture, Self> {
-        let Some(plan) = self.plan.take() else {
-            return Err(self);
-        };
-        let Self {
-            archive,
-            kura,
-            key: _,
-            capture_attempted: _,
-            projection,
-            plan: _,
-            reservation,
-        } = self;
-        drop(projection);
-        Ok(PreparedProviderIngestCapture {
-            insertion: PreparedProviderInsertion {
-                plan,
-                archive,
-                reservation,
-            },
-            kura,
-        })
-    }
-}
-
-impl PreparedProviderIngestCapture {
-    /// Rejoin the original capture to durable evidence without reacquiring Kura fences.
-    /// The immutable insertion and its reservation remain owned on every refusal.
-    pub(crate) fn reauthenticate_under_publication_lease(
-        &self,
-        lease: &KuraPublicationLease<'_>,
-        receipt: &KuraV2CommitReceipt,
-    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-        let key = &self.insertion.plan.key;
-        lease
-            .authenticate_archive_capture(
-                &self.kura,
-                key.network_id,
-                key.height,
-                key.block_hash,
-                key.finalized_at_unix_ms,
-                receipt,
-            )
-            .map_err(capture_authentication_error)
-    }
-
-    /// Persist the original admitted insertion while the exact Kura lease remains held.
-    pub(crate) fn publish_under_publication_lease(
-        &mut self,
-        lease: &KuraPublicationLease<'_>,
-        receipt: &KuraV2CommitReceipt,
-    ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
-    {
-        self.reauthenticate_under_publication_lease(lease, receipt)?;
-        self.insertion.try_persist()
-    }
 }
 struct PreparedProviderRecord {
     entry: ArchiveRecordEntryV1,
@@ -1514,21 +1376,6 @@ struct PreparedProviderRecord {
 struct ProviderInsertionPlan {
     key: ProviderIngestFinalizedArchiveKeyV1,
     record: Option<PreparedProviderRecord>,
-}
-struct PreparedProviderInsertion {
-    plan: ProviderInsertionPlan,
-    archive: Arc<ProviderIngestFinalizedArchiveV1>,
-    // Release the reservation only after retained bytes and the archive handle.
-    reservation: ArchiveCaptureReservation,
-}
-impl PreparedProviderInsertion {
-    fn try_persist(
-        &mut self,
-    ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
-    {
-        let mut index = self.archive.try_write_reserved_index(&self.reservation)?;
-        self.plan.persist(&self.archive, &mut index)
-    }
 }
 impl ProviderInsertionPlan {
     fn persist(
@@ -1610,10 +1457,18 @@ impl ProviderIngestFinalizedArchiveV1 {
         root: impl Into<PathBuf>,
         bounds: ProviderIngestFinalizedArchiveBoundsV1,
         network_id: &NetworkId,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
     ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
+        if network_id != state_ro.network_id() || !std::ptr::eq(state_ro.kura(), kura) {
+            return Err(
+                ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
+                    reason: "retention State, Kura and configured network do not agree",
+                },
+            );
+        }
         if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
                 reason: "network id must be an exact genesis-derived identity",
@@ -1623,6 +1478,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         let (archive, checkpoint_candidates) = Self::open_unreconciled(root, bounds)?;
         archive.recover_approved_retention(
             network_id,
+            state_ro,
             kura,
             binding,
             authority,
@@ -1698,7 +1554,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             writer_lock_identity,
             writer_lock,
             index: ArchiveIndexLock::new(index),
-            capture_gate: ArchiveCaptureGate::default(),
         };
         archive.verify_storage_boundaries()?;
         Ok((archive, checkpoint_candidates))
@@ -1706,6 +1561,7 @@ impl ProviderIngestFinalizedArchiveV1 {
     fn recover_approved_retention(
         &self,
         network_id: &NetworkId,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
@@ -1732,7 +1588,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             &approval,
             network_id,
         )?;
-        authenticate_retention_fence(approval.proposal().fence(), kura)?;
+        authenticate_retention_fence(approval.proposal().fence(), state_ro, kura)?;
         let approved_candidate = checkpoint_candidates.iter().find(|candidate| {
             candidate.checkpoint.checkpoint_digest == approval.proposal().checkpoint_digest()
         });
@@ -1790,7 +1646,13 @@ impl ProviderIngestFinalizedArchiveV1 {
             refresh_archive_accounting(&mut index, self.bounds)?;
             validate_index_coverage(&index, self.bounds)?;
         }
-        authenticate_retention_prefix(&index, approval.proposal().fence(), kura, self.bounds)?;
+        authenticate_retention_prefix(
+            &index,
+            approval.proposal().fence(),
+            state_ro,
+            kura,
+            self.bounds,
+        )?;
         let prepared =
             prepare_archive_compaction(&index, approval.proposal().fence(), self.bounds)?;
         validate_prepared_compaction_capacity(&index, &prepared, self.bounds)?;
@@ -1956,20 +1818,23 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// Qualify contiguous immutable coverage against Kura's exact durable tip.
     ///
     /// Every represented anchor is reauthenticated against its result-bearing
-    /// block and v2 finality artifact. The archive and Kura generations are
+    /// block and current commit certificate. The archive and Kura generations are
     /// reread after validation so concurrent boundary changes fail closed.
     ///
     /// # Errors
     ///
     /// Rejects empty/incomplete coverage, a forked or timestamp-substituted record, archive state
     /// ahead of Kura, excessive lag, or a changing qualification boundary.
-    pub fn qualify_against_kura_tip(
+    pub fn qualify_against_certified_tip(
         &self,
-        network_id: &NetworkId,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         maximum_kura_tip_lag_blocks: u64,
     ) -> Result<ProviderIngestFinalizedArchiveQualificationV1, ProviderIngestFinalizedArchiveErrorV1>
     {
+        let network_id = state_ro.network_id();
+        let certified =
+            CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
         if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
                 reason: "network id must be an exact genesis-derived identity",
@@ -1994,24 +1859,18 @@ impl ProviderIngestFinalizedArchiveV1 {
             .next_back()
             .map(|(_, entry)| entry.record.material.key.clone())
             .unwrap_or_else(|| activation_floor.clone());
-        let boundary = kura.exact_replay_boundary().map_err(|error| {
-            ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                operation: "bind exact Kura qualification boundary",
-                detail: error.to_string(),
-            }
-        })?;
-        if archive_tip.height > boundary.count {
+        if archive_tip.height > certified.tip_height() {
             return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveAheadOfKura {
                 archive_height: archive_tip.height,
-                kura_height: boundary.count,
+                kura_height: certified.tip_height(),
             });
         }
-        let lag_blocks = boundary.count - archive_tip.height;
+        let lag_blocks = certified.tip_height() - archive_tip.height;
         if lag_blocks > maximum_kura_tip_lag_blocks {
             return Err(
                 ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraTipLagExceeded {
                     archive_height: archive_tip.height,
-                    kura_height: boundary.count,
+                    kura_height: certified.tip_height(),
                     lag: lag_blocks,
                     maximum: maximum_kura_tip_lag_blocks,
                 },
@@ -2019,55 +1878,32 @@ impl ProviderIngestFinalizedArchiveV1 {
         }
         if let Some(base) = index.virtual_bases.get(network_id) {
             verify_checkpoint_entry(base, self.bounds)?;
-            authenticate_archive_anchor_against_kura(
+            let block = authenticate_archive_anchor(
                 &base.checkpoint.material.retention_floor,
-                kura,
-                &boundary,
+                state_ro.network_id(),
+                &certified,
             )?;
-            let (_, receipt) = kura
-                .v2_finality_artifact_with_receipt(base.checkpoint.material.retention_floor.height)
-                .map_err(
-                    |error| ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                        operation: "authenticate virtual-base finality artifact",
-                        detail: error.to_string(),
-                    },
-                )?
-                .ok_or(
-                    ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                        network_id: *network_id,
-                        height: base.checkpoint.material.retention_floor.height,
-                        reason: "virtual base has no authenticated v2 finality artifact",
-                    },
-                )?;
-            if *receipt.artifact_hash().as_ref()
-                != base.checkpoint.material.kura_finality_artifact_hash
-            {
+            if *block.id().0.as_ref() != base.checkpoint.material.certified_block_id {
                 return Err(
                     ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
                         network_id: *network_id,
                         height: base.checkpoint.material.retention_floor.height,
-                        reason: "virtual-base finality-artifact identity differs from Kura",
+                        reason: "virtual-base certified block identity differs from Kura",
                     },
                 );
             }
         }
         for (_, entry) in index.by_height.range(network_range) {
             verify_record_entry(entry, self.bounds)?;
-            authenticate_archive_anchor_against_kura(&entry.record.material.key, kura, &boundary)?;
+            authenticate_archive_anchor(
+                &entry.record.material.key,
+                state_ro.network_id(),
+                &certified,
+            )?;
         }
-        if kura.exact_replay_boundary().map_err(|error| {
-            ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                operation: "re-read exact Kura qualification boundary",
-                detail: error.to_string(),
-            }
-        })? != boundary
-        {
-            return Err(
-                ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
-                    boundary: "Kura",
-                },
-            );
-        }
+        certified
+            .verify_unchanged()
+            .map_err(certified_authentication_error)?;
         drop(index);
         if self.health_generation()? != generation {
             return Err(
@@ -2079,12 +1915,12 @@ impl ProviderIngestFinalizedArchiveV1 {
         Ok(ProviderIngestFinalizedArchiveQualificationV1 {
             activation_floor,
             archive_tip,
-            kura_tip_height: boundary.count,
+            kura_tip_height: certified.tip_height(),
             lag_blocks,
             generation,
         })
     }
-    /// Reconcile one replayed startup state tip using Kura's recovered non-forgeable receipt, then
+    /// Reconcile one replayed startup state tip using the current certified chain, then
     /// require that exact State key to be the zero-lag archive and Kura tip.
     ///
     /// An empty archive establishes an explicit activation floor at the replayed tip. A non-empty
@@ -2093,9 +1929,9 @@ impl ProviderIngestFinalizedArchiveV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an empty state, unavailable finality receipt, gap, fork,
+    /// Rejects an empty state, unavailable certified finality, gap, fork,
     /// projection failure, or non-zero Kura suffix after capture.
-    pub fn reconcile_kura_authenticated_state_tip(
+    pub fn reconcile_certified_state_tip(
         &self,
         state_ro: &impl StateReadOnly,
         kura: &Kura,
@@ -2113,23 +1949,10 @@ impl ProviderIngestFinalizedArchiveV1 {
                 reason: "startup state has no committed block to reconcile",
             });
         }
-        let (_, receipt) = kura
-            .v2_finality_artifact_with_receipt(height)
-            .map_err(
-                |error| ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                    operation: "recover startup v2 finality receipt",
-                    detail: error.to_string(),
-                },
-            )?
-            .ok_or(
-                ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                    reason: "startup Kura tip has no v2 finality artifact",
-                },
-            )?;
-        let expected_state_tip = authenticate_capture_view(state_ro, kura, &receipt)?;
+        let expected_state_tip = authenticate_capture_view(state_ro, kura)?;
         let activation_floor_before = self.activation_floor(state_ro.network_id())?;
-        let insertion = self.capture_kura_authenticated_view(state_ro, kura, &receipt)?;
-        let qualification = self.qualify_against_kura_tip(state_ro.network_id(), kura, 0)?;
+        let insertion = self.capture_certified_view(state_ro, kura)?;
+        let qualification = self.qualify_against_certified_tip(state_ro, kura, 0)?;
         if qualification.archive_tip() != &expected_state_tip {
             return Err(
                 ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
@@ -2144,116 +1967,33 @@ impl ProviderIngestFinalizedArchiveV1 {
         })
     }
     /// Capture one immutable committed view authenticated by its exact durable
-    /// Kura v2 finality receipt.
+    /// current Kura commit certificate.
     ///
     /// # Errors
     ///
     /// Fails closed for any Kura/view mismatch, malformed authoritative state, gap, fork, rollback,
     /// substitution, resource exhaustion, or publication failure.
-    pub fn capture_kura_authenticated_view(
+    pub fn capture_certified_view(
         &self,
         state_ro: &impl StateReadOnly,
         kura: &Kura,
-        receipt: &KuraV2CommitReceipt,
     ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
     {
-        let key = authenticate_capture_view(state_ro, kura, receipt)?;
-        self.insert(capture_projection(state_ro, key, self.bounds)?)
+        let key = committed_capture_key(state_ro, kura)?;
+        let certified =
+            CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
+        authenticate_archive_anchor(&key, state_ro.network_id(), &certified)?;
+        let projection = capture_projection(state_ro, key, self.bounds)?;
+        certified
+            .verify_unchanged()
+            .map_err(certified_authentication_error)?;
+        let mut index = self.index.try_write().map_err(Self::index_lock_error)?;
+        self.prepare_insert_locked(&projection, &index)?
+            .persist(self, &mut index)
     }
-    /// Reserve the original archive cut before acquiring candidate State writers.
-    ///
-    /// This probe never waits on an archive reader. The logical owner excludes
-    /// every insertion and retention writer while State capture and bounded plan
-    /// admission happen later. It grants no finality or State publication right.
-    pub(crate) fn try_reserve_candidate(
-        self: &Arc<Self>,
-        key: ProviderIngestFinalizedArchiveKeyV1,
-        kura: &Arc<Kura>,
-    ) -> Result<ProviderCandidateCapture, ProviderIngestFinalizedArchiveErrorV1> {
-        key.validate()?;
-        let ProviderIngestFinalizedArchiveKeyV1 {
-            network_id, height, ..
-        } = key;
-        let index = self.index.try_write().map_err(Self::index_lock_error)?;
-        self.capture_gate
-            .ensure_unreserved()
-            .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
-        self.verify_storage_boundaries()?;
-        validate_index_coverage(&index, self.bounds)?;
-        if let Some(base) = index.virtual_bases.get(&network_id)
-            && height < base.checkpoint.material.retention_floor.height
-        {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::BelowRetentionFloor {
-                requested_height: height,
-                retention_height: base.checkpoint.material.retention_floor.height,
-            });
-        }
-        let base_height = index
-            .virtual_bases
-            .get(&network_id)
-            .map(|base| base.checkpoint.material.retention_floor.height);
-        let existing_key = index
-            .by_height
-            .get(&(network_id, height))
-            .map(|entry| &entry.record.material.key)
-            .or_else(|| {
-                index.virtual_bases.get(&network_id).and_then(|base| {
-                    (base.checkpoint.material.retention_floor.height == height)
-                        .then_some(&base.checkpoint.material.retention_floor)
-                })
-            });
-        if existing_key.is_some_and(|existing| existing != &key) {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
-                network_id,
-                height,
-            });
-        }
-        if !index.by_height.contains_key(&(network_id, height)) && base_height != Some(height) {
-            let previous_height = index
-                .by_height
-                .range((network_id, 0)..=(network_id, u64::MAX))
-                .next_back()
-                .map(|((_, height), _)| *height)
-                .or(base_height);
-            if let Some(previous_height) = previous_height {
-                let expected = previous_height.checked_add(1);
-                if expected != Some(height) {
-                    return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
-                        network_id,
-                        missing_height: expected.unwrap_or(u64::MAX),
-                        observed_height: height,
-                    });
-                }
-            }
-        }
-        let reservation = self
-            .capture_gate
-            .try_reserve()
-            .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
-        drop(index);
-        Ok(ProviderCandidateCapture {
-            archive: Arc::clone(self),
-            kura: Arc::clone(kura),
-            key,
-            capture_attempted: false,
-            projection: None,
-            plan: None,
-            reservation,
-        })
-    }
-
-    /// Hold an actual committed reader across a deterministic carrier test probe.
-    #[cfg(test)]
-    pub(crate) fn with_index_reader_for_test<R>(&self, action: impl FnOnce() -> R) -> R {
-        let _index = self
-            .read_index()
-            .expect("test archive reader must be healthy");
-        action()
-    }
-
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
-    /// Preparation is read-only. Every physical prefix anchor and the fence's finality artifact are
+    /// Preparation is read-only. Every physical prefix anchor and the fence's certified block are
     /// reauthenticated against one frozen Kura boundary, then the complete canonical checkpoint
     /// bytes are digested into the returned proposal.
     ///
@@ -2261,9 +2001,10 @@ impl ProviderIngestFinalizedArchiveV1 {
     ///
     /// Rejects an absent, stale, forked, unauthenticated, or non-advancing fence, any archive/Kura
     /// boundary change, resource exhaustion, or a damaged archive.
-    pub fn prepare_kura_authenticated_compaction(
+    pub fn prepare_certified_compaction(
         &self,
         fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
     ) -> Result<
         ProviderIngestFinalizedArchiveCompactionProposalV1,
@@ -2272,7 +2013,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
         validate_index_coverage(&index, self.bounds)?;
-        authenticate_retention_prefix(&index, fence, kura, self.bounds)?;
+        authenticate_retention_prefix(&index, fence, state_ro, kura, self.bounds)?;
         let prepared = prepare_archive_compaction(&index, fence, self.bounds)?;
         validate_prepared_compaction_capacity(&index, &prepared, self.bounds)?;
         compaction_proposal(&prepared, fence)
@@ -2289,9 +2030,10 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// In addition to preparation failures, rejects proposal substitution,
     /// missing or drifting authority identity, rollback, equivocation, an
     /// unchanged or ambiguous CAS, and any durable publication failure.
-    pub fn approve_and_install_kura_authenticated_compaction(
+    pub fn approve_and_install_certified_compaction(
         &self,
         proposal: &ProviderIngestFinalizedArchiveCompactionProposalV1,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
@@ -2305,7 +2047,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         let mut index = self.write_index()?;
         self.verify_storage_boundaries()?;
         validate_index_coverage(&index, self.bounds)?;
-        authenticate_retention_prefix(&index, fence, kura, self.bounds)?;
+        authenticate_retention_prefix(&index, fence, state_ro, kura, self.bounds)?;
         let prepared = prepare_archive_compaction(&index, fence, self.bounds)?;
         validate_prepared_compaction_capacity(&index, &prepared, self.bounds)?;
         if compaction_proposal(&prepared, fence)? != *proposal {
@@ -2456,12 +2198,12 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// Durably publish one exact typed projection.
     ///
     /// This lower-level entry point is useful to authenticated replay and deterministic tests.
-    /// Production fresh capture should use [`Self::capture_kura_authenticated_view`].
+    /// Production fresh capture should use [`Self::capture_certified_view`].
     ///
     /// # Errors
     ///
     /// Returns a typed validation, coverage, conflict, bounds, or durability
-    /// failure, or a release event when a candidate owns the current predecessor.
+    /// failure.
     /// Existing records are never overwritten.
     pub fn insert(
         &self,
@@ -2471,24 +2213,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         let mut index = self.write_index()?;
         self.prepare_insert_locked(&projection, &index)?
             .persist(self, &mut index)
-    }
-    #[cfg(test)]
-    fn prepare_insert(
-        self: &Arc<Self>,
-        projection: ProviderIngestFinalizedProjectionV1,
-    ) -> Result<PreparedProviderInsertion, ProviderIngestFinalizedArchiveErrorV1> {
-        let index = self.write_index()?;
-        let reservation = self
-            .capture_gate
-            .try_reserve()
-            .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
-        let plan = self.prepare_insert_locked(&projection, &index)?;
-        drop(index);
-        Ok(PreparedProviderInsertion {
-            plan,
-            archive: Arc::clone(self),
-            reservation,
-        })
     }
     fn prepare_insert_locked(
         &self,
@@ -2878,28 +2602,13 @@ impl ProviderIngestFinalizedArchiveV1 {
     {
         self.index.read().map_err(Self::index_lock_error)
     }
-    // All mutators acquire index -> logical gate. Reservation drop takes only
-    // the gate, and no wait is entered while retaining an archive index guard.
+    // Retention and ordinary local mutation serialize through the actual index writer.
+    // Commit-owned capture probes this same writer without blocking.
     fn write_index(
         &self,
     ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1>
     {
         let index = self.index.write().map_err(Self::index_lock_error)?;
-        self.capture_gate
-            .ensure_unreserved()
-            .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
-        Ok(index)
-    }
-    /// A held Kura lease must never wait on an archive reader that needs Kura.
-    fn try_write_reserved_index(
-        &self,
-        reservation: &ArchiveCaptureReservation,
-    ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1>
-    {
-        let index = self.index.try_write().map_err(Self::index_lock_error)?;
-        if !reservation.authorizes(&self.capture_gate) {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::CaptureOwnerMismatch);
-        }
         Ok(index)
     }
     fn index_lock_error(error: ArchiveIndexLockError) -> ProviderIngestFinalizedArchiveErrorV1 {
@@ -4263,7 +3972,7 @@ fn validate_approval_checkpoint(
     let fence = approval.proposal().fence();
     let canonical_bytes = encode_bounded_checkpoint(checkpoint, bounds)?;
     if checkpoint.material.retention_floor != fence.key
-        || checkpoint.material.kura_finality_artifact_hash != fence.kura_finality_artifact_hash
+        || checkpoint.material.certified_block_id != fence.certified_block_id
         || checkpoint.material.total_generation != fence.expected_archive_generation
         || checkpoint.material.prior_checkpoint_digest != approval.predecessor_checkpoint_digest()
         || checkpoint.checkpoint_digest != approval.proposal().checkpoint_digest()
@@ -4484,66 +4193,27 @@ fn compare_and_read_back_retention_approval(
 }
 fn authenticate_retention_fence(
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
+    state_ro: &impl StateReadOnly,
     kura: &Kura,
+) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    let certified =
+        CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
+    authenticate_retention_identity(fence, state_ro.network_id(), &certified)?;
+    certified
+        .verify_unchanged()
+        .map_err(certified_authentication_error)
+}
+fn authenticate_retention_identity<V: StateReadOnly + ?Sized>(
+    fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
+    network_id: &NetworkId,
+    certified: &CertifiedArchiveView<'_, V>,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     fence.key.validate()?;
-    if fence.kura_finality_artifact_hash == [0; 32] {
+    let block = authenticate_archive_anchor(&fence.key, network_id, certified)?;
+    if fence.certified_block_id == [0; 32] || *block.id().0.as_ref() != fence.certified_block_id {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionFence {
-                reason: "Kura finality-artifact hash must be non-zero",
-            },
-        );
-    }
-    let boundary = kura.exact_replay_boundary().map_err(|error| {
-        ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-            operation: "bind exact retention qualification boundary",
-            detail: error.to_string(),
-        }
-    })?;
-    if fence.key.height > boundary.count {
-        return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveAheadOfKura {
-            archive_height: fence.key.height,
-            kura_height: boundary.count,
-        });
-    }
-    authenticate_archive_anchor_against_kura(&fence.key, kura, &boundary)?;
-    authenticate_retention_artifact_hash(fence, kura)?;
-    if kura.exact_replay_boundary().map_err(|error| {
-        ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-            operation: "re-read exact retention qualification boundary",
-            detail: error.to_string(),
-        }
-    })? != boundary
-    {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
-                boundary: "Kura retention",
-            },
-        );
-    }
-    Ok(())
-}
-fn authenticate_retention_artifact_hash(
-    fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
-    kura: &Kura,
-) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    let (_, receipt) = kura
-        .v2_finality_artifact_with_receipt(fence.key.height)
-        .map_err(
-            |error| ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                operation: "authenticate retention-fence v2 finality artifact",
-                detail: error.to_string(),
-            },
-        )?
-        .ok_or(
-            ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionFence {
-                reason: "retention fence has no durable v2 finality artifact",
-            },
-        )?;
-    if *receipt.artifact_hash().as_ref() != fence.kura_finality_artifact_hash {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionFence {
-                reason: "retention fence substituted the Kura finality-artifact identity",
+                reason: "retention fence substituted the certified block identity",
             },
         );
     }
@@ -4552,6 +4222,7 @@ fn authenticate_retention_artifact_hash(
 fn authenticate_retention_prefix(
     index: &ArchiveIndexV1,
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
+    state_ro: &impl StateReadOnly,
     kura: &Kura,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
@@ -4563,56 +4234,37 @@ fn authenticate_retention_prefix(
             },
         );
     }
-    fence.key.validate()?;
-    if fence.kura_finality_artifact_hash == [0; 32] {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionFence {
-                reason: "Kura finality-artifact hash must be non-zero",
-            },
-        );
-    }
-    let boundary = kura.exact_replay_boundary().map_err(|error| {
-        ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-            operation: "bind exact retention qualification boundary",
-            detail: error.to_string(),
-        }
-    })?;
-    if fence.key.height > boundary.count {
-        return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveAheadOfKura {
-            archive_height: fence.key.height,
-            kura_height: boundary.count,
-        });
-    }
+    let certified =
+        CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
     if let Some(base) = index.virtual_bases.get(&fence.key.network_id) {
-        authenticate_archive_anchor_against_kura(
+        let block = authenticate_archive_anchor(
             &base.checkpoint.material.retention_floor,
-            kura,
-            &boundary,
+            state_ro.network_id(),
+            &certified,
         )?;
+        if *block.id().0.as_ref() != base.checkpoint.material.certified_block_id {
+            return Err(
+                ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionFence {
+                    reason: "existing retention base substituted the certified block identity",
+                },
+            );
+        }
     }
     for (_, entry) in index.by_height.range((
         std::ops::Bound::Included((fence.key.network_id, 0)),
         std::ops::Bound::Included((fence.key.network_id, fence.key.height)),
     )) {
         verify_record_entry(entry, bounds)?;
-        authenticate_archive_anchor_against_kura(&entry.record.material.key, kura, &boundary)?;
+        authenticate_archive_anchor(
+            &entry.record.material.key,
+            state_ro.network_id(),
+            &certified,
+        )?;
     }
-    authenticate_archive_anchor_against_kura(&fence.key, kura, &boundary)?;
-    authenticate_retention_artifact_hash(fence, kura)?;
-    if kura.exact_replay_boundary().map_err(|error| {
-        ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-            operation: "re-read exact retention qualification boundary",
-            detail: error.to_string(),
-        }
-    })? != boundary
-    {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
-                boundary: "Kura retention",
-            },
-        );
-    }
-    Ok(())
+    authenticate_retention_identity(fence, state_ro.network_id(), &certified)?;
+    certified
+        .verify_unchanged()
+        .map_err(certified_authentication_error)
 }
 fn prepare_archive_compaction(
     index: &ArchiveIndexV1,
@@ -4694,7 +4346,7 @@ fn prepare_archive_compaction(
             policy_history: policy_history_to_checkpoint(&history.policy_history),
             active_order_ids: history.active_order_ids.iter().copied().collect(),
             seen_order_ids: history.seen_order_ids.iter().copied().collect(),
-            kura_finality_artifact_hash: fence.kura_finality_artifact_hash,
+            certified_block_id: fence.certified_block_id,
         },
         bounds,
     )?;
@@ -5304,100 +4956,64 @@ fn canonical_domain_digest<T: norito::core::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-fn authenticate_archive_anchor_against_kura(
+fn authenticate_archive_anchor<V: StateReadOnly + ?Sized>(
     key: &ProviderIngestFinalizedArchiveKeyV1,
-    kura: &Kura,
-    boundary: &crate::kura::ExactReplayBoundary,
-) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    let height_index = usize::try_from(key.height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .ok_or(
-            ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                network_id: key.network_id,
-                height: key.height,
-                reason: "archive height is not representable by Kura",
-            },
-        )?;
-    let boundary_hash = boundary
-        .hashes
-        .get(height_index.get() - 1)
-        .map(|hash| *hash.as_ref())
-        .ok_or(
-            ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                network_id: key.network_id,
-                height: key.height,
-                reason: "archive height is absent from the exact Kura boundary",
-            },
-        )?;
-    if boundary_hash != key.block_hash {
+    network_id: &NetworkId,
+    certified: &CertifiedArchiveView<'_, V>,
+) -> Result<crate::sumeragi::certified_chain::CertifiedBlock, ProviderIngestFinalizedArchiveErrorV1>
+{
+    if &key.network_id != network_id {
         return Err(
-            ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                network_id: key.network_id,
-                height: key.height,
-                reason: "archive hash differs from the exact Kura hash journal",
+            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
+                reason: "archive anchor belongs to another State network",
             },
         );
     }
-    let (artifact, receipt) = kura
-        .v2_finality_artifact_with_receipt(key.height)
-        .map_err(
-            |error| ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                operation: "authenticate archived v2 finality artifact",
-                detail: error.to_string(),
-            },
-        )?
-        .ok_or(
-            ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                network_id: key.network_id,
-                height: key.height,
-                reason: "archive height has no authenticated v2 finality artifact",
-            },
-        )?;
-    if artifact.height != key.height
-        || *artifact.block_hash.as_ref() != key.block_hash
-        || receipt.height() != key.height
-        || *receipt.block_hash().as_ref() != key.block_hash
+    let block = certified
+        .block(key.height)
+        .map_err(certified_authentication_error)?;
+    if *block.block_hash().as_ref() != key.block_hash
+        || block.block_time_ms() != key.finalized_at_unix_ms
     {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
                 network_id: key.network_id,
                 height: key.height,
-                reason: "archive key differs from its authenticated v2 finality artifact",
+                reason: "archive identity or timestamp differs from the certified block",
             },
         );
     }
-    let block = kura.get_block(height_index).ok_or(
-        ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id,
-            height: key.height,
-            reason: "result-bearing block is unavailable for archive qualification",
-        },
-    )?;
-    if block.header().height().get() != key.height
-        || *block.hash().as_ref() != key.block_hash
-        || block.header().creation_time_ms != key.finalized_at_unix_ms
-    {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::ArchiveKuraAnchorMismatch {
-                network_id: key.network_id,
-                height: key.height,
-                reason: "archive timestamp or identity differs from the canonical block",
-            },
-        );
-    }
-    Ok(())
+    Ok(block)
 }
 fn authenticate_capture_view(
     state_ro: &impl StateReadOnly,
     kura: &Kura,
-    receipt: &KuraV2CommitReceipt,
 ) -> Result<ProviderIngestFinalizedArchiveKeyV1, ProviderIngestFinalizedArchiveErrorV1> {
-    let key = candidate_capture_key(state_ro, kura)?;
-    authenticate_capture_key(&key, kura, receipt)?;
+    let key = committed_capture_key(state_ro, kura)?;
+    let certified =
+        CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
+    authenticate_archive_anchor(&key, state_ro.network_id(), &certified)?;
+    certified
+        .verify_unchanged()
+        .map_err(certified_authentication_error)?;
     Ok(key)
 }
-fn candidate_capture_key(
+fn certified_authentication_error(
+    error: ArchiveFinalityError,
+) -> ProviderIngestFinalizedArchiveErrorV1 {
+    match error {
+        ArchiveFinalityError::BoundaryChanged => {
+            ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
+                boundary: "certified Kura",
+            }
+        }
+        error => ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
+            operation: "authenticate same-State certified archive boundary",
+            detail: error.to_string(),
+        },
+    }
+}
+fn committed_capture_key(
     state_ro: &impl StateReadOnly,
     kura: &Kura,
 ) -> Result<ProviderIngestFinalizedArchiveKeyV1, ProviderIngestFinalizedArchiveErrorV1> {
@@ -5415,7 +5031,7 @@ fn candidate_capture_key(
     })?;
     let block_hash = state_ro.latest_block_hash().ok_or(
         ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-            reason: "immutable state has no candidate block hash",
+            reason: "immutable state has no committed block hash",
         },
     )?;
     ProviderIngestFinalizedArchiveKeyV1::try_new(
@@ -5424,36 +5040,6 @@ fn candidate_capture_key(
         *block_hash.as_ref(),
         state_ro.query_ledger_time_ms(),
     )
-}
-fn authenticate_capture_key(
-    key: &ProviderIngestFinalizedArchiveKeyV1,
-    kura: &Kura,
-    receipt: &KuraV2CommitReceipt,
-) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    kura.authenticate_archive_capture(
-        key.network_id,
-        key.height,
-        key.block_hash,
-        key.finalized_at_unix_ms,
-        receipt,
-    )
-    .map_err(capture_authentication_error)
-}
-
-fn capture_authentication_error(
-    error: KuraArchiveCaptureAuthenticationError,
-) -> ProviderIngestFinalizedArchiveErrorV1 {
-    match error {
-        KuraArchiveCaptureAuthenticationError::Identity(reason) => {
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { reason }
-        }
-        KuraArchiveCaptureAuthenticationError::Storage(error) => {
-            ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                operation: "authenticate retained archive capture",
-                detail: error.to_string(),
-            }
-        }
-    }
 }
 fn encode_bounded_record(
     record: &ProviderIngestFinalizedArchiveRecordV1,
@@ -6944,15 +6530,6 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
         /// Release Kura and State fences before awaiting this actual index owner.
         wait: concread::release::ReleaseWait,
     },
-    /// An exact prepared capture retains the archive predecessor and capacity.
-    #[error("finalized provider-ingest archive is reserved by a prepared capture")]
-    CaptureReserved {
-        /// Wait for this owner after releasing other writers, then retry admission.
-        wait: ArchiveCaptureWait,
-    },
-    /// An owned continuation was presented to a different archive instance.
-    #[error("finalized provider-ingest capture reservation belongs to another archive")]
-    CaptureOwnerMismatch,
     /// Archive ceilings are zero, inconsistent, or unrepresentable.
     #[error("invalid finalized provider-ingest archive bounds: {reason}")]
     InvalidBounds {
@@ -7387,6 +6964,8 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
 }
 #[cfg(test)]
 mod tests {
+    #[path = "../certified_capture_tests.rs"]
+    mod certified_capture_tests;
     mod frame_identity_tests;
     include!("provider_ingest_finalized/preparation_tests.rs");
     use super::*;

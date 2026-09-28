@@ -105,8 +105,12 @@ class PublicContractSchemaTests(unittest.TestCase):
         self.assertEqual(operation['responses']['200']['content']['application/json']['schema']['$ref'], '#/components/schemas/ContractCallResponse')
         self.assertEqual(operation['x-iroha-route-auth']['authentication'], 'canonical_account_signature')
         self.assertEqual(set(operation['security'][0]), {'IrohaCanonicalAccount', 'IrohaCanonicalNonce', 'IrohaCanonicalSignature', 'IrohaCanonicalTimestampMs'})
-        for phrase in ['QueuePlanSynced', 'never re-quoted', 'durable certified admission', 'Applied finality']:
+        for phrase in ['Ordinary admission', 'one actual resolved route', 'never re-quoted',
+                       'durable single-route queue admission', 'Applied finality',
+                       'multi-route work is rejected before any durable pending promise']:
             self.assertIn(phrase, operation['description'])
+        for retired in ['QueuePlanSynced', 'durable certified admission']:
+            self.assertNotIn(retired, operation['description'])
         self.assertIn('503', operation['responses'])
 
     def test_schema_fields_follow_the_actual_rust_dtos(self):

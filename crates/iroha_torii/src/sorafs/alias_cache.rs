@@ -586,7 +586,7 @@ mod tests {
     fn sample_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         let binding = AliasBindingV1 {
             alias: "docs/sora".into(),
-            manifest_cid: vec![0x42, 0x24],
+            manifest_cid: sorafs_manifest::canonical_manifest_root_cid([0x42; 32]),
             bound_at: 1,
             expiry_epoch: 10,
         };
@@ -791,6 +791,10 @@ mod tests {
         let decoded =
             decode_alias_proof_untrusted_signers(&bytes).expect("decode alias proof integrity");
         assert_eq!(decoded.binding.alias, "docs/sora");
+        assert_eq!(
+            decoded.binding.manifest_cid,
+            sorafs_manifest::canonical_manifest_root_cid([0x42; 32])
+        );
     }
     #[test]
     fn successor_grace_transitions_from_hold_to_refuse() {

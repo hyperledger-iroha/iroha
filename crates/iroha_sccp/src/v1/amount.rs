@@ -46,9 +46,7 @@ pub fn taira_units(q: &Numeric) -> Result<u128, AmountError> {
     if scale > XOR_DECIMALS {
         return Err(AmountError::ScaleTooLarge);
     }
-    let mantissa = canonical
-        .try_mantissa_u128()
-        .ok_or(AmountError::TooLarge)?;
+    let mantissa = canonical.try_mantissa_u128().ok_or(AmountError::TooLarge)?;
     let factor = 10_u128.pow(XOR_DECIMALS - scale);
     mantissa.checked_mul(factor).ok_or(AmountError::TooLarge)
 }
@@ -78,8 +76,8 @@ pub fn check_lane_amount(
     if units == 0 {
         return Err(AmountError::Zero);
     }
-    let ton = matches!(source, SccpNetworkV1::TonMainnet)
-        || matches!(target, SccpNetworkV1::TonMainnet);
+    let ton =
+        matches!(source, SccpNetworkV1::TonMainnet) || matches!(target, SccpNetworkV1::TonMainnet);
     if ton && units >= TON_AMOUNT_BOUND {
         return Err(AmountError::TonBoundExceeded);
     }
@@ -106,7 +104,10 @@ mod tests {
 
     #[test]
     fn taira_units_rejects_inexact_and_out_of_range() {
-        assert_eq!(taira_units(&numeric(1, 10)), Err(AmountError::ScaleTooLarge));
+        assert_eq!(
+            taira_units(&numeric(1, 10)),
+            Err(AmountError::ScaleTooLarge)
+        );
         assert_eq!(taira_units(&numeric(0, 0)), Err(AmountError::Zero));
         assert_eq!(taira_units(&numeric(-1, 0)), Err(AmountError::Negative));
         // (2^128 - 1) units is the maximum; one more unit overflows.

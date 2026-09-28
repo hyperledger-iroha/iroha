@@ -21,8 +21,12 @@ rejects data beyond its exact expected length. Expected hashes come from the ret
 cannot substitute the expected publication bytes. Every directory asset is checked; the previous
 32-file sample could overlook an unavailable or corrupted later asset.
 
-`deploy` now requires an independently supplied, exact-network native finality checkpoint.
-It verifies challenged `AssertSorafsPublicationV1` transaction inclusion and native finality for
+`deploy` requires an independently supplied canonical `SumeragiFinalityCheckpoint`,
+bound to the configured genesis-derived network and chain label. The shared current-consensus
+verifier resumes from its signed genesis, selected roster, certified tip and at most two
+predecessor decisions; a queried proof cannot select its own trust root. The checkpoint is
+bounded to 68 MiB before canonical decoding. It verifies challenged
+`AssertSorafsPublicationV1` transaction inclusion and embedded-certificate finality for
 the approved manifest and automatic assignment, then uploads bounded, authenticated source
 chunks to `/v1/sorafs/publish/source` for every incomplete assigned provider. Staging verifies
 the manifest and native plan and checks each content-addressed chunk; ordinary finalized ingest
@@ -31,7 +35,9 @@ Staging neither completes the ledger order nor writes a directly admitted pin.
 
 The publisher awaits the same assignment's native completion evidence, verifies a second
 challenged finality proof extending the trusted floor, and retains assignment/completion proofs
-and the new finality checkpoint. It then checks every asset at the CID origin. The receipt sets
+and the new finality checkpoint. Only verified execution advances that checkpoint through
+a private same-directory file, synced atomic replacement and directory sync. It then checks
+every asset at the CID origin. The receipt sets
 `publication_verified` only when this evidence and all gateway reads succeed. Endpoint success
 or bytes alone are insufficient. The implementation is present; live four-validator acceptance
 and the frozen package run through this complete path remain qualification gates.

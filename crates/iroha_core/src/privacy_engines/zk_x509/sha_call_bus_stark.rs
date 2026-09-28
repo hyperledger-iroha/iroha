@@ -22,6 +22,7 @@ use super::sha256_word_air::{ZkX509WordMemoryChallengesV1, ZkX509WordMemoryLaneC
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     credential_pre_aux::ZkX509CredentialPreAuxBindingV1,
+    private_table::{PrivateTableV1, zeroize_field_rows_v1},
     sha_word_stark::{
         ZkX509ShaWordCapacityBaseSourceV1, ZkX509ShaWordCapacityTraceV1,
         build_sha_word_capacity_base_source_v1, validate_zk_x509_sha_word_stark_challenges_v1,
@@ -504,11 +505,14 @@ impl core::fmt::Debug for ZkX509ShaCallWitnessV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaCallWitnessV1 {
+    fn zeroize_private_cells_v1(&mut self) {
+        zeroize::Zeroize::zeroize(self.message.as_mut_slice());
+        zeroize::Zeroize::zeroize(&mut self.digest);
+    }
     /// Overwrite the exact private preimage and its derived digest.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.message.fill(0);
+        self.zeroize_private_cells_v1();
         self.message.clear();
-        self.digest.fill(0);
     }
     #[cfg(test)]
     pub(crate) fn private_is_zeroized_v1(&self) -> bool {
@@ -798,21 +802,29 @@ impl core::fmt::Debug for ZkX509ShaBatchCallTraceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaBatchCallTraceV1 {
+    fn zeroize_private_cells_v1(&mut self) {
+        for value in self
+            .product_rows
+            .iter_mut()
+            .flatten()
+            .chain(&mut self.terminal.source_products)
+            .chain(&mut self.terminal.digest_products)
+            .chain(self.rfc_terminal.stream_products.iter_mut().flatten())
+            .chain(&mut self.segment_product_state.source_products)
+            .chain(&mut self.segment_product_state.digest_products)
+            .chain(
+                self.segment_product_state
+                    .rfc_stream_products
+                    .iter_mut()
+                    .flatten(),
+            )
+        {
+            value.zeroize_v1();
+        }
+    }
     pub(crate) fn zeroize_private_v1(&mut self) {
-        for row in &mut self.product_rows {
-            row.fill(F::ZERO);
-        }
+        self.zeroize_private_cells_v1();
         self.product_rows.clear();
-        self.terminal.source_products.fill(F::ZERO);
-        self.terminal.digest_products.fill(F::ZERO);
-        for stream in &mut self.rfc_terminal.stream_products {
-            stream.fill(F::ZERO);
-        }
-        self.segment_product_state.source_products.fill(F::ZERO);
-        self.segment_product_state.digest_products.fill(F::ZERO);
-        for stream in &mut self.segment_product_state.rfc_stream_products {
-            stream.fill(F::ZERO);
-        }
         self.word.zeroize_private_v1();
     }
     #[cfg(test)]
@@ -1471,6 +1483,51 @@ pub(crate) struct ZkX509ShaBatchFixedProviderV1 {
     calls: Vec<ZkX509ShaWordCapacityFixedScheduleV1>,
 }
 impl ZkX509ShaBatchFixedProviderV1 {
+    /// Forecast all retained fixed schedules without constructing any word trace.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocation_forecast_v1(
+        shape: ZkX509ShaCallPublicShapeV1,
+    ) -> Result<usize, ZkX509ShaCallBusStarkErrorV1> {
+        use super::allocation_payload::sum_v1;
+        use core::mem::size_of;
+        let schedule = ZkX509ShaCallScheduleV1::new(shape)?;
+        Ok(sum_v1([
+            ZK_X509_SHA_CALL_COUNT_V1 * size_of::<ZkX509ShaWordCapacityFixedScheduleV1>(),
+            sum_v1(schedule.calls().iter().map(|call| {
+                call.maximum_logical_rows() * size_of::<super::sha_word_stark::ShaWordFixedRowV1>()
+                    + call.maximum_input_words() * size_of::<(usize, usize)>()
+            })),
+        ]))
+    }
+    /// Maximum serial word-source scratch charged by the public call schedule.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn replay_scratch_forecast_v1(
+        shape: ZkX509ShaCallPublicShapeV1,
+    ) -> Result<usize, ZkX509ShaCallBusStarkErrorV1> {
+        let schedule = ZkX509ShaCallScheduleV1::new(shape)?;
+        let maximum_blocks = schedule
+            .calls()
+            .iter()
+            .map(|call| call.maximum_blocks)
+            .max()
+            .ok_or(ZkX509ShaCallBusStarkErrorV1::Topology)?;
+        Ok(super::sha_word_stark::source_replay_scratch_forecast_v1(
+            maximum_blocks,
+        )?)
+    }
+    /// Allocated public schedules for all calls, excluding this inline owner.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            vector_v1(&self.calls),
+            sum_v1(
+                self.calls
+                    .iter()
+                    .map(ZkX509ShaWordCapacityFixedScheduleV1::allocated_heap_bytes_v1),
+            ),
+        ])
+    }
     /// Compile the sole verifier-owned 29-call fixed topology.
     pub(crate) fn new_v1(
         shape: ZkX509ShaCallPublicShapeV1,
@@ -1910,7 +1967,9 @@ impl<'a> ZkX509ShaColumnFillGuardV1<'a> {
 impl Drop for ZkX509ShaColumnFillGuardV1<'_> {
     fn drop(&mut self) {
         if !self.committed {
-            self.target.fill(F::ZERO);
+            for value in self.target.iter_mut() {
+                value.zeroize_v1();
+            }
         }
     }
 }
@@ -2760,7 +2819,7 @@ fn finish_zk_x509_sha_batch_call_binding_v1(
     rfc_challenges: ZkX509Rfc5280StarkChallengesV1,
     initial_products: ZkX509ShaSegmentProductStateV1,
 ) -> Result<ZkX509ShaBatchCallTraceV1, ZkX509ShaCallBusStarkErrorV1> {
-    let mut product_rows = Vec::new();
+    let mut product_rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     product_rows
         .try_reserve_exact(word.logical_rows())
         .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
@@ -2852,7 +2911,7 @@ fn finish_zk_x509_sha_batch_call_binding_v1(
     Ok(ZkX509ShaBatchCallTraceV1 {
         manifest,
         word,
-        product_rows,
+        product_rows: product_rows.into_vec(),
         #[cfg(test)]
         rfc_consumer,
         terminal,
@@ -3280,6 +3339,22 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_sha_witness_erasure_clears_live_message_and_digest_cells() {
+        let mut witness = ZkX509ShaCallWitnessV1 {
+            role: ZkX509ShaCallRoleV1::CertificateTbs(0),
+            message: vec![0x5a; 37],
+            digest: [0x73; 32],
+        };
+        let capacity = witness.message.capacity();
+        witness.zeroize_private_cells_v1();
+        assert_eq!(witness.message, vec![0; 37]);
+        assert_eq!(witness.message.capacity(), capacity);
+        assert_eq!(witness.digest, [0; 32]);
+        witness.zeroize_private_v1();
+        assert!(witness.private_is_zeroized_v1());
+    }
+
     use super::*;
     use crate::privacy_engines::zk_x509::{
         credential_pre_aux::{
@@ -3721,6 +3796,15 @@ mod tests {
         let second_aux = second
             .bind_v1(credential_binding(0x72))
             .expect("second binding");
+        let mut replayed_base = native_column_v1(F::ZERO);
+        first_aux
+            .replay_base_column_v1(segment, 0, &mut replayed_base)
+            .expect("bound capability replays original base column");
+        assert_eq!(replayed_base, first_base);
+        second_aux
+            .replay_base_column_v1(segment, 0, &mut replayed_base)
+            .expect("base replay ignores auxiliary token values");
+        assert_eq!(replayed_base, first_base);
         let mut first_column = native_column_v1(F::ZERO);
         let mut first_replay = native_column_v1(F::ZERO);
         let mut second_column = native_column_v1(F::ZERO);
@@ -3780,6 +3864,16 @@ mod tests {
         assert!(source.fill_base_column_v1(segment, 0, &mut target).is_err());
         assert!(target.iter().all(|value| *value == sentinel));
         let original_binding = aux.binding;
+        assert!(
+            aux.replay_base_column_v1(segment + 1, 0, &mut target)
+                .is_err()
+        );
+        assert!(
+            aux.replay_base_column_v1(segment, ZK_X509_SHA_BATCH_BASE_WIDTH_V1, &mut target)
+                .is_err()
+        );
+        assert!(aux.replay_base_column_v1(segment, 0, &mut short).is_err());
+        assert!(target.iter().all(|value| *value == sentinel));
         assert!(!aux.row_stream_emitted_for_test_v1());
         assert!(aux.fill_aux_column_v1(segment + 1, 0, &mut target).is_err());
         assert!(target.iter().all(|value| *value == sentinel));
@@ -3798,6 +3892,7 @@ mod tests {
         assert!(!aux.row_stream_emitted_for_test_v1());
         aux.zeroize_private_v1();
         assert!(aux.private_is_zeroized_v1());
+        assert!(aux.replay_base_column_v1(segment, 0, &mut target).is_err());
         assert!(aux.fill_aux_column_v1(segment, 0, &mut target).is_err());
         assert!(target.iter().all(|value| *value == sentinel));
         assert!(aux.private_is_zeroized_v1());
@@ -4516,6 +4611,35 @@ mod tests {
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("base_rows"));
         assert!(!trace.private_is_zeroized_v1());
+        let retained_rows = trace.product_rows.len();
+        assert!(retained_rows > 0);
+        trace.zeroize_private_cells_v1();
+        assert_eq!(trace.product_rows.len(), retained_rows);
+        assert!(
+            trace
+                .product_rows
+                .iter()
+                .flatten()
+                .all(|value| *value == F::ZERO)
+        );
+        assert!(
+            trace
+                .terminal
+                .source_products
+                .iter()
+                .chain(&trace.terminal.digest_products)
+                .chain(trace.rfc_terminal.stream_products.iter().flatten())
+                .chain(&trace.segment_product_state.source_products)
+                .chain(&trace.segment_product_state.digest_products)
+                .chain(
+                    trace
+                        .segment_product_state
+                        .rfc_stream_products
+                        .iter()
+                        .flatten()
+                )
+                .all(|value| *value == F::ZERO)
+        );
         trace.zeroize_private_v1();
         assert!(trace.private_is_zeroized_v1());
         trace.zeroize_private_v1();

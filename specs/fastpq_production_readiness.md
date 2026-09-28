@@ -1,17 +1,18 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-26. **Production qualification is unavailable.** The selected
+Updated: 2026-09-28. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
 
-The replay resource defaults use one opening-shape derivation for the
-256-transition, 512-column admission profile: 2,163,774 bytes of approximate
-payload and 2,372,085 bytes for the complete canonical Norito frame. The verifier
-uses the payload bound; Core encoding and the sidecar default use the frame
-bound. These replay limits do not qualify or admit compact proofs.
+The predecessor replay resource analysis recorded 2,163,774 bytes of approximate
+payload and 2,372,085 bytes for a complete canonical Norito frame at 256
+transitions and 512 columns. Those figures do not describe the current masked
+DEEP child, whose canonical upper envelope is 502,895 bytes. Core ordinary and
+AXT paths select the canonical masked artifact verifier; cryptographic
+consistency remains separate from finalized-source and spend authority.
 
-## September 26 integration in progress
+## Current masked integration
 
 The normal offline quantity facade now selects the bounded DEEP profile:
 301 committed columns, 64 queries, five higher-arity folds and one OOD evaluation
@@ -21,6 +22,21 @@ and an independently committed composition mask. Fresh cryptographic entropy is
 passed explicitly to the construction; public columns remain reconstructed and
 unmasked. Checked payload, work and hash budgets cover the complete construction,
 with cumulative decode accounting and authenticated row-root results.
+The default segment limits remain 2 GiB of charged payload, 2^42 structural
+work units and 524,288 child bytes. They have not been raised to accommodate
+the construction. The September 28 normal-library check and latest 134 focused
+native tests pass; 11 external API tests, one public usage doctest, and three
+separately selected required-Metal leaf/parent/preflight checks pass. Bounded
+1024-job hashing and parallel job preparation preserve serial commitment/frontier
+parity. The earlier complete 8M-point FFT/inverse oracle also passes and takes
+69.00s wall time, reporting
+553,549,824 bytes maximum RSS on the unoptimized binary under concurrent build
+load. These scoped results do not measure complete proof generation. Exact
+commands, source scope and receipt hashes are in the
+[September 28 validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
+
+### Earlier integration evidence
+
 The September 26 normal-library and test build passed with 3,720 unchanged
 dependency-closure inputs; its focused selection passed 238 tests with zero
 failures and seven explicitly deferred full-domain/artifact diagnostics. The real
@@ -173,7 +189,10 @@ Core transfer proofs and AXT envelope verification use the canonical masked
 artifact and bounded verifier. The AXT decoder accepts only its nominal compact
 schema and compares binding, manifest, DA, amount and expiry context. Anchored
 verification retains the independently supplied finalized roots and ordered
-transaction checks. Metadata-only opaque effect carriers have no transfer AIR
+transaction checks. Ordinary roots cover the touched-balance tree, not the
+complete persisted ledger. Remote-spend and relay business-effect promotion
+remain rejected; their separate source and spend authority must be qualified.
+Metadata-only opaque effect carriers have no transfer AIR
 and are rejected as unsupported semantics. Execution-owned source quotas, atomic
 D7 publication, complete finalized-source authorization, witness-hiding review,
 independent cryptographic qualification, hardware/resource measurements and

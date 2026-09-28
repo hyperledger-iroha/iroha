@@ -36,8 +36,7 @@ pub(super) fn install_test_lane_manifests(state: &State) {
 }
 fn test_confidential_features(state: &State, height: u64) -> Option<ConfidentialFeatureDigest> {
     let view = state.query_view();
-    let digest =
-        compute_confidential_feature_digest(view.world(), view.zk(), view.sccp_registry(), height);
+    let digest = compute_confidential_feature_digest(view.world(), view.zk(), height);
     (!digest.is_empty()).then_some(digest)
 }
 /// Finalize preseeded fixture definitions at their exact genesis boundary before

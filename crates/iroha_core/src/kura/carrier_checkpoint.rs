@@ -175,8 +175,8 @@ impl Kura {
                 "checkpoint receipt height is outside the exact durable chain",
             ));
         }
-        let Some((header, artifact, _)) =
-            self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+        let Some((header, artifact)) =
+            self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(height)?
         else {
             return Err(
                 self.checkpoint_receipt_error("checkpoint has no exact durable v2 finality")

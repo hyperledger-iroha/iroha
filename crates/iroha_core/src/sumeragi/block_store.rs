@@ -10,7 +10,8 @@
 //!
 //! **Payloads (§3 rule 2).** The core payload of a block is not stored separately: it is the
 //! canonical resultless, certificate-free proposal wire of the stored block
-//! (`canonical_resultless_proposal().encode_wire()`), or `[]` for `EMPTY` (`payload_len == 0`).
+//! (`canonical_resultless_proposal().encode_wire()`). Blocks are work-driven and never empty
+//! (§6.10), so a stored header with `payload_len == 0` is corrupt.
 //! [`KuraBlockStore::append`](BlockStore::append) re-derives it from the frame it is about to
 //! write and checks `H(TAG_PAY ‖ payload) == header.payload_hash` first: a mismatch is a local
 //! bug, reported as a failed write (retried by the driver), never as an invalid block.
@@ -113,6 +114,9 @@ pub enum BlockStoreError {
     /// The staged block does not belong to the core block (height or result).
     #[error("the staged block does not match the committed block: {0}")]
     StagedMismatch(&'static str),
+    /// The stored header declares an empty payload; blocks are never empty (§6.10).
+    #[error("the stored header declares an empty payload")]
+    EmptyPayload,
     /// The re-derived payload does not hash to the header's `payload_hash` (§3 rule 2).
     #[error("the payload re-derived from block {height} does not match its header")]
     PayloadMismatch {
@@ -139,14 +143,15 @@ impl From<BlockStoreError> for io::Error {
     }
 }
 
-/// The core payload of a stored block (§3 rule 2): `[]` for `EMPTY` (`payload_len == 0`),
-/// otherwise the canonical resultless, certificate-free proposal wire.
+/// The core payload of a stored block (§3 rule 2): the canonical resultless, certificate-free
+/// proposal wire.
 ///
 /// # Errors
-/// The proposal wire cannot be encoded.
+/// [`BlockStoreError::EmptyPayload`] for `payload_len == 0` (blocks are never empty, §6.10), or
+/// the proposal wire cannot be encoded.
 pub fn derive_payload(block: &SignedBlock, payload_len: u32) -> Result<Vec<u8>, BlockStoreError> {
     if payload_len == 0 {
-        return Ok(Vec::new());
+        return Err(BlockStoreError::EmptyPayload);
     }
     block
         .canonical_resultless_proposal()
@@ -449,18 +454,14 @@ mod tests {
     }
 
     /// The next core block over the chain's tip, its QC and the staged executed block.
-    fn next(chain: &Chain, empty: bool) -> (Block, Qc, StagedBlock) {
+    fn next(chain: &Chain) -> (Block, Qc, StagedBlock) {
         let (iroha_parent, parent_hash, parent_result) = chain.tip;
         let height = chain.store.height() + 1;
         let executed = executed_block(&chain.key, height, Some(iroha_parent));
-        let payload = if empty {
-            Vec::new()
-        } else {
-            executed
-                .canonical_resultless_proposal()
-                .encode_wire()
-                .expect("wire")
-        };
+        let payload = executed
+            .canonical_resultless_proposal()
+            .encode_wire()
+            .expect("wire");
         let header = BlockHeader {
             instance: INSTANCE,
             height,
@@ -495,8 +496,8 @@ mod tests {
         (block, qc, staged)
     }
 
-    fn commit(chain: &mut Chain, empty: bool) -> (Block, Qc) {
-        let (block, qc, staged) = next(chain, empty);
+    fn commit(chain: &mut Chain) -> (Block, Qc) {
+        let (block, qc, staged) = next(chain);
         let iroha_hash = staged.executed.hash();
         chain.store.staging().stage(staged);
         chain.store.append(&block, &qc).expect("append");
@@ -510,7 +511,7 @@ mod tests {
         assert_eq!(chain.store.height(), 1);
         assert_eq!(chain.store.entry(1), None, "genesis has no core entry");
         assert_eq!(chain.store.tip(), None);
-        let (block, qc) = commit(&mut chain, false);
+        let (block, qc) = commit(&mut chain);
         assert_eq!(chain.store.height(), 2);
         let entry = chain.store.entry(2).expect("entry");
         assert_eq!(entry.block, block);
@@ -541,21 +542,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_payload_is_rederived_as_empty() {
-        let mut chain = chain();
-        commit(&mut chain, false);
-        let (block, qc) = commit(&mut chain, true);
-        let entry = chain.store.entry(3).expect("entry");
-        assert!(entry.block.payload.is_empty());
-        assert_eq!(entry.block, block);
-        assert_eq!(entry.commit_qc, qc);
-        assert!(entry.block.body_ok(&*chain.hasher));
+    fn a_stored_empty_payload_is_corrupt() {
+        let block = executed_block(&KeyPair::random(), 2, None);
+        assert!(matches!(
+            derive_payload(&block, 0),
+            Err(BlockStoreError::EmptyPayload)
+        ));
     }
 
     #[test]
     fn recent_headers_entries_and_a_fresh_store_over_the_same_kura() {
         let mut chain = chain();
-        let blocks: Vec<_> = (0..4).map(|i| commit(&mut chain, i % 2 == 1).0).collect();
+        let blocks: Vec<_> = (0..4).map(|_| commit(&mut chain).0).collect();
         assert_eq!(chain.store.height(), 5);
         let headers: Vec<_> = blocks.iter().map(|b| b.header.clone()).collect();
         assert_eq!(
@@ -602,18 +600,18 @@ mod tests {
     #[test]
     fn append_is_idempotent_and_refuses_conflicts_gaps_and_unstaged_blocks() {
         let mut chain = chain();
-        let (block, qc) = commit(&mut chain, false);
+        let (block, qc) = commit(&mut chain);
         // An exact retry succeeds without a second write.
         chain.store.append(&block, &qc).expect("retry");
         assert_eq!(chain.store.height(), 2);
         // Another block at a stored height conflicts.
-        let (mut other, mut other_qc, _) = next(&chain, true);
+        let (mut other, mut other_qc, _) = next(&chain);
         other.header.height = 2;
         other_qc.height = 2;
         other_qc.block_hash = other.hash(&*chain.hasher);
         assert!(chain.store.append(&other, &other_qc).is_err());
         // Nothing staged for the next block.
-        let (block, qc, staged) = next(&chain, false);
+        let (block, qc, staged) = next(&chain);
         assert!(chain.store.append(&block, &qc).is_err());
         // A QC for another block.
         chain.store.staging().stage(staged.clone());
@@ -646,15 +644,15 @@ mod tests {
     #[test]
     fn payload_mismatch_is_a_failed_write_never_a_stored_block() {
         let mut chain = chain();
-        commit(&mut chain, false);
-        let (mut block, _, staged) = next(&chain, false);
+        commit(&mut chain);
+        let (mut block, _, staged) = next(&chain);
         // A header whose payload is not the stored frame's proposal wire (a local bug).
         block.payload = b"not the proposal".to_vec();
         block.header.payload_hash = payload_hash(&*chain.hasher, &block.payload);
         block.header.payload_len = u32::try_from(block.payload.len()).unwrap();
         let qc = Qc {
             block_hash: block.hash(&*chain.hasher),
-            ..next(&chain, false).1
+            ..next(&chain).1
         };
         chain.store.staging().stage(StagedBlock {
             block_hash: qc.block_hash,
@@ -695,7 +693,7 @@ mod tests {
     #[test]
     fn certificate_parts_round_trip_and_reject_garbage() {
         let chain = chain();
-        let (block, qc, _) = next(&chain, false);
+        let (block, qc, _) = next(&chain);
         let certificate = commit_certificate(&block.header, &qc, vec![5]).expect("encode");
         assert_eq!(
             decode_certificate(&certificate).expect("decode"),
@@ -709,10 +707,10 @@ mod tests {
             stored_entry(&uncertified, 2, &chain.hasher),
             Err(BlockStoreError::MissingCertificate { height: 2 })
         ));
-        assert_eq!(
-            derive_payload(&uncertified, 0).expect("empty"),
-            Vec::<u8>::new()
-        );
+        assert!(matches!(
+            derive_payload(&uncertified, 0),
+            Err(BlockStoreError::EmptyPayload)
+        ));
         assert_eq!(
             derive_payload(&uncertified, 1).expect("wire"),
             uncertified

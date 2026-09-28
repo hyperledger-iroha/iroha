@@ -59,13 +59,6 @@ const DOMAIN_WILDCARD_KEY: &str = "domain:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
 const NEXUS_ACTIVE_LANE_CATALOG_KEY: &str = "nexus.active_lane_catalog";
-const SCCP_ON_CHAIN_REGISTRY_KEY: &str = "parameter.custom:sccp_registry_v1";
-/// Synthetic write key for the non-rollbackable per-block SCCP verifier quota.
-///
-/// Every instruction which can reserve verifier work must conflict on this key
-/// so sequential and parallel schedulers consume the shared budget in the same
-/// canonical transaction order.
-pub(crate) const SCCP_VERIFIER_QUOTA_KEY: &str = "sccp.verifier_quota.v1";
 /// Access set with separate read and write collections.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AccessSet {
@@ -943,19 +936,6 @@ fn manifest_matches_prepared_contract(
 fn key_tx_sequence(account: &AccountId) -> AccessKey {
     format!("tx.sequence:{account}")
 }
-fn key_sccp_outbound_message(
-    key: &iroha_data_model::bridge::SccpOutboundMessageKeyV1,
-) -> AccessKey {
-    let mut out = format!(
-        "sccp.outbound.v1:{}:{}:",
-        key.lane.source.profile_key(),
-        key.lane.target.profile_key()
-    );
-    for byte in key.message_id {
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
-}
 fn key_bridge_proof_hash(proof_hash: &[u8; 32]) -> AccessKey {
     let mut out = "bridge.proof:".to_owned();
     for byte in proof_hash {
@@ -966,88 +946,22 @@ fn key_bridge_proof_hash(proof_hash: &[u8; 32]) -> AccessKey {
 fn key_bridge_backend(backend: &str) -> AccessKey {
     format!("bridge.backend:{backend}")
 }
-fn key_sccp_native_bridge_message(
-    lane: iroha_data_model::bridge::SccpLaneIdV1,
-    message_id: [u8; 32],
-) -> AccessKey {
-    let mut out = format!(
-        "sccp.bridge.native:{}:{}:",
-        lane.source.profile_key(),
-        lane.target.profile_key()
-    );
-    for byte in message_id {
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
-}
-fn key_sccp_ton_breaker_observation(key: &iroha_data_model::bridge::SccpRouteKeyV1) -> AccessKey {
-    format!(
-        "sccp.ton.breaker.v1:{}:{}:{}:{}:{}",
-        key.lane_id.source.profile_key(),
-        key.lane_id.target.profile_key(),
-        key.route_id,
-        key.asset_key,
-        key.revision,
-    )
-}
-#[cfg(test)]
-std::thread_local! {
-    static BRIDGE_PROOF_HASH_ATTEMPTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
-}
-#[cfg(test)]
-fn reset_bridge_proof_hash_attempts() {
-    BRIDGE_PROOF_HASH_ATTEMPTS.with(|count| count.set(0));
-}
-#[cfg(test)]
-fn bridge_proof_hash_attempts() -> usize {
-    BRIDGE_PROOF_HASH_ATTEMPTS.with(core::cell::Cell::get)
-}
 fn bridge_proof_hash(proof: &iroha_data_model::bridge::BridgeProof) -> Option<[u8; 32]> {
-    #[cfg(test)]
-    BRIDGE_PROOF_HASH_ATTEMPTS.with(|count| count.set(count.get().saturating_add(1)));
     let backend = proof.backend_label();
     let encoded = norito::to_bytes(proof).ok()?;
     Some(crate::zk::hash_proof(
         &iroha_data_model::proof::ProofBox::new(backend, encoded),
     ))
 }
-fn sccp_bridge_message_access_key(
-    proof: &iroha_data_model::bridge::BridgeProof,
-) -> Option<Option<AccessKey>> {
-    match &proof.payload {
-        // Extracting the exact message key requires trusting nested,
-        // proof-controlled framing. Scheduler derivation must not decode that
-        // archive or run any curve/pairing work, so destination submissions use
-        // the conservative global access set. Execution later resolves the
-        // exact key from its single fully validated owned context.
-        iroha_data_model::bridge::BridgeProofPayload::SccpDestination(_) => None,
-        iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(native) => {
-            let decoded = iroha_sccp::decode_bridge_native_protocol_proof_v1(native).ok()?;
-            Some(Some(key_sccp_native_bridge_message(
-                decoded.source.lane,
-                decoded.source.message_id,
-            )))
-        }
-        iroha_data_model::bridge::BridgeProofPayload::Ics(_)
-        | iroha_data_model::bridge::BridgeProofPayload::TransparentZk(_) => Some(None),
-    }
-}
 fn derive_submit_bridge_proof_access(
     submit: &iroha_data_model::isi::bridge::SubmitBridgeProof,
 ) -> AccessSet {
-    let Some(sccp_message_key) = sccp_bridge_message_access_key(&submit.proof) else {
-        return AccessSet::global();
-    };
     let Some(proof_hash) = bridge_proof_hash(&submit.proof) else {
         return AccessSet::global();
     };
     let mut set = AccessSet::new();
-    set.add_write(SCCP_VERIFIER_QUOTA_KEY.to_owned());
     set.add_write(key_bridge_proof_hash(&proof_hash));
     set.add_write(key_bridge_backend(&submit.proof.backend_label()));
-    if let Some(sccp_message_key) = sccp_message_key {
-        set.add_write(sccp_message_key);
-    }
     set
 }
 fn derive_record_bridge_receipt_access(
@@ -1056,39 +970,6 @@ fn derive_record_bridge_receipt_access(
     let mut set = AccessSet::new();
     set.add_read(NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned());
     set.add_write(key_bridge_proof_hash(&record.receipt.proof_hash));
-    set
-}
-fn derive_sccp_outbound_message_access(
-    record: &iroha_data_model::isi::bridge::RecordSccpMessage,
-) -> AccessSet {
-    let Ok(validated) = crate::bridge::validate_recorded_sccp_message_payload_bytes(
-        record.context,
-        &record.payload_bytes,
-    ) else {
-        return AccessSet::global();
-    };
-    let mut set = AccessSet::new();
-    set.add_read(NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned());
-    set.add_read(SCCP_ON_CHAIN_REGISTRY_KEY.to_owned());
-    if validated.context.lane.target == iroha_data_model::bridge::SccpNetworkV1::TonMainnet {
-        let Some(route_key) = validated.governed_route_key() else {
-            return AccessSet::global();
-        };
-        set.add_read(key_sccp_ton_breaker_observation(&route_key));
-    }
-    set.add_write(key_sccp_outbound_message(&validated.key));
-    set
-}
-fn derive_submit_sccp_ton_breaker_observation_access(
-    submit: &iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1,
-) -> AccessSet {
-    if !submit.route_key.is_well_formed() {
-        return AccessSet::global();
-    }
-    let mut set = AccessSet::new();
-    set.add_read(SCCP_ON_CHAIN_REGISTRY_KEY.to_owned());
-    set.add_write(SCCP_VERIFIER_QUOTA_KEY.to_owned());
-    set.add_write(key_sccp_ton_breaker_observation(&submit.route_key));
     set
 }
 fn with_stateful_admission_keys(
@@ -1716,14 +1597,6 @@ where
     }
     if let Some(record) = any.downcast_ref::<iroha_data_model::isi::bridge::RecordBridgeReceipt>() {
         return derive_record_bridge_receipt_access(record);
-    }
-    if let Some(record) = any.downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>() {
-        return derive_sccp_outbound_message_access(record);
-    }
-    if let Some(submit) =
-        any.downcast_ref::<iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1>()
-    {
-        return derive_submit_sccp_ton_breaker_observation_access(submit);
     }
     // Transfers
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
@@ -2603,10 +2476,6 @@ mod tests {
             iroha_crypto::Hash::new(b"pipeline-access-test-genesis"),
         ))
     }
-    fn canonical_test_sccp_payload_bytes(payload: &iroha_sccp::SccpPayloadV1) -> Vec<u8> {
-        iroha_sccp::canonical_sccp_payload_bytes(payload)
-            .expect("valid SCCP access-set fixture payload encodes")
-    }
     fn wonderland_domain_id() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("static domain id")
     }
@@ -2615,31 +2484,6 @@ mod tests {
     }
     fn build_wonderland_account(account_id: &AccountId) -> Account {
         new_wonderland_account(account_id).build(account_id)
-    }
-    fn sccp_transfer_payload(
-        nonce: u64,
-        source_domain: u32,
-        target_domain: u32,
-    ) -> iroha_sccp::SccpPayloadV1 {
-        iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain,
-            dest_domain: target_domain,
-            nonce,
-            route_revision: 1,
-            asset_home_domain: source_domain,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            asset_id: b"xor".to_vec(),
-            amount: 5,
-            sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-            recipient: vec![0x22; 20],
-            route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            route_id: iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
-                .as_bytes()
-                .to_vec(),
-        })
     }
     fn bridge_proof_fixture(seed: u8) -> iroha_data_model::bridge::BridgeProof {
         iroha_data_model::bridge::BridgeProof {
@@ -2670,63 +2514,6 @@ mod tests {
             asset_id: b"wBTC#btc".to_vec(),
             recipient: b"alice@main".to_vec(),
         }
-    }
-    fn sccp_bridge_proof_fixture(
-        _nonce: u64,
-        proof_seed: u8,
-    ) -> iroha_data_model::bridge::BridgeProof {
-        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        iroha_data_model::bridge::BridgeProof {
-            range: iroha_data_model::bridge::BridgeProofRange {
-                start_height: fixture.request.public_inputs.finality_height,
-                // Vary only the outer wrapper. Scheduler derivation must stay
-                // conservative without inspecting either nested artifact.
-                end_height: fixture
-                    .request
-                    .public_inputs
-                    .finality_height
-                    .saturating_add(u64::from(proof_seed)),
-            },
-            payload: iroha_data_model::bridge::BridgeProofPayload::SccpDestination(
-                fixture.bridge_proof,
-            ),
-        }
-    }
-    fn native_sccp_bridge_proof_fixture() -> (
-        iroha_data_model::bridge::BridgeProof,
-        iroha_data_model::bridge::SccpLaneIdV1,
-        [u8; 32],
-        AccessKey,
-    ) {
-        let (native, identity, anchor) = iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
-        let validated =
-            iroha_sccp::verify_sccp_native_inbound_message_proof_v1(&native, &identity, anchor)
-                .expect("native access fixture must validate");
-        let backend = native.source.proof.backend();
-        let encoded = iroha_sccp::encode_sccp_native_inbound_message_proof_v1(&native)
-            .expect("native access fixture must encode");
-        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-            iroha_data_model::bridge::SccpRouteActivationV1::Staged,
-        );
-        let route_configuration_hash = route
-            .route_configuration_hash()
-            .expect("exact native access route configuration");
-        let proof = iroha_data_model::bridge::BridgeProof {
-            range: iroha_data_model::bridge::BridgeProofRange {
-                start_height: validated.source_finality.height,
-                end_height: validated.source_finality.height,
-            },
-            payload: iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(
-                iroha_data_model::bridge::BridgeNativeProtocolProofV1 {
-                    backend,
-                    route_configuration_hash,
-                    encoded_envelope: encoded,
-                },
-            ),
-        };
-        let key = key_sccp_native_bridge_message(validated.lane, validated.message_id);
-        (proof, validated.lane, validated.message_id, key)
     }
     fn test_contract_artifact(
         code: Vec<u8>,
@@ -3856,241 +3643,6 @@ seiyaku DynamicAccessCounter {
         assert_eq!(set.write_keys, [format!("tx.sequence:{authority}")].into());
     }
     #[test]
-    fn record_sccp_message_access_uses_outbound_message_key() {
-        let payload =
-            sccp_transfer_payload(1, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
-        let instruction = InstructionBox::from(crate::bridge::test_record_sccp_message(
-            canonical_test_sccp_payload_bytes(&payload),
-        ));
-        let mut visited_triggers = BTreeSet::new();
-        let set = derive_from_instruction(
-            &instruction,
-            None::<&crate::state::StateView<'_>>,
-            &mut visited_triggers,
-            0,
-            0,
-        );
-        let expected =
-            key_sccp_outbound_message(&crate::bridge::test_sccp_outbound_message_key(&payload));
-        assert_eq!(
-            set.read_keys,
-            BTreeSet::from([
-                NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned(),
-                SCCP_ON_CHAIN_REGISTRY_KEY.to_owned(),
-            ])
-        );
-        assert_eq!(set.write_keys, BTreeSet::from([expected]));
-    }
-    #[test]
-    fn ton_outbound_message_access_conflicts_with_same_route_breaker_observation_only() {
-        use iroha_data_model::bridge::{
-            SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpRouteKeyV1,
-            SccpSparseMerkleWitnessV1, SccpTonAddressV1,
-        };
-        use iroha_data_model::isi::bridge::{RecordSccpMessage, SubmitSccpTonBreakerObservationV1};
-
-        let mut payload = sccp_transfer_payload(
-            19,
-            iroha_sccp::SCCP_DOMAIN_SORA,
-            iroha_sccp::SCCP_DOMAIN_TON,
-        );
-        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
-        transfer.recipient_codec = iroha_sccp::SCCP_CODEC_TON_ACCOUNT36;
-        transfer.recipient = iroha_sccp::canonical_sccp_ton_account36_bytes_v1(SccpTonAddressV1 {
-            workchain: 0,
-            account: [0xA6; 32],
-        })
-        .expect("canonical TON account")
-        .to_vec();
-        transfer.route_id = iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1
-            .as_bytes()
-            .to_vec();
-        let route_revision = transfer.route_revision;
-        let context = SccpOutboundMessageContextV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::SoraTaira,
-                target: SccpNetworkV1::TonMainnet,
-            },
-            [0x31; 32],
-            [0x41; 32],
-        )
-        .expect("TON outbound context");
-        let outbound = InstructionBox::from(RecordSccpMessage::new(
-            context,
-            canonical_test_sccp_payload_bytes(&payload),
-            SccpSparseMerkleWitnessV1::empty_shard(),
-        ));
-        let route_key = SccpRouteKeyV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::TonMainnet,
-                target: SccpNetworkV1::SoraTaira,
-            },
-            iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
-            "xor".to_owned(),
-            route_revision,
-        )
-        .expect("TON route key");
-        let submit = InstructionBox::from(SubmitSccpTonBreakerObservationV1::new(
-            route_key.clone(),
-            [0; 32],
-            vec![0xAA],
-        ));
-        let derive = |instruction| {
-            derive_from_instruction(
-                instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut BTreeSet::new(),
-                0,
-                0,
-            )
-        };
-        let outbound_access = derive(&outbound);
-        let submit_access = derive(&submit);
-        let same_route_key = key_sccp_ton_breaker_observation(&route_key);
-        assert!(outbound_access.read_keys.contains(&same_route_key));
-        assert!(submit_access.write_keys.contains(&same_route_key));
-        assert!(
-            submit_access.write_keys.contains(SCCP_VERIFIER_QUOTA_KEY),
-            "breaker observations reserve the shared block verifier quota"
-        );
-
-        let next_revision = SccpRouteKeyV1::new(
-            route_key.lane_id,
-            route_key.route_id.clone(),
-            route_key.asset_key.clone(),
-            route_key.revision + 1,
-        )
-        .expect("successor TON route key");
-        let next_submit = InstructionBox::from(SubmitSccpTonBreakerObservationV1::new(
-            next_revision.clone(),
-            [0; 32],
-            vec![0xBB],
-        ));
-        let next_submit_access = derive(&next_submit);
-        let next_route_key = key_sccp_ton_breaker_observation(&next_revision);
-        assert_ne!(same_route_key, next_route_key);
-        assert!(!outbound_access.read_keys.contains(&next_route_key));
-        assert!(!next_submit_access.write_keys.contains(&same_route_key));
-        assert!(
-            next_submit_access
-                .write_keys
-                .contains(SCCP_VERIFIER_QUOTA_KEY)
-        );
-    }
-    #[test]
-    fn record_sccp_message_access_separates_networks_but_not_binding_rotations() {
-        use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1};
-        let payload =
-            sccp_transfer_payload(9, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
-        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
-        let ethereum = SccpOutboundMessageContextV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::SoraTaira,
-                target: SccpNetworkV1::EthereumMainnet,
-            },
-            [0x31; 32],
-            [0x41; 32],
-        )
-        .expect("Ethereum context");
-        let bsc = SccpOutboundMessageContextV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::SoraTaira,
-                target: SccpNetworkV1::BscMainnet,
-            },
-            [0x32; 32],
-            [0x42; 32],
-        )
-        .expect("BSC context");
-        let rotated = SccpOutboundMessageContextV1::new(
-            ethereum.lane,
-            [0x33; 32],
-            ethereum.route_configuration_hash,
-        )
-        .expect("rotated Ethereum binding");
-        let access_for = |context| {
-            let instruction =
-                InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
-                    context,
-                    payload_bytes.clone(),
-                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-                ));
-            let mut visited_triggers = BTreeSet::new();
-            derive_from_instruction(
-                &instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut visited_triggers,
-                0,
-                0,
-            )
-        };
-        let ethereum_access = access_for(ethereum);
-        let bsc_access = access_for(bsc);
-        let rotated_access = access_for(rotated);
-        assert_ne!(
-            ethereum_access.write_keys, bsc_access.write_keys,
-            "admitted external networks must not alias one scheduler key"
-        );
-        assert_eq!(
-            ethereum_access.write_keys, rotated_access.write_keys,
-            "binding rotation must not create a replay-distinct scheduler key"
-        );
-    }
-    #[test]
-    fn record_sccp_message_access_serializes_canonical_payload_only() {
-        let payload =
-            sccp_transfer_payload(3, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
-        let canonical_payload = canonical_test_sccp_payload_bytes(&payload);
-        let binary =
-            InstructionBox::from(crate::bridge::test_record_sccp_message(canonical_payload));
-        let expected =
-            key_sccp_outbound_message(&crate::bridge::test_sccp_outbound_message_key(&payload));
-        let mut visited_triggers = BTreeSet::new();
-        let set = derive_from_instruction(
-            &binary,
-            None::<&crate::state::StateView<'_>>,
-            &mut visited_triggers,
-            0,
-            0,
-        );
-        assert_eq!(
-            set.read_keys,
-            BTreeSet::from([
-                NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned(),
-                SCCP_ON_CHAIN_REGISTRY_KEY.to_owned(),
-            ])
-        );
-        assert_eq!(set.write_keys, BTreeSet::from([expected]));
-    }
-    #[test]
-    fn record_sccp_message_access_serializes_invalid_or_non_sora_payloads() {
-        let invalid = InstructionBox::from(crate::bridge::test_record_sccp_message(vec![0xFF]));
-        let inbound_payload =
-            sccp_transfer_payload(2, iroha_sccp::SCCP_DOMAIN_ETH, iroha_sccp::SCCP_DOMAIN_SORA);
-        let inbound = InstructionBox::from(crate::bridge::test_record_sccp_message(
-            canonical_test_sccp_payload_bytes(&inbound_payload),
-        ));
-        let hex_alias_payload =
-            sccp_transfer_payload(4, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
-        let hex_alias = InstructionBox::from(crate::bridge::test_record_sccp_message(
-            format!(
-                "0x{}",
-                hex::encode(canonical_test_sccp_payload_bytes(&hex_alias_payload))
-            )
-            .into_bytes(),
-        ));
-        for instruction in [&invalid, &inbound, &hex_alias] {
-            let mut visited_triggers = BTreeSet::new();
-            let set = derive_from_instruction(
-                instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut visited_triggers,
-                0,
-                0,
-            );
-            assert_eq!(set, AccessSet::global());
-        }
-    }
-    #[test]
     fn submit_bridge_proof_access_uses_canonical_proof_hash() {
         let proof = bridge_proof_fixture(5);
         let expected_hash = bridge_proof_hash(&proof).expect("fixture proof should encode");
@@ -4108,7 +3660,6 @@ seiyaku DynamicAccessCounter {
         assert_eq!(
             set.write_keys,
             BTreeSet::from([
-                SCCP_VERIFIER_QUOTA_KEY.to_owned(),
                 key_bridge_proof_hash(&expected_hash),
                 key_bridge_backend(&bridge_proof_fixture(5).backend_label())
             ])
@@ -4149,216 +3700,6 @@ seiyaku DynamicAccessCounter {
                 .contains(NEXUS_ACTIVE_LANE_CATALOG_KEY)
         );
         assert!(receipt_set.write_keys.contains(&expected_key));
-    }
-    #[test]
-    fn submit_sccp_bridge_proof_access_is_global_and_performs_zero_crypto() {
-        let first_proof = sccp_bridge_proof_fixture(7, 1);
-        let second_proof = sccp_bridge_proof_fixture(7, 2);
-        assert_ne!(
-            bridge_proof_hash(&first_proof),
-            bridge_proof_hash(&second_proof)
-        );
-        iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
-        reset_bridge_proof_hash_attempts();
-        for proof in [first_proof, second_proof] {
-            let instruction =
-                InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
-            let mut visited_triggers = BTreeSet::new();
-            let set = derive_from_instruction(
-                &instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut visited_triggers,
-                0,
-                0,
-            );
-            assert_eq!(set, AccessSet::global());
-        }
-        assert_eq!(
-            iroha_sccp::sccp_destination_proof_work_counters_v1(),
-            iroha_sccp::SccpDestinationProofWorkCountersV1::default(),
-        );
-        assert_eq!(bridge_proof_hash_attempts(), 0);
-    }
-    #[test]
-    fn submit_sccp_bridge_proof_access_routes_malformed_artifacts_globally_without_work() {
-        let valid_proof = sccp_bridge_proof_fixture(8, 1);
-        iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
-        reset_bridge_proof_hash_attempts();
-        for (index, mut proof) in [valid_proof.clone(), valid_proof].into_iter().enumerate() {
-            let iroha_data_model::bridge::BridgeProofPayload::SccpDestination(destination) =
-                &mut proof.payload
-            else {
-                panic!("SCCP fixture must use the closed destination variant");
-            };
-            if index == 0 {
-                destination.encoded_artifact = vec![0xFF];
-            } else {
-                destination.backend =
-                    iroha_data_model::bridge::BridgeSccpDestinationProofBackendV1::TronGroth16Bn254;
-            }
-            let instruction =
-                InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
-            let mut visited_triggers = BTreeSet::new();
-            let set = derive_from_instruction(
-                &instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut visited_triggers,
-                0,
-                0,
-            );
-            assert_eq!(set, AccessSet::global());
-        }
-        assert_eq!(
-            iroha_sccp::sccp_destination_proof_work_counters_v1(),
-            iroha_sccp::SccpDestinationProofWorkCountersV1::default(),
-        );
-        assert_eq!(bridge_proof_hash_attempts(), 0);
-    }
-    #[test]
-    fn submit_native_sccp_proof_access_uses_exact_lane_and_message_id() {
-        let (proof, lane, message_id, expected_key) = native_sccp_bridge_proof_fixture();
-        let instruction = InstructionBox::from(
-            iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone())
-                .with_replay_witness(
-                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-                ),
-        );
-        let mut visited_triggers = BTreeSet::new();
-        let set = derive_from_instruction(
-            &instruction,
-            None::<&crate::state::StateView<'_>>,
-            &mut visited_triggers,
-            0,
-            0,
-        );
-        assert_eq!(
-            expected_key,
-            format!(
-                "sccp.bridge.native:{}:{}:{}",
-                lane.source.profile_key(),
-                lane.target.profile_key(),
-                hex::encode(message_id)
-            )
-        );
-        assert!(set.write_keys.contains(&expected_key));
-        assert!(
-            set.write_keys.contains(SCCP_VERIFIER_QUOTA_KEY),
-            "native SCCP proofs must serialize on the shared block verifier quota"
-        );
-        assert!(set.write_keys.contains(&key_bridge_proof_hash(
-            &bridge_proof_hash(&proof).expect("native proof hash")
-        )));
-        assert!(
-            set.write_keys
-                .contains(&key_bridge_backend(&proof.backend_label()))
-        );
-    }
-    #[test]
-    fn exact_native_and_ton_breaker_proofs_share_only_verifier_quota_key() {
-        use iroha_data_model::{
-            bridge::{SccpLaneIdV1, SccpNetworkV1, SccpRouteKeyV1},
-            isi::bridge::{SubmitBridgeProof, SubmitSccpTonBreakerObservationV1},
-        };
-
-        let (native_proof, _, _, native_message_key) = native_sccp_bridge_proof_fixture();
-        let native =
-            InstructionBox::from(SubmitBridgeProof::new(native_proof).with_replay_witness(
-                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-            ));
-        let ton_route = SccpRouteKeyV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::TonMainnet,
-                target: SccpNetworkV1::SoraTaira,
-            },
-            iroha_sccp::SCCP_TAIRA_TON_XOR_ROUTE_ID_V1.to_owned(),
-            "xor".to_owned(),
-            9,
-        )
-        .expect("well-formed TON route key");
-        let ton = InstructionBox::from(SubmitSccpTonBreakerObservationV1::new(
-            ton_route.clone(),
-            [0; 32],
-            vec![0xA5],
-        ));
-        let derive = |instruction| {
-            derive_from_instruction(
-                instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut BTreeSet::new(),
-                0,
-                0,
-            )
-        };
-        let native_access = derive(&native);
-        let ton_access = derive(&ton);
-        let ton_observation_key = key_sccp_ton_breaker_observation(&ton_route);
-
-        assert!(native_access.write_keys.contains(&native_message_key));
-        assert!(ton_access.write_keys.contains(&ton_observation_key));
-        assert_ne!(native_message_key, ton_observation_key);
-        let shared_writes = native_access
-            .write_keys
-            .intersection(&ton_access.write_keys)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            shared_writes,
-            BTreeSet::from([SCCP_VERIFIER_QUOTA_KEY.to_owned()]),
-            "all exact-key proof families must serialize solely through the shared block quota fence"
-        );
-    }
-    #[test]
-    fn submit_native_sccp_access_serializes_alternate_wrappers_but_not_other_lanes() {
-        let (proof, lane, message_id, expected_key) = native_sccp_bridge_proof_fixture();
-        let mut alternate = proof.clone();
-        alternate.range.start_height = alternate.range.start_height.saturating_add(1);
-        alternate.range.end_height = alternate.range.end_height.saturating_add(1);
-        for proof in [proof, alternate] {
-            let instruction = InstructionBox::from(
-                iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).with_replay_witness(
-                    iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-                ),
-            );
-            let mut visited_triggers = BTreeSet::new();
-            let set = derive_from_instruction(
-                &instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut visited_triggers,
-                0,
-                0,
-            );
-            assert!(set.write_keys.contains(&expected_key));
-        }
-        let other_lane = iroha_data_model::bridge::SccpLaneIdV1 {
-            source: iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
-            target: lane.target,
-        };
-        let other_key = key_sccp_native_bridge_message(other_lane, message_id);
-        assert_ne!(expected_key, other_key);
-    }
-    #[test]
-    fn submit_malformed_native_sccp_proof_access_is_global() {
-        let (mut proof, _, _, _) = native_sccp_bridge_proof_fixture();
-        let iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(native) =
-            &mut proof.payload
-        else {
-            panic!("native fixture payload")
-        };
-        native.encoded_envelope.push(0x00);
-        let instruction = InstructionBox::from(
-            iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).with_replay_witness(
-                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-            ),
-        );
-        let mut visited_triggers = BTreeSet::new();
-        let set = derive_from_instruction(
-            &instruction,
-            None::<&crate::state::StateView<'_>>,
-            &mut visited_triggers,
-            0,
-            0,
-        );
-        assert_eq!(set, AccessSet::global());
     }
     #[test]
     fn register_access_includes_domain_reads() {

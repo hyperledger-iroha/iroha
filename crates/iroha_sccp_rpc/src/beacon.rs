@@ -171,7 +171,9 @@ impl BeaconClient {
             ));
         }
         let response = self.transport.get_binary(
-            &format!("/eth/v1/beacon/light_client/updates?start_period={start_period}&count={count}"),
+            &format!(
+                "/eth/v1/beacon/light_client/updates?start_period={start_period}&count={count}"
+            ),
             MEDIA_TYPE_SSZ,
         )?;
         let chunks = split_response_chunks(&response.body)?;
@@ -403,7 +405,10 @@ mod tests {
             assert!(parse_fork_name(bad).is_err(), "{bad}");
         }
         assert_eq!(parse_decimal_u64("0", "x").expect("zero"), 0);
-        assert_eq!(parse_decimal_u64("15301120", "x").expect("slot"), 15_301_120);
+        assert_eq!(
+            parse_decimal_u64("15301120", "x").expect("slot"),
+            15_301_120
+        );
         for bad in ["", "01", "+1", "-1", "1.0", "0x10", "18446744073709551616"] {
             assert!(parse_decimal_u64(bad, "x").is_err(), "{bad}");
         }
@@ -436,11 +441,11 @@ mod tests {
         assert_eq!(header.signature, [2; 96]);
         assert_eq!(header.execution_optimistic, Some(false));
         assert_eq!(header.finalized, None);
-        let bad_slot = norito::json::parse_value(&text.replace(r#""slot":"7""#, r#""slot":7"#))
-            .expect("json");
+        let bad_slot =
+            norito::json::parse_value(&text.replace(r#""slot":"7""#, r#""slot":7"#)).expect("json");
         assert!(parse_header_response(&bad_slot).is_err());
-        let short_root = norito::json::parse_value(&text.replacen(&"01".repeat(32), "01", 1))
-            .expect("json");
+        let short_root =
+            norito::json::parse_value(&text.replacen(&"01".repeat(32), "01", 1)).expect("json");
         assert!(parse_header_response(&short_root).is_err());
     }
 }

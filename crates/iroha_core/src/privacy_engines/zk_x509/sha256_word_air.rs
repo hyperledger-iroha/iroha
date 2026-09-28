@@ -18,12 +18,14 @@ use super::air::{U32RangeAirRowV1, ZkX509AirErrorV1};
 use super::io_air::{
     ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
 };
+use super::private_table::PrivateTableV1;
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 /// Manifest descriptor for the resource-bounded local SHA-256 chip.
 pub(crate) const ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-word-air-v1-incompatible:u32-range-row=packed-plus32bits:sigma-degree3:choose-degree2:majority-degree3:add-up-to5-plus-u32-constant:carry-3bits:local-rows-per-block=1728:local-initial-rows=8:word-copy=four-independent-transcript-challenged-address-value-write-grand-products:sorted-address-step-0-or1:exactly-one-write-per-address:read-value-equals-write:memory-rows-per-block=2136:memory-fixed-rows=16:fixed-canonical-topology:physical-segment-offset-and-copy-product-continuations:shared-sha-call-bus-binding-required";
 /// Native rows in each verifier-fixed SHA batch segment.
@@ -216,10 +218,21 @@ pub(crate) fn derive_sha256_word_memory_challenges_v1(
         }),
     })
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WordMemoryTraceV1 {
     pub(crate) execution: Vec<WordMemoryAccessV1>,
     pub(crate) sorted: Vec<WordMemoryAccessV1>,
+}
+impl core::fmt::Debug for WordMemoryTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("WordMemoryTraceV1 { private_words: [REDACTED] }")
+    }
+}
+impl Drop for WordMemoryTraceV1 {
+    fn drop(&mut self) {
+        zeroize_word_accesses_v1(&mut self.execution);
+        zeroize_word_accesses_v1(&mut self.sorted);
+    }
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -411,7 +424,7 @@ impl From<ZkX509AirErrorV1> for ZkX509Sha256WordAirErrorV1 {
     }
 }
 /// Complete local word-oriented SHA-256 witness.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509Sha256WordCircuitV1 {
     words: Vec<U32RangeAirRowV1>,
     input_words: Vec<WordIdV1>,
@@ -420,6 +433,20 @@ pub(crate) struct ZkX509Sha256WordCircuitV1 {
     memory: WordMemoryTraceV1,
     message_len: usize,
     digest: [u8; 32],
+}
+impl core::fmt::Debug for ZkX509Sha256WordCircuitV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509Sha256WordCircuitV1 { private_witness: [REDACTED] }")
+    }
+}
+impl Drop for ZkX509Sha256WordCircuitV1 {
+    fn drop(&mut self) {
+        zeroize_word_rows_v1(&mut self.words);
+        zeroize_word_operations_v1(&mut self.operations);
+        self.digest.zeroize();
+        self.message_len.zeroize();
+        // The memory field has its own clearing Drop, including cloned owners.
+    }
 }
 impl ZkX509Sha256WordCircuitV1 {
     /// Constrained SHA-256 digest.
@@ -492,7 +519,7 @@ impl ZkX509Sha256WordCircuitV1 {
         let message = padded
             .get(..self.message_len)
             .ok_or(ZkX509Sha256WordAirErrorV1::Topology)?;
-        if sha256_padding_v1(message)? != padded {
+        if sha256_padding_v1(message)?.as_slice() != padded.as_slice() {
             return Err(ZkX509Sha256WordAirErrorV1::Topology);
         }
         let canonical = build_sha256_word_circuit_unchecked_v1(message)?;
@@ -624,7 +651,7 @@ impl ZkX509Sha256WordCircuitV1 {
     }
     fn validate_memory_shape(&self) -> Result<(), ZkX509Sha256WordAirErrorV1> {
         let expected = word_memory_execution_v1(&self.words, &self.operations, &self.output_words)?;
-        if self.memory.execution != expected {
+        if self.memory.execution.as_slice() != expected.as_slice() {
             return Err(ZkX509Sha256WordAirErrorV1::WordMemory);
         }
         validate_sorted_word_memory_v1(&self.memory.sorted, self.words.len())
@@ -712,11 +739,11 @@ impl ZkX509Sha256WordCircuitV1 {
         }
         Ok(())
     }
-    fn input_bytes(&self) -> Result<Vec<u8>, ZkX509Sha256WordAirErrorV1> {
+    fn input_bytes(&self) -> Result<Zeroizing<Vec<u8>>, ZkX509Sha256WordAirErrorV1> {
         if self.input_words.is_empty() || self.input_words.len() % 16 != 0 {
             return Err(ZkX509Sha256WordAirErrorV1::Topology);
         }
-        let mut bytes = Vec::new();
+        let mut bytes = Zeroizing::new(Vec::new());
         bytes
             .try_reserve_exact(self.input_words.len().saturating_mul(4))
             .map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
@@ -828,13 +855,46 @@ struct WordBuilderV1 {
     input_words: Vec<WordIdV1>,
     operations: Vec<WordOperationV1>,
 }
+impl Drop for WordBuilderV1 {
+    fn drop(&mut self) {
+        zeroize_word_rows_v1(&mut self.words);
+        zeroize_word_operations_v1(&mut self.operations);
+    }
+}
 impl WordBuilderV1 {
-    fn new() -> Self {
-        Self {
+    fn new(blocks: usize) -> Result<Self, ZkX509Sha256WordAirErrorV1> {
+        // Every block has 16 input definitions, 48 three-operation schedule
+        // expansions, 64 eight-operation rounds and 8 final additions. Reserve
+        // the exact topology before private writes so Vec never reallocates
+        // private decompositions or carries while constructing a valid circuit.
+        let operations = blocks
+            .checked_mul(664)
+            .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+        let inputs = blocks
+            .checked_mul(16)
+            .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+        let words = operations
+            .checked_add(inputs)
+            .and_then(|n| n.checked_add(8))
+            .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+        let mut builder = Self {
             words: Vec::new(),
             input_words: Vec::new(),
             operations: Vec::new(),
-        }
+        };
+        builder
+            .words
+            .try_reserve_exact(words)
+            .map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+        builder
+            .input_words
+            .try_reserve_exact(inputs)
+            .map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+        builder
+            .operations
+            .try_reserve_exact(operations)
+            .map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+        Ok(builder)
     }
     fn allocate(&mut self, value: u32) -> WordIdV1 {
         let id = WordIdV1(self.words.len());
@@ -957,7 +1017,7 @@ fn build_sha256_word_circuit_unchecked_v1(
     message: &[u8],
 ) -> Result<ZkX509Sha256WordCircuitV1, ZkX509Sha256WordAirErrorV1> {
     let padded = sha256_padding_v1(message)?;
-    let mut builder = WordBuilderV1::new();
+    let mut builder = WordBuilderV1::new(padded.len() / 64)?;
     let mut state = SHA256_INITIAL_STATE_V1.map(|word| builder.allocate(word));
     for block in padded.chunks_exact(64) {
         let mut schedule = Vec::with_capacity(64);
@@ -1002,9 +1062,9 @@ fn build_sha256_word_circuit_unchecked_v1(
     let digest = digest_from_words_v1(&builder.words, &state)?;
     let memory = build_word_memory_trace_v1(&builder.words, &builder.operations, &state)?;
     Ok(ZkX509Sha256WordCircuitV1 {
-        words: builder.words,
-        input_words: builder.input_words,
-        operations: builder.operations,
+        words: core::mem::take(&mut builder.words),
+        input_words: core::mem::take(&mut builder.input_words),
+        operations: core::mem::take(&mut builder.operations),
         output_words: state,
         memory,
         message_len: message.len(),
@@ -1017,8 +1077,11 @@ fn build_word_memory_trace_v1(
     output_words: &[WordIdV1; 8],
 ) -> Result<WordMemoryTraceV1, ZkX509Sha256WordAirErrorV1> {
     let execution = word_memory_execution_v1(words, operations, output_words)?;
-    let mut sorted = execution.clone();
-    sorted.sort_by_key(|access| {
+    let mut sorted = PrivateTableV1::new(execution.to_vec(), zeroize_word_accesses_v1);
+    // Each address is an immutable word: all read ties have exactly the same
+    // complete tuple, so unstable in-place sorting preserves canonical bytes
+    // without allocating an uncleared stable-sort copy of private events.
+    sorted.sort_unstable_by_key(|access| {
         (
             access.address.0,
             if access.is_write == F::ONE {
@@ -1029,13 +1092,16 @@ fn build_word_memory_trace_v1(
         )
     });
     validate_sorted_word_memory_v1(&sorted, words.len())?;
-    Ok(WordMemoryTraceV1 { execution, sorted })
+    Ok(WordMemoryTraceV1 {
+        execution: execution.into_vec(),
+        sorted: sorted.into_vec(),
+    })
 }
 fn word_memory_execution_v1(
     words: &[U32RangeAirRowV1],
     operations: &[WordOperationV1],
     output_words: &[WordIdV1; 8],
-) -> Result<Vec<WordMemoryAccessV1>, ZkX509Sha256WordAirErrorV1> {
+) -> Result<PrivateTableV1<WordMemoryAccessV1>, ZkX509Sha256WordAirErrorV1> {
     let read_count = operations
         .iter()
         .try_fold(0_usize, |count, operation| {
@@ -1051,7 +1117,7 @@ fn word_memory_execution_v1(
         .len()
         .checked_add(read_count)
         .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
-    let mut accesses = Vec::new();
+    let mut accesses = PrivateTableV1::new(Vec::new(), zeroize_word_accesses_v1);
     accesses
         .try_reserve_exact(capacity)
         .map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
@@ -1338,13 +1404,13 @@ fn sha256_padded_len_v1(message_len: usize) -> Result<usize, ZkX509Sha256WordAir
         .and_then(|length| length.checked_add(8))
         .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)
 }
-fn sha256_padding_v1(message: &[u8]) -> Result<Vec<u8>, ZkX509Sha256WordAirErrorV1> {
+fn sha256_padding_v1(message: &[u8]) -> Result<Zeroizing<Vec<u8>>, ZkX509Sha256WordAirErrorV1> {
     let bit_length = u64::try_from(message.len())
         .ok()
         .and_then(|length| length.checked_mul(8))
         .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
     let padded_len = sha256_padded_len_v1(message.len())?;
-    let mut padded = Vec::new();
+    let mut padded = Zeroizing::new(Vec::new());
     padded
         .try_reserve_exact(padded_len)
         .map_err(|_| ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
@@ -1353,6 +1419,37 @@ fn sha256_padding_v1(message: &[u8]) -> Result<Vec<u8>, ZkX509Sha256WordAirError
     padded.resize(padded_len - 8, 0);
     padded.extend_from_slice(&bit_length.to_be_bytes());
     Ok(padded)
+}
+
+fn zeroize_word_rows_v1(words: &mut [U32RangeAirRowV1]) {
+    for word in words {
+        word.value.zeroize_v1();
+        for bit in &mut word.bits {
+            bit.zeroize_v1();
+        }
+    }
+}
+
+fn zeroize_word_operations_v1(operations: &mut [WordOperationV1]) {
+    for operation in operations {
+        if let WordOperationV1::Add {
+            carry, carry_bits, ..
+        } = operation
+        {
+            carry.zeroize();
+            for bit in carry_bits {
+                bit.zeroize_v1();
+            }
+        }
+    }
+}
+
+fn zeroize_word_accesses_v1(accesses: &mut [WordMemoryAccessV1]) {
+    for access in accesses {
+        access.address.zeroize_v1();
+        access.value.zeroize_v1();
+        access.is_write.zeroize_v1();
+    }
 }
 #[cfg(test)]
 mod tests {

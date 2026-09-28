@@ -30,8 +30,6 @@ mod privacy_exact12_zk_ams_vega_network;
 #[cfg(feature = "privacy-release-evidence")]
 #[path = "privacy_exact12_zk_x509_network.rs"]
 mod privacy_exact12_zk_x509_network;
-#[path = "sccp_route_governance.rs"]
-mod sccp_route_governance;
 #[cfg(feature = "zk-stark")]
 #[path = "zk_ace_localnet.rs"]
 mod zk_ace_localnet;

@@ -1916,596 +1916,6 @@ fn configure_axt_fixture_lane_catalog(state: &mut State, lane_catalog: LaneCatal
     }
     world.commit();
 }
-fn sccp_evm_lane_for_testing(
-    network: iroha_data_model::bridge::SccpNetworkV1,
-) -> SccpGovernedLaneV1 {
-    let_row! { route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1( network, iroha_data_model::bridge::SccpRouteActivationV1::Staged, ) };
-    SccpGovernedLaneV1 {
-        lane_id: route.lane_id,
-        native_trust_anchors: Vec::new(),
-        current_native_trust_anchor_hash: None,
-        routes: vec![route],
-    }
-}
-fn eth_test_lane_for_testing() -> SccpGovernedLaneV1 {
-    sccp_evm_lane_for_testing(iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet)
-}
-fn bsc_test_lane_for_testing() -> SccpGovernedLaneV1 {
-    sccp_evm_lane_for_testing(iroha_data_model::bridge::SccpNetworkV1::BscMainnet)
-}
-fn sccp_lane_with_cap_seed_for_testing(
-    network: iroha_data_model::bridge::SccpNetworkV1,
-    seed: u8,
-) -> SccpGovernedLaneV1 {
-    let mut lane = sccp_evm_lane_for_testing(network);
-    let revision = {
-        let route = &mut lane.routes[0];
-        route.settlement.max_outstanding_liability = route
-            .settlement
-            .max_outstanding_liability
-            .checked_add(u128::from(seed))
-            .expect("seeded SCCP liability cap fits u128");
-        let iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) =
-            &mut route.destination
-        else {
-            panic!("EVM lane fixture has an EVM destination deployment")
-        };
-        deployment.max_wrapped_supply = route
-            .settlement
-            .max_outstanding_liability
-            .checked_mul(u128::from(deployment.taira_to_token_multiplier))
-            .expect("seeded SCCP wrapped-supply cap fits u128");
-        route.revision
-    };
-    set_sccp_route_revision_for_testing(&mut lane.routes[0], revision);
-    lane.validate()
-        .expect("mutated liability-cap fixture remains valid");
-    lane
-}
-fn set_sccp_route_revision_for_testing(
-    route: &mut iroha_data_model::bridge::SccpGovernedRouteV1,
-    revision: u32,
-) {
-    route.revision = revision;
-    let_row! { route_configuration_hash = route .destination .route_configuration_hash( route.lane_id, &route.route_id, &route.asset_key, route.revision, route.settlement.payload_amount_scale, ) .expect("valid exact SCCP route revision fixture") };
-    match &mut route.source_identity.emitter {
-        iroha_data_model::bridge::SccpSourceEmitterV1::Evm(emitter) => {
-            emitter.route_config_hash = route_configuration_hash;
-        }
-        iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_) => {
-            unreachable!("state helper constructs EVM routes")
-        }
-        iroha_data_model::bridge::SccpSourceEmitterV1::Ton(_) => {
-            unreachable!("state helper constructs EVM routes")
-        }
-    }
-    route.validate().expect("rebound SCCP revision is valid");
-}
-fn install_sccp_registry_for_transaction(
-    transaction: &mut StateTransaction<'_, '_>,
-    wire: SccpOnChainRegistryV1,
-) {
-    let_row! { validated = ValidatedSccpRegistryV1::try_from_wire(wire).expect("valid SCCP registry fixture") };
-    *transaction.world.sccp_registry.get_mut() = validated.to_wire();
-    transaction.sccp_registry = validated;
-}
-pub(crate) fn ton_breaker_hydration_fixture_for_testing() -> (
-    Arc<ValidatedSccpRegistryV1>,
-    iroha_data_model::bridge::SccpRouteKeyV1,
-    iroha_data_model::bridge::SccpTonBreakerObservationRecordV1,
-) {
-    use iroha_data_model::bridge::{
-        BridgeNativeProofBackendV1, SCCP_TON_MAINNET_GLOBAL_ID_V1, SCCP_TON_MASTERCHAIN_SHARD_V1,
-        SCCP_TON_MASTERCHAIN_WORKCHAIN_V1, SCCP_V1_TON_STORAGE_VERSION,
-        SccpDestinationDeploymentV1, SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1,
-        SccpRouteActivationV1, SccpTonAccountStateReadbackV1, SccpTonBlockIdExtV1,
-        SccpTonBreakerObservationRecordV1, SccpTonBridgePendingReadbackV1,
-        SccpTonDeploymentReadbackV1, SccpTonFinalizedMasterchainBlockV1,
-        SccpTonMasterStorageReadbackV1, SccpTonReplayForestReadbackV1,
-        SccpTonRouteStorageReadbackV1, canonical_sccp_lane_id_bytes_v1, sccp_lane_id_hash_v1,
-    };
-
-    let route = iroha_sccp::sccp_exact_ton_governed_route_test_fixture_v1(
-        SccpNetworkV1::TonMainnet,
-        SccpRouteActivationV1::Staged,
-    );
-    let route_key = route.key();
-    let SccpDestinationDeploymentV1::Ton(deployment) = route.destination else {
-        unreachable!("the exact TON fixture must contain a TON deployment")
-    };
-    let source_lane = route.lane_id;
-    let destination_lane = SccpLaneIdV1 {
-        source: SccpNetworkV1::SoraTaira,
-        target: SccpNetworkV1::TonMainnet,
-    };
-    let route_configuration_hash = route
-        .route_configuration_hash()
-        .expect("exact TON fixture has a route configuration hash");
-    let destination_binding_hash = route
-        .destination_binding_hash()
-        .expect("exact TON fixture has a destination binding hash");
-    let semantic_proof_profile_hash = deployment
-        .outbound_proof_policy
-        .semantic_profile_hash()
-        .expect("exact TON fixture has a semantic profile hash");
-    let sora_finality_anchor_hash = deployment
-        .outbound_proof_policy
-        .sora_finality_anchor_hash()
-        .expect("exact TON fixture has a finality anchor hash");
-    let bridge_config_cell_hash = [0xb1; 32];
-    let verifying_key_cell_hash = [0xb2; 32];
-    let master_metadata_hash = [0xb3; 32];
-    let masterchain_seqno = 41;
-    let masterchain_gen_utime = 1_700_000_000;
-    let authenticated_anchor = SccpNativeTrustAnchorV1 {
-        backend: BridgeNativeProofBackendV1::TonMasterchain,
-        anchor_hash: [0xce; 32],
-        checkpoint_height: 40,
-    };
-    let shard_block = SccpTonBlockIdExtV1 {
-        workchain: 0,
-        shard: 0x8000_0000_0000_0000,
-        seqno: 39,
-        root_hash: [0xc1; 32],
-        file_hash: [0xc2; 32],
-    };
-    let empty_replay = SccpTonReplayForestReadbackV1 {
-        root_hash: None,
-        leaf_count: 0,
-        update_sequence: 0,
-    };
-    let mut record = SccpTonBreakerObservationRecordV1 {
-        route_key: route_key.clone(),
-        authenticated_native_anchor_hash: authenticated_anchor.anchor_hash,
-        masterchain: SccpTonFinalizedMasterchainBlockV1 {
-            block_id: SccpTonBlockIdExtV1 {
-                workchain: SCCP_TON_MASTERCHAIN_WORKCHAIN_V1,
-                shard: SCCP_TON_MASTERCHAIN_SHARD_V1,
-                seqno: masterchain_seqno,
-                root_hash: [0xc3; 32],
-                file_hash: [0xc4; 32],
-            },
-            gen_utime: masterchain_gen_utime,
-        },
-        route_account: SccpTonAccountStateReadbackV1 {
-            address: deployment.route_address,
-            shard_block,
-            registered_masterchain_seqno: masterchain_seqno,
-            shard_state_hash: [0xc5; 32],
-            account_state_hash: [0xc6; 32],
-            code_hash: deployment.route_code_hash,
-            data_hash: [0xc7; 32],
-            last_transaction_hash: [0xd7; 32],
-            last_transaction_lt: 42,
-            storage_last_transaction_lt: 43,
-        },
-        jetton_master_account: SccpTonAccountStateReadbackV1 {
-            address: deployment.jetton_master_address,
-            shard_block: SccpTonBlockIdExtV1 {
-                root_hash: [0xc8; 32],
-                file_hash: [0xc9; 32],
-                ..shard_block
-            },
-            registered_masterchain_seqno: masterchain_seqno,
-            shard_state_hash: [0xca; 32],
-            account_state_hash: [0xcb; 32],
-            code_hash: deployment.jetton_master_code_hash,
-            data_hash: [0xcc; 32],
-            last_transaction_hash: [0xdc; 32],
-            last_transaction_lt: 42,
-            storage_last_transaction_lt: 43,
-        },
-        deployment: SccpTonDeploymentReadbackV1 {
-            jetton_master_address: deployment.jetton_master_address,
-            route_address: deployment.route_address,
-            expected_global_id: SCCP_TON_MAINNET_GLOBAL_ID_V1,
-            route_revision: route.revision,
-            taira_to_ton_multiplier: deployment.taira_to_token_multiplier,
-            max_wrapped_supply: deployment.max_wrapped_supply,
-            source_lane_bytes: canonical_sccp_lane_id_bytes_v1(source_lane)
-                .expect("TON source lane has canonical bytes"),
-            destination_lane_bytes: canonical_sccp_lane_id_bytes_v1(destination_lane)
-                .expect("TON destination lane has canonical bytes"),
-            source_lane_hash: sccp_lane_id_hash_v1(source_lane)
-                .expect("TON source lane has a canonical hash"),
-            destination_lane_hash: sccp_lane_id_hash_v1(destination_lane)
-                .expect("TON destination lane has a canonical hash"),
-            route_configuration_hash,
-            destination_binding_hash,
-            bridge_config_cell_hash,
-            jetton_master_code_hash: deployment.jetton_master_code_hash,
-            jetton_master_initial_data_hash: deployment.jetton_master_initial_data_hash,
-            jetton_wallet_code_hash: deployment.jetton_wallet_code_hash,
-            route_code_hash: deployment.route_code_hash,
-            route_initial_data_hash: deployment.route_initial_data_hash,
-            embedded_verifier_code_hash: deployment.embedded_verifier_code_hash,
-            verifier_circuit_hash: deployment.verifier_circuit_hash,
-            verifying_key_hash: deployment.verifier_key_hash,
-            verifying_key_cell_hash,
-            proof_profile_commitment: deployment.proof_profile_commitment,
-            semantic_proof_profile_hash,
-            sora_finality_anchor_hash,
-            mint_breaker_guardian_keys: deployment.mint_breaker_guardian_keys,
-            master_metadata_hash,
-        },
-        route_storage: SccpTonRouteStorageReadbackV1 {
-            storage_version: SCCP_V1_TON_STORAGE_VERSION,
-            route_configuration_hash,
-            bridge_config_cell_hash,
-            inbound_mint_replay: empty_replay,
-            outbound_burn_replay: empty_replay,
-            pending: SccpTonBridgePendingReadbackV1 {
-                mint_root_hash: None,
-                burn_root_hash: None,
-                mint_count: 0,
-                burn_count: 0,
-            },
-            minting_disabled: false,
-        },
-        master_storage: SccpTonMasterStorageReadbackV1 {
-            storage_version: SCCP_V1_TON_STORAGE_VERSION,
-            route_configuration_hash,
-            bridge_config_cell_hash,
-            total_supply: 1,
-            metadata_hash: master_metadata_hash,
-            route_address: deployment.route_address,
-            mint_replay: empty_replay,
-            burn_replay: empty_replay,
-            pending_mint_root_hash: None,
-            pending_mint_count: 0,
-            minting_disabled: false,
-        },
-        effective_disabled: false,
-        disabled_latched: false,
-        proof_sha256: [0xcd; 32],
-        proof_size_bytes: 1_024,
-        accepted_at_height: 7,
-        accepted_at_unix_ms: u64::from(masterchain_gen_utime) * 1_000,
-        observation_digest: [0; 32],
-    };
-    record.observation_digest = record.computed_digest();
-    assert!(
-        record.is_well_formed(),
-        "TON hydration fixture is canonical"
-    );
-
-    let registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 {
-        version: 1,
-        lanes: vec![SccpGovernedLaneV1 {
-            lane_id: route.lane_id,
-            native_trust_anchors: vec![authenticated_anchor],
-            current_native_trust_anchor_hash: Some(authenticated_anchor.anchor_hash),
-            routes: vec![route],
-        }],
-    })
-    .expect("exact staged TON registry fixture is valid");
-    (registry, route_key, record)
-}
-fn world_with_ton_breaker_observation_for_testing(
-    registry: &ValidatedSccpRegistryV1,
-    map_key: iroha_data_model::bridge::SccpRouteKeyV1,
-    record: iroha_data_model::bridge::SccpTonBreakerObservationRecordV1,
-) -> World {
-    let mut world = World::default();
-    world.sccp_registry = Cell::new(registry.to_wire());
-    world.sccp_ton_breaker_observations.insert(map_key, record);
-    world
-}
-state_test! { sync sccp_ton_breaker_observation_hydration_accepts_canonical_record
-    let (registry, route_key, record) = ton_breaker_hydration_fixture_for_testing();
-    let world = world_with_ton_breaker_observation_for_testing(
-        registry.as_ref(),
-        route_key,
-        record,
-    );
-    validate_sccp_ton_breaker_observations_v1(&world.view(), registry.as_ref(), 7)
-        .expect("a self-consistent TON observation bound to retained governance must hydrate");
-}
-state_test! { sync sccp_ton_breaker_observation_hydration_rejects_corruption_and_governance_drift
-    let (registry, route_key, record) = ton_breaker_hydration_fixture_for_testing();
-    let assert_rejected = |
-        registry: &ValidatedSccpRegistryV1,
-        map_key: iroha_data_model::bridge::SccpRouteKeyV1,
-        record: iroha_data_model::bridge::SccpTonBreakerObservationRecordV1,
-        committed_height: usize,
-        expected: &str,
-    | {
-        let world = world_with_ton_breaker_observation_for_testing(registry, map_key, record);
-        let error = validate_sccp_ton_breaker_observations_v1(
-            &world.view(),
-            registry,
-            committed_height,
-        )
-        .expect_err("hostile TON breaker state must fail hydration");
-        assert!(
-            error.contains(expected),
-            "unexpected TON breaker hydration error: {error}"
-        );
-    };
-
-    let mut wrong_map_key = route_key.clone();
-    wrong_map_key.revision = wrong_map_key
-        .revision
-        .checked_add(1)
-        .expect("fixture revision leaves room for a mismatched key");
-    assert_rejected(
-        registry.as_ref(),
-        wrong_map_key,
-        record.clone(),
-        7,
-        "not self-consistent",
-    );
-
-    let mut bad_digest = record.clone();
-    bad_digest.observation_digest[0] ^= 1;
-    assert_rejected(
-        registry.as_ref(),
-        route_key.clone(),
-        bad_digest,
-        7,
-        "not self-consistent",
-    );
-
-    let mut anchor_field_mutation = record.clone();
-    anchor_field_mutation.authenticated_native_anchor_hash[0] ^= 1;
-    assert_rejected(
-        registry.as_ref(),
-        route_key.clone(),
-        anchor_field_mutation,
-        7,
-        "not self-consistent",
-    );
-
-    let mut zero_anchor = record.clone();
-    zero_anchor.authenticated_native_anchor_hash = [0; 32];
-    zero_anchor.observation_digest = zero_anchor.computed_digest();
-    assert_rejected(
-        registry.as_ref(),
-        route_key.clone(),
-        zero_anchor,
-        7,
-        "not self-consistent",
-    );
-
-    let mut unknown_anchor = record.clone();
-    unknown_anchor.authenticated_native_anchor_hash = [0xd0; 32];
-    unknown_anchor.observation_digest = unknown_anchor.computed_digest();
-    assert!(unknown_anchor.is_well_formed());
-    assert_rejected(
-        registry.as_ref(),
-        route_key.clone(),
-        unknown_anchor,
-        7,
-        "no exact retained authenticated native anchor",
-    );
-
-    let mut future_height = record.clone();
-    future_height.accepted_at_height = 8;
-    future_height.observation_digest = future_height.computed_digest();
-    assert!(future_height.is_well_formed());
-    assert_rejected(
-        registry.as_ref(),
-        route_key.clone(),
-        future_height,
-        7,
-        "accepted above committed height",
-    );
-
-    let empty_registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1::default())
-        .expect("empty SCCP registry is canonical");
-    assert_rejected(
-        empty_registry.as_ref(),
-        route_key.clone(),
-        record.clone(),
-        7,
-        "has no retained governed lane",
-    );
-
-    let mut anchorless_wire = registry.to_wire();
-    let anchorless_lane = anchorless_wire
-        .lanes
-        .iter_mut()
-        .find(|lane| lane.lane_id == route_key.lane_id)
-        .expect("TON fixture lane");
-    anchorless_lane.native_trust_anchors.clear();
-    anchorless_lane.current_native_trust_anchor_hash = None;
-    let anchorless_registry = ValidatedSccpRegistryV1::try_from_wire(anchorless_wire)
-        .expect("staged TON route may remain anchorless");
-    assert_rejected(
-        anchorless_registry.as_ref(),
-        route_key.clone(),
-        record.clone(),
-        7,
-        "no exact retained authenticated native anchor",
-    );
-
-    let mut rotated_wire = registry.to_wire();
-    let rotated_lane = rotated_wire
-        .lanes
-        .iter_mut()
-        .find(|lane| lane.lane_id == route_key.lane_id)
-        .expect("TON fixture lane");
-    let successor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
-        backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::TonMasterchain,
-        anchor_hash: [0xcf; 32],
-        checkpoint_height: 42,
-    };
-    rotated_lane.native_trust_anchors.push(successor);
-    rotated_lane.current_native_trust_anchor_hash = Some(successor.anchor_hash);
-    let rotated_registry = ValidatedSccpRegistryV1::try_from_wire(rotated_wire)
-        .expect("append-only TON anchor rotation is canonical");
-    let rotated_world = world_with_ton_breaker_observation_for_testing(
-        rotated_registry.as_ref(),
-        route_key.clone(),
-        record.clone(),
-    );
-    validate_sccp_ton_breaker_observations_v1(
-        &rotated_world.view(),
-        rotated_registry.as_ref(),
-        7,
-    )
-    .expect("rotation must retain observations authenticated by an earlier exact anchor");
-    let mut relabeled_after_rotation = record.clone();
-    relabeled_after_rotation.authenticated_native_anchor_hash = successor.anchor_hash;
-    relabeled_after_rotation.observation_digest = relabeled_after_rotation.computed_digest();
-    assert_rejected(
-        rotated_registry.as_ref(),
-        route_key.clone(),
-        relabeled_after_rotation,
-        7,
-        "outside its authenticated anchor continuation bound",
-    );
-
-    let mut collision_wire = registry.to_wire();
-    let ton_lane = collision_wire
-        .lanes
-        .iter_mut()
-        .find(|lane| lane.lane_id == route_key.lane_id)
-        .expect("TON fixture lane");
-    let replacement_ton_anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
-        backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::TonMasterchain,
-        anchor_hash: [0xcf; 32],
-        checkpoint_height: 40,
-    };
-    ton_lane.native_trust_anchors = vec![replacement_ton_anchor];
-    ton_lane.current_native_trust_anchor_hash = Some(replacement_ton_anchor.anchor_hash);
-    let ethereum_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-        iroha_data_model::bridge::SccpRouteActivationV1::Staged,
-    );
-    let colliding_anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
-        backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::EthereumBeacon,
-        anchor_hash: record.authenticated_native_anchor_hash,
-        checkpoint_height: 40,
-    };
-    collision_wire.lanes.push(SccpGovernedLaneV1 {
-        lane_id: ethereum_route.lane_id,
-        native_trust_anchors: vec![colliding_anchor],
-        current_native_trust_anchor_hash: Some(colliding_anchor.anchor_hash),
-        routes: vec![ethereum_route],
-    });
-    let collision_registry = ValidatedSccpRegistryV1::try_from_wire(collision_wire)
-        .expect("anchor hashes are scoped by exact lane and verifier family");
-    assert_rejected(
-        collision_registry.as_ref(),
-        route_key.clone(),
-        record.clone(),
-        7,
-        "no exact retained authenticated native anchor",
-    );
-
-    let mut missing_anchor_field =
-        norito::json::to_value(&record).expect("serialize canonical TON observation");
-    missing_anchor_field
-        .as_object_mut()
-        .expect("TON observation JSON object")
-        .remove("authenticated_native_anchor_hash")
-        .expect("mandatory authenticated anchor field");
-    assert!(
-        norito::json::from_value::<
-            iroha_data_model::bridge::SccpTonBreakerObservationRecordV1,
-        >(missing_anchor_field)
-        .is_err(),
-        "the authenticated native anchor has no optional/default JSON form"
-    );
-
-    for (label, mut hostile) in [
-        ("master initial data", record.clone()),
-        ("route initial data", record.clone()),
-        ("master address", record.clone()),
-        ("route address", record.clone()),
-        ("master code", record.clone()),
-        ("route code", record.clone()),
-    ] {
-        match label {
-            "master initial data" => {
-                hostile.deployment.jetton_master_initial_data_hash = [0xd1; 32];
-            }
-            "route initial data" => {
-                hostile.deployment.route_initial_data_hash = [0xd2; 32];
-            }
-            "master address" => {
-                let substituted = iroha_data_model::bridge::SccpTonAddressV1 {
-                    workchain: 0,
-                    account: [0xd3; 32],
-                };
-                hostile.deployment.jetton_master_address = substituted;
-                hostile.jetton_master_account.address = substituted;
-            }
-            "route address" => {
-                let substituted = iroha_data_model::bridge::SccpTonAddressV1 {
-                    workchain: 0,
-                    account: [0xd4; 32],
-                };
-                hostile.deployment.route_address = substituted;
-                hostile.route_account.address = substituted;
-                hostile.master_storage.route_address = substituted;
-            }
-            "master code" => {
-                hostile.deployment.jetton_master_code_hash = [0xd5; 32];
-                hostile.jetton_master_account.code_hash = [0xd5; 32];
-            }
-            "route code" => {
-                hostile.deployment.route_code_hash = [0xd6; 32];
-                hostile.route_account.code_hash = [0xd6; 32];
-            }
-            _ => unreachable!("closed mutation inventory"),
-        }
-        hostile.observation_digest = hostile.computed_digest();
-        assert!(
-            hostile.is_well_formed(),
-            "{label} mutation must remain internally canonical"
-        );
-        assert_rejected(
-            registry.as_ref(),
-            route_key.clone(),
-            hostile,
-            7,
-            "differs from its governed deployment",
-        );
-    }
-}
-state_test! { sync sccp_ton_breaker_observation_hydration_enforces_anchor_continuation_bounds
-    let (registry, route_key, record) = ton_breaker_hydration_fixture_for_testing();
-    let case = |anchor_height: u64, masterchain_seqno: u32| {
-        let mut wire = registry.to_wire();
-        let lane = wire
-            .lanes
-            .iter_mut()
-            .find(|lane| lane.lane_id == route_key.lane_id)
-            .expect("TON fixture lane");
-        lane.native_trust_anchors[0].checkpoint_height = anchor_height;
-        let registry = ValidatedSccpRegistryV1::try_from_wire(wire)
-            .expect("fixture anchor height is structurally canonical");
-        let mut record = record.clone();
-        record.masterchain.block_id.seqno = masterchain_seqno;
-        record.route_account.registered_masterchain_seqno = masterchain_seqno;
-        record.jetton_master_account.registered_masterchain_seqno = masterchain_seqno;
-        record.observation_digest = record.computed_digest();
-        assert!(record.is_well_formed());
-        let world = world_with_ton_breaker_observation_for_testing(
-            registry.as_ref(),
-            route_key.clone(),
-            record,
-        );
-        validate_sccp_ton_breaker_observations_v1(&world.view(), registry.as_ref(), 7)
-    };
-
-    case(40, 41).expect("one-block continuation is admitted");
-    case(40, 104).expect("64-block continuation is admitted");
-    for (label, anchor_height, masterchain_seqno) in [
-        ("zero", 41, 41),
-        ("sixty-five", 40, 105),
-        ("underflow", 42, 41),
-    ] {
-        let error = case(anchor_height, masterchain_seqno)
-            .expect_err("out-of-range anchor continuation must fail hydration");
-        assert!(
-            error.contains("outside its authenticated anchor continuation bound"),
-            "{label} continuation produced unexpected error: {error}"
-        );
-    }
-}
 fn axt_proof_blob_for_remote_spend(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -7099,159 +6509,6 @@ state_test! { sync pipeline_snapshot_reflects_latest_pipeline_config
         updated.query_stored_min_gas_units
     );
 }
-state_test! { sync set_zk_is_independent_from_and_preserves_committed_sccp_registry
-    let mut state = blank_test_state();
-    let lane = eth_test_lane_for_testing();
-    let key = lane.routes[0].key();
-    let_row! { committed_registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![lane], }) .expect("staged exact route registry") };
-    state.set_sccp_registry_for_testing(Arc::clone(&committed_registry));
-    let before = state.sccp_registry_snapshot();
-    let mut zk = state.zk_snapshot();
-    zk.max_public_inputs = zk.max_public_inputs.saturating_add(1);
-    state
-        .set_zk(zk)
-        .expect("empty SCCP outbox accepts updated ZK configuration");
-    let after = state.sccp_registry_snapshot();
-    assert!(Arc::ptr_eq(&before, &after));
-    assert_eq!(after.route(&key).map(|route| route.key()), Some(key));
-    let_row! { empty_registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1::default()) .expect("empty registry") };
-    state.set_sccp_registry_for_testing(empty_registry);
-    assert!(state.sccp_registry_snapshot().lanes().is_empty());
-}
-state_test! { sync sccp_registry_hash_commits_settlement_lifecycle_and_native_anchor_fields
-    let baseline_lane = eth_test_lane_for_testing();
-    let_row! { baseline = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![baseline_lane.clone()], }) .expect("baseline exact registry") };
-    let mut lifecycle = baseline_lane.clone();
-    lifecycle.routes[0].activation = iroha_data_model::bridge::SccpRouteActivationV1::Paused;
-    let mut anchored = baseline_lane;
-    let_row! { anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 { backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::EthereumBeacon, anchor_hash: [0xA5; 32], checkpoint_height: 17, } };
-    anchored.native_trust_anchors = vec![anchor];
-    anchored.current_native_trust_anchor_hash = Some(anchor.anchor_hash);
-    let_row! { mutations = [ sccp_lane_with_cap_seed_for_testing( iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet, 0x6A, ), lifecycle, anchored, ] };
-    let mut policy_hashes = BTreeSet::from([baseline.policy_hash()]);
-    let mut revisions = BTreeSet::from([baseline.registry_digest()]);
-    for lane in mutations {
-        let_row! { changed = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![lane], }) .expect("valid governed-field mutation") };
-        assert_ne!(changed.policy_hash(), baseline.policy_hash());
-        assert_ne!(changed.registry_digest(), baseline.registry_digest());
-        assert!(policy_hashes.insert(changed.policy_hash()));
-        assert!(revisions.insert(changed.registry_digest()));
-    }
-}
-state_test! { sync sccp_registry_transaction_discard_and_block_revert_are_atomic
-    let state = blank_test_state();
-    let_row! { registry = |seed| SccpOnChainRegistryV1 { version: 1, lanes: vec![sccp_lane_with_cap_seed_for_testing( iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet, seed, )], } };
-    let_row! { committed_cap = || { state.sccp_registry_snapshot().lanes()[0].routes[0] .settlement .max_outstanding_liability } };
-    let signed1 = empty_signed_block_after(None, 1);
-    store_block_for_state_commit(&state.kura, &signed1);
-    let mut block1 = state.block(signed1.header());
-    {
-        let mut transaction = block1.transaction();
-        install_sccp_registry_for_transaction(&mut transaction, registry(0x6A));
-        transaction.apply();
-    }
-    apply_empty_test_block_metadata(&state, &mut block1, &signed1);
-    block1.commit().expect("commit exact registry A");
-    let cap_a = committed_cap();
-    let signed2 = empty_signed_block_after(Some(&signed1), 2);
-    store_block_for_state_commit(&state.kura, &signed2);
-    let mut discarded_block = state.block(signed2.header());
-    {
-        let mut discarded = discarded_block.transaction();
-        install_sccp_registry_for_transaction(&mut discarded, registry(0x6B));
-    }
-    apply_empty_test_block_metadata(&state, &mut discarded_block, &signed2);
-    discarded_block
-        .commit()
-        .expect("commit block after discarded transaction");
-    assert_eq!(committed_cap(), cap_a);
-    let signed3 = empty_signed_block_after(Some(&signed2), 3);
-    store_block_for_state_commit(&state.kura, &signed3);
-    let mut block3 = state.block(signed3.header());
-    {
-        let mut transaction = block3.transaction();
-        install_sccp_registry_for_transaction(&mut transaction, registry(0x6C));
-        transaction.apply();
-    }
-    apply_empty_test_block_metadata(&state, &mut block3, &signed3);
-    block3.commit().expect("commit exact registry B");
-    assert_ne!(committed_cap(), cap_a);
-    let replacement = empty_signed_block_after(Some(&signed2), 4);
-    let mut replacement_block = state.block_and_revert(replacement.header());
-    state.kura.replace_top_block(Arc::new(replacement.clone()))
-        .expect("persist canonical replacement after reverting registry B");
-    apply_empty_test_block_metadata(&state, &mut replacement_block, &replacement);
-    replacement_block
-        .commit()
-        .expect("commit canonical replacement after reverting registry B");
-    assert_eq!(committed_cap(), cap_a);
-}
-#[test]
-fn executor_reconciliation_strips_retired_sccp_parameter_and_preserves_typed_registry() {
-    let_row! { registry = SccpOnChainRegistryV1 { version: 1, lanes: vec![eth_test_lane_for_testing()], } };
-    let_row! { validated = ValidatedSccpRegistryV1::try_from_wire(registry).expect("exact registry fixture") };
-    let expected_revision = validated.revision();
-    let_row! { retired_id = CustomParameterId::new(Name::from_str(RETIRED_SCCP_REGISTRY_PARAMETER_ID).unwrap()) };
-    let_row! { retired_parameter = iroha_data_model::parameter::CustomParameter::new( retired_id.clone(), Json::new("attacker-controlled-retired-registry"), ) };
-    let_row! { executor_model = |value: Option<&str>| { let mut model = ExecutorDataModel::default(); if let Some(value) = value { model.parameters.insert( retired_id.clone(), iroha_data_model::parameter::CustomParameter::new( retired_id.clone(), Json::new(value), ), ); } model } };
-    let state = blank_test_state();
-    state.set_sccp_registry_for_testing(validated);
-    {
-        let mut parameters = state.world.parameters.block();
-        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
-            retired_parameter,
-        ));
-        parameters.commit();
-    }
-    let signed = empty_signed_block_after(None, 1);
-    let mut block = state.block(signed.header());
-    {
-        let mut transaction = block.transaction();
-        transaction
-            .world
-            .apply_executor_data_model(executor_model(Some("executor-add")));
-        transaction
-            .world
-            .apply_executor_data_model(executor_model(Some("executor-replace")));
-        transaction
-            .world
-            .apply_executor_data_model(executor_model(None));
-        assert!(
-            transaction
-                .world
-                .parameters
-                .get()
-                .custom()
-                .get(&retired_id)
-                .is_none()
-        );
-        assert!(
-            transaction
-                .world
-                .executor_data_model
-                .get()
-                .parameters()
-                .get(&retired_id)
-                .is_none()
-        );
-        transaction.apply();
-    }
-    apply_empty_test_block_metadata(&state, &mut block, &signed);
-    block
-        .commit()
-        .expect("commit sanitized executor reconciliation");
-    assert_eq!(state.sccp_registry_snapshot().revision(), expected_revision);
-    assert!(
-        state
-            .world
-            .parameters
-            .view()
-            .get()
-            .custom()
-            .get(&retired_id)
-            .is_none()
-    );
-}
 #[test]
 fn executor_reconciliation_cannot_replace_signed_npos_parameters() {
     let installed = SumeragiNposParameters {
@@ -7333,73 +6590,6 @@ state_test! { sync executor_data_model_reconciliation_purges_undeclared_permissi
         &data_model,
         "the permission purge and model update must be one stateful operation",
     );
-}
-state_test! { sync canonical_sccp_registry_snapshot_decodes_once_for_reversed_lane_registration
-    let state = blank_test_state();
-    let mut presentation_order = vec![eth_test_lane_for_testing(), bsc_test_lane_for_testing()];
-    presentation_order.sort_by_key(|lane| lane.lane_id);
-    presentation_order.reverse();
-    let_row! { noncanonical = SccpOnChainRegistryV1 { version: 1, lanes: presentation_order, } };
-    let_row! { validated = ValidatedSccpRegistryV1::try_from_wire(noncanonical.clone()) .expect("reverse registration order is semantically valid") };
-    assert_ne!(
-        validated.registry(),
-        &noncanonical,
-        "fixture must exercise canonicalization"
-    );
-    let payload = validated.to_wire();
-    {
-        let mut _generation_notice = state.state_view_publication();
-        let _generation = _generation_notice.begin();
-        let mut registry = state.world.sccp_registry.block();
-        *registry.get_mut() = payload;
-        registry.commit();
-    }
-    SCCP_REGISTRY_DECODE_COUNT.store(0, Ordering::Relaxed);
-    let snapshot = state.sccp_registry_snapshot();
-    assert_eq!(snapshot.lanes().len(), 2);
-    assert!(snapshot.lanes().iter().all(|lane| lane.routes.len() == 1));
-    let decode_count = SCCP_REGISTRY_DECODE_COUNT.load(Ordering::Relaxed);
-    assert_eq!(decode_count, 1);
-    for _ in 0..1_000 {
-        let repeated = state.sccp_registry_snapshot();
-        assert!(Arc::ptr_eq(&snapshot, &repeated));
-    }
-    assert_eq!(
-        SCCP_REGISTRY_DECODE_COUNT.load(Ordering::Relaxed),
-        decode_count
-    );
-}
-state_test! { sync snapshots_blocks_and_transactions_share_one_sccp_registry_arc
-    let state = blank_test_state();
-    let first = state.sccp_registry_snapshot();
-    for _ in 0..1_000 {
-        let snapshot = state.sccp_registry_snapshot();
-        assert!(Arc::ptr_eq(&first, &snapshot));
-    }
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
-    assert!(Arc::ptr_eq(&first, &block.sccp_registry));
-    let transaction = block.transaction();
-    assert!(Arc::ptr_eq(&first, &transaction.sccp_registry));
-}
-state_test! { sync sccp_registry_snapshot_fails_stop_on_impossible_invalid_consensus_material
-    let state = blank_test_state();
-    let lane = bsc_test_lane_for_testing();
-    let_row! { invalid = [ SccpOnChainRegistryV1 { version: 2, lanes: Vec::new(), }, SccpOnChainRegistryV1 { version: 1, lanes: vec![lane.clone(), lane], }, ] };
-    for wire in invalid {
-        {
-            let mut _generation_notice = state.state_view_publication();
-            let _generation = _generation_notice.begin();
-            let mut registry = state.world.sccp_registry.block();
-            *registry.get_mut() = wire;
-            registry.commit();
-        }
-        let_row! { failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { let _ = state.sccp_registry_snapshot(); })) };
-        assert!(
-            failure.is_err(),
-            "invalid consensus registry must never be converted into an empty live registry"
-        );
-    }
 }
 state_test! { sync content_snapshot_reflects_latest_content_config
     let mut state = blank_test_state();
@@ -36595,7 +35785,7 @@ state_test! { sync compute_confidential_digest_uses_config_defaults
     let state = State::new(World::default(), kura, query);
     let view = state.view();
     let height = u64::try_from(view.height()).expect("height fits into u64");
-    let_row! { digest = compute_confidential_feature_digest( view.world(), &view.zk, view.sccp_registry.as_ref(), height, ) };
+    let_row! { digest = compute_confidential_feature_digest( view.world(), &view.zk, height, ) };
     assert_eq!(digest.vk_set_hash, None);
     assert_eq!(digest.poseidon_params_id, view.zk.poseidon_params_id);
     assert_eq!(digest.pedersen_params_id, view.zk.pedersen_params_id);
@@ -36607,16 +35797,16 @@ state_test! { sync compute_confidential_digest_uses_config_defaults
         digest.zk_policy_hash,
         Some(combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&view.zk),
-            view.sccp_registry.policy_hash(),
+            sccp_policy_hash_v1(),
         ))
     );
 }
-state_test! { sync default_genesis_confidential_policy_hash_uses_default_zk_and_empty_sccp
+state_test! { sync default_genesis_confidential_policy_hash_uses_default_zk_and_sccp_v1_policy
     assert_eq!(
         default_genesis_confidential_policy_hash(),
         combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&default_zk_config()),
-            ValidatedSccpRegistryV1::empty().policy_hash(),
+            sccp_policy_hash_v1(),
         )
     );
     assert_eq!(
@@ -36627,15 +35817,13 @@ state_test! { sync default_genesis_confidential_policy_hash_uses_default_zk_and_
 state_test! { sync pure_zk_and_sccp_policy_hashes_are_independent_and_domain_separated
     let base = default_zk_config();
     let mut configured = base.clone();
-    let empty = ValidatedSccpRegistryV1::empty();
-    let_row! { governed = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![bsc_test_lane_for_testing()], }) .expect("governed BSC registry") };
     assert_eq!(
         compute_genesis_confidential_policy_hash(&base),
         combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&base),
-            empty.policy_hash(),
+            sccp_policy_hash_v1(),
         ),
-        "genesis policy must bind the canonical empty governed SCCP registry"
+        "genesis policy must bind the fixed SCCP v1 policy input"
     );
     assert_ne!(
         compute_genesis_confidential_policy_hash(&base),
@@ -36645,18 +35833,15 @@ state_test! { sync pure_zk_and_sccp_policy_hashes_are_independent_and_domain_sep
     assert_eq!(
         compute_genesis_confidential_policy_hash(&base),
         compute_genesis_confidential_policy_hash(&configured),
-        "equal ZK policy plus canonical empty SCCP state must produce equal genesis policy"
+        "equal ZK policy must produce equal genesis policy"
     );
     assert_ne!(
         combine_zk_and_sccp_policy_hashes(
             compute_zk_consensus_policy_hash(&base),
-            empty.policy_hash(),
+            sccp_policy_hash_v1(),
         ),
-        combine_zk_and_sccp_policy_hashes(
-            compute_zk_consensus_policy_hash(&base),
-            governed.policy_hash(),
-        ),
-        "effective policy must bind the governed SCCP registry"
+        combine_zk_and_sccp_policy_hashes(compute_zk_consensus_policy_hash(&base), [0; 32]),
+        "effective policy must bind the SCCP policy input"
     );
     configured.max_public_inputs = configured.max_public_inputs.saturating_add(1);
     assert_ne!(
@@ -36664,6 +35849,17 @@ state_test! { sync pure_zk_and_sccp_policy_hashes_are_independent_and_domain_sep
         compute_genesis_confidential_policy_hash(&configured),
         "ZK consensus configuration must remain bound into genesis"
     );
+}
+state_test! { sync sccp_policy_hash_v1_is_a_fixed_domain_separated_constant
+    let expected: [u8; 32] = {
+        let mut hasher = Sha256::new();
+        zk_policy_put_bytes(&mut hasher, b"iroha:sccp:policy:v1");
+        Sha2Digest::finalize(hasher).into()
+    };
+    assert_eq!(sccp_policy_hash_v1(), expected);
+    assert_eq!(sccp_policy_hash_v1(), sccp_policy_hash_v1());
+    assert_ne!(sccp_policy_hash_v1(), [0; 32]);
+    assert_eq!(blank_state().sccp_policy_hash_snapshot(), sccp_policy_hash_v1());
 }
 state_test! { sync zk_policy_hash_ignores_operator_only_timing_and_workers
     let base = default_zk();
@@ -36707,14 +35903,6 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
             );
         }};
     }
-    assert_field_bound!(
-        max_pending_outbound_messages,
-        core::num::NonZeroU64::new(65_535).expect("65,535 is nonzero")
-    );
-    assert_field_bound!(
-        max_pending_outbound_payload_bytes,
-        core::num::NonZeroU64::new(255 * 1024 * 1024).expect("255 MiB is nonzero")
-    );
     assert_field_bound!(
         max_proofs_per_transaction,
         core::num::NonZeroU32::new(2).expect("two is nonzero")
@@ -36768,22 +35956,6 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
         core::num::NonZeroU32::new(4_021).expect("4,021 is nonzero")
     );
     assert_field_bound!(
-        max_bls_aggregate_checks_per_transaction,
-        core::num::NonZeroU32::new(1_003).expect("1,003 is nonzero")
-    );
-    assert_field_bound!(
-        max_bls_aggregate_checks_per_block,
-        core::num::NonZeroU32::new(4_017).expect("4,017 is nonzero")
-    );
-    assert_field_bound!(
-        max_bls_signer_contributions_per_transaction,
-        core::num::NonZeroU32::new(131_712).expect("131,712 is nonzero")
-    );
-    assert_field_bound!(
-        max_bls_signer_contributions_per_block,
-        core::num::NonZeroU32::new(526_853).expect("526,853 is nonzero")
-    );
-    assert_field_bound!(
         max_ed25519_signature_checks_per_transaction,
         core::num::NonZeroU32::new(65_535).expect("65,535 is nonzero")
     );
@@ -36799,583 +35971,8 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
         max_ed25519_validator_key_checks_per_block,
         core::num::NonZeroU32::new(794_625).expect("794,625 is nonzero")
     );
-    assert_field_bound!(
-        max_bn254_pairing_checks_per_transaction,
-        core::num::NonZeroU32::new(2).expect("two is nonzero")
-    );
-    assert_field_bound!(
-        max_bn254_pairing_checks_per_block,
-        core::num::NonZeroU32::new(5).expect("five is nonzero")
-    );
-    assert_field_bound!(
-        max_bls12_381_pairing_checks_per_transaction,
-        core::num::NonZeroU32::new(2).expect("two is nonzero")
-    );
-    assert_field_bound!(
-        max_bls12_381_pairing_checks_per_block,
-        core::num::NonZeroU32::new(5).expect("five is nonzero")
-    );
-}
-fn set_uniform_sccp_test_limits(
-    limits: &mut iroha_config::parameters::actual::Sccp,
-    transaction: u32,
-    block: u32,
-) {
-    let transaction_count = NonZeroU32::new(transaction).expect("transaction limit is nonzero");
-    let block_count = NonZeroU32::new(block).expect("block limit is nonzero");
-    let_row! { transaction_bytes = NonZeroU64::new(u64::from(transaction)).expect("transaction byte limit is nonzero") };
-    let block_bytes = NonZeroU64::new(u64::from(block)).expect("block byte limit is nonzero");
-    limits.max_proofs_per_transaction = transaction_count;
-    limits.max_proofs_per_block = block_count;
-    limits.max_proof_bytes_per_proof = transaction_bytes;
-    limits.max_proof_bytes_per_transaction = transaction_bytes;
-    limits.max_proof_bytes_per_block = block_bytes;
-    limits.max_native_headers_per_transaction = transaction_count;
-    limits.max_native_headers_per_block = block_count;
-    limits.max_ethereum_light_client_updates_per_transaction = transaction_count;
-    limits.max_ethereum_light_client_updates_per_block = block_count;
-    limits.max_native_header_bytes_per_transaction = transaction_bytes;
-    limits.max_native_header_bytes_per_block = block_bytes;
-    limits.max_secp256k1_recoveries_per_transaction = transaction_count;
-    limits.max_secp256k1_recoveries_per_block = block_count;
-    limits.max_bls_aggregate_checks_per_transaction = transaction_count;
-    limits.max_bls_aggregate_checks_per_block = block_count;
-    limits.max_bls_signer_contributions_per_transaction = transaction_count;
-    limits.max_bls_signer_contributions_per_block = block_count;
-    limits.max_ed25519_signature_checks_per_transaction = transaction_count;
-    limits.max_ed25519_signature_checks_per_block = block_count;
-    limits.max_ed25519_validator_key_checks_per_transaction = transaction_count;
-    limits.max_ed25519_validator_key_checks_per_block = block_count;
-    limits.max_bn254_pairing_checks_per_transaction = transaction_count;
-    limits.max_bn254_pairing_checks_per_block = block_count;
-    limits.max_bls12_381_pairing_checks_per_transaction = transaction_count;
-    limits.max_bls12_381_pairing_checks_per_block = block_count;
-}
-state_test! { sync sccp_verifier_work_accepts_every_exact_boundary_and_charges_before_crypto
-    let state = blank_state();
-    let block = new_dummy_block();
-    let mut state_block = state.block(block.as_ref().header());
-    let_row! { expected = SccpVerifierWorkV1 { proofs: 1, proof_bytes: 1, native_headers: 1, ethereum_light_client_updates: 1, native_header_bytes: 1, secp256k1_recoveries: 1, bls_aggregate_checks: 1, bls_signer_contributions: 1, ed25519_signature_checks: 1, ed25519_validator_key_checks: 1, bn254_pairing_checks: 1, bls12_381_pairing_checks: 1, } };
-    {
-        let mut transaction = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut transaction.zk.sccp, 1, 1);
-        transaction
-            .preflight_sccp_proof(1)
-            .expect("exact proof count and bytes pass preflight");
-        assert!(transaction.sccp_verifier_work_in_tx.is_zero());
-        assert!(transaction.sccp_verifier_work_after_block.is_zero());
-        transaction
-            .register_sccp_proof(
-                1,
-                SccpVerifierWorkV1 {
-                    proofs: 0,
-                    proof_bytes: 0,
-                    ..expected
-                },
-            )
-            .expect("every exact SCCP transaction and block boundary is accepted");
-        assert_eq!(transaction.sccp_verifier_work_in_tx, expected);
-        assert_eq!(transaction.sccp_verifier_work_after_block, expected);
-        assert_eq!(*transaction.block_sccp_verifier_work, expected);
-        transaction.apply();
-    }
-    assert_eq!(state_block.sccp_verifier_work_in_block, expected);
-}
-state_test! { sync sccp_verifier_work_rejects_every_transaction_limit_without_partial_mutation
-    let state = blank_state();
-    let block = new_dummy_block();
-    let mut state_block = state.block(block.as_ref().header());
-    {
-        let mut transaction = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut transaction.zk.sccp, 100, 100);
-        transaction.zk.sccp.max_proof_bytes_per_proof = NonZeroU64::new(1).unwrap();
-        let_row! { error = transaction .register_sccp_proof(2, SccpVerifierWorkV1::default()) .expect_err("per-proof byte cap must reject one oversized proof") };
-        assert!(format!("{error:?}").contains("max_proof_bytes_per_proof"));
-        assert!(transaction.sccp_verifier_work_in_tx.is_zero());
-        assert!(transaction.sccp_verifier_work_after_block.is_zero());
-    }
-    {
-        let mut transaction = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut transaction.zk.sccp, 100, 100);
-        transaction.zk.sccp.max_proofs_per_transaction = NonZeroU32::new(1).unwrap();
-        transaction
-            .register_sccp_proof(1, SccpVerifierWorkV1::default())
-            .expect("first SCCP proof fits");
-        let before = transaction.sccp_verifier_work_in_tx;
-        let block_before = transaction.sccp_verifier_work_after_block;
-        let_row! { error = transaction .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("second SCCP proof must exceed the transaction count") };
-        assert!(format!("{error:?}").contains("proof count per transaction"));
-        assert_eq!(transaction.sccp_verifier_work_in_tx, before);
-        assert_eq!(transaction.sccp_verifier_work_after_block, block_before);
-        assert_eq!(*transaction.block_sccp_verifier_work, block_before);
-    }
-    {
-        let mut transaction = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut transaction.zk.sccp, 100, 100);
-        transaction.zk.sccp.max_proof_bytes_per_proof = NonZeroU64::new(1).unwrap();
-        transaction.zk.sccp.max_proof_bytes_per_transaction = NonZeroU64::new(1).unwrap();
-        transaction
-            .register_sccp_proof(1, SccpVerifierWorkV1::default())
-            .expect("first SCCP proof byte fits");
-        let before = transaction.sccp_verifier_work_in_tx;
-        let block_before = transaction.sccp_verifier_work_after_block;
-        let_row! { error = transaction .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("aggregate SCCP proof bytes must be bounded per transaction") };
-        assert!(format!("{error:?}").contains("proof bytes per transaction"));
-        assert_eq!(transaction.sccp_verifier_work_in_tx, before);
-        assert_eq!(transaction.sccp_verifier_work_after_block, block_before);
-        assert_eq!(*transaction.block_sccp_verifier_work, block_before);
-    }
-    macro_rules! assert_work_limit {
-        ($field:ident, $limit_field:ident, $label:literal, $nonzero:ident) => {{
-            let mut transaction = state_block.transaction();
-            set_uniform_sccp_test_limits(&mut transaction.zk.sccp, 100, 100);
-            let block_before = transaction.sccp_verifier_work_after_block;
-            transaction.zk.sccp.$limit_field = $nonzero::new(1).unwrap();
-            let_row! { error = transaction .register_sccp_proof( 1, SccpVerifierWorkV1 { $field: 2, ..SccpVerifierWorkV1::default() }, ) .expect_err(concat!("SCCP ", $label, " must be bounded per transaction")) };
-            assert!(
-                format!("{error:?}").contains(concat!($label, " per transaction")),
-                "unexpected SCCP limit error: {error:?}"
-            );
-            assert!(transaction.sccp_verifier_work_in_tx.is_zero());
-            assert_eq!(transaction.sccp_verifier_work_after_block, block_before);
-            assert_eq!(*transaction.block_sccp_verifier_work, block_before);
-        }};
-    }
-    assert_work_limit!(
-        native_headers,
-        max_native_headers_per_transaction,
-        "native headers",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        ethereum_light_client_updates,
-        max_ethereum_light_client_updates_per_transaction,
-        "Ethereum light-client updates",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        native_header_bytes,
-        max_native_header_bytes_per_transaction,
-        "native-header bytes",
-        NonZeroU64
-    );
-    assert_work_limit!(
-        secp256k1_recoveries,
-        max_secp256k1_recoveries_per_transaction,
-        "secp256k1 recoveries",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        bls_aggregate_checks,
-        max_bls_aggregate_checks_per_transaction,
-        "BLS aggregate checks",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        bls_signer_contributions,
-        max_bls_signer_contributions_per_transaction,
-        "BLS signer contributions",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        ed25519_signature_checks,
-        max_ed25519_signature_checks_per_transaction,
-        "Ed25519 signature checks",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        ed25519_validator_key_checks,
-        max_ed25519_validator_key_checks_per_transaction,
-        "Ed25519 validator-key checks",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        bn254_pairing_checks,
-        max_bn254_pairing_checks_per_transaction,
-        "BN254 pairing checks",
-        NonZeroU32
-    );
-    assert_work_limit!(
-        bls12_381_pairing_checks,
-        max_bls12_381_pairing_checks_per_transaction,
-        "BLS12-381 pairing checks",
-        NonZeroU32
-    );
-}
-#[test]
-fn sccp_verifier_work_rejects_every_block_limit_and_rejected_transactions_retain_charge() {
-    let state = blank_state();
-    let block = new_dummy_block();
-    let mut state_block = state.block(block.as_ref().header());
-    {
-        let mut rejected_after_registration = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut rejected_after_registration.zk.sccp, 1, 1);
-        rejected_after_registration
-            .register_sccp_proof(1, SccpVerifierWorkV1::default())
-            .expect("first proof reaches its pre-cryptography reservation");
-    }
-    assert_eq!(
-        state_block.sccp_verifier_work_in_block,
-        SccpVerifierWorkV1 {
-            proofs: 1,
-            proof_bytes: 1,
-            ..SccpVerifierWorkV1::default()
-        },
-        "dropping a rejected transaction must not refund attempted verifier work"
-    );
-    {
-        let mut second = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut second.zk.sccp, 1, 1);
-        let_row! { error = second .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("a second proof must see the rejected transaction's retained charge") };
-        assert!(
-            format!("{error:?}").contains("proof count per block"),
-            "unexpected retained-charge error: {error:?}"
-        );
-    }
-    macro_rules! assert_block_work_limit {
-        ($field:ident, $limit_field:ident, $label:literal, $nonzero:ident) => {{
-            let_row! { delta = SccpVerifierWorkV1 { $field: 1, ..SccpVerifierWorkV1::default() } };
-            {
-                let mut accepted = state_block.transaction();
-                set_uniform_sccp_test_limits(&mut accepted.zk.sccp, 100, 100);
-                accepted.zk.sccp.$limit_field = $nonzero::new(1).unwrap();
-                accepted.register_sccp_proof(1, delta).expect(concat!(
-                    "first block SCCP ",
-                    $label,
-                    " reservation fits"
-                ));
-                accepted.apply();
-            }
-            let block_before = state_block.sccp_verifier_work_in_block;
-            {
-                let mut rejected = state_block.transaction();
-                let_row! { error = rejected.register_sccp_proof(1, delta).expect_err(concat!( "second block SCCP ", $label, " reservation exceeds cap" )) };
-                assert!(
-                    format!("{error:?}").contains(concat!($label, " per block")),
-                    "unexpected SCCP block limit error: {error:?}"
-                );
-                assert_eq!(rejected.sccp_verifier_work_after_block, block_before);
-            }
-            assert_eq!(state_block.sccp_verifier_work_in_block, block_before);
-        }};
-    }
-    assert_block_work_limit!(
-        native_headers,
-        max_native_headers_per_block,
-        "native headers",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        ethereum_light_client_updates,
-        max_ethereum_light_client_updates_per_block,
-        "Ethereum light-client updates",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        native_header_bytes,
-        max_native_header_bytes_per_block,
-        "native-header bytes",
-        NonZeroU64
-    );
-    assert_block_work_limit!(
-        secp256k1_recoveries,
-        max_secp256k1_recoveries_per_block,
-        "secp256k1 recoveries",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        bls_aggregate_checks,
-        max_bls_aggregate_checks_per_block,
-        "BLS aggregate checks",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        bls_signer_contributions,
-        max_bls_signer_contributions_per_block,
-        "BLS signer contributions",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        ed25519_signature_checks,
-        max_ed25519_signature_checks_per_block,
-        "Ed25519 signature checks",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        ed25519_validator_key_checks,
-        max_ed25519_validator_key_checks_per_block,
-        "Ed25519 validator-key checks",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        bn254_pairing_checks,
-        max_bn254_pairing_checks_per_block,
-        "BN254 pairing checks",
-        NonZeroU32
-    );
-    assert_block_work_limit!(
-        bls12_381_pairing_checks,
-        max_bls12_381_pairing_checks_per_block,
-        "BLS12-381 pairing checks",
-        NonZeroU32
-    );
-}
-state_test! { sync sccp_proof_count_and_bytes_are_bounded_across_committed_transactions
-    let state = blank_state();
-    let block = new_dummy_block();
-    let mut state_block = state.block(block.as_ref().header());
-    {
-        let mut accepted = state_block.transaction();
-        set_uniform_sccp_test_limits(&mut accepted.zk.sccp, 1, 2);
-        accepted.zk.sccp.max_proof_bytes_per_block = NonZeroU64::new(1).unwrap();
-        accepted
-            .register_sccp_proof(1, SccpVerifierWorkV1::default())
-            .expect("first proof fits block count and byte caps");
-        accepted.apply();
-    }
-    {
-        let mut rejected = state_block.transaction();
-        let_row! { error = rejected .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("second proof exceeds aggregate block bytes") };
-        assert!(format!("{error:?}").contains("proof bytes per block"));
-    }
-    let_row! { second_state = State::new( World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
-    let second_block = new_dummy_block();
-    let mut second_state_block = second_state.block(second_block.as_ref().header());
-    {
-        let mut accepted = second_state_block.transaction();
-        set_uniform_sccp_test_limits(&mut accepted.zk.sccp, 1, 1);
-        accepted
-            .register_sccp_proof(1, SccpVerifierWorkV1::default())
-            .expect("first proof fits block count cap");
-        accepted.apply();
-    }
-    {
-        let mut rejected = second_state_block.transaction();
-        let_row! { error = rejected .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("second proof exceeds block count") };
-        assert!(format!("{error:?}").contains("proof count per block"));
-    }
-}
-state_test! { sync sccp_verifier_work_rejects_internal_aliases_and_counter_overflow_without_mutation
-    let state = blank_state();
-    let block = new_dummy_block();
-    let mut state_block = state.block(block.as_ref().header());
-    let mut transaction = state_block.transaction();
-    set_uniform_sccp_test_limits(&mut transaction.zk.sccp, u32::MAX, u32::MAX);
-    let_row! { error = transaction .register_sccp_proof( 1, SccpVerifierWorkV1 { proofs: 1, ..SccpVerifierWorkV1::default() }, ) .expect_err("callers cannot alias proof accounting inside work estimates") };
-    assert!(format!("{error:?}").contains("must not supply proof-count"));
-    assert!(transaction.sccp_verifier_work_in_tx.is_zero());
-    transaction.sccp_verifier_work_in_tx.proofs = u64::MAX;
-    let transaction_before = transaction.sccp_verifier_work_in_tx;
-    let block_before = transaction.sccp_verifier_work_after_block;
-    let_row! { error = transaction .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("transaction counter overflow must be rejected") };
-    assert!(format!("{error:?}").contains("transaction work overflow"));
-    assert_eq!(transaction.sccp_verifier_work_in_tx, transaction_before);
-    assert_eq!(transaction.sccp_verifier_work_after_block, block_before);
-    transaction.sccp_verifier_work_in_tx = SccpVerifierWorkV1::default();
-    transaction.block_sccp_verifier_work.proofs = u64::MAX;
-    let transaction_before = transaction.sccp_verifier_work_in_tx;
-    let block_before = *transaction.block_sccp_verifier_work;
-    let mirror_before = transaction.sccp_verifier_work_after_block;
-    let_row! { error = transaction .register_sccp_proof(1, SccpVerifierWorkV1::default()) .expect_err("block counter overflow must be rejected") };
-    assert!(format!("{error:?}").contains("block work overflow"));
-    assert_eq!(transaction.sccp_verifier_work_in_tx, transaction_before);
-    assert_eq!(*transaction.block_sccp_verifier_work, block_before);
-    assert_eq!(transaction.sccp_verifier_work_after_block, mirror_before);
 }
 
-#[test]
-fn sccp_replay_binding_requires_the_exact_governed_route_configuration() {
-    use iroha_data_model::bridge::{
-        SccpLaneIdV1, SccpNetworkV1, SccpReplayAccumulatorIdV1, SccpReplayBoundaryV1,
-        SccpReplayDomainV1, SccpRouteKeyV1,
-    };
-
-    let route_key = SccpRouteKeyV1::new(
-        SccpLaneIdV1 {
-            source: SccpNetworkV1::EthereumMainnet,
-            target: SccpNetworkV1::SoraTaira,
-        },
-        "taira_eth_xor".to_owned(),
-        "xor".to_owned(),
-        7,
-    )
-    .expect("valid replay route key");
-    let domain = SccpReplayDomainV1 {
-        source_network: SccpNetworkV1::SoraTaira,
-        target_network: SccpNetworkV1::EthereumMainnet,
-        boundary: SccpReplayBoundaryV1::SoraOutboundLock,
-        route_revision: 7,
-        route_configuration_hash: [0x44; 32],
-        actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
-    };
-    let accumulator_id =
-        SccpReplayAccumulatorIdV1::from_domain(route_key, &domain).expect("valid replay domain");
-    assert!(sccp_replay_binding_matches_governed_route(
-        &accumulator_id,
-        &domain,
-        SccpReplayBoundaryV1::SoraOutboundLock,
-        Some(domain.route_configuration_hash),
-    ));
-    assert!(!sccp_replay_binding_matches_governed_route(
-        &accumulator_id,
-        &domain,
-        SccpReplayBoundaryV1::SoraOutboundLock,
-        Some([0x45; 32]),
-    ));
-    assert!(!sccp_replay_binding_matches_governed_route(
-        &accumulator_id,
-        &domain,
-        SccpReplayBoundaryV1::SoraOutboundLock,
-        None,
-    ));
-    let mut mismatched_identity = accumulator_id.clone();
-    mismatched_identity.domain_hash[0] ^= 1;
-    assert!(!sccp_replay_binding_matches_governed_route(
-        &mismatched_identity,
-        &domain,
-        SccpReplayBoundaryV1::SoraOutboundLock,
-        Some(domain.route_configuration_hash),
-    ));
-    assert!(!sccp_replay_binding_matches_governed_route(
-        &accumulator_id,
-        &domain,
-        SccpReplayBoundaryV1::SoraInboundRelease,
-        Some(domain.route_configuration_hash),
-    ));
-}
-
-state_test! { sync sccp_registry_revision_is_order_independent_and_tracks_native_authority
-    let bsc_lane = bsc_test_lane_for_testing();
-    let eth_lane = eth_test_lane_for_testing();
-    let_row! { ordered = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![bsc_lane.clone(), eth_lane.clone()], }) .expect("ordered exact registry") };
-    let_row! { reversed = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![eth_lane.clone(), bsc_lane.clone()], }) .expect("reversed exact registry") };
-    assert_eq!(ordered.revision(), reversed.revision());
-    assert_eq!(ordered.canonical_wire(), reversed.canonical_wire());
-    let mut changed_lane = bsc_lane;
-    let_row! { anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 { backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::BscParlia, anchor_hash: [0xEE; 32], checkpoint_height: 91, } };
-    changed_lane.native_trust_anchors = vec![anchor];
-    changed_lane.current_native_trust_anchor_hash = Some(anchor.anchor_hash);
-    let_row! { changed = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![changed_lane, eth_lane], }) .expect("changed exact registry") };
-    assert_ne!(ordered.revision(), changed.revision());
-    assert_ne!(ordered.policy_hash(), changed.policy_hash());
-}
-state_test! { sync sccp_registry_rejects_duplicate_exact_lanes_and_revision_gaps
-    let lane = bsc_test_lane_for_testing();
-    let_row! { error = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![lane.clone(), lane], }) .expect_err("duplicate exact lanes must reject") };
-    assert!(error.contains("duplicate"), "{error}");
-    let mut gap = eth_test_lane_for_testing();
-    let mut revision_three = gap.routes[0].clone();
-    set_sccp_route_revision_for_testing(&mut revision_three, 3);
-    gap.routes.push(revision_three);
-    let_row! { error = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![gap], }) .expect_err("a route lineage revision gap must reject") };
-    assert!(error.contains("revision"), "{error}");
-}
-state_test! { sync sccp_registry_rejects_multiple_enabled_revisions_atomically
-    let mut lane = sccp_evm_lane_for_testing(SccpNetworkV1::EthereumMainnet);
-    let_row! { anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 { backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::EthereumBeacon, anchor_hash: [0xA5; 32], checkpoint_height: 17, } };
-    lane.native_trust_anchors = vec![anchor];
-    lane.current_native_trust_anchor_hash = Some(anchor.anchor_hash);
-    lane.routes[0].activation = iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional;
-    let mut successor = lane.routes[0].clone();
-    set_sccp_route_revision_for_testing(&mut successor, 2);
-    successor.activation = iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional;
-    lane.routes.push(successor);
-    let_row! { error = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![lane], }) .expect_err("two enabled route revisions must reject") };
-    assert!(error.contains("multiple revisions"), "{error}");
-}
-state_test! { sync sccp_registry_local_profile_rejects_foreign_chain_and_alias_chain_ids
-    let_row! { registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![eth_test_lane_for_testing()], }) .expect("Taira exact registry") };
-    for chain_id in [
-        "00000000-0000-0000-0000-000000000001",
-        "sora-taira",
-        // Canonical UUID spelling is lowercase.
-        "FC56984B-2BE7-431D-840E-21514D1883F0",
-        // The pre-v2 Taira chain is archived and cannot host current SCCP state.
-        "809574F5-FEE7-5E69-BFCF-52451E42D50F",
-    ] {
-        let_row! { error = validate_sccp_registry_local_profile( registry.as_ref(), &iroha_model_base::chain::ChainId::from(chain_id), ) .expect_err("foreign or alias chain id must fail closed") };
-        assert!(
-            error.contains("foreign SORA profile")
-                || error.contains("not a canonical public SORA chain id"),
-            "{error}"
-        );
-    }
-    validate_sccp_registry_local_profile(
-        registry.as_ref(),
-        &iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
-    )
-    .expect("canonical Taira chain id accepts the Taira registry");
-}
-state_test! { sync sccp_registry_json_rejects_retired_and_unknown_fields_at_every_depth
-    let_row! { canonical = Json::new(SccpOnChainRegistryV1 { version: 1, lanes: vec![bsc_test_lane_for_testing()], }) };
-    let_row! { cases = [ ("\"native_trust_anchors\":", "route_manifest"), ("\"native_trust_anchors\":", "destination_rollout"), ("\"native_trust_anchors\":", "route_allowlist"), ("\"activation\":", "future_route_authority"), ("\"outbound_proof_policy\":", "browser_prover"), ("\"semantic_profile\":", "unreviewed_circuit"), ] };
-    for (insertion_point, field) in cases {
-        assert!(
-            canonical.get().contains(insertion_point),
-            "fixture JSON missing insertion point {insertion_point}"
-        );
-        let_row! { injected = canonical.get().replacen( insertion_point, &format!("\"{field}\":null,{insertion_point}"), 1, ) };
-        let_row! { error = norito::json::from_str::<SccpOnChainRegistryV1>(&injected) .expect_err("unknown SCCP governance field must reject") };
-        assert!(
-            error.to_string().contains(field) || error.to_string().contains("unknown field"),
-            "{field}: {error}"
-        );
-    }
-}
-state_test! { sync sccp_registry_allows_distinct_admitted_mainnet_profiles
-    let ethereum = eth_test_lane_for_testing();
-    let bsc = bsc_test_lane_for_testing();
-    let_row! { registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![ethereum.clone(), bsc.clone()], }) .expect("distinct admitted mainnet profiles may coexist") };
-    assert!(registry.lane(ethereum.lane_id).is_some());
-    assert!(registry.lane(bsc.lane_id).is_some());
-    assert_ne!(
-        ethereum.routes[0]
-            .destination_binding_hash()
-            .expect("Ethereum binding"),
-        bsc.routes[0]
-            .destination_binding_hash()
-            .expect("BSC binding")
-    );
-}
-state_test! { sync sccp_registry_rejects_mismatched_typed_source_identity
-    let mut lane = bsc_test_lane_for_testing();
-    lane.routes[0].source_identity.lane.source =
-        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet;
-    let_row! { error = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![lane], }) .expect_err("identity for another exact lane must reject") };
-    assert!(error.contains("source"), "{error}");
-}
-state_test! { sync sccp_registry_rejects_missing_zero_and_cross_family_native_anchors
-    use iroha_data_model::bridge::{BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1};
-    let mut inbound_without_anchor = bsc_test_lane_for_testing();
-    inbound_without_anchor.routes[0].activation =
-        iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional;
-    let_row! { error = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 { version: 1, lanes: vec![inbound_without_anchor], }) .expect_err("inbound activation without a native anchor must reject") };
-    assert!(error.contains("inbound"), "{error}");
-    for (backend, anchor_hash, checkpoint_height) in [
-        (BridgeNativeProofBackendV1::BscParlia, [0; 32], 1),
-        (BridgeNativeProofBackendV1::BscParlia, [0xA5; 32], 0),
-        (BridgeNativeProofBackendV1::EthereumBeacon, [0xA5; 32], 1),
-    ] {
-        let mut lane = bsc_test_lane_for_testing();
-        let_row! { anchor = SccpNativeTrustAnchorV1 { backend, anchor_hash, checkpoint_height, } };
-        lane.native_trust_anchors = vec![anchor];
-        lane.current_native_trust_anchor_hash = Some(anchor.anchor_hash);
-        ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 {
-            version: 1,
-            lanes: vec![lane],
-        })
-        .expect_err("zero or cross-family native anchor must reject");
-    }
-    let mut valid = bsc_test_lane_for_testing();
-    let_row! { anchor = SccpNativeTrustAnchorV1 { backend: BridgeNativeProofBackendV1::BscParlia, anchor_hash: [0xA5; 32], checkpoint_height: 1, } };
-    valid.native_trust_anchors = vec![anchor];
-    valid.current_native_trust_anchor_hash = Some(anchor.anchor_hash);
-    ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 {
-        version: 1,
-        lanes: vec![valid],
-    })
-    .expect("family-matched nonzero staged anchor is valid");
-}
 #[cfg(feature = "zk-halo2-ipa")]
 state_test! { sync confidential_digest_reflects_registry_commit
     let kura = Kura::blank_kura_for_testing();
@@ -37400,7 +35997,7 @@ state_test! { sync confidential_digest_reflects_registry_commit
     }
     block1.commit_world_overlay_for_testing().expect("commit bootstrap");
     let view = state.view();
-    let_row! { digest_before = compute_confidential_feature_digest(view.world(), &view.zk, view.sccp_registry.as_ref(), 2) };
+    let_row! { digest_before = compute_confidential_feature_digest(view.world(), &view.zk, 2) };
     drop(view);
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -37416,7 +36013,7 @@ state_test! { sync confidential_digest_reflects_registry_commit
     }
     block2.commit_world_overlay_for_testing().expect("commit verifying key");
     let view = state.view();
-    let_row! { digest_after = compute_confidential_feature_digest(view.world(), &view.zk, view.sccp_registry.as_ref(), 2) };
+    let_row! { digest_after = compute_confidential_feature_digest(view.world(), &view.zk, 2) };
     assert_ne!(digest_before, digest_after);
     assert!(digest_after.vk_set_hash.is_some());
 }
@@ -37430,7 +36027,7 @@ state_test! { sync state_transaction_reports_confidential_digest
     drop(block);
     let view = state.view();
     let height = u64::try_from(view.height()).expect("height fits into u64");
-    let_row! { expected = compute_confidential_feature_digest( view.world(), &view.zk, view.sccp_registry.as_ref(), height, ) };
+    let_row! { expected = compute_confidential_feature_digest( view.world(), &view.zk, height, ) };
     assert_eq!(digest_from_tx, expected);
 }
 state_test! { sync governance_lock_record_rejects_missing_custody_on_wire_and_json
@@ -39439,7 +38036,6 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
             network_id,
             0,
             None,
-            [0xA5; 32],
         )
         .err()
         .expect("a stale signed height must fail the exact Kura binding");
@@ -39455,7 +38051,6 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
             network_id,
             1,
             Some(wrong_tip),
-            [0xA5; 32],
         )
         .err()
         .expect("a forged signed tip must fail the exact Kura binding");
@@ -39464,14 +38059,12 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
         "unexpected manifest tip error: {tip_error}"
     );
 
-    let signed_sccp_policy_hash = [0xC7; 32];
     let restored = seed()
         .into_state_from_emergency_fast_manifest(
             chain_id.clone(),
             network_id,
             1,
             Some(committed_hash),
-            signed_sccp_policy_hash,
         )
         .expect("the exact signed manifest boundary must restore");
     assert_eq!(restored.chain_id, chain_id);
@@ -39480,33 +38073,13 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
     assert_eq!(restored.latest_block_hash_fast(), Some(committed_hash));
     assert_eq!(
         restored.sccp_policy_hash_snapshot(),
-        signed_sccp_policy_hash,
-        "Fast capability matching must use the signed compact policy commitment"
-    );
-    assert_ne!(
-        restored.sccp_registry_snapshot().policy_hash(),
-        signed_sccp_policy_hash,
-        "the compact constructor must not synthesize or decode a registry preimage"
+        sccp_policy_hash_v1(),
+        "Fast restore uses the fixed SCCP v1 policy input"
     );
     assert!(restored.world.accounts.view().iter().next().is_none());
     assert!(
         !restored.nexus_runtime_restored_from_snapshot(),
         "the compact manifest does not authenticate dynamic Nexus runtime state"
-    );
-}
-state_test! { sync sccp_policy_hash_snapshot_uses_validated_registry_in_strict_mode
-    let state = blank_state();
-    let registry = ValidatedSccpRegistryV1::try_from_wire(SccpOnChainRegistryV1 {
-        version: 1,
-        lanes: vec![eth_test_lane_for_testing()],
-    })
-    .expect("valid non-empty SCCP registry fixture");
-    let expected = registry.policy_hash();
-    state.set_sccp_registry_for_testing(registry);
-    assert_eq!(
-        state.sccp_policy_hash_snapshot(),
-        expected,
-        "Strict mode must derive its policy identity from the validated registry"
     );
 }
 state_test! { sync automatic_replication_snapshot_rejects_oversubscribed_capacity

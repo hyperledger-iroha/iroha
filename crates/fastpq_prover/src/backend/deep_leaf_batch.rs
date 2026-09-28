@@ -1,6 +1,8 @@
 //! Bounded canonical leaf hashing under explicit CPU or required-device execution.
 
 use rayon::prelude::*;
+#[cfg(any(test, feature = "fastpq-gpu"))]
+use zeroize::Zeroize;
 
 use super::{
     compact_v1::{MAX_PREPARED_HASH_FRAME_BYTES, PreparedHashFrame},
@@ -13,10 +15,56 @@ use crate::digest384_batch::{Digest384LastFieldJob, last_fields_payload_charge};
 use crate::{DigestExecutionV1, Error, Result};
 
 /// Independent of the worker count, witness, transcript and proof representation.
-pub(super) const CAPACITY: usize = 32;
+/// Fixed after bounded 32/256/1024-job device measurements; every build charges
+/// the same capacity before processing private rows.
+pub(super) const CAPACITY: usize = 1024;
 
-/// Packed payloads, clearing digest slots, ordered error results and one exact
-/// private canonical frame per possible concurrent hash. Worker stacks, allocator
+/// Own returned device digests immediately, including a malformed result shape.
+/// No pop/drain or growing allocation leaves private-derived cells unguarded.
+#[cfg(any(test, feature = "fastpq-gpu"))]
+struct ReturnedLeafDigests(Vec<fastpq_isi::GoldilocksDigest384V1>);
+
+#[cfg(any(test, feature = "fastpq-gpu"))]
+impl ReturnedLeafDigests {
+    fn write_to(self, output: &mut [[u64; 6]]) -> Result<()> {
+        if self.0.len() != output.len() {
+            return Err(invalid("DEEP leaf executor returned another digest count"));
+        }
+        for (destination, digest) in output.iter_mut().zip(&self.0) {
+            *destination = digest.words();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "fastpq-gpu"))]
+impl Drop for ReturnedLeafDigests {
+    fn drop(&mut self) {
+        for digest in &mut self.0 {
+            digest.zeroize();
+        }
+        // Observe real erased cells before Vec releases its allocation; no
+        // allocation is read after free and no secret is retained by the hook.
+        #[cfg(test)]
+        LEAF_ERASURES.with(|observed| {
+            let (cleared, uncleared) = observed.get();
+            let clean = self
+                .0
+                .iter()
+                .filter(|digest| digest.words() == [0; 6])
+                .count();
+            observed.set((cleared + clean, uncleared + self.0.len() - clean));
+        });
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static LEAF_ERASURES: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+}
+
+/// Packed payloads, clearing digest slots, both caller/tree index arrays, ordered
+/// error results and one exact private frame per possible concurrent hash. Worker stacks, allocator
 /// metadata and the shared public Context are charged/excluded by their owners.
 pub(super) fn payload_bytes(binding: &Context, oracle: Oracle, leaf_bytes: usize) -> Result<usize> {
     let bodies = mul(CAPACITY, MAX_PREPARED_HASH_FRAME_BYTES)?;
@@ -25,9 +73,11 @@ pub(super) fn payload_bytes(binding: &Context, oracle: Oracle, leaf_bytes: usize
         add(
             leaf_bytes,
             add(
-                48 + size_of::<Result<()>>()
+                48 + 2 * size_of::<usize>()
+                    + size_of::<Result<()>>()
                     + size_of::<Result<PreparedHashFrame>>()
                     + size_of::<PreparedHashFrame>()
+                    + size_of::<Result<Digest384LastFieldJob<'_>>>()
                     + size_of::<Digest384LastFieldJob<'_>>(),
                 binding.tree_frame_bytes(oracle).map_err(binding_error)?,
             )?,
@@ -37,6 +87,66 @@ pub(super) fn payload_bytes(binding: &Context, oracle: Oracle, leaf_bytes: usize
         host,
         add(bodies, last_fields_payload_charge(CAPACITY, bodies)?)?,
     )
+}
+
+/// Build ordered borrowed continuation jobs in parallel. The intermediate
+/// result descriptors and final jobs are both included in `payload_bytes`.
+/// Successful job owners clear their stream state on any later error.
+#[cfg(any(test, feature = "fastpq-gpu"))]
+pub(super) fn prepare_jobs(frames: &[PreparedHashFrame]) -> Result<Vec<Digest384LastFieldJob<'_>>> {
+    if frames.is_empty() || frames.len() > CAPACITY {
+        return Err(invalid(
+            "DEEP prepared batch has another exact bounded shape",
+        ));
+    }
+    frames
+        .par_iter()
+        .map(PreparedHashFrame::job)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Execute already-framed leaves or parents into caller-owned clearing storage.
+/// The shared frame/job/executor charge is identical for both call sites.
+#[cfg(any(test, feature = "fastpq-gpu"))]
+pub(super) fn execute_prepared(
+    frames: &[PreparedHashFrame],
+    output: &mut [[u64; 6]],
+    execution: DigestExecutionV1,
+) -> Result<()> {
+    if frames.is_empty() || frames.len() > CAPACITY || frames.len() != output.len() {
+        return Err(invalid(
+            "DEEP prepared batch has another exact bounded shape",
+        ));
+    }
+    #[cfg(feature = "fastpq-gpu")]
+    if matches!(execution, DigestExecutionV1::Device(_)) {
+        let bytes = frames
+            .iter()
+            .try_fold(0usize, |sum, frame| add(sum, frame.payload_len()))?;
+        let digests = ReturnedLeafDigests(execute_last_fields_with_cpu(
+            frames.len(),
+            bytes,
+            execution,
+            |index| frames[index].hash_cpu(),
+            || prepare_jobs(frames),
+        )?);
+        return digests.write_to(output);
+    }
+    let _ = execution;
+    let results = output
+        .par_iter_mut()
+        .zip(frames.par_iter())
+        .map(|(output, frame)| {
+            *output = frame.hash_cpu()?.words();
+            Ok(())
+        })
+        .collect::<Vec<Result<()>>>();
+    for result in results {
+        result?;
+    }
+    Ok(())
 }
 
 /// Hash a bounded prefix into caller-owned clearing digest storage. Every job
@@ -69,24 +179,10 @@ pub(super) fn hash(
                     .map_err(|_| invalid("DEEP leaf batch index exceeds u32"))?;
                 binding.prepare_leaf(oracle, index, bytes)
             })
+            .collect::<Vec<_>>()
+            .into_iter()
             .collect::<Result<Vec<_>>>()?;
-        let bytes = frames
-            .iter()
-            .try_fold(0usize, |sum, frame| add(sum, frame.payload_len()))?;
-        let digests = execute_last_fields_with_cpu(
-            frames.len(),
-            bytes,
-            execution,
-            |index| frames[index].hash_cpu(),
-            || frames.iter().map(PreparedHashFrame::job).collect(),
-        )?;
-        if digests.len() != output.len() {
-            return Err(invalid("DEEP leaf executor returned another digest count"));
-        }
-        for (destination, digest) in output.iter_mut().zip(digests) {
-            *destination = digest.words();
-        }
-        return Ok(());
+        return execute_prepared(&frames, output, execution);
     }
     let _ = execution;
     let results: Vec<Result<()>> = output
@@ -124,6 +220,96 @@ mod tests {
     use super::*;
     use crate::backend::{deep_geometry::LDE_ROWS, secret_polynomial::SecretPolynomial};
     use fastpq_isi::GoldilocksDigest384V1 as Digest;
+
+    #[test]
+    fn returned_leaf_digests_clear_on_success_shape_error_and_partial_unwind() {
+        let source = [Digest::new([1, 2, 3, 5, 7, 11]).unwrap(); 4];
+        let before = LEAF_ERASURES.with(core::cell::Cell::get);
+        let mut output = SecretPolynomial::<[u64; 6]>::zeroed(4).unwrap();
+        ReturnedLeafDigests(source.to_vec())
+            .write_to(&mut output)
+            .unwrap();
+        assert!(output.iter().all(|&words| words == source[0].words()));
+        assert_eq!(
+            LEAF_ERASURES.with(core::cell::Cell::get),
+            (before.0 + 4, before.1)
+        );
+
+        assert!(
+            ReturnedLeafDigests(source.to_vec())
+                .write_to(&mut output[..3])
+                .is_err()
+        );
+        assert_eq!(
+            LEAF_ERASURES.with(core::cell::Cell::get),
+            (before.0 + 8, before.1)
+        );
+
+        let unwound = std::panic::catch_unwind(|| {
+            let returned = ReturnedLeafDigests(source.to_vec());
+            let mut partial = SecretPolynomial::<[u64; 6]>::zeroed(4).unwrap();
+            for (destination, digest) in partial.iter_mut().zip(&returned.0).take(2) {
+                *destination = digest.words();
+            }
+            panic!("test-only failure after partial returned-digest use");
+        });
+        assert!(unwound.is_err());
+        assert_eq!(
+            LEAF_ERASURES.with(core::cell::Cell::get),
+            (before.0 + 12, before.1)
+        );
+    }
+
+    #[test]
+    fn prepared_parallel_jobs_and_execution_keep_canonical_order_and_shape() {
+        let binding = Context::new(b"prepared parallel continuation order").unwrap();
+        let left = Digest::new([1, 2, 3, 5, 7, 11]).unwrap();
+        let right = Digest::new([13, 17, 19, 23, 29, 31]).unwrap();
+        let frames = (0..=CAPACITY)
+            .map(|index| {
+                binding
+                    .prepare_parent(Oracle::Row, 1, (CAPACITY - index) as u32, left, right)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        for count in [1, 7, CAPACITY] {
+            for threads in [1, 4] {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap()
+                    .install(|| {
+                        let jobs = prepare_jobs(&frames[..count]).unwrap();
+                        let streamed = zeroize::Zeroizing::new(
+                            crate::digest384_batch::hash_last_fields_cpu(&jobs).unwrap(),
+                        );
+                        let mut output = SecretPolynomial::<[u64; 6]>::zeroed(count).unwrap();
+                        execute_prepared(&frames[..count], &mut output, DigestExecutionV1::Cpu)
+                            .unwrap();
+                        for (index, (&words, digest)) in
+                            output.iter().zip(streamed.iter()).enumerate()
+                        {
+                            let expected = binding
+                                .hash_parent(Oracle::Row, 1, (CAPACITY - index) as u32, left, right)
+                                .unwrap();
+                            assert_eq!(words, expected.words());
+                            assert_eq!(*digest, expected);
+                        }
+                    });
+            }
+        }
+        assert!(prepare_jobs(&[]).is_err());
+        assert!(prepare_jobs(&frames).is_err());
+        let mut output = SecretPolynomial::<[u64; 6]>::zeroed(CAPACITY + 1).unwrap();
+        for (input, count) in [
+            (&frames[..0], 0),
+            (&frames[..1], 0),
+            (&frames[..], CAPACITY + 1),
+        ] {
+            assert!(execute_prepared(input, &mut output[..count], DigestExecutionV1::Cpu).is_err());
+            assert!(output.iter().all(|&words| words == [0; 6]));
+        }
+    }
 
     #[test]
     fn bounded_parallel_leaves_match_serial_hashes_in_exact_input_order() {
@@ -186,9 +372,11 @@ mod tests {
             CAPACITY
                 * (96
                     + 48
+                    + 2 * size_of::<usize>()
                     + size_of::<Result<()>>()
                     + size_of::<Result<PreparedHashFrame>>()
                     + size_of::<PreparedHashFrame>()
+                    + size_of::<Result<Digest384LastFieldJob<'_>>>()
                     + size_of::<Digest384LastFieldJob<'_>>()
                     + binding.tree_frame_bytes(Oracle::QuotientAndMask).unwrap())
                 + bodies

@@ -1184,3 +1184,39 @@ fn independently_interpolated_complete_air_degree_matches_registration() {
     );
 }
 include!("der_stark_descriptor_tests.rs");
+
+#[test]
+fn rejected_der_binding_and_trace_drop_clear_owned_field_tables() {
+    use super::super::private_table::inspection::observe_v1;
+
+    let base = ZkX509DerStarkBaseV1 {
+        private_shape: private_shape(),
+        rows: vec![[F(17); ZK_X509_DER_STARK_BASE_WIDTH_V1]; 3],
+    };
+    let mut invalid_challenges = challenges();
+    invalid_challenges.tuple[0][0] = F::ZERO;
+    let (result, erasures) =
+        observe_v1(|| build_zk_x509_der_stark_trace_v1(base, invalid_challenges));
+    assert_eq!(result, Err(ZkX509DerStarkErrorV1::Challenge));
+    assert!(erasures.iter().any(|erasure| {
+        erasure.cells == 3 * ZK_X509_DER_STARK_BASE_WIDTH_V1
+            && erasure.nonzero_before == erasure.cells
+            && erasure.nonzero_after == 0
+    }));
+    let trace = ZkX509DerStarkTraceV1 {
+        base: ZkX509DerStarkBaseV1 {
+            private_shape: private_shape(),
+            rows: vec![[F(19); ZK_X509_DER_STARK_BASE_WIDTH_V1]; 5],
+        },
+        aux_rows: vec![[F(23); ZK_X509_DER_STARK_AUX_WIDTH_V1]; 7],
+    };
+    let ((), erasures) = observe_v1(|| drop(trace));
+    for cells in [
+        5 * ZK_X509_DER_STARK_BASE_WIDTH_V1,
+        7 * ZK_X509_DER_STARK_AUX_WIDTH_V1,
+    ] {
+        assert!(erasures.iter().any(|erasure| {
+            erasure.cells == cells && erasure.nonzero_before == cells && erasure.nonzero_after == 0
+        }));
+    }
+}

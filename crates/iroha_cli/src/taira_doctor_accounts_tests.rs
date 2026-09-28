@@ -183,4 +183,172 @@ mod doctor_account_tests {
             );
         }
     }
+    fn doctor_check<'a>(report: &'a Value, name: &str) -> &'a Value {
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("doctor check {name}"))
+    }
+    #[test]
+    fn doctor_checks_the_canonical_bond_against_the_live_faucet() {
+        let seated = run_doctor_with_faucet_amount(None);
+        assert_eq!(report_status(&seated), Some("ok"));
+        // Both Parliament checks judge the compiled canonical profile, and their exact detail
+        // says the live values are not verified, so they cannot pass for live evidence.
+        let reach = doctor_check(&seated, "canonical_bond_faucet_reach");
+        assert_eq!(reach["http_status"].as_u64(), Some(200));
+        assert_eq!(reach["ok"].as_bool(), Some(true));
+        assert_eq!(
+            reach["detail"].as_str(),
+            Some(doctor_accounts::CANONICAL_BOND_FAUCET_REACH_DETAIL)
+        );
+        assert!(
+            doctor_accounts::CANONICAL_BOND_FAUCET_REACH_DETAIL
+                .contains("the live bond is not verified")
+        );
+        let profile = doctor_check(&seated, "canonical_profile_seating");
+        assert_eq!(profile["http_status"].as_u64(), Some(0));
+        assert_eq!(profile["ok"].as_bool(), Some(true));
+        assert_eq!(
+            profile["detail"].as_str(),
+            Some(doctor_accounts::CANONICAL_PROFILE_SEATING_DETAIL)
+        );
+        assert!(
+            doctor_accounts::CANONICAL_PROFILE_SEATING_DETAIL
+                .contains("the live profile is not verified")
+        );
+        for name in ["parliament_bond_faucet_reach", "parliament_seating_profile"] {
+            assert!(
+                !seated["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|check| check["name"].as_str() == Some(name)),
+                "{name} would read as live evidence"
+            );
+        }
+        // The public-reset contract carries the same exact details.
+        let expected = doctor_accounts::expected();
+        assert_eq!(
+            expected
+                .iter()
+                .map(|(name, _, _)| *name)
+                .collect::<Vec<_>>(),
+            [
+                "account_capabilities",
+                "account_faucet_policy",
+                "canonical_bond_faucet_reach",
+                "canonical_profile_seating",
+            ]
+        );
+        assert_eq!(
+            expected[2].2.as_deref(),
+            Some(doctor_accounts::CANONICAL_BOND_FAUCET_REACH_DETAIL)
+        );
+        assert_eq!(
+            expected[3].2.as_deref(),
+            Some(doctor_accounts::CANONICAL_PROFILE_SEATING_DETAIL)
+        );
+
+        // One XOR above 1 000 000 / 40 puts the bond within 40 faucet claims.
+        let generous = run_doctor_with_faucet_amount(Some("25001"));
+        assert_eq!(report_status(&generous), Some("fail"));
+        let reach = doctor_check(&generous, "canonical_bond_faucet_reach");
+        assert_eq!(reach["ok"].as_bool(), Some(false));
+        let detail = reach["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("citizenship_bond_amount=1000000"),
+            "{detail}"
+        );
+        assert!(
+            generous["failures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| failure
+                    .as_str()
+                    .is_some_and(|failure| failure.starts_with("canonical_bond_faucet_reach")))
+        );
+    }
+    fn run_doctor_with_faucet_amount(amount: Option<&'static str>) -> Value {
+        let server = spawn_mock_http(16, move |request| {
+            let mut response = doctor_mock_response(request, None);
+            if let Some(amount) = amount
+                && path_only(&request.path) == "/v1/accounts/faucet/policy"
+            {
+                let mut body: Value = json::from_slice(&response.body).unwrap();
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("amount".to_owned(), Value::from(amount));
+                response.body = json::to_vec(&body).unwrap();
+            }
+            response
+        });
+        let report = run_doctor(&server.base_url, DoctorScope::Basic).unwrap();
+        finish_mock(server);
+        report
+    }
+    #[test]
+    fn doctor_does_not_double_count_an_unverifiable_bond_reach() {
+        let server = spawn_mock_http(16, |request| {
+            if path_only(&request.path) == "/v1/accounts/faucet/policy" {
+                MockResponse::text(503, "unavailable")
+            } else {
+                doctor_mock_response(request, None)
+            }
+        });
+        let report = run_doctor(&server.base_url, DoctorScope::Basic).unwrap();
+        finish_mock(server);
+        let reach = doctor_check(&report, "canonical_bond_faucet_reach");
+        assert_eq!(reach["http_status"].as_u64(), Some(0));
+        assert_eq!(reach["ok"].as_bool(), Some(false));
+        assert!(
+            reach["detail"]
+                .as_str()
+                .unwrap()
+                .contains("cannot be verified")
+        );
+        let failures = report["failures"].as_array().unwrap();
+        assert!(!failures.iter().any(|failure| {
+            failure
+                .as_str()
+                .is_some_and(|failure| failure.starts_with("canonical_"))
+        }));
+        assert_eq!(
+            doctor_check(&report, "canonical_profile_seating")["ok"].as_bool(),
+            Some(true)
+        );
+    }
+    #[test]
+    fn doctor_parliament_warnings_name_every_unverifiable_requirement() {
+        let warnings = doctor_accounts::parliament_warnings().unwrap();
+        assert_eq!(warnings.len(), 4);
+        for name in [
+            "parliament_eligible_citizens",
+            "parliament_live_profile",
+            "parliament_global_beacon_session",
+            "parliament_tle_session",
+        ] {
+            assert!(
+                warnings
+                    .iter()
+                    .any(|warning| warning.starts_with(name) && warning.contains("not verified")),
+                "{name}: {warnings:?}"
+            );
+        }
+        assert!(warnings[0].contains("at least 9 citizens bonded at 1000000 XOR"));
+        assert!(
+            warnings[1].contains("/v1/gov/capabilities"),
+            "{}",
+            warnings[1]
+        );
+        // The report stays within the public-reset qualification bound for warnings.
+        assert!(warnings.iter().all(|warning| warning.len() <= 1_024));
+        let mut report = norito::json!({"warnings": ["existing"]});
+        doctor_accounts::append_parliament_warnings(&mut report).unwrap();
+        assert_eq!(report["warnings"].as_array().unwrap().len(), 5);
+        assert!(doctor_accounts::append_parliament_warnings(&mut norito::json!({})).is_err());
+    }
 }

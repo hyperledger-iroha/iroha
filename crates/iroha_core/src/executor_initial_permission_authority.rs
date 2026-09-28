@@ -649,11 +649,6 @@ fn initial_permission_capability_root_authority(
             token.program_id.sponsor == *authority
                 || authority_has_permission(&state_transaction.world, authority, &manager)?
         }
-        "CanProposeSccpRouteGovernance" => {
-            let _ = decode!(executor_permission::sccp::CanProposeSccpRouteGovernance);
-            let manager: Permission = executor_permission::sccp::CanManageSccpGovernance.into();
-            authority_has_permission(&state_transaction.world, authority, &manager)?
-        }
         "CanProposeContractDeployment" => {
             let _ = decode!(executor_permission::governance::CanProposeContractDeployment);
             false
@@ -1405,9 +1400,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::settlement::SettlementInstructionBox,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
-        iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
-        iroha_data_model::isi::bridge::RecordSccpMessage,
-        iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
@@ -1465,11 +1457,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
     ) {
-        return true;
-    }
-    // Pending evidence cancellation is separately gated by CanManagePeers in
-    // the Initial executor authority check below.
-    if is_any!(iroha_data_model::isi::staking::CancelConsensusEvidencePenalty) {
         return true;
     }
     // Archive registration enforces the registry policy/revision, exact signed
@@ -1664,15 +1651,6 @@ fn validate_initial_native_instruction_authority(
                 "validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal",
             );
         }
-        if matches!(
-            set_parameter.inner(),
-            iroha_data_model::parameter::Parameter::Custom(parameter)
-                if parameter.id().name().as_ref() == "sccp_registry_v1"
-        ) {
-            return deny(
-                "the reserved SCCP registry cannot be changed through SetParameter; use route governance",
-            );
-        }
         if is_genesis
             || initial_authority_has_exact_permission(
                 state_transaction,
@@ -1735,18 +1713,6 @@ fn validate_initial_native_instruction_authority(
         && rewards.reward_asset.account() != authority
     {
         return deny("public lane rewards require the reward treasury account authority");
-    }
-    if any
-        .downcast_ref::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>()
-        .is_some()
-        && !is_genesis
-        && !initial_authority_has_exact_permission(
-            state_transaction,
-            authority,
-            executor_permission::peer::CanManagePeers.into(),
-        )?
-    {
-        return deny("consensus evidence penalty cancellation requires CanManagePeers");
     }
     if (any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
@@ -2638,7 +2604,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageRuntimeUpgrades",
     "CanManageConsensusKeys",
     "CanManageConfidentialParams",
-    "CanManageSccpGovernance",
     "CanProposeSccpRouteGovernance",
     "CanManageKagemushaReserve",
     "CanManageRoles",

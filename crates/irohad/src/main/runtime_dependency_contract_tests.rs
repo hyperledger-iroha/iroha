@@ -79,7 +79,7 @@ fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
         );
     }
     assert!(compact_source.contains(
-        "letsorafs_stream_token_approved_anchor=runtime_deps.sorafs_stream_token_approved_anchor;"
+        "letmutsorafs_stream_token_approved_anchor=runtime_deps.sorafs_stream_token_approved_anchor;"
     ));
     assert!(compact_source.contains(".with_sorafs_stream_token_approved_anchor(anchor)"));
     assert!(

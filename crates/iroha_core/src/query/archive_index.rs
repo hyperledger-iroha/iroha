@@ -1,9 +1,9 @@
 //! Physical archive index custody with observable, nonblocking writer refusal.
 //!
-//! Archive qualification may hold a reader while authenticating Kura. A carrier
-//! that already owns Kura must therefore probe its archive writer without waiting.
-//! Every reader and writer signals after releasing the actual lock; the caller
-//! drops all other physical guards before awaiting that release and retrying.
+//! Archive qualification may hold a reader while authenticating Kura. Committed capture
+//! retains an immutable State view and therefore probes its archive writer without waiting.
+//! Every reader and writer signals after releasing the actual lock; the caller drops its
+//! State view and other physical guards before awaiting that release and retrying.
 
 use std::{
     fmt,
@@ -76,7 +76,7 @@ impl<T> ArchiveIndexLock<T> {
         }
     }
 
-    /// Acquire an ordinary writer when no enclosing Kura lease is held.
+    /// Acquire an ordinary maintenance writer; committed capture uses the nonblocking probe.
     pub(super) fn write(&self) -> Result<ArchiveIndexWriteGuard<'_, T>, ArchiveIndexLockError> {
         match self.inner.write() {
             Ok(guard) => Ok(self.wrap_write(guard)),

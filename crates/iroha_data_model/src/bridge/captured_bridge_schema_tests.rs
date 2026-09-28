@@ -19,21 +19,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::BridgeTransparentProof>(
         "iroha_data_model::bridge::BridgeTransparentProof",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeNativeProofBackendV1>(
-        "iroha_data_model::bridge::BridgeNativeProofBackendV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::SccpNativeTrustAnchorV1>(
-        "iroha_data_model::bridge::SccpNativeTrustAnchorV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeNativeProtocolProofV1>(
-        "iroha_data_model::bridge::BridgeNativeProtocolProofV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeSccpDestinationProofBackendV1>(
-        "iroha_data_model::bridge::BridgeSccpDestinationProofBackendV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeSccpDestinationProofV1>(
-        "iroha_data_model::bridge::BridgeSccpDestinationProofV1",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::BridgeProofPayload>(
         "iroha_data_model::bridge::BridgeProofPayload",
     ),

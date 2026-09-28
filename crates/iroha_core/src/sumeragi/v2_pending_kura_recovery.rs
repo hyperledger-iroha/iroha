@@ -1359,12 +1359,6 @@ impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
         kura: Arc<Kura>,
-        provider_ingest_finalized_archive: Option<
-            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
-        >,
-        reputation_finalized_archive: Option<
-            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
-        >,
         events_sender: crate::EventsSender,
     ) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1>
     {
@@ -1375,8 +1369,6 @@ impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
                 state,
                 queue,
                 kura,
-                provider_ingest_finalized_archive,
-                reputation_finalized_archive,
                 events_sender,
             )
     }

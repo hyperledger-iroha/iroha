@@ -120,9 +120,8 @@ Lifecycle hooks (runtime enforced):
   `deactivation_height` at the next unfrozen election height; the timestamp
   transition does not shorten the exact-height consensus tenure. The `Exited`
   record continues to reserve validator capacity and its peer until that height
-  is reached and while bonded or pending-unbond custody remains, or while
-  pending evidence retains a slashing lien. Only canonical pruning after all
-  gates clear frees those reservations.
+  is reached and while bonded or pending-unbond custody remains. Only canonical
+  pruning after all gates clear frees those reservations.
 - Reward recording rejects validator shares unless the validator is `Active`,
   keeping pending, exiting, exited, and slashed validators from accruing payouts.
 
@@ -348,21 +347,6 @@ historical sources in bounded batches. Positive payouts are prepared together
 as one atomic numeric movement batch. Refusal restores reserve preimages and
 leaves cursor and accrual state unchanged. Pending queries expose
 `processed_through_epoch: Option<u64>` without an epoch-zero sentinel.
-
-### 2.9 `CancelConsensusEvidencePenalty`
-
-Cancels consensus slashing before the delayed penalty applies.
-
-- `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
-- The record transitions to `penalty_status = cancelled` with the canonical cancellation height, preventing slashing when `slashing_delay_blocks` elapses.
-- `metadata`: references to payout transactions, root hashes, or dashboards.
-
-The instruction is idempotent for the exact evidence key: replaying a
-cancellation after that record is already cancelled succeeds without changing
-its terminal height. For evidence admitted at height `A` with delay `D`, an
-ordinary transaction can cancel it only in committed blocks `A + 1` through
-`A + D - 1`, exactly `D - 1` opportunities. At `A + D`, due consensus effects
-run before ordinary transactions, so cancellation in that block is too late.
 
 Pinned custody records retain each validator's exact scoped escrow asset and
 held quantity (bonded plus pending unbond). The aggregate stake reserve and unpaid

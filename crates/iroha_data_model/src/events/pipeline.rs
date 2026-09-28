@@ -491,7 +491,6 @@ mod tests {
                 npos_effects_hash: None,
                 global_beacon_pulse_hash: None,
                 execution_context_hash: None,
-                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,

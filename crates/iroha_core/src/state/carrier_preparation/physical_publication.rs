@@ -41,14 +41,8 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Checkpoint(crate::kura::Error),
     /// The retained execution or Native source differs from exact durable evidence.
     Source(super::super::super::execution_prefix::CarrierSourceAuthenticationError),
-    /// The original provider capture does not join this exact durable carrier.
-    Provider(crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1),
-    /// The original reputation capture does not join this exact durable carrier.
-    Reputation(crate::query::reputation_finalized::ReputationFinalizedArchiveError),
     /// The original execution witness could not be persisted or reauthenticated.
     ExecutionWitness(crate::kura::Error),
-    /// Retained archive persistence failed under the original joint lease.
-    Archive(super::archive_publication::CarrierArchivePublicationError),
     /// The named original State fence must release before another attempt.
     Fence {
         /// State lock which prevented acquisition.
@@ -78,12 +72,9 @@ impl std::fmt::Debug for CarrierPhysicalPreparationError {
             Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
             Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
             Self::Source(error) => f.debug_tuple("Source").field(error).finish(),
-            Self::Provider(error) => f.debug_tuple("Provider").field(error).finish(),
-            Self::Reputation(error) => f.debug_tuple("Reputation").field(error).finish(),
             Self::ExecutionWitness(error) => {
                 f.debug_tuple("ExecutionWitness").field(error).finish()
             }
-            Self::Archive(error) => f.debug_tuple("Archive").field(error).finish(),
             Self::Fence { field, wait } => f
                 .debug_struct("Fence")
                 .field("field", field)
@@ -154,24 +145,6 @@ impl<'target, Admission> SourceAuthenticatedCarrier<'target, Admission> {
                     &owner.kura,
                 )
                 .map_err(CarrierPhysicalPreparationError::Source)?;
-            // Standalone archive readers would reacquire Kura and deadlock.
-            // Join both retained anchors under this exact source boundary.
-            if let Some(capture) = original.journals.provider_capture.as_ref() {
-                capture
-                    .reauthenticate_under_publication_lease(
-                        &owner.kura,
-                        original.checkpoint.finality_receipt(),
-                    )
-                    .map_err(CarrierPhysicalPreparationError::Provider)?;
-            }
-            if let Some(capture) = original.journals.reputation_capture.as_ref() {
-                capture
-                    .reauthenticate_under_publication_lease(
-                        &owner.kura,
-                        original.checkpoint.finality_receipt(),
-                    )
-                    .map_err(CarrierPhysicalPreparationError::Reputation)?;
-            }
             Ok(())
         })();
         match result {
@@ -432,7 +405,7 @@ impl<Admission>
             }
         }
         // Retain the same original Kura fences from source authentication through
-        // witness/archive persistence and State acquisition. Releasing between
+        // witness persistence and State acquisition. Releasing between
         // phases lets queued readers repeatedly preempt the next try-only probe.
         let kura = match target.kura.try_publication_lease() {
             Ok(lease) => lease,
@@ -471,16 +444,6 @@ impl<'target, Admission> SourceAuthenticatedCarrier<'target, Admission> {
                 CarrierExecutionWitnessPublicationError::Witness(error) => {
                     CarrierPhysicalPreparationError::ExecutionWitness(error)
                 }
-            };
-            return Err((self.release(), error));
-        }
-        if let Err(error) = self.decision.publish_archives(&self.kura) {
-            use super::archive_publication::CarrierArchivePublicationError;
-            let error = match error {
-                CarrierArchivePublicationError::Checkpoint(error) => {
-                    CarrierPhysicalPreparationError::Checkpoint(error)
-                }
-                error => CarrierPhysicalPreparationError::Archive(error),
             };
             return Err((self.release(), error));
         }

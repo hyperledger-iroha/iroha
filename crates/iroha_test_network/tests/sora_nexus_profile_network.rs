@@ -751,9 +751,12 @@ async fn beacon_horizons(
 }
 
 /// The Sumeragi v2 status each validator signs, for its committed tip and a fresh challenge,
-/// into a public bridge-finality attestation (`/v1/bridge/finality/attestation/{height}`).
+/// into a public finality attestation (`/v1/bridge/finality/attestation/{height}`).
 /// A failed read (including a tip that moved between the two reads) is retried for at most
-/// [`STATUS_RETRY`]; the last error is returned.
+/// [`STATUS_RETRY`]; the last error is returned. The current node signs a
+/// `SumeragiFinalityAttestation` whose status has no protocol version or beacon horizon, so
+/// every read fails after verifying the node's signature (the v2 status was never published by
+/// the current node, so this read failed before as well).
 async fn sumeragi_statuses(clients: &[Client], nodes: &[PeerId]) -> Result<Vec<SumeragiV2Status>> {
     ensure!(clients.len() == nodes.len(), "one node identity per client");
     try_join_all(clients.iter().zip(nodes).map(|(client, node)| async move {
@@ -771,9 +774,19 @@ async fn sumeragi_statuses(clients: &[Client], nodes: &[PeerId]) -> Result<Vec<S
                     // The I105 discriminant is thread-local.
                     let _discriminant = ChainDiscriminantGuard::enter(369);
                     client
-                        .get_bridge_finality_attestation(height, challenge, &node)
-                        .map(|attestation| attestation.body.status)
+                        .get_sumeragi_finality_attestation(height, challenge, &node)
                         .map_err(|error| eyre!("{error:?}"))
+                        .and_then(|attestation| {
+                            // TODO(S3): the current node's signed status carries no protocol
+                            // version or beacon horizon; re-source the compatibility values and
+                            // horizons this proof checks from the current node.
+                            Err(eyre!(
+                                "validator {} signed a current status at height {} without the \
+                                 Sumeragi v2 protocol version and beacon horizon",
+                                attestation.body.node_id,
+                                attestation.body.status.committed_height
+                            ))
+                        })
                 })
                 .await
             }

@@ -20,10 +20,17 @@ TRON block `86588651`) from:
 - `https://api.trongrid.io` (TRON HTTP API).
 
 The TRON `/walletsolidity/getcontractinfo` exchange records the HTTP 405 that
-java-tron returns for that route; runtime code is read from
-`/wallet/getcontractinfo` instead.
+java-tron returns for that route (its solidity HTTP service registers no
+`getcontractinfo`); runtime code is read from `/wallet/getcontractinfo`
+instead, and solidified views from `/walletsolidity/triggerconstantcontract`.
 
-Synthetic replies (HTTP 429 and 5xx, timeouts, malformed hex, a successful
-`eth_sendRawTransaction` and `broadcasthex`) are built inline by the tests and
-are not stored here. JSON-RPC ids in replayed bodies are rewritten by the mock
+Two tests replay a recorded body for a sibling route with the same response
+shape: `evm/eth_getBlockByNumber_hashes` answers `eth_getBlockByHash` for the
+same block, and `tron/wallet_triggerconstantcontract` answers
+`/walletsolidity/triggerconstantcontract`.
+
+Synthetic replies (HTTP 401, 403, 429 and 5xx, JSON-RPC rate-limit and
+unsupported-method errors, a batch refused as a whole, HTML and truncated
+success bodies, timeouts, malformed hex, a successful `eth_sendRawTransaction`
+and `broadcasthex`) are built inline by the tests and are not stored here. JSON-RPC ids in replayed bodies are rewritten by the mock
 server to the id of the request it answers.

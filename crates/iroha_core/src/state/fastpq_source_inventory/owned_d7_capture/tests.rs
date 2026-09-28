@@ -408,7 +408,6 @@ fn unrelated_header_fields_and_later_replay_bookkeeping_do_not_rewrite_d7_inputs
         .unwrap()
         .into_parts();
     block._curr_block.view_change_index += 1;
-    block._curr_block.sccp_commitment_root = Some([42; 32]);
     assert!(context.verify_current(&block).is_ok());
     block.authenticated_replay_commit = true;
     assert!(context.verify_current(&block).is_ok());

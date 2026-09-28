@@ -208,14 +208,14 @@ fn ordinary_world_capture_retains_deltas_events_catalog_and_releases_every_write
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(detached.mode(), BlockMode::Ordinary);
-    assert_eq!(detached.field_count(), 285);
+    assert_eq!(detached.field_count(), 307);
     assert_eq!(
         detached
             .fields()
             .map(|field| field.name)
             .collect::<BTreeSet<_>>()
             .len(),
-        285
+        307
     );
     assert_eq!(
         detached
@@ -504,7 +504,7 @@ fn every_inventory_field_binds_untouched_current_and_undo_publications() {
             ]
         };
     }
-    let owners: [(&str, fn(&World)); 285] = with_world_overlay_fields!(invalidators);
+    let owners: [(&str, fn(&World)); 307] = with_world_overlay_fields!(invalidators);
     let world = fixture();
     for (name, publish_same_values) in owners {
         let detached = capture(world.block());

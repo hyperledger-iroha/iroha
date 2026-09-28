@@ -532,7 +532,8 @@ fn relabel_halo2_ipa_open_verify_fixture(
     let exact_vk = VerifyingKeyBox::new(exact_backend.to_owned(), vk.bytes.clone());
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_canonical(&proof.bytes).expect("canonical Halo2 OpenVerifyEnvelope");
-    envelope.circuit_id = exact_backend.to_owned();
+    envelope.circuit_id = halo2_ipa_circuit_for_backend_v1(exact_backend)
+        .expect("exact Halo2 backend has one canonical circuit identifier");
     envelope.vk_hash = hash_vk(&exact_vk);
     let exact_proof = ProofBox::new(
         exact_backend.to_owned(),
@@ -5223,7 +5224,7 @@ mod debug_backend_tests {
                         &exact_proof,
                         Some(&exact_vk),
                     ),
-                    "exact IVM registry label should reach the IVM execution verifier for seed {seed}"
+                    "exact IVM registry label should reach the replay-binding verifier for seed {seed}"
                 );
                 let mut exact_wrong_schema: iroha_data_model::zk::OpenVerifyEnvelope =
                     norito::decode_canonical(&exact_proof.bytes).expect("exact fixture envelope");

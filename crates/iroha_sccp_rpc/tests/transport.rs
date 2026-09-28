@@ -6,6 +6,7 @@
 
 use std::{
     collections::VecDeque,
+    fmt::Write as _,
     fs,
     io::{BufRead as _, BufReader, Read as _, Write as _},
     net::{SocketAddr, TcpListener, TcpStream},
@@ -13,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -22,9 +23,7 @@ use std::{
 use iroha_config::parameters::actual::SccpSecretHeader;
 use iroha_sccp_rpc::{
     beacon::{BeaconBlockId, BeaconClient},
-    endpoints::{
-        Backoff, EndpointSet, FailoverPolicy, SecretFileProblem, Sleeper,
-    },
+    endpoints::{Backoff, EndpointSet, FailoverPolicy, SecretFileProblem, Sleeper},
     evm::{BlockId, BlockTag, EvmBlockTransactions, EvmCallRequest, EvmClient, U256},
     http::{HttpConfig, HttpTransport, JsonRpcCall, RpcError},
     tron::TronClient,
@@ -78,6 +77,18 @@ impl Reply {
         }
     }
 
+    /// A JSON-RPC error object whose id (or ids, for a batch answer) is
+    /// rewritten to the request id.
+    fn rpc_errors(body: &str) -> Self {
+        Self::Respond {
+            status: 200,
+            headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
+            body: body.as_bytes().to_vec(),
+            rewrite_ids: true,
+            close_delimited: false,
+        }
+    }
+
     fn with_header(mut self, name: &str, value: &str) -> Self {
         if let Self::Respond { headers, .. } = &mut self {
             headers.push((name.to_owned(), value.to_owned()));
@@ -99,11 +110,17 @@ impl Reply {
 /// One request the server received.
 #[derive(Debug, Clone)]
 struct Recorded {
+    /// Position among every request received by any mock server of the test
+    /// binary; requests of one test are sequential, so this orders them.
+    sequence: u64,
     method: String,
     target: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
 }
+
+/// Next [`Recorded::sequence`].
+static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl Recorded {
     fn header(&self, name: &str) -> Option<&str> {
@@ -212,6 +229,7 @@ fn read_request(stream: &TcpStream) -> Option<Recorded> {
     let mut body = vec![0_u8; length];
     reader.read_exact(&mut body).ok()?;
     Some(Recorded {
+        sequence: SEQUENCE.fetch_add(1, Ordering::SeqCst),
         method,
         target,
         headers,
@@ -246,12 +264,15 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>) {
             } else {
                 body
             };
-            let mut head = format!("HTTP/1.1 {status} {}\r\nConnection: close\r\n", reason(status));
+            let mut head = format!(
+                "HTTP/1.1 {status} {}\r\nConnection: close\r\n",
+                reason(status)
+            );
             if !close_delimited {
-                head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+                write!(head, "Content-Length: {}\r\n", body.len()).expect("format head");
             }
             for (name, value) in headers {
-                head.push_str(&format!("{name}: {value}\r\n"));
+                write!(head, "{name}: {value}\r\n").expect("format head");
             }
             head.push_str("\r\n");
             let _ = stream.write_all(head.as_bytes());
@@ -264,6 +285,8 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>) {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         429 => "Too Many Requests",
@@ -280,12 +303,18 @@ fn rewrite_json_rpc_ids(request: &[u8], response: &[u8]) -> Vec<u8> {
         .expect("JSON-RPC response");
     match (&request, &mut response) {
         (Value::Object(call), Value::Object(answer)) => {
-            answer.insert("id".to_owned(), call.get("id").cloned().expect("request id"));
+            answer.insert(
+                "id".to_owned(),
+                call.get("id").cloned().expect("request id"),
+            );
         }
         (Value::Array(calls), Value::Array(answers)) => {
             for (call, answer) in calls.iter().zip(answers.iter_mut()) {
                 if let Value::Object(answer) = answer {
-                    answer.insert("id".to_owned(), call.get("id").cloned().expect("request id"));
+                    answer.insert(
+                        "id".to_owned(),
+                        call.get("id").cloned().expect("request id"),
+                    );
                 }
             }
         }
@@ -349,8 +378,7 @@ fn recorded(name: &str) -> Reply {
         }
     }
     let request = entry.get("request").expect("request");
-    let rewrite_ids =
-        request.get("json_rpc").is_some() || request.get("json_rpc_batch").is_some();
+    let rewrite_ids = request.get("json_rpc").is_some() || request.get("json_rpc_batch").is_some();
     Reply::Respond {
         status,
         headers,
@@ -474,17 +502,31 @@ fn failover_skips_5xx_and_429_in_round_robin_order_and_sticks() {
     let b = MockServer::start(vec![
         Reply::status(429, "text/plain", b"slow down").with_header("Retry-After", "1"),
     ]);
-    let c = MockServer::start(vec![recorded("evm/eth_chainId"), recorded("evm/eth_blockNumber")]);
+    let c = MockServer::start(vec![
+        recorded("evm/eth_chainId"),
+        recorded("evm/eth_blockNumber"),
+    ]);
     let (transport, sleeper) = transport(&[&a, &b, &c], 3);
     let client = EvmClient::new(transport);
 
     assert_eq!(client.chain_id().expect("third endpoint answers"), 1);
-    assert_eq!((a.request_count(), b.request_count(), c.request_count()), (1, 1, 1));
+    assert_eq!(
+        (a.request_count(), b.request_count(), c.request_count()),
+        (1, 1, 1)
+    );
+    let order = [&a, &b, &c].map(|server| server.requests()[0].sequence);
+    assert!(
+        order[0] < order[1] && order[1] < order[2],
+        "tried in list order"
+    );
     assert!(sleeper.delays().is_empty(), "no backoff inside a round");
     assert_eq!(client.transport().endpoints().preferred(), 2);
 
     assert_eq!(client.block_number().expect("sticky endpoint"), 0x18d_af53);
-    assert_eq!((a.request_count(), b.request_count(), c.request_count()), (1, 1, 2));
+    assert_eq!(
+        (a.request_count(), b.request_count(), c.request_count()),
+        (1, 1, 2)
+    );
 }
 
 #[test]
@@ -495,13 +537,18 @@ fn failed_rounds_back_off_with_seeded_jitter_until_exhausted() {
         Reply::status(500, "application/json", br#"{"message":"internal"}"#),
     ]);
     let (transport, sleeper) = transport(&[&server], 3);
-    let error = EvmClient::new(transport).chain_id().expect_err("all rounds fail");
+    let error = EvmClient::new(transport)
+        .chain_id()
+        .expect_err("all rounds fail");
     let RpcError::Exhausted { failures } = &error else {
         panic!("unexpected {error:?}");
     };
     assert_eq!(failures.len(), 3);
     assert_eq!(
-        failures.iter().map(|failure| failure.round).collect::<Vec<_>>(),
+        failures
+            .iter()
+            .map(|failure| failure.round)
+            .collect::<Vec<_>>(),
         vec![0, 1, 2]
     );
     assert!(matches!(
@@ -513,9 +560,16 @@ fn failed_rounds_back_off_with_seeded_jitter_until_exhausted() {
         sleeper.delays(),
         vec![policy.round_delay(0, None), policy.round_delay(1, None)]
     );
-    assert_eq!(sleeper.delays(), vec![policy.backoff.delay(0), policy.backoff.delay(1)]);
+    assert_eq!(
+        sleeper.delays(),
+        vec![policy.backoff.delay(0), policy.backoff.delay(1)]
+    );
     assert_eq!(server.request_count(), 3);
-    assert!(error.to_string().contains("all endpoints failed after 3 attempt(s)"));
+    assert!(
+        error
+            .to_string()
+            .contains("all endpoints failed after 3 attempt(s)")
+    );
 }
 
 #[test]
@@ -525,7 +579,10 @@ fn retry_after_of_429_extends_the_backoff() {
         recorded("evm/eth_chainId"),
     ]);
     let (transport, sleeper) = transport(&[&server], 2);
-    assert_eq!(EvmClient::new(transport).chain_id().expect("second round"), 1);
+    assert_eq!(
+        EvmClient::new(transport).chain_id().expect("second round"),
+        1
+    );
     let delays = sleeper.delays();
     assert_eq!(delays, vec![Duration::from_secs(1)]);
     assert!(delays[0] >= policy(2).backoff.delay(0));
@@ -539,8 +596,8 @@ fn timeouts_and_refused_connections_fail_over() {
         format!("http://{}", listener.local_addr().expect("address"))
     };
     let answering = MockServer::start(vec![recorded("evm/eth_chainId")]);
-    let set = EndpointSet::parse(&[&stalled.url(), &refused, &answering.url()], &[])
-        .expect("endpoints");
+    let set =
+        EndpointSet::parse(&[&stalled.url(), &refused, &answering.url()], &[]).expect("endpoints");
     let (transport, _) = transport_with(set, config(Duration::from_millis(300)), 1);
     let client = EvmClient::new(transport);
     assert_eq!(client.chain_id().expect("third endpoint answers"), 1);
@@ -551,7 +608,10 @@ fn timeouts_and_refused_connections_fail_over() {
     let set = EndpointSet::parse(&[&lonely.url()], &[]).expect("endpoints");
     let (transport, _) = transport_with(set, config(Duration::from_millis(300)), 1);
     let error = EvmClient::new(transport).chain_id().expect_err("timeout");
-    assert!(matches!(error.last_failure(), RpcError::Timeout { .. }), "{error:?}");
+    assert!(
+        matches!(error.last_failure(), RpcError::Timeout { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -567,7 +627,17 @@ fn client_errors_and_json_rpc_errors_are_answers_not_failover() {
             "application/json",
         )
         .expect_err("405");
-    assert!(matches!(error, RpcError::Status { status: 405, message: None, .. }), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            RpcError::Status {
+                status: 405,
+                message: None,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
     assert_eq!(b.request_count(), 0);
 
     let a = MockServer::start(vec![recorded("evm/eth_getProof_window_error")]);
@@ -583,7 +653,10 @@ fn client_errors_and_json_rpc_errors_are_answers_not_failover() {
     match error {
         RpcError::JsonRpc { code, message, .. } => {
             assert_eq!(code, -32602);
-            assert_eq!(message, "distance to target block exceeds maximum proof window");
+            assert_eq!(
+                message,
+                "distance to target block exceeds maximum proof window"
+            );
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -622,12 +695,234 @@ fn responses_above_the_size_limit_are_rejected() {
 }
 
 #[test]
+fn json_rpc_rate_limits_fail_over_like_http_429() {
+    let limited = MockServer::start(vec![Reply::json(
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32005,"message":"daily request count exceeded, request rate limited"}}"#,
+    )]);
+    let answering = MockServer::start(vec![recorded("evm/eth_chainId")]);
+    let (single, sleeper) = transport(&[&limited, &answering], 2);
+    let client = EvmClient::new(single);
+    assert_eq!(client.chain_id().expect("second endpoint"), 1);
+    assert_eq!((limited.request_count(), answering.request_count()), (1, 1));
+    assert!(sleeper.delays().is_empty(), "no backoff inside a round");
+    assert_eq!(client.transport().endpoints().preferred(), 1);
+
+    // One rate-limited call moves the whole batch to the next endpoint.
+    let limited = MockServer::start(vec![Reply::rpc_errors(
+        r#"[{"jsonrpc":"2.0","id":0,"result":"0x18daf58"},{"jsonrpc":"2.0","id":0,"error":{"code":429,"message":"Too Many Requests"}}]"#,
+    )]);
+    let answering = MockServer::start(vec![recorded("evm/batch_blockNumber_getProof")]);
+    let (batch, _) = transport(&[&limited, &answering], 1);
+    let results = batch
+        .json_rpc_batch(head_and_proof_batch())
+        .expect("second endpoint answers the batch");
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!((limited.request_count(), answering.request_count()), (1, 1));
+}
+
+/// The calls of the recorded `evm/batch_blockNumber_getProof` exchange.
+fn head_and_proof_batch() -> Vec<JsonRpcCall> {
+    vec![
+        JsonRpcCall::new("eth_blockNumber", Vec::new()),
+        JsonRpcCall::new(
+            "eth_getProof",
+            vec![
+                Value::from("0x0000F90827F1C53a10cb7A02335B175320002935"),
+                Value::Array(vec![Value::from(format!("0x{:0>64}", "1b75"))]),
+                Value::from("latest"),
+            ],
+        ),
+    ]
+}
+
+#[test]
+fn unsupported_methods_fail_over_to_an_endpoint_that_serves_them() {
+    let history = hex20("0x0000F90827F1C53a10cb7A02335B175320002935");
+    let slot = hex32(&format!("{:0>64}", "1b75"));
+    let unsupported = MockServer::start(vec![Reply::rpc_errors(
+        r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"the method eth_getProof does not exist/is not available"}}"#,
+    )]);
+    let serving = MockServer::start(vec![
+        recorded("evm/eth_getProof"),
+        recorded("evm/eth_chainId"),
+    ]);
+    let (single, sleeper) = transport(&[&unsupported, &serving], 2);
+    let client = EvmClient::new(single);
+    let proof = client
+        .proof(&history, &[slot], BlockId::from(BlockTag::Latest))
+        .expect("second endpoint serves eth_getProof");
+    assert_eq!(proof.address, history);
+    assert_eq!(
+        (unsupported.request_count(), serving.request_count()),
+        (1, 1)
+    );
+    assert!(sleeper.delays().is_empty(), "no backoff inside a round");
+    // The serving endpoint is preferred from now on.
+    assert_eq!(client.transport().endpoints().preferred(), 1);
+    assert_eq!(client.chain_id().expect("preferred endpoint"), 1);
+    assert_eq!(
+        (unsupported.request_count(), serving.request_count()),
+        (1, 2)
+    );
+
+    // EIP-1474 "method not supported" inside a batch moves the whole batch.
+    let unsupported = MockServer::start(vec![Reply::rpc_errors(
+        r#"[{"jsonrpc":"2.0","id":0,"result":"0x18daf58"},{"jsonrpc":"2.0","id":0,"error":{"code":-32004,"message":"method not supported"}}]"#,
+    )]);
+    let serving = MockServer::start(vec![recorded("evm/batch_blockNumber_getProof")]);
+    let (batch, _) = transport(&[&unsupported, &serving], 1);
+    let results = batch
+        .json_rpc_batch(head_and_proof_batch())
+        .expect("second endpoint serves the batch");
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(
+        (unsupported.request_count(), serving.request_count()),
+        (1, 1)
+    );
+
+    // An endpoint refusing the whole batch with one error object hands it on;
+    // when every endpoint refuses, the caller learns why from the failures.
+    let refusing = MockServer::start(vec![Reply::json(
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"batch requests are not supported"}}"#,
+    )]);
+    let serving = MockServer::start(vec![recorded("evm/batch_blockNumber_getProof")]);
+    let (batch, _) = transport(&[&refusing, &serving], 1);
+    let results = batch
+        .json_rpc_batch(head_and_proof_batch())
+        .expect("second endpoint serves the batch");
+    assert_eq!(results.len(), 2);
+    assert_eq!((refusing.request_count(), serving.request_count()), (1, 1));
+    let refusing = MockServer::start(vec![Reply::json(
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"batch requests are not supported"}}"#,
+    )]);
+    let (batch, _) = transport(&[&refusing], 1);
+    let error = batch
+        .json_rpc_batch(head_and_proof_batch())
+        .expect_err("every endpoint refuses");
+    assert!(
+        matches!(
+            error.last_failure(),
+            RpcError::BatchRejected { error: inner } if matches!(**inner, RpcError::JsonRpc { code: -32600, .. })
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn refused_credentials_fail_over() {
+    let forbidden = MockServer::start(vec![Reply::status(
+        403,
+        "application/json",
+        br#"{"Error":"request rate exceeded, the query server is suspended"}"#,
+    )]);
+    let unauthorized = MockServer::start(vec![Reply::status(
+        401,
+        "application/json",
+        br#"{"message":"invalid API key"}"#,
+    )]);
+    let answering = MockServer::start(vec![recorded("tron/wallet_getnowblock")]);
+    let (tron_transport, sleeper) = transport(&[&forbidden, &unauthorized, &answering], 1);
+    let client = TronClient::new(tron_transport);
+    let head = client.now_block().expect("third endpoint answers");
+    assert_eq!(head.header.number, 86_588_679);
+    let order = [&forbidden, &unauthorized, &answering].map(|server| server.requests()[0].sequence);
+    assert!(
+        order[0] < order[1] && order[1] < order[2],
+        "tried in list order"
+    );
+    assert!(sleeper.delays().is_empty(), "no backoff inside a round");
+    assert_eq!(client.transport().endpoints().preferred(), 2);
+
+    let forbidden = MockServer::start(vec![Reply::status(
+        403,
+        "application/json",
+        br#"{"message":"forbidden"}"#,
+    )]);
+    let (lonely, _) = transport(&[&forbidden], 1);
+    let error = TronClient::new(lonely)
+        .now_block()
+        .expect_err("the only endpoint refuses");
+    assert!(
+        matches!(
+            error.last_failure(),
+            RpcError::Status { status: 403, message: Some(message), .. } if message == "forbidden"
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn success_bodies_that_are_not_json_fail_over() {
+    let page = || {
+        Reply::status(
+            200,
+            "text/html; charset=utf-8",
+            b"<!DOCTYPE html><html><title>Just a moment...</title></html>",
+        )
+    };
+
+    let html = MockServer::start(vec![page()]);
+    let answering = MockServer::start(vec![recorded("evm/eth_chainId")]);
+    let client = EvmClient::new(transport_pair(&html, &answering));
+    assert_eq!(client.chain_id().expect("second endpoint"), 1);
+    assert_eq!((html.request_count(), answering.request_count()), (1, 1));
+    assert_eq!(client.transport().endpoints().preferred(), 1);
+
+    let html = MockServer::start(vec![page()]);
+    let answering = MockServer::start(vec![recorded("tron/walletsolidity_getnowblock")]);
+    let client = TronClient::new(transport_pair(&html, &answering));
+    let solid = client.solidity_now_block().expect("second endpoint");
+    assert_eq!(solid.header.number, 86_588_661);
+    assert_eq!((html.request_count(), answering.request_count()), (1, 1));
+
+    let html = MockServer::start(vec![page()]);
+    let answering = MockServer::start(vec![recorded("beacon/headers_finalized")]);
+    let client = BeaconClient::new(transport_pair(&html, &answering));
+    assert_eq!(
+        client.finalized_header().expect("second endpoint").slot,
+        15_301_120
+    );
+    assert_eq!((html.request_count(), answering.request_count()), (1, 1));
+
+    let html = MockServer::start(vec![page()]);
+    let answering = MockServer::start(vec![Reply::json(r#"{"result":true}"#)]);
+    let value = transport_pair(&html, &answering)
+        .post_json("/wallet/validateaddress", &Value::from(USDT))
+        .expect("second endpoint");
+    assert_eq!(
+        value,
+        norito::json::parse_value(r#"{"result":true}"#).expect("JSON")
+    );
+    assert_eq!(answering.requests()[0].json(), Value::from(USDT));
+    assert_eq!(
+        answering.requests()[0].header("content-type"),
+        Some("application/json")
+    );
+
+    let truncated = MockServer::start(vec![Reply::json(r#"{"data":{"root":"0xfe"#)]);
+    let (transport, _) = transport(&[&truncated], 1);
+    let error = transport
+        .get_json("/eth/v1/beacon/headers/finalized")
+        .expect_err("only a truncated body");
+    assert!(
+        matches!(
+            error.last_failure(),
+            RpcError::NotJson { content_type: Some(media), .. } if media == "application/json"
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn json_rpc_ids_must_answer_the_request() {
     let server = MockServer::start(vec![Reply::json(
         r#"{"jsonrpc":"2.0","id":999,"result":"0x1"}"#,
     )]);
     let error = evm(&server).chain_id().expect_err("foreign id");
-    assert!(matches!(error, RpcError::InvalidResponse { .. }), "{error:?}");
+    assert!(
+        matches!(error, RpcError::InvalidResponse { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -639,7 +934,7 @@ fn malformed_hex_is_rejected_without_failover() {
         (r#""0xzz""#, 1),
         (r#""0xabc""#, 2),
         (r#""0x1234""#, 3),
-        (r#"1"#, 1),
+        (r"1", 1),
     ] {
         let a = MockServer::start(vec![Reply::rpc_result(reply)]);
         let b = MockServer::start(Vec::new());
@@ -647,11 +942,16 @@ fn malformed_hex_is_rejected_without_failover() {
         let result = match call {
             0 => client.chain_id().map(drop),
             1 => client.block_number().map(drop),
-            2 => client.code(&[0; 20], BlockId::from(BlockTag::Latest)).map(drop),
+            2 => client
+                .code(&[0; 20], BlockId::from(BlockTag::Latest))
+                .map(drop),
             _ => client.send_raw_transaction(&[2, 0xc0]).map(drop),
         };
         let error = result.expect_err(reply);
-        assert!(matches!(error, RpcError::InvalidResponse { .. }), "{reply}: {error:?}");
+        assert!(
+            matches!(error, RpcError::InvalidResponse { .. }),
+            "{reply}: {error:?}"
+        );
         assert_eq!(b.request_count(), 0, "{reply}");
     }
 
@@ -660,7 +960,10 @@ fn malformed_hex_is_rejected_without_failover() {
         .get_mut("result")
         .and_then(Value::as_object_mut)
         .expect("block");
-    result.insert("miner".to_owned(), Value::from(format!("0x{}", "11".repeat(19))));
+    result.insert(
+        "miner".to_owned(),
+        Value::from(format!("0x{}", "11".repeat(19))),
+    );
     let server = MockServer::start(vec![Reply::Respond {
         status: 200,
         headers: Vec::new(),
@@ -757,7 +1060,10 @@ fn insecure_secret_header_files_are_refused_before_sending() {
             _ => assert!(matches!(refusal.problem, SecretFileProblem::Io { .. })),
         }
         let printed = format!("{error} {error:?}");
-        assert!(!printed.contains("top-secret-value"), "{expected}: {printed}");
+        assert!(
+            !printed.contains("top-secret-value"),
+            "{expected}: {printed}"
+        );
     }
 }
 
@@ -770,8 +1076,8 @@ fn an_endpoint_with_a_refused_secret_fails_over_to_the_next() {
     let open = MockServer::start(vec![recorded("evm/eth_chainId")]);
     let guarded_url = iroha_config::parameters::actual::parse_sccp_http_endpoint(&guarded.url())
         .expect("endpoint");
-    let open_url = iroha_config::parameters::actual::parse_sccp_http_endpoint(&open.url())
-        .expect("endpoint");
+    let open_url =
+        iroha_config::parameters::actual::parse_sccp_http_endpoint(&open.url()).expect("endpoint");
     let set = EndpointSet::new(
         [guarded_url.clone(), open_url],
         &[SccpSecretHeader {
@@ -782,7 +1088,12 @@ fn an_endpoint_with_a_refused_secret_fails_over_to_the_next() {
     )
     .expect("endpoints");
     let (transport, _) = transport_with(set, config(Duration::from_secs(5)), 1);
-    assert_eq!(EvmClient::new(transport).chain_id().expect("second endpoint"), 1);
+    assert_eq!(
+        EvmClient::new(transport)
+            .chain_id()
+            .expect("second endpoint"),
+        1
+    );
     assert_eq!(guarded.request_count(), 0);
     assert_eq!(open.request_count(), 1);
     assert_eq!(open.requests()[0].header("x-api-key"), None);
@@ -795,8 +1106,14 @@ fn an_endpoint_with_a_refused_secret_fails_over_to_the_next() {
 fn rpc_call(request: &Recorded) -> (String, Vec<Value>) {
     let call = request.json();
     (
-        call.get("method").and_then(Value::as_str).expect("method").to_owned(),
-        call.get("params").and_then(Value::as_array).expect("params").clone(),
+        call.get("method")
+            .and_then(Value::as_str)
+            .expect("method")
+            .to_owned(),
+        call.get("params")
+            .and_then(Value::as_array)
+            .expect("params")
+            .clone(),
     )
 }
 
@@ -814,7 +1131,10 @@ fn evm_chain_ids_and_head() {
     let (method, params) = rpc_call(&server.requests()[1]);
     assert_eq!(method, "eth_blockNumber");
     assert!(params.is_empty());
-    assert_eq!(server.requests()[0].header("accept"), Some("application/json"));
+    assert_eq!(
+        server.requests()[0].header("accept"),
+        Some("application/json")
+    );
 }
 
 #[test]
@@ -834,7 +1154,10 @@ fn evm_blocks_carry_every_header_field_through_prague() {
         hex32("0x4168ab54c50c21f13c2fc36b285fc7666824d3acb7879f56945b73d07338a942")
     );
     assert_eq!(header.number, 0x18d_af08);
-    assert_eq!(header.beneficiary, hex20("0x4838b106fce9647bdf1e7877bf73ce8b0bad5f97"));
+    assert_eq!(
+        header.beneficiary,
+        hex20("0x4838b106fce9647bdf1e7877bf73ce8b0bad5f97")
+    );
     assert!(header.difficulty.is_zero());
     assert_eq!(header.gas_limit, 0x393_8700);
     assert_eq!(header.timestamp, 0x6ab7_e84b);
@@ -847,10 +1170,15 @@ fn evm_blocks_carry_every_header_field_through_prague() {
     assert!(header.parent_beacon_block_root.is_some());
     assert_eq!(
         header.requests_hash,
-        Some(hex32("0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"))
+        Some(hex32(
+            "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ))
     );
     assert_eq!(block.transactions.len(), 320);
-    assert!(matches!(block.transactions, EvmBlockTransactions::Hashes(_)));
+    assert!(matches!(
+        block.transactions,
+        EvmBlockTransactions::Hashes(_)
+    ));
     assert!(block.uncles.is_empty());
     assert_eq!(block.size, Some(0x23d52));
     assert!(block.raw.get("withdrawals").is_some());
@@ -901,7 +1229,10 @@ fn evm_full_blocks_and_receipts() {
     assert_eq!(receipt.transaction_hash, hash);
     assert_eq!(receipt.status, Some(1));
     assert_eq!(receipt.logs.len(), 21);
-    assert_eq!(receipt.logs[0].address, hex20("0x9008d19f58aabd9ed0d60971565aa8510560ab41"));
+    assert_eq!(
+        receipt.logs[0].address,
+        hex20("0x9008d19f58aabd9ed0d60971565aa8510560ab41")
+    );
     assert_eq!(client.transaction_receipt(&[0; 32]).expect("unknown"), None);
     assert_eq!(
         client
@@ -914,10 +1245,43 @@ fn evm_full_blocks_and_receipts() {
 }
 
 #[test]
+fn evm_blocks_by_hash() {
+    // `eth_getBlockByHash` answers with the same block object that the
+    // recorded `eth_getBlockByNumber` exchange returned for this block.
+    let server = MockServer::start(vec![
+        recorded("evm/eth_getBlockByNumber_hashes"),
+        recorded("evm/eth_getBlockByNumber_null"),
+    ]);
+    let client = evm(&server);
+    let hash = hex32("0x4168ab54c50c21f13c2fc36b285fc7666824d3acb7879f56945b73d07338a942");
+    let block = client
+        .block_by_hash(&hash, false)
+        .expect("block")
+        .expect("known block");
+    assert_eq!(block.header.hash, hash);
+    assert_eq!(block.header.number, 0x18d_af08);
+    let (method, params) = rpc_call(&server.requests()[0]);
+    assert_eq!(method, "eth_getBlockByHash");
+    assert_eq!(
+        params,
+        vec![
+            Value::from(format!("0x{}", hex::encode(hash))),
+            Value::from(false)
+        ]
+    );
+    assert_eq!(client.block_by_hash(&[0; 32], true).expect("unknown"), None);
+    let (_, params) = rpc_call(&server.requests()[1]);
+    assert_eq!(params[1], Value::from(true));
+}
+
+#[test]
 fn evm_proofs_must_answer_the_requested_slots() {
     let history = hex20("0x0000F90827F1C53a10cb7A02335B175320002935");
     let slot = hex32(&format!("{:0>64}", "1b75"));
-    let server = MockServer::start(vec![recorded("evm/eth_getProof"), recorded("evm/eth_getProof")]);
+    let server = MockServer::start(vec![
+        recorded("evm/eth_getProof"),
+        recorded("evm/eth_getProof"),
+    ]);
     let client = evm(&server);
     let proof = client
         .proof(&history, &[slot], BlockId::from(BlockTag::Latest))
@@ -940,7 +1304,10 @@ fn evm_proofs_must_answer_the_requested_slots() {
     let error = client
         .proof(&history, &[other_slot], BlockId::from(BlockTag::Latest))
         .expect_err("foreign slot");
-    assert!(matches!(error, RpcError::InvalidResponse { .. }), "{error:?}");
+    assert!(
+        matches!(error, RpcError::InvalidResponse { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -955,13 +1322,17 @@ fn evm_state_reads_and_fee_data() {
     ]);
     let client = evm(&server);
     let history = hex20("0x0000F90827F1C53a10cb7A02335B175320002935");
-    let code = client.code(&history, BlockId::from(0x18d_af08)).expect("code");
+    let code = client
+        .code(&history, BlockId::from(0x18d_af08))
+        .expect("code");
     assert_eq!(code.len(), 83);
     assert_eq!(&code[..2], &[0x33, 0x73]);
 
     let weth = hex20("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
     let symbol = EvmCallRequest::new(weth, vec![0x95, 0xd8, 0x9b, 0x41]);
-    let output = client.call(&symbol, BlockId::from(0x18d_af08)).expect("call");
+    let output = client
+        .call(&symbol, BlockId::from(0x18d_af08))
+        .expect("call");
     assert_eq!(output.len(), 96);
     assert_eq!(&output[64..68], b"WETH");
     assert_eq!(client.estimate_gas(&symbol).expect("gas"), 0x605b);
@@ -995,8 +1366,16 @@ fn evm_state_reads_and_fee_data() {
     assert_eq!(params[2].as_array().map(Vec::len), Some(2));
     assert_eq!(server.request_count(), 6);
     assert!(client.fee_history(0, BlockTag::Latest, &[]).is_err());
-    assert!(client.fee_history(1, BlockTag::Latest, &[75.0, 25.0]).is_err());
-    assert!(client.fee_history(1, BlockTag::Latest, &[f64::NAN]).is_err());
+    assert!(
+        client
+            .fee_history(1, BlockTag::Latest, &[75.0, 25.0])
+            .is_err()
+    );
+    assert!(
+        client
+            .fee_history(1, BlockTag::Latest, &[f64::NAN])
+            .is_err()
+    );
     assert_eq!(server.request_count(), 6, "invalid requests are not sent");
 }
 
@@ -1008,9 +1387,19 @@ fn evm_raw_transaction_submission() {
         Reply::rpc_result(&format!(r#""{hash}""#)),
     ]);
     let client = evm(&server);
-    let error = client.send_raw_transaction(&[0x02, 0xc0]).expect_err("rejected");
-    assert!(matches!(error, RpcError::JsonRpc { code: -32600, .. }), "{error:?}");
-    assert_eq!(client.send_raw_transaction(&[0x02, 0xc1, 0x80]).expect("accepted"), [0xab; 32]);
+    let error = client
+        .send_raw_transaction(&[0x02, 0xc0])
+        .expect_err("rejected");
+    assert!(
+        matches!(error, RpcError::JsonRpc { code: -32600, .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        client
+            .send_raw_transaction(&[0x02, 0xc1, 0x80])
+            .expect("accepted"),
+        [0xab; 32]
+    );
     let (method, params) = rpc_call(&server.requests()[1]);
     assert_eq!(method, "eth_sendRawTransaction");
     assert_eq!(params, vec![Value::from("0x02c180")]);
@@ -1035,8 +1424,17 @@ fn evm_batches_match_answers_to_calls() {
         ])
         .expect("batch");
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].as_ref().expect("head"), &Value::from("0x18daf58"));
-    assert!(results[1].as_ref().expect("proof").get("accountProof").is_some());
+    assert_eq!(
+        results[0].as_ref().expect("head"),
+        &Value::from("0x18daf58")
+    );
+    assert!(
+        results[1]
+            .as_ref()
+            .expect("proof")
+            .get("accountProof")
+            .is_some()
+    );
     assert!(server.requests()[0].json().as_array().is_some());
     assert!(transport.json_rpc_batch(Vec::new()).is_err());
 }
@@ -1056,7 +1454,10 @@ fn evm_block_batches_parse_every_block() {
         .blocks_by_number(&[0x18d_af08, 0xffff_ffff], false)
         .expect("batch");
     assert_eq!(blocks.len(), 2);
-    assert_eq!(blocks[0].as_ref().map(|block| block.header.number), Some(0x18d_af08));
+    assert_eq!(
+        blocks[0].as_ref().map(|block| block.header.number),
+        Some(0x18d_af08)
+    );
     assert!(blocks[1].is_none());
 }
 
@@ -1092,7 +1493,9 @@ fn beacon_ssz_objects_carry_their_fork_context() {
         recorded("beacon/optimistic_update"),
     ]);
     let client = beacon(&server);
-    let finality = client.light_client_finality_update().expect("finality update");
+    let finality = client
+        .light_client_finality_update()
+        .expect("finality update");
     assert_eq!(finality.consensus_version.as_deref(), Some("fulu"));
     assert_eq!(finality.ssz, fixture_bytes("beacon/finality_update"));
     let optimistic = client
@@ -1101,7 +1504,10 @@ fn beacon_ssz_objects_carry_their_fork_context() {
     assert_eq!(optimistic.ssz.len(), 1_018);
     let request = &server.requests()[0];
     assert_eq!(request.method, "GET");
-    assert_eq!(request.target, "/eth/v1/beacon/light_client/finality_update");
+    assert_eq!(
+        request.target,
+        "/eth/v1/beacon/light_client/finality_update"
+    );
     assert_eq!(request.header("accept"), Some("application/octet-stream"));
     assert_eq!(
         server.requests()[1].target,
@@ -1134,7 +1540,10 @@ fn beacon_endpoints_answering_json_fail_over_to_ssz_endpoints() {
 #[test]
 fn beacon_bootstraps_and_period_updates() {
     let root = hex32("0xfea1d5a9a843e3afece8bdf7cfe4e0701d9b6282af51715834783170128f6ecd");
-    let server = MockServer::start(vec![recorded("beacon/bootstrap"), recorded("beacon/updates")]);
+    let server = MockServer::start(vec![
+        recorded("beacon/bootstrap"),
+        recorded("beacon/updates"),
+    ]);
     let client = beacon(&server);
     let bootstrap = client.light_client_bootstrap(&root).expect("bootstrap");
     assert_eq!(bootstrap.consensus_version.as_deref(), Some("fulu"));
@@ -1145,9 +1554,17 @@ fn beacon_bootstraps_and_period_updates() {
     );
 
     let updates = client.light_client_updates(1_865, 2).expect("updates");
-    assert_eq!(updates.consensus_versions, vec!["fulu".to_owned(), "fulu".to_owned()]);
+    assert_eq!(
+        updates.consensus_versions,
+        vec!["fulu".to_owned(), "fulu".to_owned()]
+    );
     assert_eq!(updates.chunks.len(), 2);
-    assert!(updates.chunks.iter().all(|chunk| chunk.fork_digest == [0x8c, 0x9f, 0x62, 0xfe]));
+    assert!(
+        updates
+            .chunks
+            .iter()
+            .all(|chunk| chunk.fork_digest == [0x8c, 0x9f, 0x62, 0xfe])
+    );
     assert_eq!(updates.chunks[0].ssz.len(), 26_923);
     assert_eq!(updates.chunks[1].ssz.len(), 26_920);
     assert_eq!(
@@ -1167,7 +1584,10 @@ fn beacon_updates_with_more_chunks_than_requested_are_rejected() {
     let error = beacon(&server)
         .light_client_updates(1_865, 1)
         .expect_err("two chunks for one period");
-    assert!(matches!(error, RpcError::InvalidResponse { .. }), "{error:?}");
+    assert!(
+        matches!(error, RpcError::InvalidResponse { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -1191,10 +1611,18 @@ fn beacon_headers_are_read_as_json() {
     assert!(header.canonical);
     assert_eq!(header.execution_optimistic, Some(false));
     assert_eq!(header.finalized, Some(false));
-    assert_eq!(server.requests()[0].target, "/eth/v1/beacon/headers/finalized");
-    assert_eq!(server.requests()[0].header("accept"), Some("application/json"));
+    assert_eq!(
+        server.requests()[0].target,
+        "/eth/v1/beacon/headers/finalized"
+    );
+    assert_eq!(
+        server.requests()[0].header("accept"),
+        Some("application/json")
+    );
 
-    let error = client.header(&BeaconBlockId::slot(42)).expect_err("unknown slot");
+    let error = client
+        .header(&BeaconBlockId::slot(42))
+        .expect_err("unknown slot");
     assert!(
         matches!(
             &error,
@@ -1242,7 +1670,10 @@ fn tron_blocks_keep_raw_transaction_bytes() {
     assert_eq!(usdt.ret.len(), 1);
     let request = &server.requests()[0];
     assert_eq!(request.target, "/wallet/getblockbynum");
-    assert_eq!(request.json().get("num").and_then(Value::as_u64), Some(86_588_651));
+    assert_eq!(
+        request.json().get("num").and_then(Value::as_u64),
+        Some(86_588_651)
+    );
 
     assert_eq!(client.block_by_num(999_999_999).expect("missing"), None);
     let head = client.now_block().expect("head");
@@ -1260,12 +1691,18 @@ fn tron_block_ranges() {
         .blocks_by_limit_next(86_588_649, 86_588_651)
         .expect("range");
     assert_eq!(
-        blocks.iter().map(|block| block.header.number).collect::<Vec<_>>(),
+        blocks
+            .iter()
+            .map(|block| block.header.number)
+            .collect::<Vec<_>>(),
         vec![86_588_649, 86_588_650]
     );
     assert_eq!(blocks[1].header.parent_hash, blocks[0].block_id);
     let body = server.requests()[0].json();
-    assert_eq!(body.get("startNum").and_then(Value::as_u64), Some(86_588_649));
+    assert_eq!(
+        body.get("startNum").and_then(Value::as_u64),
+        Some(86_588_649)
+    );
     assert_eq!(body.get("endNum").and_then(Value::as_u64), Some(86_588_651));
     assert!(client.blocks_by_limit_next(5, 5).is_err());
     assert!(client.blocks_by_limit_next(0, 101).is_err());
@@ -1296,10 +1733,16 @@ fn tron_transaction_info_and_contract_code() {
     assert_eq!(info.logs[0].data.len(), 32);
     assert_eq!(info.result, None);
     assert_eq!(
-        server.requests()[0].json().get("value").and_then(Value::as_str),
+        server.requests()[0]
+            .json()
+            .get("value")
+            .and_then(Value::as_str),
         Some("6386e9f37d890da8924f089a0adbcd16a09ac0ff6a979cc9357cf7feb25e9f54")
     );
-    assert_eq!(client.solidity_transaction_info(&[0; 32]).expect("missing"), None);
+    assert_eq!(
+        client.solidity_transaction_info(&[0; 32]).expect("missing"),
+        None
+    );
 
     let contract = client
         .contract_info(&hex21(USDT))
@@ -1329,14 +1772,50 @@ fn tron_constant_calls_and_reverts() {
     assert_eq!(decimals.energy_used, 2_207);
     let body = server.requests()[0].json();
     assert_eq!(body.get("data").and_then(Value::as_str), Some("313ce567"));
-    assert_eq!(body.get("contract_address").and_then(Value::as_str), Some(USDT));
+    assert_eq!(
+        body.get("contract_address").and_then(Value::as_str),
+        Some(USDT)
+    );
 
     let transfer = client
         .trigger_constant_contract(&owner, &hex21(USDT), &[0xa9, 0x05, 0x9c, 0xbb])
         .expect("transfer()");
     assert!(transfer.reverted());
-    assert_eq!(transfer.message.as_deref(), Some(&b"REVERT opcode executed"[..]));
+    assert_eq!(
+        transfer.message.as_deref(),
+        Some(&b"REVERT opcode executed"[..])
+    );
     assert_eq!(transfer.constant_result, vec![Vec::<u8>::new()]);
+}
+
+#[test]
+fn tron_constant_calls_against_solidified_state() {
+    // The recorded head-state answer is replayed: both routes answer with the
+    // same `TransactionExtention` shape.
+    let server = MockServer::start(vec![recorded("tron/wallet_triggerconstantcontract")]);
+    let client = tron(&server);
+    let owner = format!("41{}", "00".repeat(20));
+    let decimals = client
+        .solidity_trigger_constant_contract(&hex21(&owner), &hex21(USDT), &[0x31, 0x3c, 0xe5, 0x67])
+        .expect("decimals()");
+    assert!(!decimals.reverted());
+    assert_eq!(decimals.constant_result[0][31], 6);
+    let request = &server.requests()[0];
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.target, "/walletsolidity/triggerconstantcontract");
+    let body = request.json();
+    assert_eq!(
+        body.get("owner_address").and_then(Value::as_str),
+        Some(owner.as_str())
+    );
+    assert_eq!(body.get("data").and_then(Value::as_str), Some("313ce567"));
+    assert!(
+        client
+            .solidity_trigger_constant_contract(&[0; 21], &hex21(USDT), &[])
+            .is_err(),
+        "non-TRON owner"
+    );
+    assert_eq!(server.request_count(), 1, "invalid requests are not sent");
 }
 
 #[test]
@@ -1351,7 +1830,9 @@ fn tron_broadcasts_and_api_errors() {
         recorded("tron/wallet_getblockbynum_api_error"),
     ]);
     let client = tron(&server);
-    let rejected = client.broadcast_hex(&[0x0a, 0x01, 0x00]).expect("rejection");
+    let rejected = client
+        .broadcast_hex(&[0x0a, 0x01, 0x00])
+        .expect("rejection");
     assert!(!rejected.result);
     assert_eq!(rejected.code.as_deref(), Some("SIGERROR"));
     assert_eq!(
@@ -1360,7 +1841,9 @@ fn tron_broadcasts_and_api_errors() {
     );
     assert_eq!(
         rejected.txid,
-        Some(hex32("949d86e53d6a03f8d09ef021c8bedbcd9b881c0d1dc37f4d5fbb6eaff4ebe9d9"))
+        Some(hex32(
+            "949d86e53d6a03f8d09ef021c8bedbcd9b881c0d1dc37f4d5fbb6eaff4ebe9d9"
+        ))
     );
     let error = client.broadcast_hex(&[0x0a, 0x02]).expect_err("unparsable");
     assert!(
@@ -1372,7 +1855,10 @@ fn tron_broadcasts_and_api_errors() {
     assert_eq!(accepted.message, None);
     assert_eq!(accepted.txid, Some([0xab; 32]));
     assert_eq!(
-        server.requests()[2].json().get("transaction").and_then(Value::as_str),
+        server.requests()[2]
+            .json()
+            .get("transaction")
+            .and_then(Value::as_str),
         Some("0a0100")
     );
     let error = client.block_by_num(1).expect_err("API error");

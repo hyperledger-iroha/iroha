@@ -49,6 +49,8 @@ use zeroize::Zeroizing;
 mod doctor_accounts;
 #[path = "taira_onboarding.rs"]
 mod onboarding;
+#[path = "taira_parliament_seating.rs"]
+pub(crate) mod parliament_seating;
 use iroha_wallet::faucet_pow::{solve_account_faucet_claim, validate_puzzle_identity};
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
@@ -117,12 +119,6 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         &[200],
     ),
     (
-        "sccp_capabilities",
-        RouteCheckMethod::Get,
-        "/v1/sccp/capabilities",
-        &[200],
-    ),
-    (
         "zk_proofs_count",
         RouteCheckMethod::Get,
         "/v1/zk/proofs/count",
@@ -170,6 +166,9 @@ pub enum Command {
     DataspaceDeploy(crate::taira_dataspace_deploy::Command),
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
+    /// Seat the SORA Parliament in a freshly generated Kagami Taira network: genesis citizens
+    /// and the recommended `[gov]` profile (`specs/sccp.md` §4.14.5).
+    SeatParliament(parliament_seating::SeatParliament),
     /// Preflight or execute the strictly authorized compiled public reset.
     PublicReset(crate::taira_public_reset::PublicReset),
     /// Reconcile empty stopped Inrou owners under the active routine updater lock.
@@ -191,6 +190,7 @@ impl Run for Command {
             Self::Account(cmd) => cmd.run(context),
             Self::DataspaceDeploy(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
+            Self::SeatParliament(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
             ),
@@ -248,6 +248,10 @@ pub struct Doctor {
     /// Emit a stable JSON report.
     #[arg(long)]
     pub json: bool,
+    /// Also report every SORA Parliament seating requirement (`specs/sccp.md` §4.14.5) that
+    /// signer-free public routes cannot prove, as warnings.
+    #[arg(long)]
+    pub parliament: bool,
 }
 impl Run for Doctor {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -257,7 +261,10 @@ impl Run for Doctor {
 }
 impl Doctor {
     fn run_with_output<O: ReportOutput>(&self, output: &mut O) -> Result<()> {
-        let report = run_doctor(&self.public_root, self.scope)?;
+        let mut report = run_doctor(&self.public_root, self.scope)?;
+        if self.parliament {
+            doctor_accounts::append_parliament_warnings(&mut report)?;
+        }
         render_report_to(output, self.json, &report)?;
         if report_status(&report) == Some("fail") {
             eyre::bail!("Taira doctor found hard failures");
@@ -2777,7 +2784,7 @@ pub(super) fn doctor_expected_checks(
         .filter(|(name, _, _, _)| scope.includes_route(name))
         .map(|(name, _, _, statuses)| (*name, u64::from(statuses[0]), route_check_detail(statuses)))
         .collect::<Vec<_>>();
-    checks.extend(doctor_accounts::EXPECTED);
+    checks.extend(doctor_accounts::expected());
     checks.extend([
         ("mcp_get", 405, None),
         ("mcp_discovery", 200, None),

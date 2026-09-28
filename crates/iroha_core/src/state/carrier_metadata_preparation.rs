@@ -46,8 +46,6 @@ impl StateBlock<'_> {
             signed_block.npos_consensus_effects(),
             self.applied_npos_consensus_effects_hash.as_ref(),
         )?;
-        crate::bridge::validate_sccp_commitment_root_for_signed_block(signed_block)
-            .map_err(|error| invalid(&format!("SCCP commitment: {error:?}")))?;
         let snapshot = signed_block
             .axt_policy_snapshot()
             .ok_or_else(|| invalid("missing AXT policy snapshot"))?;

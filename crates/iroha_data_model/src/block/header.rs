@@ -69,10 +69,6 @@ mod model {
         #[getset(get_copy = "pub", set = "pub")]
         #[norito(required)]
         pub npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
-        /// Optional SCCP commitment root finalized before signing this block.
-        #[getset(get_copy = "pub", set = "pub")]
-        #[norito(required)]
-        pub sccp_commitment_root: Option<[u8; 32]>,
         /// Creation timestamp as Unix time in milliseconds.
         #[getset(skip)]
         pub creation_time_ms: u64,
@@ -167,8 +163,6 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Execution-context hash.
         pub Option<[u8; 32]>,
-        /// SCCP commitment root.
-        pub Option<[u8; 32]>,
         /// Confidential feature digest.
         pub Option<ConfidentialFeatureDigestWire>,
         /// Current threshold beacon pulse hash.
@@ -187,7 +181,6 @@ pub mod wire {
         (
             Option<[u8; 32]>,
             Option<[u8; 32]>,
-            Option<[u8; 32]>,
             Option<ConfidentialFeatureDigestWire>,
             Option<[u8; 32]>,
         ),
@@ -203,7 +196,7 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                (self.8, self.9, self.10, self.11, self.12),
+                (self.8, self.9, self.10, self.11),
             );
             <BlockHeaderPayloadTuple as ncore::SerializePayload>::serialize(&tuple, writer)
         }
@@ -217,7 +210,7 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                (self.8, self.9, self.10, self.11, self.12),
+                (self.8, self.9, self.10, self.11),
             );
             <BlockHeaderPayloadTuple as ncore::SerializePayload>::encoded_len_hint(&tuple)
         }
@@ -231,7 +224,7 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                (self.8, self.9, self.10, self.11, self.12),
+                (self.8, self.9, self.10, self.11),
             );
             <BlockHeaderPayloadTuple as ncore::SerializePayload>::encoded_len_exact(&tuple)
         }
@@ -244,7 +237,7 @@ pub mod wire {
                 );
             Self(
                 tuple.0, tuple.1, tuple.2, tuple.3, tuple.4, tuple.5, tuple.6, tuple.7, tuple.8.0,
-                tuple.8.1, tuple.8.2, tuple.8.3, tuple.8.4,
+                tuple.8.1, tuple.8.2, tuple.8.3,
             )
         }
     }
@@ -440,7 +433,6 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
             opt_hash_to_bytes(b.da_pin_intents_hash),
             opt_hash_to_bytes(b.npos_effects_hash),
             opt_hash_to_bytes(b.execution_context_hash),
-            b.sccp_commitment_root,
             digest_to_wire(b.confidential_features),
             opt_hash_to_bytes(b.global_beacon_pulse_hash),
         )
@@ -468,11 +460,10 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
         header.set_da_pin_intents_hash(opt_hash_from_bytes::<DaPinIntentBundle>(w.7));
         header.set_npos_effects_hash(opt_hash_from_bytes::<NposConsensusEffects>(w.8));
         header.set_execution_context_hash(opt_hash_from_bytes::<BlockExecutionContextBundle>(w.9));
-        header.set_sccp_commitment_root(w.10);
-        header.set_confidential_features(digest_from_wire(w.11));
+        header.set_confidential_features(digest_from_wire(w.10));
         header.set_global_beacon_pulse_hash(opt_hash_from_bytes::<
             FinalizedGlobalThresholdBeaconPulseV1,
-        >(w.12));
+        >(w.11));
         header
     }
 }
@@ -515,7 +506,6 @@ struct BlockHeaderConsensusProjectionV1 {
     npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
     global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
     execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
-    sccp_commitment_root: Option<[u8; 32]>,
     creation_time_ms: u64,
     view_change_index: u64,
     confidential_features: Option<ConfidentialFeatureDigest>,
@@ -535,7 +525,6 @@ impl From<&BlockHeader> for BlockHeaderConsensusProjectionV1 {
             npos_effects_hash,
             global_beacon_pulse_hash,
             execution_context_hash,
-            sccp_commitment_root,
             creation_time_ms,
             view_change_index,
             confidential_features,
@@ -551,7 +540,6 @@ impl From<&BlockHeader> for BlockHeaderConsensusProjectionV1 {
             npos_effects_hash,
             global_beacon_pulse_hash,
             execution_context_hash,
-            sccp_commitment_root,
             creation_time_ms,
             view_change_index,
             confidential_features,
@@ -578,7 +566,6 @@ impl BlockHeader {
             npos_effects_hash: None,
             global_beacon_pulse_hash: None,
             execution_context_hash: None,
-            sccp_commitment_root: None,
             creation_time_ms,
             view_change_index,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -595,8 +582,8 @@ impl BlockHeader {
     }
     /// Returns the consensus-level hash of the block header.
     ///
-    /// This header contains only proposal inputs. `sccp_commitment_root` is included so block
-    /// signatures and commit QCs authenticate exported SCCP proofs.
+    /// This header contains only proposal inputs; execution results are authenticated by the
+    /// Commit QC's `ExecutionCommitment`.
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
         self.hash_consensus_projection()
@@ -702,25 +689,6 @@ mod tests {
         )]);
         HashOf::new(&context)
     }
-    fn assert_sccp_commitment_root_captured_by_hash(mut header: BlockHeader) {
-        let base = header.hash();
-        header.set_sccp_commitment_root(Some([0x42; 32]));
-        let first_root_hash = header.hash();
-        assert_ne!(
-            base, first_root_hash,
-            "SCCP commitment root must affect the consensus hash"
-        );
-        header.set_sccp_commitment_root(Some([0x7A; 32]));
-        let second_root_hash = header.hash();
-        assert_ne!(
-            base, second_root_hash,
-            "changing SCCP commitment root must keep affecting the consensus hash"
-        );
-        assert_ne!(
-            first_root_hash, second_root_hash,
-            "different SCCP commitment roots must produce different consensus hashes"
-        );
-    }
     #[test]
     fn block_signature_getters_and_roundtrip() {
         let keypair = checked_random_keypair();
@@ -808,7 +776,7 @@ mod tests {
             "da_commitments_hash",
             "da_pin_intents_hash",
             "npos_effects_hash",
-            "sccp_commitment_root",
+            "global_beacon_pulse_hash",
             "confidential_features",
             "execution_context_hash",
         ];
@@ -847,7 +815,11 @@ mod tests {
         header.set_da_pin_intents_hash(Some(typed_hash::<DaPinIntentBundle>(0x66)));
         header.set_npos_effects_hash(Some(typed_hash::<NposConsensusEffects>(0x88)));
         header.set_execution_context_hash(Some(typed_hash::<BlockExecutionContextBundle>(0x99)));
-        header.set_sccp_commitment_root(Some([0xAA; 32]));
+        let before_pulse = header.hash();
+        header.set_global_beacon_pulse_hash(Some(typed_hash::<
+            FinalizedGlobalThresholdBeaconPulseV1,
+        >(0xAA)));
+        assert_ne!(header.hash(), before_pulse);
 
         let decoded_wire = BlockHeader::from(wire::BlockHeaderWire::from(header));
         assert_eq!(decoded_wire, header);
@@ -1036,21 +1008,43 @@ mod tests {
     }
 
     #[test]
-    fn header_hash_captures_sccp_commitment_root_in_canonical_v1_projection() {
-        assert_sccp_commitment_root_captured_by_hash(BlockHeader::new(
-            nonzero!(7_u64),
-            None,
-            None,
-            123,
-            0,
-        ));
-        let mut with_context = BlockHeader::new(nonzero!(7_u64), None, None, 123, 0);
-        with_context.set_execution_context_hash(Some(sample_execution_context_hash()));
-        assert_sccp_commitment_root_captured_by_hash(with_context);
-        let mut with_npos = BlockHeader::new(nonzero!(7_u64), None, None, 123, 0);
-        with_npos.set_execution_context_hash(Some(sample_execution_context_hash()));
-        with_npos.set_npos_effects_hash(Some(HashOf::new(&NposConsensusEffects::default())));
-        assert_sccp_commitment_root_captured_by_hash(with_npos);
+    fn header_rejects_retired_layout_with_bridge_commitment_slot() {
+        #[derive(norito::codec::Encode)]
+        struct RetiredBlockHeader {
+            height: NonZeroU64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+            da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
+            da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
+            da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
+            retired_commitment_slot: Option<[u8; 32]>,
+            creation_time_ms: u64,
+            view_change_index: u64,
+            confidential_features: Option<ConfidentialFeatureDigest>,
+            execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
+        }
+        for retired_commitment_slot in [None, Some([0x42; 32])] {
+            let retired = RetiredBlockHeader {
+                height: nonzero!(7_u64),
+                prev_block_hash: None,
+                merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                npos_effects_hash: None,
+                retired_commitment_slot,
+                creation_time_ms: 123,
+                view_change_index: 2,
+                confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
+                execution_context_hash: None,
+            };
+            let bytes = retired.encode();
+            assert!(
+                BlockHeader::decode_all(&mut bytes.as_slice()).is_err(),
+                "the header decoder must reject the retired proposal-time bridge commitment slot"
+            );
+        }
     }
     #[test]
     fn header_rejects_pre_release_payload_without_execution_context_hash_field() {
@@ -1064,7 +1058,6 @@ mod tests {
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
             global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
-            sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -1078,7 +1071,6 @@ mod tests {
             da_pin_intents_hash: None,
             npos_effects_hash: None,
             global_beacon_pulse_hash: None,
-            sccp_commitment_root: Some([0x42; 32]),
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -1101,7 +1093,6 @@ mod tests {
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
-            sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -1115,7 +1106,6 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             global_beacon_pulse_hash: None,
-            sccp_commitment_root: Some([0x42; 32]),
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -1143,7 +1133,6 @@ mod tests {
             retired_roster_slot: Option<HashOf<RetiredLayoutTag>>,
             npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
             global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
-            sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -1162,7 +1151,6 @@ mod tests {
             ))),
             npos_effects_hash: None,
             global_beacon_pulse_hash: None,
-            sccp_commitment_root: Some([0x42; 32]),
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -1210,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_header_rejects_retired_thirteen_field_payload() {
+    fn proposal_header_rejects_retired_output_root_payload() {
         #[derive(norito::codec::Encode)]
         struct RetiredHeader {
             height: NonZeroU64,
@@ -1222,7 +1210,6 @@ mod tests {
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
-            sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -1243,7 +1230,6 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
-                sccp_commitment_root: None,
                 creation_time_ms: 12345,
                 view_change_index: 0,
                 confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),

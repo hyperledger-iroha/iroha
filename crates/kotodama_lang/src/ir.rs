@@ -1238,8 +1238,6 @@ pub enum Instr {
 pub enum VendorInstructionKind {
     /// Governance `SubmitBallot`.
     SubmitBallot,
-    /// Bridge `RecordSccpMessage`.
-    RecordSccpMessage,
 }
 /// Kinds of typed data references supported by the pointer-ABI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -5511,14 +5509,12 @@ fn lower_surface_builtin_call(
             });
             dest
         }
-        Builtin::RecordSccpMessage | Builtin::ScExecuteSubmitBallot => {
+        Builtin::ScExecuteSubmitBallot => {
             let payload = lower_expr(ctx, &args[0], vars);
-            let kind = match builtin {
-                Builtin::RecordSccpMessage => VendorInstructionKind::RecordSccpMessage,
-                Builtin::ScExecuteSubmitBallot => VendorInstructionKind::SubmitBallot,
-                _ => unreachable!("matched operation-specific instruction bridge"),
-            };
-            ctx.current_instr(Instr::VendorExecuteInstruction { payload, kind });
+            ctx.current_instr(Instr::VendorExecuteInstruction {
+                payload,
+                kind: VendorInstructionKind::SubmitBallot,
+            });
             emit_i64_const(ctx, 0)
         }
         Builtin::ExecuteQuery => {

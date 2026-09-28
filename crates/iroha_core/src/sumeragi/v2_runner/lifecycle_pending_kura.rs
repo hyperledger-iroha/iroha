@@ -849,12 +849,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
     state: Arc<State>,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
-    provider_ingest_finalized_archive: Option<
-        Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
-    >,
-    reputation_finalized_archive: Option<
-        Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
-    >,
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
     >,
@@ -1041,8 +1035,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         Arc::clone(&state),
         Arc::clone(&queue),
         Arc::clone(&kura),
-        provider_ingest_finalized_archive.clone(),
-        reputation_finalized_archive.clone(),
         events_sender.clone(),
     )?;
     let owner = authenticated.open_production_lifecycle_owner_v1(
@@ -1251,8 +1243,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         state,
         queue,
         kura,
-        provider_ingest_finalized_archive,
-        reputation_finalized_archive,
         global_beacon_partial_signer,
         beacon_readiness,
         kagemusha_mint_finality_authority,

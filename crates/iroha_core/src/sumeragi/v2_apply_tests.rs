@@ -7,8 +7,6 @@ pub(super) struct FailureInjection {
     successful_frontier_pause: std::sync::Mutex<Option<Arc<SuccessfulApplyFrontierPause>>>,
     pub(super) kura_store: std::sync::atomic::AtomicBool,
     pub(super) wsv_checkpoint: std::sync::atomic::AtomicBool,
-    pub(super) provider_ingest_archive_capture: std::sync::atomic::AtomicBool,
-    pub(super) reputation_archive_capture: std::sync::atomic::AtomicBool,
 }
 /// Arrival, release and worker exit belong to the same synchronized observation.
 #[derive(Default)]
@@ -134,16 +132,17 @@ fn successful_apply_frontier_worker_exit_before_arrival_notifies_both_gates() {
         std::thread::scope(|scope| {
             let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
             let worker_pause = Arc::clone(&pause);
-            let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-early-exit")
-                .spawn_scoped(scope, move || {
-                    let _finished = NotifySuccessfulApplyExit(worker_pause);
-                    match disposition {
-                        0 => Ok(()),
-                        1 => Err("Apply rejected before either gate"),
-                        _ => panic!("Apply panicked before either gate"),
-                    }
-                })
-                .expect("spawn exiting frontier worker");
+            let worker =
+                crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-early-exit")
+                    .spawn_scoped(scope, move || {
+                        let _finished = NotifySuccessfulApplyExit(worker_pause);
+                        match disposition {
+                            0 => Ok(()),
+                            1 => Err("Apply rejected before either gate"),
+                            _ => panic!("Apply panicked before either gate"),
+                        }
+                    })
+                    .expect("spawn exiting frontier worker");
             for gate in [&pause.before_store, &pause.after_store] {
                 let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     gate.wait_until_arrived();
@@ -181,13 +180,14 @@ fn successful_apply_frontier_worker_exit_between_gates_preserves_first_arrival()
     std::thread::scope(|scope| {
         let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
-        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-between-gates")
-            .spawn_scoped(scope, move || {
-                let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
-                worker_pause.before_store.arrive_and_wait();
-                Err::<(), _>("Apply rejected after the first gate")
-            })
-            .expect("spawn frontier worker");
+        let worker =
+            crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-between-gates")
+                .spawn_scoped(scope, move || {
+                    let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
+                    worker_pause.before_store.arrive_and_wait();
+                    Err::<(), _>("Apply rejected after the first gate")
+                })
+                .expect("spawn frontier worker");
         pause.before_store.wait_until_arrived();
         pause.before_store.release();
         let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -215,14 +215,15 @@ fn successful_apply_frontier_observer_unwind_releases_and_joins_worker() {
     std::thread::scope(|scope| {
         let release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
-        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-observer-unwind")
-            .spawn_scoped(scope, move || {
-                let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
-                worker_pause.before_store.arrive_and_wait();
-                worker_pause.after_store.arrive_and_wait();
-                "both gates released during observer unwind"
-            })
-            .expect("spawn frontier worker");
+        let worker =
+            crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-observer-unwind")
+                .spawn_scoped(scope, move || {
+                    let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
+                    worker_pause.before_store.arrive_and_wait();
+                    worker_pause.after_store.arrive_and_wait();
+                    "both gates released during observer unwind"
+                })
+                .expect("spawn frontier worker");
         let observer_pause = Arc::clone(&pause);
         let outcome = std::panic::catch_unwind(move || {
             let _release = release;
@@ -287,10 +288,6 @@ pub(super) enum CrashPoint {
     KuraStore,
     /// After the staged WSV checkpoint.
     WsvCheckpoint,
-    /// After provider-ingest archive capture.
-    ProviderIngestArchiveCapture,
-    /// After reputation archive capture.
-    ReputationArchiveCapture,
 }
 /// Persist the exact payload, exact execution input, and immutable recovery
 /// record in crash-safe order after independently rebuilding every authority.
@@ -385,18 +382,6 @@ impl V2ApplyService {
                     .swap(false, std::sync::atomic::Ordering::Relaxed),
                 V2ApplyError::InjectedCrashAfterWsvCheckpoint,
             ),
-            CrashPoint::ProviderIngestArchiveCapture => (
-                self.test_failures
-                    .provider_ingest_archive_capture
-                    .swap(false, std::sync::atomic::Ordering::Relaxed),
-                V2ApplyError::InjectedCrashAfterProviderIngestArchiveCapture,
-            ),
-            CrashPoint::ReputationArchiveCapture => (
-                self.test_failures
-                    .reputation_archive_capture
-                    .swap(false, std::sync::atomic::Ordering::Relaxed),
-                V2ApplyError::InjectedCrashAfterReputationArchiveCapture,
-            ),
         };
         if requested { Err(error) } else { Ok(()) }
     }
@@ -410,18 +395,6 @@ impl V2ApplyService {
     fn fail_after_wsv_checkpoint_for_test(&self) {
         self.test_failures
             .wsv_checkpoint
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    #[cfg(test)]
-    fn fail_after_provider_ingest_archive_capture_for_test(&self) {
-        self.test_failures
-            .provider_ingest_archive_capture
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    #[cfg(test)]
-    fn fail_after_reputation_archive_capture_for_test(&self) {
-        self.test_failures
-            .reputation_archive_capture
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -637,7 +610,6 @@ fn install_live_lifecycle_cursor_for_apply_test(
 include!("tests/v2_apply_unsealed_00.rs");
 include!("tests/v2_apply_unsealed_01.rs");
 include!("tests/v2_apply_unsealed_02.rs");
-include!("v2_apply/archive_reservations_tests.rs");
 include!("v2_apply/native_preparation_error_tests.rs");
 
 /// Canonical height-one material for exercising the recovered Decision Apply
@@ -787,10 +759,11 @@ fn current_carrier_accepts_signed_direct_ordinary_route_without_local_queue() {
 #[cfg(feature = "bls")]
 #[test]
 fn retained_current_genesis_executes_once_and_publishes_original_owner() {
-    let handle =
-        crate::sumeragi::threads::sumeragi_thread_builder("retained-current-genesis-original-owner")
-            .spawn(retained_current_genesis_on_consensus_stack)
-            .expect("spawn retained genesis test on the production consensus stack");
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder(
+        "retained-current-genesis-original-owner",
+    )
+    .spawn(retained_current_genesis_on_consensus_stack)
+    .expect("spawn retained genesis test on the production consensus stack");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }

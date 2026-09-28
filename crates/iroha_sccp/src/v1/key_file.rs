@@ -4,15 +4,17 @@
 //! `key_dir`, holding the headered Norito frame of
 //! `SccpBridgeKeyFileV1 { secret: [u8; 32], created_at_ms: u64 }`. This module owns the frame
 //! format, key generation from the OS CSPRNG, address derivation and signing; directory
-//! handling, modes and atomic writes belong to the attestor (`irohad`). Key generation, signing
-//! and file-name parsing are compiled only for tests until that attestor consumes them.
+//! handling, modes and atomic writes belong to the attestor (`irohad`).
 //!
 //! The secret is wiped when the value is dropped and never appears in `Debug` output. Wiping is
 //! best effort without `unsafe`: the bytes are overwritten behind an optimization barrier.
 
 use core::fmt;
 
-use super::signature::{self, SignatureError, wipe};
+use super::{
+    hashes::to_hex,
+    signature::{self, SignatureError, wipe},
+};
 
 unit_error! {
     /// Bridge key file errors.
@@ -70,7 +72,6 @@ impl SccpBridgeKeyFileV1 {
     /// # Errors
     ///
     /// Returns [`KeyFileError::EntropyUnavailable`] when the OS RNG fails.
-    #[cfg(test)]
     pub fn generate(created_at_ms: u64) -> Result<Self, KeyFileError> {
         let secret = signature::fresh_entropy().map_err(|_| KeyFileError::EntropyUnavailable)?;
         Self::new(secret, created_at_ms)
@@ -120,7 +121,6 @@ impl SccpBridgeKeyFileV1 {
     /// # Errors
     ///
     /// See [`signature::sign_digest`].
-    #[cfg(test)]
     pub fn sign_digest(&self, digest: &[u8; 32]) -> Result<[u8; 65], SignatureError> {
         signature::sign_digest(&self.secret, digest)
     }
@@ -170,14 +170,13 @@ impl fmt::Debug for SccpBridgeKeyFileV1 {
 /// `<address-hex>.key` for a bridge address.
 #[must_use]
 pub fn key_file_name(address: &[u8; 20]) -> String {
-    let mut name: String = address.iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut name = to_hex(address);
     name.push_str(KEY_FILE_SUFFIX);
     name
 }
 
 /// Parse `<address-hex>.key` back into an address; `None` for any other name.
 #[must_use]
-#[cfg(test)]
 pub fn parse_key_file_name(name: &str) -> Option<[u8; 20]> {
     let hex = name.strip_suffix(KEY_FILE_SUFFIX)?;
     if hex.len() != 40
@@ -277,10 +276,7 @@ mod tests {
         let key = SccpBridgeKeyFileV1::new(fixed_secret(), 9).unwrap();
         let debug = format!("{key:?}");
         assert!(debug.contains("<redacted>"));
-        let secret_hex: String = fixed_secret()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let secret_hex = to_hex(&fixed_secret());
         assert!(!debug.contains(&secret_hex));
         assert!(!debug.contains(&format!("{:?}", fixed_secret())));
         let frame_debug = format!("{:?}", key.to_frame().unwrap());
@@ -297,7 +293,7 @@ mod tests {
         );
         let name = key.file_name().unwrap();
         assert_eq!(name.len(), 44);
-        assert!(name.ends_with(".key"));
+        assert_eq!(&name[40..], KEY_FILE_SUFFIX);
         assert_eq!(parse_key_file_name(&name), Some(address));
         assert_eq!(parse_key_file_name("abc.key"), None);
         assert_eq!(parse_key_file_name(&name.to_uppercase()), None);
