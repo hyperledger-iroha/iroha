@@ -242,6 +242,9 @@ mod current_beacon_tests {
             consensus_mode: ConsensusMode::Permissioned,
             applied: (4, replay.committed(4).core_hash()),
             crypto: None,
+            applied_watch: std::sync::Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+                0, None,
+            )),
         })
         .unwrap();
         restarted

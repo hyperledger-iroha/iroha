@@ -320,6 +320,10 @@ impl CertifiedTestChain {
             consensus_mode: consensus_mode.into(),
             applied: (GENESIS_HEIGHT, tip.block_hash),
             crypto: Some(Arc::clone(&crypto)),
+            applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+                GENESIS_HEIGHT,
+                state.view().latest_block_hash(),
+            )),
         })
         .expect("executor thread");
         let signers = keys

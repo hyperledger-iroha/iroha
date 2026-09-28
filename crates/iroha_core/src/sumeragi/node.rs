@@ -367,6 +367,7 @@ pub struct Prepared {
     blocks: Arc<KuraBlockStore>,
     executor: StateExecutor,
     consensus_mode: ConsensusMode,
+    applied_watch: Arc<crate::sumeragi::lanes::global::AppliedWatch>,
 }
 
 impl core::fmt::Debug for Prepared {
@@ -442,6 +443,10 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         GENESIS_HEIGHT,
         staging.clone(),
     ));
+    let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+        GENESIS_HEIGHT,
+        state.view().latest_block_hash(),
+    ));
     let mut executor = StateExecutor::spawn(ExecutorContext {
         state: Arc::clone(&state),
         queue: None,
@@ -451,6 +456,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         consensus_mode,
         applied: (GENESIS_HEIGHT, tip.block_hash),
         crypto: Some(Arc::clone(&crypto)),
+        applied_watch: Arc::clone(&applied_watch),
     })
     .map_err(|error| NodeError::Driver(error.to_string()))?;
     admit_window(&state, &crypto, GENESIS_HEIGHT);
@@ -474,6 +480,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         blocks,
         executor,
         consensus_mode,
+        applied_watch,
     })
 }
 
@@ -510,6 +517,7 @@ impl Prepared {
             blocks,
             executor,
             consensus_mode,
+            applied_watch: _,
         } = self;
         let StartInputs {
             net,
@@ -1330,6 +1338,10 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             applied: (GENESIS_HEIGHT, tip.block_hash),
             crypto: Some(Arc::clone(&crypto)),
+            applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
+                GENESIS_HEIGHT,
+                state.view().latest_block_hash(),
+            )),
         })
         .expect("executor");
         admit_window(&state, &crypto, GENESIS_HEIGHT);

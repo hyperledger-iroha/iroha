@@ -9,6 +9,8 @@
 
 /// The executor of a lane instance.
 pub mod executor;
+/// The global chain as lane instances use it: applied tip, anchors, checks and the queue.
+pub mod global;
 /// Routing transactions to lanes from committed state.
 pub mod routing;
 /// The durable block store of a lane instance.

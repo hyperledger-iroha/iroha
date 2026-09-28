@@ -175,6 +175,7 @@ fn context(
             consensus_mode: ConsensusMode::Permissioned,
             applied: (1, chain.committed(1).core_hash()),
             crypto: None,
+            applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
         },
         receiver,
     )

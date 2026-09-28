@@ -80,6 +80,8 @@ pub struct ExecutorContext {
     /// The driver's cryptography: the keys of each newly scheduled committee are admitted
     /// (their proofs of possession verified) as blocks commit.
     pub crypto: Option<Arc<super::crypto::BlsCrypto>>,
+    /// The applied tip published to the node's lane instances (`specs/sumeragi_lanes.md` §3.2).
+    pub applied_watch: Arc<crate::sumeragi::lanes::global::AppliedWatch>,
 }
 
 /// Configured SoraFS archives captured from the exact committed State before apply completes.
@@ -609,6 +611,9 @@ impl Worker<'_> {
             .ok_or_else(|| "committed completion disappeared".to_owned())?;
         let height = pending.header.height;
         self.applied = (height, pending.qc.block_hash);
+        self.context
+            .applied_watch
+            .publish(height, pending.state_hash);
         self.results.retain(|_, (at, _)| *at > height);
         if let Some(queue) = &self.queue {
             queue.remove_committed_hashes(pending.hashes, None);
@@ -869,6 +874,7 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             applied: (1, parent_hash),
             crypto: None,
+            applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
         })
         .expect("state executor");
         let zero_transaction_wire = iroha_data_model::block::builder::BlockBuilder::new(

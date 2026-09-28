@@ -198,13 +198,43 @@ pub fn select(
     let Some((pending, lease)) = queue.bounded_pending_snapshot(&view, MAX_QUEUE_SCAN) else {
         return Vec::new();
     };
-    drop(view);
     drop(lease);
+    // The global chain sequences lane 0; transactions routed to a lane reach it through that
+    // lane's merged blocks (`specs/sumeragi_lanes.md` §5).
+    let nexus = state.nexus_snapshot();
+    let height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let records = {
+        use mv::storage::StorageReadOnly as _;
+        view.world()
+            .sumeragi_lanes()
+            .iter()
+            .map(|(_, record)| record.clone())
+            .collect::<Vec<_>>()
+    };
+    let record_refs = records.iter().collect::<Vec<_>>();
+    let routing = super::lanes::routing::RoutingInputs {
+        policy: &nexus.routing_policy,
+        dataspaces: &nexus.dataspace_catalog,
+        world: view.world(),
+        ledger_time_ms: view
+            .latest_block()
+            .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
+            .unwrap_or(0),
+    };
+    let elastic = |lane| nexus.autoscale.contains_elastic_lane_id(lane);
     let mut selected = Vec::new();
     let mut bytes = 0usize;
     for transaction in pending {
         if selected.len() >= max_transactions {
             break;
+        }
+        if !records.is_empty()
+            && super::lanes::routing::route(routing, &record_refs, elastic, &transaction, height)
+                != super::lanes::routing::GLOBAL_LANE
+        {
+            continue;
         }
         // TODO(WP8a): QueuePlanSynced is deleted with the lane machinery.
         if transaction.entrypoint().admission_intent()
