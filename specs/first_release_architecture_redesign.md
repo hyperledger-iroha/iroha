@@ -332,7 +332,7 @@ model's eight DA tests also pass: raw-bit preservation, binary/JSON roundtrips,
 signature tampering, canonical witness sets and governed admission policies.
 
 The [base extraction inventory](model_base_extraction.md) defines the first
-dependency-closed identity move and its codec, FFI and consumer obligations.
+dependency-closed identity move and its codec and consumer obligations.
 Physical relocation awaits the atomic identity cutover.
 
 Connect queue and Soracloud witness paths belong to CLI configuration. The SDK

@@ -46,7 +46,7 @@ mod params;
 #[cfg(feature = "full")]
 mod poly;
 #[cfg(feature = "model-primitives")]
-pub mod poseidon;
+pub use iroha_zkp_poseidon::poseidon;
 #[cfg(all(test, feature = "full"))]
 #[allow(
     dead_code,
@@ -58,7 +58,7 @@ mod transcript;
 #[cfg(feature = "full")]
 pub mod vega;
 #[cfg(feature = "model-primitives")]
-pub mod vega_constants;
+pub use iroha_zkp_poseidon::vega_constants;
 // Re-exports for the default (Pallas) backend.
 #[cfg(feature = "full")]
 pub use backend::{

@@ -28,7 +28,7 @@ use iroha_torii_shared::status::Status;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
-    json::{self as serde_json, Map as JsonMap, Value as JsonValue},
+    json::{Map as JsonMap, Value as JsonValue},
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 use std::{
@@ -583,7 +583,7 @@ fn load_lane_compliance_map(
             path.display()
         )
     })?;
-    let file: LaneComplianceEvidenceFile = serde_json::from_str(&raw).map_err(|err| {
+    let file: LaneComplianceEvidenceFile = json::from_str(&raw).map_err(|err| {
         format!(
             "failed to parse lane compliance evidence {}: {err}",
             path.display()
@@ -591,7 +591,7 @@ fn load_lane_compliance_map(
     })?;
     let mut map = HashMap::new();
     for record in file.lanes {
-        let serialized_policy = serde_json::to_string(&record.policy).map_err(|err| {
+        let serialized_policy = json::to_string(&record.policy).map_err(|err| {
             format!(
                 "failed to serialize lane compliance policy for lane {}: {err}",
                 record.lane_id
@@ -805,11 +805,8 @@ struct LaneAuditRow {
     status_height: u64,
 }
 impl LaneAuditRow {
-    fn compliance_json_string(&self) -> Result<Option<String>, serde_json::Error> {
-        self.lane_compliance
-            .as_ref()
-            .map(serde_json::to_json)
-            .transpose()
+    fn compliance_json_string(&self) -> Result<Option<String>, json::Error> {
+        self.lane_compliance.as_ref().map(json::to_json).transpose()
     }
 }
 pub fn run_lane_audit(options: &LaneAuditOptions) -> Result<(), Box<dyn Error>> {
@@ -895,7 +892,7 @@ fn write_json_rows(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<dyn Err
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let rendered = serde_json::to_json_pretty(&rows.to_vec())?;
+    let rendered = json::to_json_pretty(&rows.to_vec())?;
     fs::write(path, rendered)?;
     Ok(())
 }
@@ -1279,7 +1276,7 @@ mod tests {
         assert!(compliance.is_valid(0));
         assert!(compliance.is_null(1));
         let parsed: JsonValue =
-            serde_json::from_str(compliance.value(0)).expect("compliance json parses");
+            json::from_str(compliance.value(0)).expect("compliance json parses");
         assert_eq!(
             parsed
                 .get("reviewer_signatures")
@@ -1653,15 +1650,12 @@ mod tests {
     }
     fn write_compliance_file(path: &Path, records: Vec<LaneComplianceEvidenceRecord>) {
         let file = LaneComplianceEvidenceFile { lanes: records };
-        let value = serde_json::to_value(&file).expect("lane compliance value");
-        let mut rendered =
-            serde_json::to_string_pretty(&value).expect("lane compliance serialization");
+        let value = json::to_value(&file).expect("lane compliance value");
+        let mut rendered = json::to_string_pretty(&value).expect("lane compliance serialization");
         rendered.push('\n');
         fs::write(path, rendered).expect("write compliance file");
     }
     fn policy_to_json_value(policy: &LaneCompliancePolicy) -> JsonValue {
-        let norito_value = json::to_value(policy).expect("policy json value");
-        let rendered = json::to_string(&norito_value).expect("policy json encode");
-        serde_json::from_str(&rendered).expect("serde policy json")
+        json::to_value(policy).expect("policy json value")
     }
 }

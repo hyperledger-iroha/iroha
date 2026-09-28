@@ -133,7 +133,8 @@ implementation and testing.
   compiles all three Poseidon kernels up-front so the first dispatch does not
   pay a pipeline creation penalty.
 - Threadgroup width is selected from the device limits and may be pinned with
-  `FASTPQ_METAL_POSEIDON_LANES` for profiling. Goldilocks grids are sized from
+  `FASTPQ_METAL_POSEIDON_LANES` for profiling in debug builds (release builds
+  ignore it). Goldilocks grids are sized from
   the actual state count with one state per lane; BN254 retains a separate,
   internal device-derived multi-state geometry.
 - Column staging follows the same double-buffered pool already used by the FFT
@@ -193,9 +194,9 @@ implementation and testing.
 
 ## WP2-C BN254 Metal Pipelines & Parity Tests
 
-- **Scope & gap:** Host dispatchers, parity harnesses, and `bn254_status()` are live, and `crates/fastpq_prover/metal/kernels/bn254.metal` now implements the Montgomery primitives plus threadgroup-synchronized FFT/LDE loops. Each dispatch runs an entire column inside a single threadgroup with per-stage barriers, so the kernels exercise the staged manifests in parallel. Telemetry is now wired and scheduler overrides are honored so we can gate the default-on rollout with the same evidence we use for the Goldilocks kernels.
+- **Scope & gap:** Host FFT/LDE dispatchers, parity harnesses, and the `bn254_status()` smoke check are compiled for the parity tests only (no production path dispatches BN254 FFT/LDE on Metal yet), and `crates/fastpq_prover/metal/kernels/bn254.metal` now implements the Montgomery primitives plus threadgroup-synchronized FFT/LDE loops. Each dispatch runs an entire column inside a single threadgroup with per-stage barriers, so the kernels exercise the staged manifests in parallel. Telemetry is now wired and scheduler overrides are honored so we can gate the default-on rollout with the same evidence we use for the Goldilocks kernels.
 - **Kernel requirements:** ✅ reuse the staged twiddle/coset manifests, convert inputs/outputs once, and execute all radix-2 stages inside the per-column threadgroup so we don’t need multi-dispatch synchronisation. Montgomery helpers remain shared between FFT/LDE so only the loop geometry changed.
-- **Host wiring:** ✅ `crates/fastpq_prover/src/metal.rs` stages canonical limbs, zero-fills the LDE buffer, selects a single threadgroup per column, and exposes `bn254_status()` for gating. No extra host changes are required for telemetry.
+- **Host wiring:** ✅ `crates/fastpq_prover/src/metal.rs` stages canonical limbs, zero-fills the LDE buffer, selects a single threadgroup per column, and keeps these dispatchers and `bn254_status()` test-only until a production consumer exists; the BN254 Poseidon word-batch path loads its own narrow pipeline context. No extra host changes are required for telemetry.
 - **Build guards:** the `fastpq.metallib` ships the tiled kernels, so CI still fails fast if the shader drifts. Any future optimisations stay behind telemetry/feature gates rather than compile-time switches.
 - **Parity fixtures:** ✅ `bn254_parity` tests continue to compare GPU FFT/LDE outputs against CPU fixtures and now run live on Metal hardware; keep tampered-manifest tests in mind if new kernel code paths appear.
 - **Telemetry & benchmarks:** `fastpq_metal_bench` now emits:

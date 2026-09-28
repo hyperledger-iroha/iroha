@@ -47,10 +47,10 @@ fn owner_literal_matches_inner(
             "orderbook owner canonical address length changed during encoding",
         ));
     }
-    let checksum = i105_checksum_digits(&scratch);
+    let checksum = iroha_data_model::account::address::i105_checksum_digits(&scratch);
     let digits_start = encode_base105_in_scratch(&mut scratch, canonical_len, maximum_digits)?;
     let mut numeric_sentinel = [0_u8; 6];
-    let sentinel = i105_sentinel(
+    let sentinel = iroha_data_model::account::address::write_i105_sentinel(
         iroha_data_model::account::address::chain_discriminant(),
         &mut numeric_sentinel,
     );
@@ -235,102 +235,8 @@ fn encode_base105_in_scratch(
     scratch[digits_start..].reverse();
     Ok(digits_start)
 }
-fn i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
-    fn step(mut checksum: u32, value: u8) -> u32 {
-        const GENERATORS: [u32; 5] = [
-            0x3b6a_57b2,
-            0x2650_8e6d,
-            0x1ea1_19fa,
-            0x3d42_33dd,
-            0x2a14_62b3,
-        ];
-        let top = checksum >> 25;
-        checksum = ((checksum & 0x01ff_ffff) << 5) ^ u32::from(value);
-        for (index, generator) in GENERATORS.iter().enumerate() {
-            if (top >> index) & 1 == 1 {
-                checksum ^= generator;
-            }
-        }
-        checksum
-    }
-    let mut checksum = 1_u32;
-    for &byte in b"snx" {
-        checksum = step(checksum, byte >> 5);
-    }
-    checksum = step(checksum, 0);
-    for &byte in b"snx" {
-        checksum = step(checksum, byte & 0x1f);
-    }
-    let mut accumulator = 0_u32;
-    let mut bits = 0_u32;
-    for &byte in canonical {
-        accumulator = (accumulator << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            checksum = step(
-                checksum,
-                u8::try_from((accumulator >> bits) & 0x1f)
-                    .expect("five-bit checksum word fits in one byte"),
-            );
-        }
-    }
-    if bits > 0 {
-        checksum = step(
-            checksum,
-            u8::try_from((accumulator << (5 - bits)) & 0x1f)
-                .expect("five-bit checksum word fits in one byte"),
-        );
-    }
-    for _ in 0..6 {
-        checksum = step(checksum, 0);
-    }
-    checksum ^= 0x2bc8_30a3;
-    let mut result = [0_u8; 6];
-    for (index, slot) in result.iter_mut().enumerate() {
-        *slot = u8::try_from((checksum >> (5 * (5 - index))) & 0x1f)
-            .expect("five-bit checksum word fits in one byte");
-    }
-    result
-}
-fn i105_sentinel<'a>(discriminant: u16, numeric: &'a mut [u8; 6]) -> &'a [u8] {
-    match discriminant {
-        0x02f1 => b"sora",
-        0x0171 => b"test",
-        0 => b"dev",
-        discriminant => {
-            numeric[0] = b'n';
-            let mut reversed = [0_u8; 5];
-            let mut value = discriminant;
-            let mut digits = 0_usize;
-            loop {
-                reversed[digits] = b'0'
-                    + u8::try_from(value % 10).expect("decimal sentinel digit fits in one byte");
-                digits += 1;
-                value /= 10;
-                if value == 0 {
-                    break;
-                }
-            }
-            for index in 0..digits {
-                numeric[index + 1] = reversed[digits - 1 - index];
-            }
-            &numeric[..digits + 1]
-        }
-    }
-}
 fn i105_symbol(digit: u8) -> Result<&'static str, InstructionExecutionError> {
-    const SYMBOLS: [&str; 105] = [
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J",
-        "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c",
-        "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
-        "w", "x", "y", "z", "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ",
-        "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
-        "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-    ];
-    SYMBOLS
-        .get(usize::from(digit))
-        .copied()
+    iroha_data_model::account::address::i105_symbol(digit)
         .ok_or_else(|| corrupt_state("orderbook owner has an invalid I105 digit"))
 }
 fn consume_exact(remaining: &mut &[u8], expected: &[u8]) -> bool {

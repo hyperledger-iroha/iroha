@@ -1062,11 +1062,6 @@ fn first_release_sccp_router_has_only_closed_read_surfaces() {
         );
     }
 }
-fn clone_private_key(
-    src: &iroha_data_model::prelude::ExposedPrivateKey,
-) -> iroha_data_model::prelude::ExposedPrivateKey {
-    iroha_data_model::prelude::ExposedPrivateKey(src.0.clone())
-}
 #[derive(Clone)]
 struct TestLocalReadRuntime {
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,

@@ -7,18 +7,21 @@
 //! exact host-visible link; they do not substitute for a paired recursive
 //! proof of key attestation, non-forking use, and head continuity.
 
+#[cfg(test)]
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
-    KagemushaHardwareTransitionSelectionExpectedV1, KagemushaHardwareTransitionSelectionV1,
+    KAGEMUSHA_WIRE_VERSION_V1, KagemushaHardwareTransitionSelectionExpectedV1,
     KagemushaOperationKindV1, kagemusha_device_key_reference_v1,
 };
+use iroha_data_model::kagemusha::{
+    KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareTransitionSelectionV1,
+};
 use norito::codec::{Decode, Encode};
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 
-use super::{
-    DigestV1, KagemushaStateErrorV1, KagemushaStateV1, KagemushaTransitionKindV1,
-    TransitionProofStatementV1,
-};
+use super::{DigestV1, KagemushaStateErrorV1, KagemushaStateV1};
+#[cfg(test)]
+use super::{KagemushaTransitionKindV1, TransitionProofStatementV1};
 
 /// Enforce that one-use-key mode cannot disappear or reuse a prepared key.
 pub(super) fn validate_next_key_transition(
@@ -75,6 +78,7 @@ pub struct KagemushaOneUseKeyRatchetLinkV1 {
     pub signature: KagemushaDeviceSignatureV1,
 }
 
+#[cfg(test)]
 const KEYMINT_PREPARED_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:keymint-prepared-key:v1\0";
 
 /// Original Android KeyMint one-use evidence paired with Core's ratchet link.
@@ -109,6 +113,7 @@ pub struct KagemushaKeyMintRawSelectionEvidenceV1 {
 }
 
 impl KagemushaKeyMintRawSelectionEvidenceV1 {
+    #[cfg(test)]
     /// Check that the original Android collector bytes match one exact Core ratchet link.
     ///
     /// The platform verifier must separately validate the pinned certificate path, attestation
@@ -164,6 +169,7 @@ impl KagemushaKeyMintRawSelectionEvidenceV1 {
     }
 }
 
+#[cfg(test)]
 fn keymint_prepared_challenge_v1(
     nonce: DigestV1,
     lane: DigestV1,
@@ -180,6 +186,7 @@ fn keymint_prepared_challenge_v1(
 }
 
 impl KagemushaOneUseKeyRatchetLinkV1 {
+    #[cfg(test)]
     /// Check the exact Core selection, one-use signature, and adjacent key heads.
     ///
     /// The `expected` comparisons must be reconstructed from authenticated
@@ -270,6 +277,7 @@ impl KagemushaOneUseKeyRatchetLinkV1 {
             .map_err(|_| mismatch())
     }
 
+    #[cfg(test)]
     /// Fail closed until the one-use key ratchet is bound by both Pasta folds.
     ///
     /// TODO: Replace this rejection only after a paired recursive relation

@@ -6,34 +6,36 @@
 //! or redemption proof and canonical envelope are persisted before exposure. Recovery resumes the
 //! exact durable stage and every retry returns the originally persisted bytes.
 
-use std::{cell::Cell, collections::BTreeMap};
+#[cfg(test)]
+use std::cell::Cell;
+use std::collections::BTreeMap;
 
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg(test)]
 use std::ops::Range;
 
+#[cfg(test)]
+use iroha_data_model::kagemusha::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1;
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, KAGEMUSHA_OUTBOX_RETRY_METADATA_MAX_BYTES_V1,
-    KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1,
-    KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1, KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1,
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaAppAttestHardwareTransitionSelectionV1,
-    KagemushaAppAttestationAuthorityPolicyV1, KagemushaAuthenticatedReleaseV1,
-    KagemushaCommitCertificateV1, KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
-    KagemushaHardwareTerminalBodyV1, KagemushaHardwareTransitionSelectionExpectedV1,
-    KagemushaLifecycleBindingV1, KagemushaOperationKindV1, KagemushaOutboxReservationV1,
-    KagemushaPairedProofV1, KagemushaPaymentOutputV1, KagemushaPaymentRequestV1,
-    KagemushaPaymentV1, KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
-    KagemushaRedemptionVoucherV1, KagemushaSignedHardwareTransitionSelectionV1,
-    KagemushaVerifiedAppAttestSelectionV1, kagemusha_ciphertext_digest_v1,
-    kagemusha_payment_body_digest_v1, kagemusha_prepared_transfer_digest_v1,
+    KAGEMUSHA_OUTBOX_RETRY_METADATA_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+    KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1,
+    KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+    KagemushaCommitCertificateV1, KagemushaHardwareTerminalBodyV1, KagemushaLifecycleBindingV1,
+    KagemushaOperationKindV1, KagemushaOutboxReservationV1, KagemushaPairedProofV1,
+    KagemushaPaymentOutputV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
+    KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1, KagemushaRedemptionVoucherV1,
+    kagemusha_ciphertext_digest_v1, kagemusha_payment_body_digest_v1,
+    kagemusha_prepared_transfer_digest_v1,
 };
 use norito::codec::{Decode, Encode};
 
+#[cfg(test)]
+use super::KagemushaOutgoingOperationPrepareOutcomeV1;
 use super::{
     DigestV1, HardwareTransitionStatementV1, KAGEMUSHA_STATE_VERSION_V1,
     KagemushaOutgoingOperationIndexErrorV1, KagemushaOutgoingOperationIndexV1,
-    KagemushaOutgoingOperationPhaseV1, KagemushaOutgoingOperationPrepareOutcomeV1,
-    KagemushaStateErrorV1, KagemushaStateProofReleaseV1, KagemushaStateV1,
-    TransitionProofStatementV1, VerifiedKagemushaRedemptionReleaseV1, canonical_sha256_digest,
+    KagemushaOutgoingOperationPhaseV1, KagemushaStateErrorV1, KagemushaStateProofReleaseV1,
+    KagemushaStateV1, TransitionProofStatementV1, canonical_sha256_digest,
 };
 use crate::zk::kagemusha_v1_recursion::{
     KagemushaPastaParityV1, KagemushaPreparedIntentCommitmentsV1, KagemushaRecursionArtifactsV1,
@@ -135,20 +137,13 @@ impl KagemushaReceiverInboxCapacityV1 {
         self.committed_inbox_bytes
     }
 
-    /// Return physical bytes not committed to staged peer or mint credits.
-    #[must_use]
-    pub const fn available_inbox_bytes(&self) -> u64 {
-        self.total_inbox_bytes
-            .saturating_sub(self.committed_inbox_bytes)
-            .saturating_sub(self.mint_inbox_bytes)
-    }
-
     /// Bytes allocated to pre-debit mint reservations and durable mint records.
     #[must_use]
     pub const fn mint_inbox_bytes(&self) -> u64 {
         self.mint_inbox_bytes
     }
 
+    #[cfg(test)]
     /// Install the exact mint-journal charge without borrowing any issued peer allocation.
     pub(super) fn with_mint_inbox_bytes(&self, bytes: u64) -> Result<Self, KagemushaStateErrorV1> {
         let mut next = self.clone();
@@ -168,6 +163,7 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     /// Return a checked capacity successor after one durable inbound credit is staged.
     pub(super) fn receiver_snapshot_staged_successor(
         &self,
@@ -187,6 +183,7 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(next)
     }
 
+    #[cfg(test)]
     /// Return a checked capacity successor after one pending credit becomes consumed.
     pub(super) fn receiver_snapshot_folded_successor(
         &self,
@@ -223,6 +220,7 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn reconcile_receiver_snapshot_usage(&mut self) -> Result<(), KagemushaStateErrorV1> {
         let snapshot_bytes = receiver_snapshot_usage_from_entry_bytes(
             self.pending_credit_entry_bytes,
@@ -311,6 +309,7 @@ pub enum SenderOutboxReservationOutcomeV1 {
     AlreadyReserved,
 }
 
+#[cfg(test)]
 /// Opaque authority to ask qualified hardware to commit one exact staged transition intent.
 ///
 /// The capability is neither cloneable nor serializable. Recovery reissues it only while the
@@ -322,6 +321,7 @@ pub struct KagemushaOutgoingCommitCapabilityV1 {
     _non_clone_seal: Cell<()>,
 }
 
+#[cfg(test)]
 impl KagemushaOutgoingCommitCapabilityV1 {
     pub(super) fn for_prepared(
         prepared: &PreparedOutgoingCandidateV1,
@@ -344,6 +344,7 @@ impl KagemushaOutgoingCommitCapabilityV1 {
     }
 }
 
+#[cfg(test)]
 /// Core-derived sender inputs durably sealed before hardware consumes a payment predecessor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -363,6 +364,7 @@ pub(super) struct PreparedSendMaterialV1 {
     pub(super) normalized_guard_statement_digest: DigestV1,
 }
 
+#[cfg(test)]
 /// Core-derived redeemer inputs sealed before hardware consumes a redemption predecessor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -639,6 +641,7 @@ pub(crate) fn terminal_journal_commitment_v1(
     )
 }
 
+#[cfg(test)]
 /// Canonical fixed-frame template and semantic offsets for the journal circuit opening.
 ///
 /// Only the five semantic fields and the derived Norito checksum are holes. The template comes
@@ -736,6 +739,7 @@ pub(crate) fn terminal_recovery_commitment_v1(
     )
 }
 
+#[cfg(test)]
 /// The encoder-owned fixed header for a bounded recursive opening of recovery material.
 ///
 /// Only the payload length and checksum are left open. Payload fields are assembled from
@@ -909,6 +913,7 @@ impl PreparedOutgoingCandidateV1 {
         }
     }
 
+    #[cfg(test)]
     /// Build one already-derived sender payment intent.
     pub(super) fn send(
         predecessor_state: KagemushaStateV1,
@@ -980,6 +985,7 @@ impl PreparedOutgoingCandidateV1 {
         )
     }
 
+    #[cfg(test)]
     /// Build one already-derived partial or full redemption intent.
     pub(super) fn redemption(
         predecessor_state: KagemushaStateV1,
@@ -1118,6 +1124,7 @@ impl PreparedOutgoingCandidateV1 {
         }
     }
 
+    #[cfg(test)]
     /// Borrow the derived compact payment output when this is a `SendSplit` candidate.
     #[must_use]
     pub fn send_output(&self) -> Option<&KagemushaPaymentOutputV1> {
@@ -1418,109 +1425,6 @@ impl PersistedOutgoingCandidateV1 {
         Ok(candidate)
     }
 
-    /// Verify a signed hardware selection against this exact locally verified candidate.
-    ///
-    /// This prepares a digest for a future foldable proof. It does not authorize an outgoing
-    /// monetary commit: the physical secure-index semantics and recursive signature verification
-    /// still require release-pinned platform and proof qualification. The expected app binding
-    /// is reconstructed from the authenticated app policy and release, and the consumed secure
-    /// index from the committed predecessor state, not from caller-supplied values.
-    /// Testnet experiments may continue through their separately identified non-hardware corridor.
-    pub fn verify_signed_hardware_selection_for_proof(
-        &self,
-        selection: &KagemushaSignedHardwareTransitionSelectionV1,
-        credential: &KagemushaHardwareCredentialV1,
-        release: &KagemushaAuthenticatedReleaseV1,
-        app_policy: &KagemushaAppAttestationAuthorityPolicyV1,
-    ) -> Result<DigestV1, KagemushaStateErrorV1> {
-        let (profile, expected) =
-            self.hardware_selection_context_for_proof(credential, release, app_policy)?;
-        selection
-            .verify_against(credential, &profile, app_policy, expected)
-            .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)
-    }
-
-    /// Verify an App Attest assertion against this exact locally verified candidate.
-    ///
-    /// This returns evidence for a future recursive fold only. The original assertion
-    /// CBOR is parsed and its signature checked here; the result explicitly says whether
-    /// signed app-release extensions were present. iOS 26's extension-free assertion does not
-    /// independently measure the app version. The complete Apple enrollment attestation must
-    /// also pass the release-pinned platform verifier. This check cannot authorize an outgoing
-    /// monetary commit by itself.
-    pub fn verify_app_attest_hardware_selection_for_proof(
-        &self,
-        selection: &KagemushaAppAttestHardwareTransitionSelectionV1,
-        credential: &KagemushaHardwareCredentialV1,
-        release: &KagemushaAuthenticatedReleaseV1,
-        app_policy: &KagemushaAppAttestationAuthorityPolicyV1,
-    ) -> Result<KagemushaVerifiedAppAttestSelectionV1, KagemushaStateErrorV1> {
-        let (profile, expected) =
-            self.hardware_selection_context_for_proof(credential, release, app_policy)?;
-        selection
-            .verify_signature_and_counter_against(credential, &profile, expected, app_policy)
-            .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)
-    }
-
-    fn hardware_selection_context_for_proof(
-        &self,
-        credential: &KagemushaHardwareCredentialV1,
-        release: &KagemushaAuthenticatedReleaseV1,
-        app_policy: &KagemushaAppAttestationAuthorityPolicyV1,
-    ) -> Result<
-        (
-            KagemushaHardwareProfileV1,
-            KagemushaHardwareTransitionSelectionExpectedV1,
-        ),
-        KagemushaStateErrorV1,
-    > {
-        let prepared = &self.prepared;
-        let predecessor = &prepared.predecessor_state;
-        if predecessor.secure_index.checked_add(1) != Some(prepared.successor_state.secure_index) {
-            return Err(KagemushaStateErrorV1::HardwareCertificateMismatch);
-        }
-        let enabled = release
-            .enabled_profile(prepared.lifecycle().hardware_profile_id)
-            .ok_or(KagemushaStateErrorV1::InvalidHardwareProfile)?;
-        credential
-            .validate_app_policy_binding_for_release(
-                &enabled.hardware_profile,
-                release.release_id(),
-                app_policy,
-            )
-            .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)?;
-        if release.release_id() != prepared.lifecycle().release_id
-            || enabled.suite_id != credential.suite_id
-            || credential.device_key_reference
-                != predecessor.device_policy_binding.device_key_reference
-            || predecessor.device_policy_binding.hardware_policy_id
-                != release.provider_policy_root()
-            || credential.hardware_profile_id != predecessor.hardware_profile_id
-            || credential.policy_epoch != predecessor.policy_epoch
-            || credential.network_id != prepared.proof_statement.lane.network_id
-            || credential.lane_commitment != prepared.proof_statement.lane.device_lane_id
-            || u128::from(credential.hardware_epoch_generation)
-                != predecessor.hardware_epoch.generation
-            || credential.hardware_epoch_id != predecessor.hardware_epoch.epoch_id
-        {
-            return Err(KagemushaStateErrorV1::HardwareCertificateMismatch);
-        }
-        let expected = KagemushaHardwareTransitionSelectionExpectedV1 {
-            release_id: release.release_id(),
-            provider_policy_root: release.provider_policy_root(),
-            app_policy_digest: credential.app_policy_binding_digest,
-            operation_kind: prepared.lifecycle().operation_kind,
-            transition_statement_digest: prepared.proof_statement.digest()?,
-            candidate_envelope_digest: self.candidate_envelope_digest,
-            terminal_body_commitment: self
-                .hardware_terminal_body()?
-                .canonical_commitment()
-                .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)?,
-            secure_index_before: predecessor.secure_index,
-        };
-        Ok((enabled.hardware_profile, expected))
-    }
-
     /// Build the exact self-free terminal body which qualified hardware must commit atomically.
     ///
     /// The three private commitments bind the verified successor, rollback-resistant journal
@@ -1663,19 +1567,13 @@ impl CommittedOutgoingCandidateV1 {
         })
     }
 
+    #[cfg(test)]
     /// Return the six exact SHA messages needed to open a retained outgoing preparation.
     ///
     /// This is producer material only. The terminal circuit must assign these bytes, SHA-open
     /// them against the recursively verified State carriers, and prove the complete 32-job Eq/Ep
     /// claim before they can authorize an outgoing payment or redemption. In particular, this
     /// method does not verify the persisted candidate proof or grant a hardware commitment.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "native committed-candidate export is not yet wired into the coordinator"
-        )
-    )]
     pub(crate) fn canonical_outgoing_opening_sha_messages_v1(
         &self,
     ) -> Result<[Vec<u8>; 6], KagemushaStateErrorV1> {
@@ -1924,6 +1822,7 @@ impl CommittedOutgoingCandidateV1 {
         .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))
     }
 
+    #[cfg(test)]
     fn canonical_storage_bytes(&self) -> Result<u64, KagemushaStateErrorV1> {
         canonical_len(self)
     }
@@ -2232,6 +2131,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         &mut self.operation_index
     }
 
+    #[cfg(test)]
     /// Stage one caller-indexed operation and its exact Core preparation atomically.
     pub(super) fn prepare_indexed(
         &mut self,
@@ -2256,6 +2156,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         Ok(outcome)
     }
 
+    #[cfg(test)]
     /// Atomically stage an exact transition intent before hardware commit.
     fn prepare(
         &mut self,
@@ -2275,6 +2176,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
+    #[cfg(test)]
     /// Persist the sole verified operation proof authority before hardware may consume state.
     pub(super) fn persist_candidate(
         &mut self,
@@ -2304,6 +2206,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
+    #[cfg(test)]
     /// Install the sole hardware commit; a second successor cannot be attached to the candidate.
     pub(super) fn commit(
         &mut self,
@@ -2339,6 +2242,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
+    #[cfg(test)]
     /// Persist a verified terminal envelope and clear only the active stage.
     pub(super) fn install_finalized(
         &mut self,
@@ -2387,6 +2291,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)
     }
 
+    #[cfg(test)]
     /// Borrow one durable terminal envelope for retry or settlement processing.
     #[must_use]
     pub fn finalized_envelope(
@@ -2394,117 +2299,6 @@ impl KagemushaOutgoingCandidateJournalV1 {
         reservation_id: DigestV1,
     ) -> Option<&DurableOutgoingEnvelopeV1> {
         self.finalized_outbox.get(&reservation_id)
-    }
-
-    /// Return the number of currently retained retry envelopes.
-    #[must_use]
-    pub fn finalized_outbox_count(&self) -> usize {
-        self.finalized_outbox.len()
-    }
-
-    /// Verify a peer ACK and atomically retain the indexed release tombstone.
-    pub(super) fn release_indexed_payment(
-        &mut self,
-        operation_id: DigestV1,
-        acknowledgement_bytes: &[u8],
-        outbox: &mut KagemushaSenderOutboxCapacityV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        let record = self
-            .operation_index
-            .lookup(operation_id)
-            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        if record.phase == KagemushaOutgoingOperationPhaseV1::Released {
-            return record
-                .validate_released_acknowledgement_retry(acknowledgement_bytes)
-                .map_err(map_operation_index_error);
-        }
-        let finalized = self
-            .finalized_outbox
-            .get(&record.outbox_reservation_id)
-            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        let terminal_receipt_digest = record
-            .verified_payment_terminal_receipt_digest(finalized, acknowledgement_bytes)
-            .map_err(map_operation_index_error)?;
-        let reservation_id = record.outbox_reservation_id;
-        let envelope_digest = finalized.envelope_digest;
-        let next_index = self
-            .operation_index
-            .release_successor(reservation_id, envelope_digest, terminal_receipt_digest)
-            .map_err(map_operation_index_error)?;
-        let mut next = self.clone();
-        let mut next_outbox = outbox.clone();
-        next.operation_index = next_index;
-        next.release_finalized_inner(reservation_id, envelope_digest, &mut next_outbox)?;
-        *self = next;
-        *outbox = next_outbox;
-        Ok(())
-    }
-
-    /// Consume a Core-authenticated settlement capability and retain the exact redemption
-    /// release tombstone in the same successor which removes the retry envelope.
-    pub(super) fn release_indexed_redemption(
-        &mut self,
-        verified: VerifiedKagemushaRedemptionReleaseV1,
-        outbox: &mut KagemushaSenderOutboxCapacityV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        let operation_id = verified.operation_id();
-        let record = self
-            .operation_index
-            .lookup(operation_id)
-            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        if record.phase == KagemushaOutgoingOperationPhaseV1::Released {
-            return verified.validate_against_record(record, None);
-        }
-        let finalized = self
-            .finalized_outbox
-            .get(&record.outbox_reservation_id)
-            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        verified.validate_against_record(record, Some(finalized))?;
-        let reservation_id = record.outbox_reservation_id;
-        let envelope_digest = verified.envelope_digest();
-        let terminal_receipt_digest = verified.terminal_receipt_digest();
-        let next_index = self
-            .operation_index
-            .release_successor(reservation_id, envelope_digest, terminal_receipt_digest)
-            .map_err(map_operation_index_error)?;
-        let mut next = self.clone();
-        let mut next_outbox = outbox.clone();
-        next.operation_index = next_index;
-        next.release_finalized_inner(reservation_id, envelope_digest, &mut next_outbox)?;
-        *self = next;
-        *outbox = next_outbox;
-        Ok(())
-    }
-
-    fn release_finalized_inner(
-        &mut self,
-        reservation_id: DigestV1,
-        expected_envelope_digest: DigestV1,
-        outbox: &mut KagemushaSenderOutboxCapacityV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        if let Some(existing) = self.released_envelopes.get(&reservation_id) {
-            if *existing != expected_envelope_digest {
-                return Err(KagemushaStateErrorV1::CandidateConflict);
-            }
-            return Ok(());
-        }
-        let finalized = self
-            .finalized_outbox
-            .get(&reservation_id)
-            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        if finalized.envelope_digest != expected_envelope_digest {
-            return Err(KagemushaStateErrorV1::CandidateConflict);
-        }
-        let mut next = self.clone();
-        let mut next_outbox = outbox.clone();
-        next.finalized_outbox.remove(&reservation_id);
-        next.released_envelopes
-            .insert(reservation_id, expected_envelope_digest);
-        next_outbox.mark_terminal_released(reservation_id, expected_envelope_digest)?;
-        next_outbox.reconcile_capacity_meters(&next)?;
-        *self = next;
-        *outbox = next_outbox;
-        Ok(())
     }
 
     pub(crate) fn validate_recovered<R>(
@@ -2709,6 +2503,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         }
     }
 
+    #[cfg(test)]
     /// Return physical bytes still available for staged transition intents.
     #[must_use]
     pub const fn available_outbox_bytes(&self) -> u64 {
@@ -2767,6 +2562,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(SenderOutboxReservationOutcomeV1::Reserved)
     }
 
+    #[cfg(test)]
     pub(super) fn require_reservation(
         &self,
         reservation: KagemushaOutboxReservationV1,
@@ -2786,6 +2582,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(commitment)
     }
 
+    #[cfg(test)]
     fn bind_terminal_envelope(
         &mut self,
         reservation: KagemushaOutboxReservationV1,
@@ -2806,6 +2603,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn mark_terminal_released(
         &mut self,
         reservation_id: DigestV1,

@@ -33,6 +33,7 @@ impl LaneEpoch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ReplayFingerprint([u8; blake3::OUT_LEN]);
 impl ReplayFingerprint {
+    #[cfg(test)]
     /// Try to construct a fingerprint from raw Blake3 hash output bytes.
     #[must_use]
     pub fn try_from_hash_bytes(bytes: &[u8]) -> Option<Self> {
@@ -525,6 +526,7 @@ impl ReplayCache {
             .map(|state| state.entries.len())
             .unwrap_or_default()
     }
+    #[cfg(test)]
     /// Inspect the number of distinct `(lane, epoch)` windows retained globally.
     #[must_use]
     pub fn lane_epoch_count(&self) -> usize {

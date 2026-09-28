@@ -17,9 +17,9 @@ default = []
 sm = ["iroha_config/sm", "iroha_data_model/sm"]
 # Send structured events to the configured WebSocket collector.
 event-exporter = [
-    "dep:chrono",
     "dep:futures",
     "dep:iroha_logger",
+    "dep:time",
     "dep:tokio",
     "dep:tokio-tungstenite",
     "dep:url",
@@ -34,9 +34,9 @@ event-exporter = [
 # Support developer-specific telemetry.
 # Should not be enabled on production builds.
 dev-telemetry = [
-    "dep:chrono",
     "dep:iroha_futures",
     "dep:iroha_logger",
+    "dep:time",
     "dep:tokio",
     "iroha_futures/telemetry",
     "tokio/fs",
@@ -67,15 +67,12 @@ iroha_futures = { workspace = true, optional = true }
 iroha_torii_shared = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 
-async-trait = { workspace = true }
-chrono = { version = "0.4.38", optional = true }
 eyre = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"], optional = true }
-streaming-stats = "0.2.3"
 tokio = { workspace = true, optional = true }
-tokio-stream = { workspace = true, features = ["fs", "sync"] }
 tokio-tungstenite = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
 url = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
 prometheus = { workspace = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls-native-roots"], optional = true }
 blake3 = { workspace = true }

@@ -80,6 +80,7 @@ pub fn global_threshold_beacon_seat_readiness_challenge_v1(
     Ok((challenge, signer_index))
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Prove actual threshold-share custody for one exact target seat and frozen attempt.
 ///
 /// The challenge is disjoint from pulse payloads and binds the full scheduling/readiness context,

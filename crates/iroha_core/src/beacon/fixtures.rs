@@ -80,7 +80,7 @@ pub(super) fn adaptive_beacon_fixture() -> AdaptiveBeaconFixture {
     adaptive_beacon_fixture_for_session(adaptive_dkg_session_fixture())
 }
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(super) fn adaptive_beacon_fixture_for_session(
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
 ) -> AdaptiveBeaconFixture {

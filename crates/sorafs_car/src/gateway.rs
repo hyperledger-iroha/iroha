@@ -185,6 +185,73 @@ pub struct GatewayProviderInput {
     /// Optional admin endpoint exposing `/privacy/events` for relay telemetry.
     pub privacy_events_url: Option<String>,
 }
+impl GatewayProviderInput {
+    /// Parse one operator provider specification of comma-separated `key=value` pairs.
+    ///
+    /// Required keys are `name`, `provider-id`, `gateway-key`, `base-url` and `stream-token`;
+    /// `privacy-url` is optional. Hex identifiers must be 32 bytes and are normalised to lower
+    /// case. `flag` names the command-line flag in error messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable message for malformed pairs, unknown keys, empty values,
+    /// non-canonical hex identifiers or missing required keys.
+    pub fn parse_spec(value: &str, flag: &str) -> Result<Self, String> {
+        fn non_empty(flag: &str, key: &str, value: &str) -> Result<String, String> {
+            if value.is_empty() {
+                return Err(format!("{flag} {key} must not be empty"));
+            }
+            Ok(value.to_owned())
+        }
+        fn hex32(flag: &str, key: &str, value: &str) -> Result<String, String> {
+            if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(format!("{flag} {key} must be 32-byte hex"));
+            }
+            Ok(value.to_ascii_lowercase())
+        }
+        fn required(flag: &str, entry: &str, value: Option<String>) -> Result<String, String> {
+            value.ok_or_else(|| format!("{flag} requires {entry}"))
+        }
+
+        let mut name = None;
+        let mut provider_id_hex = None;
+        let mut gateway_public_key_hex = None;
+        let mut base_url = None;
+        let mut stream_token_b64 = None;
+        let mut privacy_events_url = None;
+        for pair in value
+            .split(',')
+            .map(str::trim)
+            .filter(|pair| !pair.is_empty())
+        {
+            let (key, val) = pair
+                .split_once('=')
+                .ok_or_else(|| format!("{flag} expects comma-separated key=value pairs"))?;
+            let val = val.trim();
+            match key {
+                "name" => name = Some(non_empty(flag, key, val)?),
+                "provider-id" => provider_id_hex = Some(hex32(flag, key, val)?),
+                "gateway-key" => gateway_public_key_hex = Some(hex32(flag, key, val)?),
+                "base-url" => base_url = Some(non_empty(flag, key, val)?),
+                "stream-token" => stream_token_b64 = Some(non_empty(flag, key, val)?),
+                "privacy-url" => privacy_events_url = Some(non_empty(flag, key, val)?),
+                other => {
+                    return Err(format!(
+                        "unknown {flag} key `{other}`; expected name, provider-id, gateway-key, base-url, stream-token, privacy-url"
+                    ));
+                }
+            }
+        }
+        Ok(Self {
+            name: required(flag, "name=<alias>", name)?,
+            provider_id_hex: required(flag, "provider-id=<hex>", provider_id_hex)?,
+            gateway_public_key_hex: required(flag, "gateway-key=<hex>", gateway_public_key_hex)?,
+            base_url: required(flag, "base-url=<https://...>", base_url)?,
+            stream_token_b64: required(flag, "stream-token=<base64>", stream_token_b64)?,
+            privacy_events_url,
+        })
+    }
+}
 /// Shared manifest context supplied to the gateway fetcher.
 #[derive(Debug, Clone)]
 pub struct GatewayFetchConfig {
@@ -3481,4 +3548,59 @@ mod tests {
     }
     include!("gateway/canonical_token_tests.rs");
     include!("gateway/retrieval_quota_tests.rs");
+    #[test]
+    fn provider_spec_parses_canonical_keys_and_normalises_hex() {
+        let provider_id = "AB".repeat(32);
+        let gateway_key = "CD".repeat(32);
+        let spec = GatewayProviderInput::parse_spec(
+            &format!(
+                "name=alpha, provider-id={provider_id}, gateway-key={gateway_key}, base-url=https://alpha.example/, stream-token=dG9rZW4=, privacy-url=https://admin.example/"
+            ),
+            "--provider",
+        )
+        .expect("valid gateway provider specification");
+        assert_eq!(spec.name, "alpha");
+        assert_eq!(spec.provider_id_hex, provider_id.to_ascii_lowercase());
+        assert_eq!(
+            spec.gateway_public_key_hex,
+            gateway_key.to_ascii_lowercase()
+        );
+        assert_eq!(spec.base_url, "https://alpha.example/");
+        assert_eq!(spec.stream_token_b64, "dG9rZW4=");
+        assert_eq!(
+            spec.privacy_events_url.as_deref(),
+            Some("https://admin.example/")
+        );
+    }
+
+    #[test]
+    fn provider_spec_rejects_aliases_missing_keys_and_bad_hex() {
+        let provider_id = "11".repeat(32);
+        let gateway_key = "22".repeat(32);
+        let alias = GatewayProviderInput::parse_spec(
+            &format!(
+                "name=alpha,provider_id={provider_id},gateway-key={gateway_key},base-url=https://a/,stream-token=dA=="
+            ),
+            "--gateway-provider",
+        )
+        .expect_err("snake_case aliases are not accepted");
+        assert!(alias.contains("unknown --gateway-provider key `provider_id`"));
+        let missing = GatewayProviderInput::parse_spec(
+            &format!("name=alpha,provider-id={provider_id},base-url=https://a/,stream-token=dA=="),
+            "--provider",
+        )
+        .expect_err("gateway key is required");
+        assert!(missing.contains("--provider requires gateway-key=<hex>"));
+        let bad_hex = GatewayProviderInput::parse_spec(
+            &format!(
+                "name=alpha,provider-id={provider_id},gateway-key=not-hex,base-url=https://a/,stream-token=dA=="
+            ),
+            "--provider",
+        )
+        .expect_err("gateway key must be hex");
+        assert!(bad_hex.contains("--provider gateway-key must be 32-byte hex"));
+        let malformed =
+            GatewayProviderInput::parse_spec("name", "--provider").expect_err("pairs need `=`");
+        assert!(malformed.contains("comma-separated key=value pairs"));
+    }
 }

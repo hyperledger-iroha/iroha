@@ -12,23 +12,32 @@
 //! authenticated split manifest plus separately addressed polynomial and native-proof objects
 //! implemented by `decryption`.
 use super::{
-    BgvProfile, MKHE_VERSION_V1, Scalar, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
-    checked_rns_polynomial_bytes,
-    manifest::{
-        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_release_manifest_v1,
-    },
+    BgvProfile, ZkAmsMkheErrorV1, checked_rns_polynomial_bytes,
+    manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
 };
+#[cfg(test)]
+use super::{
+    MKHE_VERSION_V1, Scalar, ZkAmsMkhePartyIdV1,
+    manifest::{release_profile_v1, zk_ams_mkhe_release_manifest_v1},
+};
+#[cfg(test)]
 use crate::vega::{
     VegaT256PointV1,
     sponge::{Keccak256, keccak256},
 };
+#[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
 const ROSTER_TAG_V1: [u8; 4] = *b"ZAGR";
+#[cfg(test)]
 pub(super) const GOVERNED_ROSTER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.governed-roster";
+#[cfg(test)]
 const CIPHERTEXT_TAG_V1: [u8; 4] = *b"ZACT";
 #[cfg(test)]
 const SEEDED_RKG_KEY_TAG_V1: [u8; 4] = *b"ZARK";
+#[cfg(test)]
 const CKS_CONTRIBUTION_TAG_V1: [u8; 4] = *b"ZACK";
+#[cfg(test)]
 const PROOF_ENVELOPE_TAG_V1: [u8; 4] = *b"ZAPE";
 const AUTHENTICATION_WIRE_BYTES: usize = 1 + 32 + 33 + 65;
 const COMMON_BINDING_WIRE_BYTES: usize = 4 + 1 + 32 + 32 + 8 + 32 + 4 + 1;
@@ -44,6 +53,7 @@ const PROOF_ENVELOPE_HEADER_WIRE_BYTES: usize = COMMON_BINDING_WIRE_BYTES + 1 + 
 /// decoders must independently enforce their own exact canonical layout after this transport layer
 /// has preflighted the byte string.
 pub const ZK_AMS_MKHE_MAX_PROOF_BYTES_V1: usize = 32 * 1024 * 1024;
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct WireDimensions<'a> {
     ring_degree: usize,
@@ -57,6 +67,7 @@ struct WireDimensions<'a> {
     max_evaluated_key_bytes: usize,
     max_round_bytes: usize,
 }
+#[cfg(test)]
 impl<'a> WireDimensions<'a> {
     fn coefficient_count(self) -> Result<usize, ZkAmsMkheErrorV1> {
         self.ring_degree
@@ -122,6 +133,7 @@ pub(super) fn derive_wire_length_certificate_v1(
         proof_envelope_header_wire_bytes: PROOF_ENVELOPE_HEADER_WIRE_BYTES,
     })
 }
+#[cfg(test)]
 fn release_dimensions() -> Result<WireDimensions<'static>, ZkAmsMkheErrorV1> {
     // `release_profile_v1` only references static modulus/root arrays.  Build
     // the dimensions directly so no reference to the local profile escapes.
@@ -142,6 +154,7 @@ fn release_dimensions() -> Result<WireDimensions<'static>, ZkAmsMkheErrorV1> {
     })
 }
 /// Exact profile/roster/epoch/transcript/index/level binding of one wire record.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheWireBindingV1 {
     profile_digest: [u8; 32],
@@ -151,6 +164,7 @@ pub struct ZkAmsMkheWireBindingV1 {
     record_index: u32,
     level: u8,
 }
+#[cfg(test)]
 impl ZkAmsMkheWireBindingV1 {
     /// Construct a binding under one previously validated governed roster.
     pub fn new(
@@ -215,6 +229,7 @@ impl ZkAmsMkheWireBindingV1 {
     }
 }
 /// Exact eight-party governed release roster and secret epoch.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheGovernedRosterWireV1 {
     profile_digest: [u8; 32],
@@ -222,6 +237,7 @@ pub struct ZkAmsMkheGovernedRosterWireV1 {
     parties: [ZkAmsMkhePartyIdV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     roster_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkheGovernedRosterWireV1 {
     /// Construct the sole fixed-size roster form; parties must be strictly ordered.
     pub fn new(
@@ -307,6 +323,7 @@ impl ZkAmsMkheGovernedRosterWireV1 {
         self.roster_digest
     }
 }
+#[cfg(test)]
 pub(super) fn governed_roster_digest(
     profile_digest: [u8; 32],
     epoch: u64,
@@ -323,10 +340,12 @@ pub(super) fn governed_roster_digest(
     hash.finalize()
 }
 /// Canonical limb-major RNS residue vector for the frozen release profile.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsPolynomialWireV1 {
     residues: Arc<Vec<u64>>,
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheRnsPolynomialWireV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -335,6 +354,7 @@ impl core::fmt::Debug for ZkAmsMkheRnsPolynomialWireV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheRnsPolynomialWireV1 {
     /// Construct a release polynomial from exact canonical limb-major residues.
     pub fn new(residues: Vec<u64>) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -389,6 +409,7 @@ impl ZkAmsMkheRnsPolynomialWireV1 {
         validate_residues(self.residues.as_slice(), dimensions)
     }
 }
+#[cfg(test)]
 fn validate_residues(
     residues: &[u64],
     dimensions: WireDimensions<'_>,
@@ -404,12 +425,14 @@ fn validate_residues(
     Ok(())
 }
 /// Canonical authentication material carried by contribution/share records.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheAuthenticationWireV1 {
     party: ZkAmsMkhePartyIdV1,
     public_key: [u8; 33],
     signature: [u8; 65],
 }
+#[cfg(test)]
 impl ZkAmsMkheAuthenticationWireV1 {
     /// Construct canonical authentication bytes and bind the party to its key.
     pub fn new(
@@ -457,6 +480,7 @@ impl ZkAmsMkheAuthenticationWireV1 {
     }
 }
 /// Exact contribution-proof family carried by a proof envelope.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ZkAmsMkheProofKindV1 {
@@ -465,6 +489,7 @@ pub enum ZkAmsMkheProofKindV1 {
     /// RKG digit/contribution proof.
     RkgContribution = 2,
 }
+#[cfg(test)]
 impl TryFrom<u8> for ZkAmsMkheProofKindV1 {
     type Error = ZkAmsMkheErrorV1;
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -480,6 +505,7 @@ impl TryFrom<u8> for ZkAmsMkheProofKindV1 {
 /// The transport does not invent a common curve-point/scalar shape: the active RKG and CKS proof
 /// systems have different native transcripts and enforce their canonical encodings in their own
 /// decoders. Decryption proofs use their standalone native `ZADP` encoding instead.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(PartialEq, Eq)]
 pub struct ZkAmsMkheProofEnvelopeWireV1 {
@@ -488,6 +514,7 @@ pub struct ZkAmsMkheProofEnvelopeWireV1 {
     statement_digest: [u8; 32],
     proof_bytes: Vec<u8>,
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheProofEnvelopeWireV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -500,6 +527,7 @@ impl core::fmt::Debug for ZkAmsMkheProofEnvelopeWireV1 {
             .finish()
     }
 }
+#[cfg(test)]
 impl Drop for ZkAmsMkheProofEnvelopeWireV1 {
     fn drop(&mut self) {
         let proof_bytes = core::hint::black_box(&mut self.proof_bytes);
@@ -523,6 +551,7 @@ std::thread_local! {
 fn proof_envelope_zeroized_drop_count_v1() -> usize {
     PROOF_ENVELOPE_ZEROIZED_DROP_COUNT_V1.with(core::cell::Cell::get)
 }
+#[cfg(test)]
 impl ZkAmsMkheProofEnvelopeWireV1 {
     /// Construct one exact proof envelope and validate all canonical fields.
     pub fn new(
@@ -600,6 +629,7 @@ impl ZkAmsMkheProofEnvelopeWireV1 {
     }
 }
 /// Compact collective ciphertext containing exactly two RNS polynomials.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveCiphertextWireV1 {
     binding: ZkAmsMkheWireBindingV1,
@@ -607,6 +637,7 @@ pub struct ZkAmsMkheCollectiveCiphertextWireV1 {
     constant: ZkAmsMkheRnsPolynomialWireV1,
     linear: ZkAmsMkheRnsPolynomialWireV1,
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheCollectiveCiphertextWireV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // Keep diagnostics independent of both full-size polynomial data and
@@ -619,6 +650,7 @@ impl core::fmt::Debug for ZkAmsMkheCollectiveCiphertextWireV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveCiphertextWireV1 {
     /// Construct one exact two-polynomial collective ciphertext.
     pub fn new(
@@ -727,6 +759,7 @@ impl ZkAmsMkheCollectiveCiphertextWireV1 {
     }
 }
 /// One proof-bound collective-key-switch contribution.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCksContributionWireV1 {
@@ -736,6 +769,7 @@ pub struct ZkAmsMkheCksContributionWireV1 {
     contribution: ZkAmsMkheRnsPolynomialWireV1,
     proof: ZkAmsMkheProofEnvelopeWireV1,
 }
+#[cfg(test)]
 impl ZkAmsMkheCksContributionWireV1 {
     /// Construct a CKS contribution whose proof statement binds every record field.
     pub fn new(
@@ -840,7 +874,9 @@ impl ZkAmsMkheCksContributionWireV1 {
         )
     }
 }
+#[cfg(test)]
 const CKS_STATEMENT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cks-wire-statement";
+#[cfg(test)]
 fn expected_roster_party(
     roster: &ZkAmsMkheGovernedRosterWireV1,
     binding: ZkAmsMkheWireBindingV1,
@@ -861,6 +897,7 @@ fn expected_roster_party(
         .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
 /// Derive the exact statement digest required by a CKS proof envelope.
+#[cfg(test)]
 pub fn zk_ams_mkhe_cks_statement_digest_v1(
     binding: ZkAmsMkheWireBindingV1,
     source_ciphertext_digest: [u8; 32],
@@ -876,6 +913,7 @@ pub fn zk_ams_mkhe_cks_statement_digest_v1(
         release_dimensions()?,
     )
 }
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "validation keeps every independently authenticated wire component explicit"
@@ -919,6 +957,7 @@ fn validate_contribution_parts(
     contribution_wire_bytes(dimensions, proof_len, ceiling)?;
     Ok(())
 }
+#[cfg(test)]
 fn contribution_statement_digest(
     domain: &[u8],
     binding: ZkAmsMkheWireBindingV1,
@@ -940,6 +979,7 @@ fn contribution_statement_digest(
     frame.extend_from_slice(&polynomial_digest(polynomial)?);
     Ok(keccak256(&frame))
 }
+#[cfg(test)]
 fn polynomial_digest(
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -951,6 +991,7 @@ fn polynomial_digest(
     }
     Ok(hash.finalize())
 }
+#[cfg(test)]
 fn append_binding_frame(frame: &mut Vec<u8>, binding: ZkAmsMkheWireBindingV1) {
     frame.extend_from_slice(&binding.profile_digest);
     frame.extend_from_slice(&binding.roster_digest);
@@ -959,6 +1000,7 @@ fn append_binding_frame(frame: &mut Vec<u8>, binding: ZkAmsMkheWireBindingV1) {
     frame.extend_from_slice(&binding.record_index.to_be_bytes());
     frame.push(binding.level);
 }
+#[cfg(test)]
 struct DecodedContribution {
     binding: ZkAmsMkheWireBindingV1,
     subject_digest: [u8; 32],
@@ -966,6 +1008,7 @@ struct DecodedContribution {
     polynomial: ZkAmsMkheRnsPolynomialWireV1,
     proof: ZkAmsMkheProofEnvelopeWireV1,
 }
+#[cfg(test)]
 fn decode_contribution(
     bytes: &[u8],
     tag: [u8; 4],
@@ -1006,6 +1049,7 @@ fn decode_contribution(
         proof,
     })
 }
+#[cfg(test)]
 fn preflight_ciphertext(
     bytes: &[u8],
     expected_binding: ZkAmsMkheWireBindingV1,
@@ -1066,6 +1110,7 @@ fn preflight_seeded_rkg_key(
     }
     decoder.finish()
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn preflight_contribution(
     bytes: &[u8],
@@ -1106,6 +1151,7 @@ fn preflight_contribution(
         }
     })
 }
+#[cfg(test)]
 fn preflight_proof_envelope(
     bytes: &[u8],
     expected_binding: ZkAmsMkheWireBindingV1,
@@ -1139,6 +1185,7 @@ fn preflight_proof_envelope(
     decoder.skip(proof_len)?;
     decoder.finish()
 }
+#[cfg(test)]
 fn decode_proof_envelope(
     bytes: &[u8],
     expected_binding: ZkAmsMkheWireBindingV1,
@@ -1172,6 +1219,7 @@ fn decode_proof_envelope(
     proof.validate(dimensions)?;
     Ok(proof)
 }
+#[cfg(test)]
 fn write_binding(encoder: &mut WireEncoder, tag: [u8; 4], binding: ZkAmsMkheWireBindingV1) {
     encoder.bytes(&tag);
     encoder.u8(MKHE_VERSION_V1);
@@ -1182,6 +1230,7 @@ fn write_binding(encoder: &mut WireEncoder, tag: [u8; 4], binding: ZkAmsMkheWire
     encoder.u32(binding.record_index);
     encoder.u8(binding.level);
 }
+#[cfg(test)]
 fn read_binding(
     decoder: &mut WireDecoder<'_>,
     tag: [u8; 4],
@@ -1202,12 +1251,14 @@ fn read_binding(
     }
     Ok(())
 }
+#[cfg(test)]
 fn write_authentication(encoder: &mut WireEncoder, authentication: &ZkAmsMkheAuthenticationWireV1) {
     encoder.u8(MKHE_VERSION_V1);
     encoder.bytes(&authentication.party.to_bytes());
     encoder.bytes(&authentication.public_key);
     encoder.bytes(&authentication.signature);
 }
+#[cfg(test)]
 fn read_authentication(
     decoder: &mut WireDecoder<'_>,
 ) -> Result<ZkAmsMkheAuthenticationWireV1, ZkAmsMkheErrorV1> {
@@ -1217,6 +1268,7 @@ fn read_authentication(
     let signature = decoder.array()?;
     ZkAmsMkheAuthenticationWireV1::new(party, public_key, signature)
 }
+#[cfg(test)]
 fn write_polynomial(
     encoder: &mut WireEncoder,
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
@@ -1227,6 +1279,7 @@ fn write_polynomial(
     }
     Ok(())
 }
+#[cfg(test)]
 fn skip_polynomial(
     decoder: &mut WireDecoder<'_>,
     dimensions: WireDimensions<'_>,
@@ -1239,6 +1292,7 @@ fn skip_polynomial(
             .ok_or(ZkAmsMkheErrorV1::WireTooLarge)?,
     )
 }
+#[cfg(test)]
 fn read_polynomial(
     decoder: &mut WireDecoder<'_>,
     dimensions: WireDimensions<'_>,
@@ -1259,6 +1313,7 @@ fn read_polynomial(
     }
     ZkAmsMkheRnsPolynomialWireV1::new_with_dimensions(residues, dimensions)
 }
+#[cfg(test)]
 fn collective_ciphertext_wire_bytes(
     dimensions: WireDimensions<'_>,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -1280,6 +1335,7 @@ fn seeded_rkg_key_wire_bytes(dimensions: WireDimensions<'_>) -> Result<usize, Zk
         .and_then(|digits| digits.checked_add(SEEDED_RKG_KEY_HEADER_WIRE_BYTES))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn contribution_wire_bytes(
     dimensions: WireDimensions<'_>,
     proof_len: usize,
@@ -1294,6 +1350,7 @@ fn contribution_wire_bytes(
     }
     Ok(length)
 }
+#[cfg(test)]
 fn max_proof_envelope_bytes(dimensions: WireDimensions<'_>) -> Result<usize, ZkAmsMkheErrorV1> {
     let base = CONTRIBUTION_HEADER_WIRE_BYTES
         .checked_add(dimensions.polynomial_wire_bytes()?)
@@ -1303,6 +1360,7 @@ fn max_proof_envelope_bytes(dimensions: WireDimensions<'_>) -> Result<usize, ZkA
         .checked_sub(base)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn proof_envelope_wire_bytes(proof_len: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     PROOF_ENVELOPE_HEADER_WIRE_BYTES
         .checked_add(proof_len)
@@ -1312,12 +1370,15 @@ fn proof_envelope_wire_bytes(proof_len: usize) -> Result<usize, ZkAmsMkheErrorV1
 fn as_u8(value: usize) -> Result<u8, ZkAmsMkheErrorV1> {
     u8::try_from(value).map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
+#[cfg(test)]
 fn as_u32(value: usize) -> Result<u32, ZkAmsMkheErrorV1> {
     u32::try_from(value).map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
+#[cfg(test)]
 struct WireEncoder {
     output: Vec<u8>,
 }
+#[cfg(test)]
 impl WireEncoder {
     fn new(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut output = Vec::new();
@@ -1345,10 +1406,12 @@ impl WireEncoder {
         Ok(self.output)
     }
 }
+#[cfg(test)]
 struct WireDecoder<'a> {
     input: &'a [u8],
     cursor: usize,
 }
+#[cfg(test)]
 impl<'a> WireDecoder<'a> {
     const fn new(input: &'a [u8]) -> Self {
         Self { input, cursor: 0 }

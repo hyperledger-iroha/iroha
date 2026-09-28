@@ -1,6 +1,6 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::{
-    json::{self as serde_json, Value},
+    json::{self, Value},
     streaming::BUNDLED_RANS_BUILD_AVAILABLE,
 };
 use std::{fs, path::PathBuf};
@@ -26,7 +26,7 @@ fn run_bundle_check(config_relative: &str) -> Value {
     ]);
     cmd.assert().success();
     let raw = fs::read_to_string(json_out).expect("bundle summary JSON");
-    serde_json::from_str(&raw).expect("parse bundle summary JSON")
+    json::from_str(&raw).expect("parse bundle summary JSON")
 }
 fn assert_tables_path(summary: &Value) {
     let tables = summary["tables"]

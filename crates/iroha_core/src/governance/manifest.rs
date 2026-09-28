@@ -2225,6 +2225,7 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Validate that every active lane can enforce all configured manifest semantics.
     ///
     /// # Errors
@@ -2315,6 +2316,7 @@ impl LaneManifestRegistry {
     pub fn lane_rules(&self, lane_id: LaneId) -> Option<&GovernanceRules> {
         self.status(lane_id).and_then(LaneManifestStatus::rules)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Resolve the validator pool declared for a lane's physical dataspace.
     ///
     /// Policy-only manifests do not declare authority and are skipped. Every roster-bearing
@@ -2395,11 +2397,13 @@ impl LaneManifestRegistry {
 
         Ok(target_rules.or(fallback_rules))
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Retrieve the validator set declared for `lane_id`, if present.
     pub fn lane_validators(&self, lane_id: LaneId) -> Option<Vec<AccountId>> {
         self.lane_rules(lane_id)
             .map(|rules| rules.validators.clone())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Retrieve explicit validator-account to peer-id bindings declared for `lane_id`, if present.
     pub fn lane_validator_bindings(
         &self,
@@ -2408,6 +2412,7 @@ impl LaneManifestRegistry {
         self.lane_rules(lane_id)
             .map(|rules| rules.validator_bindings.clone())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Retrieve the quorum declared for `lane_id`, if present.
     pub fn lane_quorum(&self, lane_id: LaneId) -> Option<u32> {
         self.lane_rules(lane_id).and_then(|rules| rules.quorum)
@@ -2418,7 +2423,8 @@ impl LaneManifestRegistry {
         self.statuses.values().cloned().collect()
     }
 }
-fn lane_uses_reserved_autoscale_metadata(lane: &LaneConfig) -> bool {
+/// Whether `lane` carries metadata keys reserved for autoscaled lane lifecycle management.
+pub(crate) fn lane_uses_reserved_autoscale_metadata(lane: &LaneConfig) -> bool {
     lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
         || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
         || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)

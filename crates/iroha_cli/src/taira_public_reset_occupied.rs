@@ -263,6 +263,7 @@ pub(super) fn verify_prior_genesis_hash(
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn protects_prior_artifact(target: &HostTarget, root: &Path) -> bool {
     match target {
         HostTarget::Validator(validator) => validator.admitted_release().is_ok_and(|prior| {

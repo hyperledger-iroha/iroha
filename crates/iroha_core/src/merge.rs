@@ -161,20 +161,6 @@ pub fn canonical_merge_ledger_entry_bytes(entry: &MergeLedgerEntry) -> Vec<u8> {
 pub fn merge_ledger_entry_hash(entry: &MergeLedgerEntry) -> HashOf<MergeLedgerEntry> {
     entry.canonical_hash()
 }
-/// Return the exact canonical framed byte length committed by a compact merge-entry reference.
-#[must_use]
-pub fn merge_ledger_entry_encoded_len(entry: &MergeLedgerEntry) -> u64 {
-    entry.canonical_encoded_len()
-}
-/// Verify the hash and exact byte length of a caller-resolved merge sidecar.
-#[must_use]
-pub fn merge_ledger_entry_reference_matches(
-    entry: &MergeLedgerEntry,
-    expected_hash: HashOf<MergeLedgerEntry>,
-    expected_encoded_len: u64,
-) -> bool {
-    entry.canonical_encoded_len() == expected_encoded_len && entry.canonical_hash() == expected_hash
-}
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::merge::MergeLedgerSignPayload")]
 #[derive(Encode)]

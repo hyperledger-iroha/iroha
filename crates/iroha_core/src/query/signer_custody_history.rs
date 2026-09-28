@@ -19,7 +19,9 @@ mod read;
 #[cfg(test)]
 pub(crate) mod staging_fixture;
 mod transition;
-pub(crate) use purpose::{AccountPurpose, ManifestPurpose, ReceiptPurpose};
+#[cfg(test)]
+pub(crate) use purpose::ManifestPurpose;
+pub(crate) use purpose::{AccountPurpose, ReceiptPurpose};
 #[cfg(test)]
 pub(crate) use read::read_control_record;
 pub(crate) use read::{control_digest, read_control, read_control_at};

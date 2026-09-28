@@ -267,8 +267,8 @@ fn build_manifest(
     let auth_mode = parse_auth_mode(auth).wrap_err("invalid auth mode")?;
     let mut mime_overrides = BTreeMap::new();
     for entry in &files {
-        if let Some(mime) = guess_mime(&entry.path) {
-            mime_overrides.insert(entry.path.clone(), mime);
+        if let Some(mime) = iroha_torii_shared::content_mime::media_type_for_path(&entry.path) {
+            mime_overrides.insert(entry.path.clone(), mime.to_owned());
         }
     }
     Ok(ContentBundleManifest {
@@ -543,24 +543,6 @@ fn split_tar_path(path: &str) -> Result<(String, String)> {
         eyre::bail!("path prefix `{prefix}` exceeds tar header limit");
     }
     Ok((name.to_string(), prefix.to_string()))
-}
-fn guess_mime(path: &str) -> Option<String> {
-    let ext = path.rsplit('.').next()?.to_ascii_lowercase();
-    let mime = match ext.as_str() {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "js" => "application/javascript",
-        "json" => "application/json",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "svg" => "image/svg+xml",
-        "txt" => "text/plain; charset=utf-8",
-        "wasm" => "application/wasm",
-        "ico" => "image/x-icon",
-        "gif" => "image/gif",
-        _ => return None,
-    };
-    Some(mime.to_string())
 }
 #[cfg(test)]
 mod tests {

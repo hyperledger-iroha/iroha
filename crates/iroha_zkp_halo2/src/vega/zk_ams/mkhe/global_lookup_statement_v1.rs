@@ -5,7 +5,10 @@
 //! post-z inverse set is shared, and no residual-vector or second-z inventory
 //! exists. This descriptor cannot construct entropy, a proof, or source authority.
 
-use super::{ZkAmsMkheErrorV1, rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1};
+#[cfg(test)]
+use super::ZkAmsMkheErrorV1;
+use super::rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1;
+#[cfg(test)]
 use crate::vega::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
     sponge::Keccak256,
@@ -13,21 +16,39 @@ use crate::vega::{
 
 #[path = "global_lookup_statement_v1/vector_arithmetic_plane_openings_v1.rs"]
 mod vector_arithmetic_plane_openings_v1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use vector_arithmetic_plane_openings_v1::SealedQMaskSFileV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use vector_arithmetic_plane_openings_v1::materialized_plane_context_digest_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use vector_arithmetic_plane_openings_v1::{
     OrderedPlaneSpoolSnapshotV1, OrderedPlaneSpoolWriterV1, OrderedSnapshotErrorV1,
+};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use vector_arithmetic_plane_openings_v1::{
     OrderedStorageSessionBudgetV1, QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1,
-    SealedQMaskSFileV1, WrittenQMaskSBlockFileV1, materialized_plane_context_digest_v1,
+    WrittenQMaskSBlockFileV1,
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
 const GROUPS_V1: u32 = 43 * 8;
 const LOW_DIGITS_V1: u32 = 17;
 const BORROWS_V1: u32 = 18;
 const SMALL_BLOCKS_V1: u32 = 43 * 3 * 8;
 const Q_MASK_PER_ROLE_V1: u32 = ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u32 * 5 * 8 * 4;
+#[cfg(test)]
 const TOPOLOGY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.topology\0";
+#[cfg(test)]
 const INVENTORY_LANGUAGE_V1: &[u8] = b"native40-persistent-opening-inventory;source344-is-separately-bound;one-pre-z-set;sole-z-before-all-inverses;shared-D/S-inverses;no-residual-q3/q5/q8;no-retired702-mask;distinct-multiplicity32768-and-inverse-product-mask16384-with87-prefix-scalars;storage-ordinals-are-not-wire-ordinals";
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the test-only global lookup prover constructs commitment phases"
+    )
+)]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GlobalLookupCommitmentPhaseV1 {
@@ -88,6 +109,7 @@ impl GlobalLookupCommitmentPurposeV1 {
         count as usize
     }
 
+    #[cfg(test)]
     pub(super) const fn phase_v1(self) -> GlobalLookupCommitmentPhaseV1 {
         match self {
             Self::SharedDifferenceInverse
@@ -102,6 +124,7 @@ impl GlobalLookupCommitmentPurposeV1 {
     }
 }
 
+#[cfg(test)]
 pub(super) const PRE_Z_POINT_PURPOSES_V1: [GlobalLookupCommitmentPurposeV1; 13] = [
     GlobalLookupCommitmentPurposeV1::ExistingDifferenceLow,
     GlobalLookupCommitmentPurposeV1::ExistingSumLow,
@@ -118,6 +141,7 @@ pub(super) const PRE_Z_POINT_PURPOSES_V1: [GlobalLookupCommitmentPurposeV1; 13] 
     GlobalLookupCommitmentPurposeV1::InverseProductMask,
 ];
 
+#[cfg(test)]
 pub(super) const POST_Z_POINT_PURPOSES_V1: [GlobalLookupCommitmentPurposeV1; 7] = [
     GlobalLookupCommitmentPurposeV1::SharedDifferenceInverse,
     GlobalLookupCommitmentPurposeV1::SharedSumInverse,
@@ -152,6 +176,7 @@ pub(super) const ALL_POINT_PURPOSES_V1: [GlobalLookupCommitmentPurposeV1; 21] = 
     GlobalLookupCommitmentPurposeV1::QMaskComplementInverse,
 ];
 
+#[cfg(test)]
 pub(super) const COMPARATOR_SIGNED_POINT_PURPOSES_V1: [GlobalLookupCommitmentPurposeV1; 6] = [
     GlobalLookupCommitmentPurposeV1::ComparatorDifferenceTop,
     GlobalLookupCommitmentPurposeV1::ComparatorSumTop,
@@ -161,6 +186,7 @@ pub(super) const COMPARATOR_SIGNED_POINT_PURPOSES_V1: [GlobalLookupCommitmentPur
     GlobalLookupCommitmentPurposeV1::SmallNegativeMagnitude,
 ];
 
+#[cfg(test)]
 pub(super) fn comparator_signed_coordinate_v1(
     logical_ordinal: u32,
 ) -> Result<GlobalLookupCommitmentCoordinateV1, ZkAmsMkheErrorV1> {
@@ -200,6 +226,7 @@ const fn inventory_count_v1() -> u32 {
 
 pub(super) const GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1: u32 = inventory_count_v1();
 
+#[cfg(test)]
 pub(super) fn commitment_coordinate_v1(
     global_ordinal: u32,
 ) -> Result<GlobalLookupCommitmentCoordinateV1, ZkAmsMkheErrorV1> {
@@ -222,6 +249,7 @@ pub(super) fn commitment_coordinate_v1(
     Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 
+#[cfg(test)]
 pub(super) fn first_commitment_ordinal_v1(purpose: GlobalLookupCommitmentPurposeV1) -> u32 {
     let mut first = 0;
     for current in ALL_POINT_PURPOSES_V1 {
@@ -234,6 +262,7 @@ pub(super) fn first_commitment_ordinal_v1(purpose: GlobalLookupCommitmentPurpose
 }
 
 /// Source-coupled identity of the exact current inventory, without a second transcript.
+#[cfg(test)]
 pub(super) fn global_lookup_topology_digest_v1() -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(TOPOLOGY_DOMAIN_V1);

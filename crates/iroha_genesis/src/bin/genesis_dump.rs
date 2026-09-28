@@ -14,11 +14,7 @@ fn main() -> Result<()> {
         .nth(1)
         .ok_or_else(|| eyre!("usage: genesis_dump <genesis.nrt>"))?;
     let block = iroha_genesis::read_signed_genesis(Path::new(&path))?;
-    println!(
-        "tx_count={} result_count={}",
-        block.external_transactions().len(),
-        block.results().len()
-    );
+    println!("tx_count={}", block.external_transactions().len());
     for (tx_index, tx) in block.external_transactions().enumerate() {
         match tx.instructions() {
             Executable::Instructions(batch) => {

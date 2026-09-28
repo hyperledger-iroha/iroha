@@ -74,6 +74,137 @@ async fn scheduler_respects_real_byte_and_request_windows() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn score_policy_waits_for_eligible_provider_request_quota() {
+    let (plan, payload) = repeated_chunk_plan(2);
+    let mut metadata = ProviderMetadata::new();
+    metadata.range_capability = Some(RangeCapability {
+        max_chunk_span: payload.len() as u32,
+        min_granularity: 1,
+        supports_sparse_offsets: true,
+        requires_alignment: false,
+        supports_merkle_proof: true,
+    });
+    metadata.requests_per_minute = Some(1);
+    let started = tokio::time::Instant::now();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&calls);
+    let outcome = fetch_plan_parallel(
+        &plan,
+        [
+            FetchProvider::new("alpha"),
+            FetchProvider::new("beta")
+                .with_max_concurrent_chunks(NonZeroUsize::new(2).unwrap())
+                .with_metadata(metadata),
+        ],
+        move |request| {
+            assert_eq!(request.provider.id().as_str(), "beta");
+            observed
+                .lock()
+                .unwrap()
+                .push(tokio::time::Instant::now().duration_since(started));
+            let bytes = payload.as_ref().clone();
+            async move { Ok::<_, TestError>(ChunkResponse::new(bytes)) }
+        },
+        FetchOptions {
+            score_policy: Some(Arc::new(DenyAlphaPolicy)),
+            ..FetchOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [Duration::ZERO, Duration::from_secs(60)]
+    );
+    assert_eq!(outcome.chunk_receipts.len(), 2);
+    assert_eq!(outcome.provider_reports[0].successes, 0);
+    assert_eq!(outcome.provider_reports[1].successes, 2);
+    assert!(
+        outcome
+            .provider_reports
+            .iter()
+            .all(|report| report.failures == 0)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn score_policy_rejection_during_quota_cooldown_returns_without_waiting() {
+    struct DenyAfterSuccess;
+    impl ScorePolicy for DenyAfterSuccess {
+        fn score(&self, ctx: ProviderScoreContext<'_>) -> ProviderScoreDecision {
+            ProviderScoreDecision {
+                allow: ctx.stats.successes == 0,
+                priority_delta: 0,
+            }
+        }
+    }
+
+    let (plan, payload) = repeated_chunk_plan(2);
+    let mut metadata = ProviderMetadata::new();
+    metadata.range_capability = Some(RangeCapability {
+        max_chunk_span: payload.len() as u32,
+        min_granularity: 1,
+        supports_sparse_offsets: true,
+        requires_alignment: false,
+        supports_merkle_proof: true,
+    });
+    metadata.requests_per_minute = Some(1);
+    let started = tokio::time::Instant::now();
+    let error = fetch_plan_parallel(
+        &plan,
+        [FetchProvider::new("beta").with_metadata(metadata)],
+        move |request| {
+            assert_eq!(request.spec.chunk_index, 0);
+            let bytes = payload.as_ref().clone();
+            async move { Ok::<_, TestError>(ChunkResponse::new(bytes)) }
+        },
+        FetchOptions {
+            score_policy: Some(Arc::new(DenyAfterSuccess)),
+            session_timeout: Duration::from_secs(1),
+            ..FetchOptions::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    let MultiSourceError::NoPolicyEligibleProviders {
+        chunk_index,
+        providers,
+    } = error
+    else {
+        panic!("policy rejection during cooldown must not wait for the session deadline")
+    };
+    assert_eq!(chunk_index, 1);
+    assert_eq!(providers, [ProviderId::new("beta")]);
+    assert_eq!(tokio::time::Instant::now(), started);
+}
+
+#[test]
+fn score_policy_eligibility_survives_temporary_capacity_limits() {
+    let (plan, _) = repeated_chunk_plan(1);
+    let spec = &plan.try_chunk_fetch_specs().unwrap()[0];
+    for stream_limit in [true, false] {
+        let mut beta = ProviderState::new(FetchProvider::new("beta"));
+        if stream_limit {
+            beta.inflight = beta.capacity();
+        } else {
+            beta.burst_limit = Some(u64::from(spec.length));
+            beta.bytes_inflight = 1;
+        }
+        let states = [ProviderState::new(FetchProvider::new("alpha")), beta];
+        let mut credits = [0, 0];
+        assert!(matches!(
+            select_weighted_provider(&states, &mut credits, 2, spec, Some(&DenyAlphaPolicy)),
+            ProviderSelectionOutcome::Unavailable
+        ));
+        let result = select_weighted_provider(&states, &mut credits, 2, spec, Some(&DenyAllPolicy));
+        let ProviderSelectionOutcome::PolicyDenied(providers) = result else {
+            panic!("all-deny policy must reject every compatible live provider")
+        };
+        assert_eq!(providers, [0, 1]);
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn consuming_window_remains_bounded_behind_a_slow_first_chunk() {
     for count in [16, 1025] {
         let (plan, bytes) = repeated_chunk_plan(count);
@@ -166,8 +297,9 @@ async fn repeated_gateway_throttle_preserves_health_and_failure_retry_budget() {
     let started = tokio::time::Instant::now();
     let outcome = fetch_plan_parallel(
         &plan,
-        [FetchProvider::new("healthy")],
-        move |_| {
+        [FetchProvider::new("healthy"), FetchProvider::new("alpha")],
+        move |request| {
+            assert_eq!(request.provider.id().as_str(), "healthy");
             let call = observed.fetch_add(1, Ordering::SeqCst);
             let bytes = bytes.as_ref().clone();
             async move {
@@ -184,6 +316,7 @@ async fn repeated_gateway_throttle_preserves_health_and_failure_retry_budget() {
         FetchOptions {
             per_chunk_retry_limit: Some(1),
             provider_failure_threshold: 1,
+            score_policy: Some(Arc::new(DenyAlphaPolicy)),
             ..FetchOptions::default()
         },
     )
@@ -196,6 +329,8 @@ async fn repeated_gateway_throttle_preserves_health_and_failure_retry_budget() {
     assert_eq!(calls.load(Ordering::SeqCst), 5);
     assert_eq!(outcome.provider_reports[0].failures, 0);
     assert!(!outcome.provider_reports[0].disabled);
+    assert_eq!(outcome.provider_reports[1].successes, 0);
+    assert_eq!(outcome.provider_reports[1].failures, 0);
     assert_eq!(outcome.chunk_receipts[0].attempts, 1);
 }
 

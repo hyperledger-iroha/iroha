@@ -1,5 +1,6 @@
 //! Soracloud lifecycle instruction handlers.
 use super::{asset::isi::assert_numeric_spec_with, *};
+use crate::smartcontracts::isi::helpers::verify_signature_for_signer;
 use crate::{
     smartcontracts::{Execute, isi::staking::validator_election_eligible_at_height},
     state::{
@@ -13,19 +14,23 @@ use iroha_crypto::fhe_bfv::{
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1,
 };
 #[cfg(feature = "zk-stark")]
+#[cfg(test)]
 use iroha_crypto::fhe_bfv::{
     BfvFullBootstrapExecutionProverInputMaterialV1,
+    bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1,
+    bfv_full_bootstrap_execution_prover_input_material_v1,
+    validate_bfv_full_bootstrap_execution_prover_input_material_v1,
+};
+#[cfg(feature = "zk-stark")]
+use iroha_crypto::fhe_bfv::{
     bfv_full_bootstrap_arithmetic_air_evaluation_material_v1,
     bfv_full_bootstrap_arithmetic_trace_material_digest_v1,
     bfv_full_bootstrap_arithmetic_trace_material_v1,
     bfv_full_bootstrap_execution_proof_input_material_v1,
-    bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1,
-    bfv_full_bootstrap_execution_prover_input_material_v1,
     bfv_full_bootstrap_execution_witness_digest_material_v1,
-    validate_bfv_full_bootstrap_execution_prover_input_material_v1,
 };
 use iroha_crypto::{
-    Algorithm, Hash, PublicKey, Signature,
+    Hash, PublicKey,
     fhe_bfv::{
         BfvBootstrapKeyMode, BfvCiphertext, BfvEvaluationBudget, BfvEvaluationKeyBundle,
         BfvEvaluationPlan, BfvFullBootstrapCircuitArtifactBundleV1,
@@ -248,22 +253,6 @@ fn invalid_quantity_arithmetic(
     error: iroha_primitives::numeric::NumericOperationError,
 ) -> InstructionExecutionError {
     invalid_parameter(format!("{context}: {error}"))
-}
-fn verify_signature_for_signer(
-    signature: &Signature,
-    signer: &PublicKey,
-    payload: &[u8],
-) -> Result<(), iroha_crypto::Error> {
-    match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-        }
-        _ => {}
-    }
-    signature.verify(signer, payload)
 }
 /// Whether a registered account holds the exact SoraCloud management capability.
 ///
@@ -1454,6 +1443,7 @@ fn validate_soracloud_fhe_statement_open_verify_envelope(
     (contract.validate_native_envelope_bytes)(&open.envelope_bytes)?;
     Ok(open)
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_native_air_statement_binding_v1(
     label: &str,
@@ -3314,6 +3304,7 @@ fn validate_soracloud_fhe_full_bootstrap_prover_verifier_key(
     )
     .map(|_| ())
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
     label: &str,
@@ -3339,6 +3330,7 @@ fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
     .map_err(invalid_parameter)?;
     Ok(verifier_key.clone())
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_prover_statement_hash(
     label: &str,
@@ -3649,6 +3641,7 @@ fn full_bootstrap_execution_proof_bound_mode(
         }
     }
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn refresh_transcript_mode_for_ciphertext_bound_mode(
     bound_mode: BfvCiphertextBoundModeV1,
@@ -16288,6 +16281,7 @@ fn finalize_soracloud_fhe_full_bootstrap_stark_proof_attachment_v1(
     attachment.vk_commitment = Some(envelope.vk_hash);
     Ok(attachment)
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn soracloud_fhe_full_bootstrap_execution_proof_from_native_air_envelope_v1(
     statement_hash: Hash,
@@ -16368,6 +16362,7 @@ pub(crate) fn prove_soracloud_fhe_full_bootstrap_execution_proof_v1(
         "FHE full-bootstrap execution proof generation requires {FHE_FULL_BOOTSTRAP_DEDICATED_PROVER_UNAVAILABLE}"
     )))
 }
+#[cfg(test)]
 /// Build native BFV AIR STARK/FRI envelope bytes from release-prover material.
 ///
 /// The returned envelope commits the governed row-major arithmetic trace and
@@ -16538,6 +16533,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
     }
     Ok(native_envelope)
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
     params: &BfvParameters,
@@ -16567,6 +16563,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_prover_input_material_for_art
     })?;
     Ok(())
 }
+#[cfg(test)]
 /// Prove a governed Soracloud FHE full-bootstrap execution statement from release-prover material.
 ///
 /// The release-prover material is validated before native STARK/FRI envelope
@@ -16620,6 +16617,7 @@ fn prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material
         native_air_envelope_bytes,
     )
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn full_bootstrap_execution_prover_input_material_verifier_key(
     prover_input_material: &BfvFullBootstrapExecutionProverInputMaterialV1,
@@ -16649,6 +16647,7 @@ fn full_bootstrap_execution_prover_input_material_verifier_key(
     validate_governed_full_bootstrap_execution_stark_verifier_key_payload(&mut verifier_key_box)?;
     Ok(verifier_key_box)
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_release_audit_package_for_evaluation_keys_v1(
     context: &str,
@@ -16719,6 +16718,7 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_package_for_evaluation_ke
     })?;
     Ok(())
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_release_audit_refresh_transcript_v1(
     context: &str,
@@ -16740,6 +16740,7 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_refresh_transcript_v1(
             ))
         })
 }
+#[cfg(test)]
 /// Derive and prove the Soracloud FHE full-bootstrap material statement for evaluation keys.
 ///
 /// This helper mirrors runtime policy admission: the statement hash is derived from the BFV
@@ -16894,6 +16895,7 @@ fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
         })
         .collect()
 }
+#[cfg(test)]
 #[cfg(feature = "zk-stark")]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn validate_soracloud_fhe_full_bootstrap_release_audited_execution_output_v1(
@@ -17017,6 +17019,7 @@ fn validate_soracloud_fhe_full_bootstrap_release_audited_execution_output_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Derive and prove full-bootstrap execution statements after release-audit validation.
 ///
 /// This is the production release-prover entry point: the signed release audit

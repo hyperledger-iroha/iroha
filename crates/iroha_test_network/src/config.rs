@@ -249,31 +249,6 @@ pub fn genesis_with_keypair(
         genesis_key_pair,
     )
 }
-/// Build the default genesis using a custom signing key pair and post-topology instructions.
-#[allow(dead_code)]
-pub fn genesis_with_keypair_and_post_topology(
-    extra_transactions: Vec<Vec<InstructionBox>>,
-    post_topology_transactions: Vec<Vec<InstructionBox>>,
-    topology: UniqueVec<PeerId>,
-    topology_entries: Vec<GenesisTopologyEntry>,
-    genesis_key_pair: KeyPair,
-) -> GenesisBlock {
-    genesis_with_keypair_and_post_topology_with_policies(
-        extra_transactions,
-        post_topology_transactions,
-        topology,
-        topology_entries,
-        genesis_key_pair,
-        chain_id(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-    )
-}
 
 /// Build and sign the default genesis with post-topology instructions without
 /// pre-executing its transactions.
@@ -610,7 +585,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     block.0 = signed_block;
     (block, staged_hash, raw_genesis)
 }
-#[allow(dead_code)]
+#[cfg(test)]
 fn build_minimal_genesis_unexecuted(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,

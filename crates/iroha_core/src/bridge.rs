@@ -1,34 +1,37 @@
 //! Helpers for bridge finality proofs built from commit certificates.
-use crate::{
-    state::{State as CoreState, StateReadOnly},
-    tx::AcceptedTransaction,
-};
-use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf, sha256};
+use crate::state::{State as CoreState, StateReadOnly};
+#[cfg(test)]
+use crate::tx::AcceptedTransaction;
+#[cfg(test)]
+use iroha_crypto::sha256;
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::block::consensus_v2::finality::V2QuorumCertificateVerificationError;
 use iroha_data_model::{
     NetworkId,
     block::{
         BlockHeader, SignedBlock,
-        consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
-        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, SumeragiV2Status},
+        consensus_v2::{SumeragiV2Status, finality::V2FinalityArtifact},
         execution_output::ExecutionOutputV1,
     },
     bridge::{
         BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment,
         BridgeFinalityAttestationBodyV1, BridgeFinalityAttestationV1,
         BridgeFinalityAttestationValidationError, BridgeFinalityBundle, BridgeFinalityProof,
-        SccpGovernedRouteV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageKeyV1,
-        SccpReplayAccumulatorIdV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1,
-        SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1, SccpRouteKeyV1,
-        SccpSoraFinalityAnchorV1, sccp_sora_taira_chain_id_hash_v1,
+        SccpGovernedRouteV1, SccpLaneIdV1, SccpOutboundMessageKeyV1, SccpReplayAccumulatorIdV1,
+        SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1, SccpReplayForestV1,
+        SccpReplayPrincipalV1, SccpReplayRecordV1, SccpRouteKeyV1,
     },
     isi::InstructionBox,
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint, TransactionResult},
 };
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
+#[cfg(test)]
+use iroha_sccp::SccpGroth16Bn254ProofRequestV1;
 use iroha_sccp::{
-    SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, SccpReplayArchiveV1,
-    TairaBridgeFinalityProofV1, TairaSccpMessageProofV1,
+    SccpHubCommitmentV1, SccpPayloadV1, SccpReplayArchiveV1, TairaBridgeFinalityProofV1,
+    TairaSccpMessageProofV1,
 };
 use mv::storage::StorageReadOnly;
 use sha2::Digest as _;
@@ -38,6 +41,13 @@ use std::{
     num::NonZeroUsize,
 };
 use thiserror::Error;
+#[cfg(test)]
+use {
+    iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
+    iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+    iroha_data_model::bridge::SccpNetworkV1, iroha_data_model::bridge::SccpSoraFinalityAnchorV1,
+    iroha_data_model::bridge::sccp_sora_taira_chain_id_hash_v1,
+};
 /// A Sumeragi-v2 finality artifact whose structure, roster PoPs, and CommitQC
 /// cryptography have already been verified.
 ///
@@ -52,6 +62,7 @@ pub struct VerifiedV2FinalityArtifact {
     artifact: V2FinalityArtifact,
     retained_header: BlockHeader,
 }
+#[cfg(test)]
 /// Failure to derive an SCCP SORA anchor from authenticated Sumeragi-v2 finality.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum SccpSoraFinalityAnchorBuildError {
@@ -78,9 +89,11 @@ pub enum SccpSoraFinalityAnchorBuildError {
     InvalidDerivedAnchor,
 }
 
+#[cfg(test)]
 const SCCP_SORA_ROSTER_SEMANTIC_DOMAIN_V1: &[u8] = b"iroha:sumeragi:v2:roster-semantic:final-v1";
 
 impl VerifiedV2FinalityArtifact {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Fully verify an untrusted artifact against its exact retained header.
     ///
     /// # Errors
@@ -115,6 +128,7 @@ impl VerifiedV2FinalityArtifact {
     pub const fn retained_header(&self) -> &BlockHeader {
         &self.retained_header
     }
+    #[cfg(test)]
     /// Derive the exact epoch-aware SCCP SORA anchor from verified finality.
     ///
     /// The election epoch, epoch end, ordered roster, and aligned proofs of
@@ -177,6 +191,7 @@ impl VerifiedV2FinalityArtifact {
     }
 }
 
+#[cfg(test)]
 fn sccp_sora_roster_commitment_v1(
     roster: &[iroha_data_model::block::consensus_v2::ValidatorPower],
     validator_set_pops: &[Vec<u8>],
@@ -681,6 +696,7 @@ fn recorded_sccp_message_instruction(
         .as_any()
         .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
 }
+#[cfg(test)]
 fn validate_recorded_sccp_message_instruction(
     instruction: &InstructionBox,
 ) -> Result<Option<ValidatedRecordedSccpMessage>, RecordedSccpMessageValidationError> {
@@ -862,6 +878,7 @@ pub(crate) fn validate_sora_outbound_sccp_payload_route(
     let SccpPayloadV1::Transfer(transfer) = payload;
     validate_sora_outbound_transfer_route(transfer)
 }
+#[cfg(test)]
 fn collect_sccp_messages_from_executable<F>(
     tx_index: usize,
     executable: &Executable,
@@ -966,12 +983,14 @@ fn sccp_message_candidates_from_executable(
         })
         .collect()
 }
+#[cfg(test)]
 /// Extract all SCCP message records from accepted signed entrypoints.
 pub fn collect_sccp_messages_from_accepted_transactions(
     transactions: &[AcceptedTransaction<'_>],
 ) -> Vec<RecordedSccpMessage> {
     collect_new_sccp_messages_from_accepted_transactions(transactions, |_| false)
 }
+#[cfg(test)]
 /// Extract newly recordable SCCP message records from accepted signed entrypoints.
 ///
 /// Existing outbox keys are excluded so proposal headers do not commit messages
@@ -989,6 +1008,7 @@ where
         is_already_recorded,
     )
 }
+#[cfg(test)]
 /// Extract newly recordable SCCP message records from selected accepted signed entrypoints.
 ///
 /// The transaction-index filter preserves canonical block entrypoint indices in
@@ -1627,6 +1647,7 @@ pub enum BridgeFinalityAttestationBuildError {
     #[error("failed to sign finality attestation: {0}")]
     Signing(String),
 }
+#[cfg(test)]
 /// Build an SCCP Groth16 request from a bundle bound to one already verified local artifact.
 ///
 /// The marker is the trust boundary: Kura mints it after cache-backed verification, while
@@ -1912,6 +1933,7 @@ fn validate_local_sccp_records_against_commitment_root(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Verify an SCCP finality proof against local committed block and v2 artifact data.
 ///
 /// This intentionally rejects proofs when the local node cannot load the committed block or

@@ -17,7 +17,6 @@ mod da_query_auth {
         DaPinIntentVerifyResponse,
     };
     use norito::json;
-    use tower::ServiceExt as _;
 
     fn fixture(account: &AccountId) -> RuntimeApiRouterFixture {
         let kura = Kura::blank_kura_for_testing();

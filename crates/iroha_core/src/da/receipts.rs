@@ -5,20 +5,22 @@
 //! sequencing per `(lane, epoch)`, and map them onto the sanitized commitment
 //! bundle that block assembly embeds.
 use crate::da::{LaneEpoch, ReplayFingerprint};
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use blake3::Hasher as Blake3Hasher;
+#[cfg(test)]
 use iroha_config::parameters::actual::LaneConfig;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::da::ingest::StoredDaReceipt;
 use iroha_data_model::{
-    da::{
-        commitment::DaCommitmentRecord,
-        ingest::{DaIngestReceipt, StoredDaReceipt},
-        types::StorageTicketId,
-    },
+    da::{commitment::DaCommitmentRecord, ingest::DaIngestReceipt, types::StorageTicketId},
     sorafs::pin_registry::ManifestDigest,
 };
 use iroha_model_base::topology::LaneId;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use std::path::Path;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 use thiserror::Error;
 /// Receipt entry captured from the spool.
@@ -137,6 +139,7 @@ pub enum DaReceiptSpoolError {
         sequence: u64,
     },
 }
+#[cfg(test)]
 /// Errors returned when the receipt queue violates ordering or bundle mapping.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum DaReceiptQueueError {
@@ -267,6 +270,7 @@ pub enum DaReceiptQueueError {
         receipt: StorageTicketId,
     },
 }
+#[cfg(test)]
 /// Summary of a DA receipt spool cleanup pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DaReceiptPruneReport {
@@ -285,6 +289,7 @@ pub struct DaReceiptPruneReport {
     /// True when the spool directory itself could not be opened.
     pub read_dir_failed: bool,
 }
+#[cfg(test)]
 impl DaReceiptPruneReport {
     /// Return true when cleanup encountered filesystem failures.
     #[must_use]
@@ -476,6 +481,7 @@ impl DaReceiptCursorIndex {
             .collect()
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Load raw receipt entries from the spool directory, retaining deterministic order.
 ///
 /// # Errors
@@ -556,6 +562,7 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
     });
     Ok(receipts)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn open_receipt_spool_dir(spool_dir: &Path) -> std::io::Result<Option<std::fs::ReadDir>> {
     let metadata = match std::fs::symlink_metadata(spool_dir) {
         Ok(metadata) => metadata,
@@ -570,6 +577,7 @@ fn open_receipt_spool_dir(spool_dir: &Path) -> std::io::Result<Option<std::fs::R
     }
     std::fs::read_dir(spool_dir).map(Some)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn read_regular_receipt_file(path: &Path) -> Result<Vec<u8>, DaReceiptSpoolError> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|source| DaReceiptSpoolError::ReadFile {
@@ -592,6 +600,7 @@ fn read_regular_receipt_file(path: &Path) -> Result<Vec<u8>, DaReceiptSpoolError
     revalidate_regular_receipt_file(path, &metadata, bytes.len())?;
     Ok(bytes)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn revalidate_regular_receipt_file(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -624,6 +633,7 @@ fn revalidate_regular_receipt_file(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn is_da_receipt_file(path: &Path) -> Result<bool, DaReceiptSpoolError> {
     let Some(name) = path.file_name() else {
         return Ok(false);
@@ -636,16 +646,19 @@ fn is_da_receipt_file(path: &Path) -> Result<bool, DaReceiptSpoolError> {
     }
     Ok(false)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[cfg(unix)]
 fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let bytes = name.as_bytes();
     bytes.starts_with(prefix) && bytes.ends_with(suffix)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[cfg(not(unix))]
 fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
     false
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[derive(Clone, Copy)]
 struct ReceiptFileKey {
     lane_id: LaneId,
@@ -654,6 +667,7 @@ struct ReceiptFileKey {
     storage_ticket: StorageTicketId,
     fingerprint: ReplayFingerprint,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn parse_receipt_file_key(path: &Path) -> Result<ReceiptFileKey, DaReceiptSpoolError> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err(malformed_receipt_filename(path));
@@ -696,23 +710,27 @@ fn parse_receipt_file_key(path: &Path) -> Result<ReceiptFileKey, DaReceiptSpoolE
         fingerprint,
     })
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn malformed_receipt_filename(path: &Path) -> DaReceiptSpoolError {
     DaReceiptSpoolError::MalformedFilename {
         path: path.to_path_buf(),
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn parse_fixed_hex_u32(value: &str, width: usize, path: &Path) -> Result<u32, DaReceiptSpoolError> {
     if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_receipt_filename(path));
     }
     u32::from_str_radix(value, 16).map_err(|_| malformed_receipt_filename(path))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn parse_fixed_hex_u64(value: &str, width: usize, path: &Path) -> Result<u64, DaReceiptSpoolError> {
     if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_receipt_filename(path));
     }
     u64::from_str_radix(value, 16).map_err(|_| malformed_receipt_filename(path))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaReceiptSpoolError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_receipt_filename(path));
@@ -721,6 +739,7 @@ fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaReceiptSpo
     hex::decode_to_slice(value, &mut bytes).map_err(|_| malformed_receipt_filename(path))?;
     Ok(bytes)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn decode_receipt(
     data: &[u8],
     path: &Path,
@@ -769,6 +788,7 @@ fn decode_receipt(
         },
     ))
 }
+#[cfg(test)]
 /// Canonicalize and filter receipts against the current committed cursor.
 ///
 /// This enforces monotonic sequencing per `(lane, epoch)`, drops stale receipts,
@@ -867,6 +887,7 @@ pub fn plan_committable_receipts(
     });
     Ok(planned)
 }
+#[cfg(test)]
 /// Align commitment records with the planned receipt queue.
 ///
 /// # Errors
@@ -931,6 +952,7 @@ pub fn align_commitments_for_receipts(
     }
     Ok(aligned)
 }
+#[cfg(test)]
 /// Remove stale receipts from the spool based on the committed cursor snapshot.
 ///
 /// Cleanup failures are reported and logged, but they do not abort callers. Proposal assembly must
@@ -1023,6 +1045,7 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaRe
     }
     report
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Extract a deterministic fingerprint for replay cache usage.
 #[must_use]
 pub fn receipt_fingerprint(receipt: &DaIngestReceipt) -> ReplayFingerprint {

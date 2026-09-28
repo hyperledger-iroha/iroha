@@ -264,6 +264,7 @@ struct ZeroizingScalarVec<F: ProofScalar> {
 struct SecretDlogCoefficientV1(u64);
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static SECRET_DLOG_COEFFICIENT_DROPS_V1: core::cell::Cell<usize> =
         const { core::cell::Cell::new(0) };
 }

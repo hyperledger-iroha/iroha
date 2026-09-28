@@ -4,10 +4,7 @@ use ed25519_dalek::VerifyingKey;
 use iroha_config::parameters::actual;
 use iroha_core::state::{State as CoreState, StateReadOnly};
 use iroha_crypto::PublicKey;
-use rand::{
-    rand_core::{TryCryptoRng, TryRngCore},
-    rngs::OsRng,
-};
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use sorafs_manifest::token::{
     STREAM_TOKEN_MAX_RATE_LIMIT_BYTES_V1, STREAM_TOKEN_MAX_REQUESTS_PER_MINUTE_V1,
     STREAM_TOKEN_MAX_STREAMS_V1, StreamTokenBodyError, validate_token_body,
@@ -39,14 +36,16 @@ pub(crate) const MAX_CLIENT_ID_BYTES: usize = 128;
 pub(crate) const MAX_NONCE_BYTES: usize = 128;
 /// Maximum tolerated positive clock skew for an otherwise valid token.
 pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
+#[cfg(feature = "test-fixtures")]
+#[path = "token/native_issuer_test_fixture.rs"]
+pub mod native_issuer_test_fixture;
 mod signer_completed_finality;
 mod signer_finality;
 mod signer_lifecycle;
 mod signer_pins;
 mod signer_transport;
-#[cfg(feature = "test-fixtures")]
-#[path = "token/native_issuer_test_fixture.rs"]
-pub mod native_issuer_test_fixture;
+#[cfg(test)]
+use rand::rand_core::TryRngCore;
 use signer_finality::CoreFinalityV1;
 use signer_lifecycle::{SignerDriverV1, SystemSignerClockV1};
 pub use signer_pins::StreamTokenSignerPinsV1;

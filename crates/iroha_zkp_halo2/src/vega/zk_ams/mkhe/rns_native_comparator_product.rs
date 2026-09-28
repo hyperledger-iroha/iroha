@@ -21,23 +21,26 @@
 //! so the residual continuation remains opaque and composite readiness stays
 //! fail-closed.
 
+#[cfg(test)]
 use core::marker::PhantomData;
 
+#[cfg(test)]
 use super::{
     rns_native_claimed_successor::RnsNativeClaimedSuccessorV1,
     rns_native_cross_field_inventory::RnsNativeCrossFieldInventoryPrerequisiteV1,
-    rns_native_cross_field_rlwe_direct::{
-        RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1,
-        RnsNativeCrossFieldRlweClaimedInventoryParentV1,
-    },
+    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweClaimedInventoryParentV1,
     rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
-    rns_native_profile::{
-        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
-    },
     rns_native_proof_hash::RnsNativeDigestIdentityV1 as DigestIdentityV1,
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
     rns_native_transcript::ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
 };
+use super::{
+    rns_native_cross_field_rlwe_direct::RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1,
+    rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
+    },
+};
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
@@ -50,9 +53,13 @@ use crate::{
     },
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
+#[cfg(test)]
 const FLAGS_V1: u8 = 0;
+#[cfg(test)]
 const MAGIC_V1: [u8; 4] = *b"ZSP3";
+#[cfg(test)]
 const STATEMENT_V1: u8 = 3;
 const DIGEST_BYTES_V1: usize = 32;
 const POINT_BYTES_V1: usize = 33;
@@ -67,6 +74,7 @@ const PADDED_GATES_V1: usize = 65_536;
 const LOG_PADDED_GATES_V1: usize = 16;
 const CONSTRAINTS_PER_COORDINATE_V1: usize = 9;
 const CONSTRAINTS_V1: usize = COORDINATES_V1 * CONSTRAINTS_PER_COORDINATE_V1;
+#[cfg(test)]
 const COMMITMENTS_V1: usize = 2;
 const FIXED_CORE_POINTS_V1: usize = 13;
 const IPA_POINTS_V1: usize = 2 * LOG_PADDED_GATES_V1;
@@ -88,19 +96,29 @@ pub(super) const RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1: usize =
         - RECORD_SET_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const CIRCUIT_LANGUAGE_V1: &[u8] = b"statement=3;group-count=344;coordinate-count=16384;commitments=(bD,bS);gate-order=coordinate-major:(bD*(bD-1),bS*(bS-1),bD*bS);rows-per-coordinate=9;each-input-linked-to-its-exact-commitment-coordinate;each-right-input-linked;each-product-output-zero;padded-gates=65536;no-aggregate-residual";
+#[cfg(test)]
 const TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.transcript";
+#[cfg(test)]
 const TRANSCRIPT_SCHEMA_V1: &[u8] = b"ZSP3/transcript/v1";
+#[cfg(test)]
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.challenge";
+#[cfg(test)]
 const CIRCUIT_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.circuit-manifest";
+#[cfg(test)]
 const PROOF_SET_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.proof-set-root";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.residual";
+#[cfg(test)]
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.codec";
+#[cfg(test)]
 const VERIFIED_TRANSCRIPTS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.verified-transcripts";
+#[cfg(test)]
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-comparator-product.prerequisite";
 
@@ -135,6 +153,7 @@ const _: () = {
 };
 
 /// Failure while decoding or verifying the first 40-limb product argument.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeComparatorProductErrorV1 {
     ProofCapExceeded,
@@ -148,25 +167,30 @@ pub(super) enum RnsNativeComparatorProductErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeComparatorProductErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeComparatorProductErrorV1 {}
 
+#[cfg(test)]
 impl From<GeneralizedBulletproofErrorV1> for RnsNativeComparatorProductErrorV1 {
     fn from(_: GeneralizedBulletproofErrorV1) -> Self {
         Self::Algebra
     }
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -207,11 +231,13 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ExactCoreViewV1<'a> {
     bytes: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> ExactCoreViewV1<'a> {
     fn parse_v1(bytes: &'a [u8]) -> Result<Self, RnsNativeComparatorProductErrorV1> {
         if bytes.len() != CORE_BYTES_V1 {
@@ -241,6 +267,7 @@ impl<'a> ExactCoreViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ComparatorProofSetViewV1<'a> {
     records: &'a [u8],
@@ -250,6 +277,7 @@ struct ComparatorProofSetViewV1<'a> {
     codec_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> ComparatorProofSetViewV1<'a> {
     #[cfg(test)]
     #[allow(dead_code, reason = "legacy raw-inventory parser is test-only")]
@@ -380,6 +408,7 @@ impl<'a> ComparatorProofSetViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn record_at_v1(records: &[u8], group: usize) -> Result<&[u8], RnsNativeComparatorProductErrorV1> {
     if group >= GROUPS_V1 || records.len() != RECORD_SET_BYTES_V1 {
         return Err(RnsNativeComparatorProductErrorV1::InvalidGeometry);
@@ -410,6 +439,7 @@ fn record_at_v1(records: &[u8], group: usize) -> Result<&[u8], RnsNativeComparat
     Ok(&record[RECORD_HEADER_BYTES_V1..])
 }
 
+#[cfg(test)]
 fn encode_point_v1(
     point: Point,
 ) -> Result<[u8; POINT_BYTES_V1], RnsNativeComparatorProductErrorV1> {
@@ -420,6 +450,7 @@ fn encode_point_v1(
     Ok(encoded)
 }
 
+#[cfg(test)]
 fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CIRCUIT_MANIFEST_DOMAIN_V1);
@@ -435,6 +466,7 @@ fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn canonical_proof_set_root_v1<F>(
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
@@ -470,6 +502,7 @@ where
     Ok(digest)
 }
 
+#[cfg(test)]
 pub(super) fn canonical_residual_digest_v1(
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
@@ -498,6 +531,7 @@ pub(super) fn canonical_residual_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
@@ -506,6 +540,7 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn comparator_constraints_v1(
     coordinates: usize,
     padded_gates: usize,
@@ -585,6 +620,7 @@ fn comparator_constraints_v1(
     Ok(constraints)
 }
 
+#[cfg(test)]
 fn build_comparator_statement_v1<S>(
     coordinates: usize,
     padded_gates: usize,
@@ -602,6 +638,7 @@ where
     )?)
 }
 
+#[cfg(test)]
 fn append_frame_v1(
     state: &mut Vec<u8>,
     value: &[u8],
@@ -615,6 +652,7 @@ fn append_frame_v1(
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ComparatorTranscriptContextV1 {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
@@ -627,6 +665,7 @@ struct ComparatorTranscriptContextV1 {
     generator_basis_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 fn initial_transcript_state_v1(
     context: ComparatorTranscriptContextV1,
 ) -> Result<Vec<u8>, RnsNativeComparatorProductErrorV1> {
@@ -676,12 +715,14 @@ fn initial_transcript_state_v1(
     Ok(state)
 }
 
+#[cfg(test)]
 fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(bytes);
     hash.finalize()
 }
 
+#[cfg(test)]
 fn derive_challenge_v1(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -714,6 +755,7 @@ fn derive_challenge_v1(
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
 
+#[cfg(test)]
 struct ComparatorVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -725,6 +767,7 @@ where
     suite: PhantomData<S>,
 }
 
+#[cfg(test)]
 impl<'a, S> ComparatorVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -765,6 +808,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<S> VerifierTranscript<S> for ComparatorVerifierTranscriptV1<'_, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -798,6 +842,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'_, '_, S>,
     view: ComparatorProofSetViewV1<'_>,
@@ -849,6 +894,7 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 ///
 /// The retained residual is not authenticated as any later proof schema by
 /// this token and confers no release, receipt, or authorization capability.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the consumed inventory and unverified residual must advance exactly once"
@@ -869,6 +915,7 @@ pub(super) struct RnsNativeComparatorProductPrerequisiteV1<
     _binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeComparatorProductPrerequisiteV1<'source, 'proof, S>
 {
@@ -925,6 +972,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     }
 }
 
+#[cfg(test)]
 struct VerifiedComparatorProductPartsV1<'proof> {
     residual: &'proof [u8],
     proof_set_root: [u8; DIGEST_BYTES_V1],
@@ -933,6 +981,7 @@ struct VerifiedComparatorProductPartsV1<'proof> {
     binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 fn verify_comparator_product_parts_v1<'source, 'proof, S>(
     inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
     successor: &'proof [u8],
@@ -1000,6 +1049,7 @@ where
 /// comparator boolean/disjoint product proofs sequentially. This does not
 /// assert the retained direct algebra. A production caller cannot enter this
 /// stage from raw `inventory.continuation()` bytes.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the sound private statement-3 entry awaits the remaining statement-5, statement-8, and lookup consumers"

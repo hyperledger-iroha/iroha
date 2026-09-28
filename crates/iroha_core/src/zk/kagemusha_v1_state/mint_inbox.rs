@@ -80,6 +80,7 @@ impl MintInboxReservationV1 {
         Ok(record)
     }
 
+    #[cfg(test)]
     /// Compute the conservative full staging allocation before constructing a reservation.
     pub fn required_reservation_bytes(
         authorization: &KagemushaMintAuthorizationV1,
@@ -153,6 +154,7 @@ impl MintInboxReservationV1 {
             .and_then(|n| n.checked_add(FIXED_STAGE_FRAMING_RESERVATION_BYTES))
             .ok_or(KagemushaStateErrorV1::ArithmeticOverflow)
     }
+    #[cfg(test)]
     pub(super) fn credit_opening(&self) -> &KagemushaCreditOpeningV1 {
         &self.credit_opening
     }
@@ -442,22 +444,6 @@ impl AcceptedMintReceiptV1 {
     pub fn stage_certificate(&self) -> &MintStageCertificateV1 {
         &self.stage_certificate
     }
-    /// Classify only exact bounded authorization and mint bytes as a historical duplicate.
-    pub fn matches_delivery(
-        &self,
-        authorization: &KagemushaMintAuthorizationV1,
-        credit: &KagemushaMintCreditV1,
-    ) -> Result<bool, KagemushaStateErrorV1> {
-        credit
-            .validate_shape_against_authorization(authorization)
-            .map_err(|_| KagemushaStateErrorV1::InvalidMintCredit)?;
-        Ok(self.credit_id.0 == credit.statement.lifecycle.credit_id
-            && self.authorization_digest
-                == authorization
-                    .canonical_digest()
-                    .map_err(|_| KagemushaStateErrorV1::InvalidMintCredit)?
-            && self.envelope_digest == mint_envelope_digest_v1(credit)?)
-    }
 }
 
 /// Proof-authenticated exact mint inputs; only installed hardware reservations grant local ownership.
@@ -587,35 +573,6 @@ pub(super) fn applied_top_up_result_v1(
         Some(KagemushaOperationResultV1::TopUp(result)) => Ok(result),
         _ => Err(KagemushaStateErrorV1::MintFinalityMismatch),
     }
-}
-
-/// Authenticate one applied chain top-up and its actual mint proofs for a reserved local inbox.
-///
-/// The finality anchor must come from an independently authenticated consensus context. This
-/// function binds the entire applied result to the exact pre-debit reservation before producing
-/// the native proof capability. It neither installs the credit nor qualifies device hardware:
-/// [`KagemushaStateMachineV1::stage_mint_credit`] still requires the original qualified Guard
-/// staging certificate and the installed reservation.
-///
-/// # Errors
-///
-/// Rejects pending/rejected/wrong-kind statuses, a mismatched reserved operation or
-/// authorization, invalid chain finality, or either invalid release-authenticated mint proof.
-pub fn verify_applied_top_up_mint_stage_v1(
-    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
-    artifacts: KagemushaRecursionArtifactsV1,
-    reservation: &MintInboxReservationV1,
-    status: &KagemushaOperationStatusV1,
-    trust_anchor: &KagemushaFinalityTrustAnchorV1,
-) -> Result<VerifiedMintStageV1, KagemushaStateErrorV1> {
-    verify_applied_top_up_mint_stage_with_authorization_v1(
-        verifier,
-        artifacts,
-        reservation,
-        status,
-        trust_anchor,
-        KagemushaAuthenticatedRecursiveVerifierV1::verify_mint_authorization,
-    )
 }
 
 /// Observe an actual Applied testnet top-up and both mint proofs under an Experimental release.
@@ -784,10 +741,12 @@ impl KagemushaMintInboxV1 {
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
+    #[cfg(test)]
     /// Whether an outstanding authorization or finalized mint must survive recovery/rotation.
     pub fn has_unresolved_credits(&self) -> bool {
         !self.reservations.is_empty() || !self.pending.is_empty()
     }
+    #[cfg(test)]
     /// Borrow all pending records in deterministic credit-ID order.
     pub fn pending_values(&self) -> impl Iterator<Item = &StagedMintCreditV1> {
         self.pending.values()
@@ -804,6 +763,7 @@ impl KagemushaMintInboxV1 {
     pub fn accepted(&self) -> &BTreeMap<CreditIdV1, AcceptedMintReceiptV1> {
         &self.accepted
     }
+    #[cfg(test)]
     /// Whether any live or historical mint record already owns this credit identity.
     pub fn contains_credit_id(&self, id: CreditIdV1) -> bool {
         self.reservations.contains_key(&id)
@@ -814,10 +774,12 @@ impl KagemushaMintInboxV1 {
     pub fn reservation(&self, id: CreditIdV1) -> Option<&MintInboxReservationV1> {
         self.reservations.get(&id)
     }
+    #[cfg(test)]
     /// Borrow one pending mint.
     pub fn pending_credit(&self, id: CreditIdV1) -> Option<&StagedMintCreditV1> {
         self.pending.get(&id)
     }
+    #[cfg(test)]
     /// Borrow one consumed-mint receipt.
     pub fn accepted_receipt(&self, id: CreditIdV1) -> Option<&AcceptedMintReceiptV1> {
         self.accepted.get(&id)
@@ -883,6 +845,7 @@ impl KagemushaMintInboxV1 {
         Ok(total)
     }
 
+    #[cfg(test)]
     /// Compute a reservation successor only; the caller must certify it before installation.
     pub fn reserve_successor(
         &self,
@@ -912,6 +875,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
+    #[cfg(test)]
     /// Compute nonauthorizing staging projection before hardware supplies the final certificate.
     /// Its placeholder certificate cannot be installed via `staged_successor` or recovered.
     pub fn preview_staged_successor(
@@ -951,6 +915,7 @@ impl KagemushaMintInboxV1 {
         self.stage_projection(verified, &certificate)
     }
 
+    #[cfg(test)]
     /// Compute the final checked staging successor; hardware/physical-ledger verification remains
     /// mandatory in the state-machine operation before publishing it.
     pub fn staged_successor(
@@ -968,6 +933,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
+    #[cfg(test)]
     fn stage_projection(
         &self,
         verified: &VerifiedMintStageV1,
@@ -1011,6 +977,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
+    #[cfg(test)]
     /// Require the exact pending bytes before a monetary fold may consume them.
     pub fn validate_fold(
         &self,
@@ -1034,6 +1001,7 @@ impl KagemushaMintInboxV1 {
         Err(KagemushaStateErrorV1::CreditNotStaged(id))
     }
 
+    #[cfg(test)]
     /// Prepare pending removal/compact receipt installation before the irreversible replay CAS.
     pub fn folded_successor(
         &self,
@@ -1118,6 +1086,7 @@ impl KagemushaMintInboxV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn ensure_unique_operation_key(
         &self,
         operation: DigestV1,

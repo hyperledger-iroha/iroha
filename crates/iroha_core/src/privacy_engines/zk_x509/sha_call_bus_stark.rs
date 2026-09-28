@@ -2936,6 +2936,7 @@ fn physical_padding_row_v1(_segment_row: usize) -> ZkX509ShaBatchRowV1 {
         fixed,
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Evaluate one opened fixed-capacity batch row.
 ///
 /// Calls never cross a physical segment boundary.  Every active segment

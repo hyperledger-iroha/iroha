@@ -18,8 +18,7 @@ use iroha_data_model::{
     },
     sorafs::moderation::{MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationReproManifestV1},
 };
-use norito::json::{JsonDeserialize, Map as JsonMap, Value};
-use serde::de::DeserializeOwned;
+use norito::json::{self, JsonDeserialize, Map as JsonMap, Value};
 use std::{
     collections::BTreeMap,
     convert::TryFrom,
@@ -104,13 +103,13 @@ fn build_packet(options: &PacketOptions) -> Result<ReferendumPacketV1> {
     let proposal: AgendaProposalV1 =
         load_json(&options.synth.proposal_path, "proposal for packet")?;
     let sortition: SortitionSummary =
-        load_serde_json(&options.sortition_summary_path, "sortition summary")?;
+        load_json(&options.sortition_summary_path, "sortition summary")?;
     ensure!(
         sortition.format_version == 1,
         "unsupported sortition summary format version {}",
         sortition.format_version
     );
-    let impact: ImpactReport = load_serde_json(&options.impact_report_path, "impact report")?;
+    let impact: ImpactReport = load_json(&options.impact_report_path, "impact report")?;
     let sortition_evidence = build_sortition_evidence(&sortition)?;
     let panelists = build_panelists(&sortition)?;
     let impact_summary = build_referendum_impact_summary(&impact, &proposal.proposal_id)?;
@@ -129,16 +128,7 @@ where
 {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read {label} from {}", path.display()))?;
-    norito::json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse {label} JSON at {}", path.display()))
-}
-fn load_serde_json<T>(path: &Path, label: &str) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    let bytes = fs::read(path)
-        .with_context(|| format!("failed to read {label} from {}", path.display()))?;
-    serde_json::from_slice(&bytes)
+    json::from_slice(&bytes)
         .with_context(|| format!("failed to parse {label} JSON at {}", path.display()))
 }
 fn build_sortition_evidence(summary: &SortitionSummary) -> Result<ReferendumSortitionEvidence> {
@@ -254,9 +244,9 @@ mod parse_tests {
         let manifest_path = tmp.path().join("manifest.json");
         write_norito_json(&manifest_path, &sample_manifest());
         let sortition_path = tmp.path().join("sortition.json");
-        serde_write(&sortition_path, &sample_sortition_summary());
+        write_norito_json(&sortition_path, &sample_sortition_summary());
         let impact_path = tmp.path().join("impact.json");
-        serde_write(&impact_path, &sample_impact_report());
+        write_norito_json(&impact_path, &sample_impact_report());
         let packet_path = tmp.path().join("packet.json");
         let summary_path = tmp.path().join("summary.json");
         let options = PacketOptions {
@@ -277,8 +267,7 @@ mod parse_tests {
         packet(options).expect("packet workflow runs");
         assert!(summary_path.exists(), "summary output must be written");
         let packet_bytes = fs::read(&packet_path).expect("packet read");
-        let packet: ReferendumPacketV1 =
-            norito::json::from_slice(&packet_bytes).expect("packet decode");
+        let packet: ReferendumPacketV1 = json::from_slice(&packet_bytes).expect("packet decode");
         assert_eq!(packet.proposal.proposal_id, "AC-2026-001");
         assert_eq!(packet.review_summary.panel_round_id, "RP-2026-05");
         assert_eq!(packet.panelists.len(), 2);
@@ -288,20 +277,12 @@ mod parse_tests {
     where
         T: JsonSerialize,
     {
-        let bytes =
-            norito::json::to_vec_pretty(value).expect("serialize Norito-compatible structure");
+        let bytes = json::to_vec_pretty(value).expect("serialize Norito-compatible structure");
         fs::write(path, bytes).expect("write Norito json");
     }
     fn write_norito_json_value(path: &Path, value: &NoritoValue) {
-        let bytes = norito::json::to_vec_pretty(value).expect("serialize Norito value");
+        let bytes = json::to_vec_pretty(value).expect("serialize Norito value");
         fs::write(path, bytes).expect("write value json");
-    }
-    fn serde_write<T>(path: &Path, value: &T)
-    where
-        T: serde::Serialize,
-    {
-        let bytes = serde_json::to_vec_pretty(value).expect("serialize serde value");
-        fs::write(path, bytes).expect("write serde json");
     }
     fn sample_proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {
@@ -521,8 +502,8 @@ mod parse_tests {
     }
 }
 fn write_summary(summary: &ReviewPanelSummaryV1, path: &Path) -> Result<()> {
-    let bytes = norito::json::to_vec_pretty(summary)
-        .context("failed to serialise review panel summary to JSON")?;
+    let bytes =
+        json::to_vec_pretty(summary).context("failed to serialise review panel summary to JSON")?;
     if path == Path::new("-") {
         let mut stdout = io::stdout().lock();
         stdout
@@ -536,8 +517,8 @@ fn write_summary(summary: &ReviewPanelSummaryV1, path: &Path) -> Result<()> {
     Ok(())
 }
 fn write_packet(packet: &ReferendumPacketV1, path: &Path) -> Result<()> {
-    let bytes = norito::json::to_vec_pretty(packet)
-        .context("failed to serialise referendum packet to JSON")?;
+    let bytes =
+        json::to_vec_pretty(packet).context("failed to serialise referendum packet to JSON")?;
     if path == Path::new("-") {
         let mut stdout = io::stdout().lock();
         stdout

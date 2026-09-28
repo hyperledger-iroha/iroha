@@ -250,7 +250,7 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
     assert_eq!(size_of::<ZkAmsMkheDirectObjectPointerV1>(), 80);
     assert_eq!(size_of::<ZkAmsMkheDirectObjectReadReceiptV1>(), 248);
     assert_eq!(size_of::<ZkAmsMkheDirectObjectPublicationReceiptV1>(), 704);
-    assert_eq!(evidence.ciphertext_input_bytes, 104_016);
+    assert_eq!(evidence.compact_ciphertext_manifest_bytes, 104_016);
     assert_eq!(evidence.aggregate_bytes, 39_845_888);
     assert_eq!(evidence.proof_view_backing_bytes, 33_030_199);
     assert_eq!(evidence.manifest_preflight_bytes, 3_984);
@@ -272,7 +272,7 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
     assert_eq!(evidence.ciphertext_linear_passes, 17);
     assert_eq!(evidence.native_reference_lower_bound_bytes, 358_612_992);
     assert_eq!(
-        evidence.compact_authority_construction_lower_bound_bytes,
+        evidence.compact_authority_construction_peak_bytes,
         122_683_434
     );
     assert_eq!(evidence.compact_authority_aggregate_bytes, 39_845_888);

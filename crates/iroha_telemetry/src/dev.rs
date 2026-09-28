@@ -2,7 +2,6 @@
 use crate::integrity::ChainState;
 #[cfg(unix)]
 use crate::integrity::{TELEMETRY_O_NOFOLLOW_FLAG, process_uid_in_directory};
-use chrono::Utc;
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::TelemetryIntegrity;
 use iroha_futures::FuturePollTelemetry;
@@ -196,7 +195,7 @@ async fn write_telemetry(
         norito::json::Value::Object(map) => map,
         _ => return Err(eyre!("dev telemetry must serialize to an object")),
     };
-    record.insert("ts".into(), Utc::now().to_rfc3339().into());
+    record.insert("ts".into(), crate::timestamp::rfc3339_utc_now().into());
     integrity.stage_record(record, true).await?;
     resolve_pending(file, integrity).await
 }

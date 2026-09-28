@@ -50,6 +50,7 @@
 
 #![allow(dead_code)]
 use super::{BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1, keccak256};
+#[cfg(test)]
 use core::convert::Infallible;
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
 const SIGMA_FIXED_INDEPENDENT_COEFFICIENTS_V1: usize = RELEASE_RING_DEGREE_V1 / 2;
@@ -308,8 +309,10 @@ pub(super) fn zk_ams_phase23_mask_proof_audit_v1(
 }
 /// Uninhabited proof type.  Safe code cannot construct release evidence while
 /// the audit has unresolved blockers.
+#[cfg(test)]
 pub(super) enum ZkAmsPhase23MaskProofV1 {}
 /// Fail closed for proving, verification, encoding, or decoding.
+#[cfg(test)]
 pub(super) fn preflight_zk_ams_phase23_mask_proof_v1(
     profile: &BgvProfile,
 ) -> Result<Infallible, ZkAmsMkheErrorV1> {
@@ -318,6 +321,7 @@ pub(super) fn preflight_zk_ams_phase23_mask_proof_v1(
     Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
 }
 /// Reject candidate manifest bytes before parsing attacker-controlled input.
+#[cfg(test)]
 pub(super) fn decode_zk_ams_phase23_mask_manifest_v1(
     profile: &BgvProfile,
     _encoded: &[u8],
@@ -328,6 +332,7 @@ pub(super) fn decode_zk_ams_phase23_mask_manifest_v1(
     }
 }
 /// Reject candidate record bytes before parsing attacker-controlled input.
+#[cfg(test)]
 pub(super) fn decode_zk_ams_phase23_mask_record_v1(
     profile: &BgvProfile,
     _encoded: &[u8],

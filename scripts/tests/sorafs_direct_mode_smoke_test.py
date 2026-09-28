@@ -202,6 +202,26 @@ def test_direct_mode_smoke_rejects_missing_gateway_key(
     assert "requires gateway-key=<32-byte Ed25519 public key hex>" in result.stderr
 
 
+def test_direct_mode_smoke_rejects_snake_case_provider_keys(
+    tmp_path: Path,
+) -> None:
+    plan_path, policy_path = write_inputs(tmp_path)
+    aliased = PROVIDER_SPEC.replace("provider-id=", "provider_id=")
+
+    result = run_wrapper(
+        tmp_path,
+        plan_path,
+        policy_path,
+        "--provider",
+        aliased,
+        "--skip-adoption-check",
+    )
+
+    assert result.returncode == 1
+    assert "unknown --provider key 'provider_id'" in result.stderr
+    assert not (tmp_path / "payload.bin").exists()
+
+
 def test_direct_mode_smoke_rejects_plaintext_gateway_url(
     tmp_path: Path,
 ) -> None:

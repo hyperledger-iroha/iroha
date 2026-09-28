@@ -421,7 +421,6 @@ mod model {
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::parameter::system::model::SumeragiNposParameters")]
     #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[norito(deny_unknown_fields)]
     pub struct SumeragiNposParameters {
         /// Canonical XOR asset authenticated by genesis for this network.
@@ -711,10 +710,6 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
-    #[expect(
-        variant_size_differences,
-        reason = "the small fixed-size genesis envelope is an atomic Copy parameter value"
-    )]
     pub enum BlockParameter {
         MaxTransactions(NonZeroU64),
         /// Change the active Time count inside the committed capacity envelope.
@@ -882,7 +877,6 @@ mod model {
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::parameter::system::model::Parameter")]
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum Parameter {
         Sumeragi(SumeragiParameter),
         Block(BlockParameter),

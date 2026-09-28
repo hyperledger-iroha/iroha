@@ -52,7 +52,6 @@ mod model {
     #[display("{name}")]
     #[getset(get = "pub")]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
 
     pub struct SettlementId {
         /// Logical identifier chosen by upstream trade/collateral workflows.
@@ -686,14 +685,6 @@ impl core::fmt::Display for PvpIsi {
 #[derive(
     Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[norito(deny_unknown_fields)]
 pub struct FxCorridorPricingContext {
     /// Stable corridor policy identifier.
@@ -722,14 +713,6 @@ pub struct FxCorridorPricingContext {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::isi::settlement::DvpSettlementDetails")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct DvpSettlementDetails {
     /// Resolved delivery movement.
     pub delivery: ResolvedSettlementMovement,
@@ -754,14 +737,6 @@ pub struct DvpSettlementDetails {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::isi::settlement::PvpSettlementDetails")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct PvpSettlementDetails {
     /// Resolved primary movement.
     pub primary: ResolvedSettlementMovement,
@@ -786,14 +761,6 @@ pub struct PvpSettlementDetails {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::isi::settlement::FxCorridorSettlementDetails")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct FxCorridorSettlementDetails {
     /// Actual source-currency collection.
     pub source: ResolvedSettlementMovement,
@@ -818,14 +785,6 @@ pub struct FxCorridorSettlementDetails {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::isi::settlement::AtomicSettlementDetails")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct AtomicSettlementDetails {
     /// Every exact balance movement in the signed canonical order.
     pub movements: ResolvedSettlementMovements,
@@ -851,14 +810,6 @@ pub struct AtomicSettlementDetails {
 )]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::isi::settlement::SettlementDetails")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub enum SettlementDetails {
     /// A complete delivery-versus-payment exchange.
     Dvp(DvpSettlementDetails),
@@ -918,14 +869,6 @@ impl SettlementDetails {
 )]
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::isi::settlement::SettlementReceipt")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct SettlementReceipt {
     /// Account that authorized the settlement carrier.
     pub authority: AccountId,

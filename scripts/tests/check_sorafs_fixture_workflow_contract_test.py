@@ -605,13 +605,16 @@ def test_manifest_generator_enables_required_vrf_and_drand_crypto() -> None:
 def test_por_fixture_generator_has_a_strict_isolated_output_root() -> None:
     """The aggregate generator cannot ambiguously redirect fixture writes."""
 
+    entrypoint = read("crates/sorafs_manifest/src/bin/generate_por_fixtures.rs")
+    assert '#[path = "common/fixture_fs.rs"]\nmod fixture_fs;' in entrypoint
     generator = "\n".join(
         (
-            read("crates/sorafs_manifest/src/bin/generate_por_fixtures.rs"),
+            entrypoint,
             read(
                 "crates/sorafs_manifest/src/bin/generate_por_fixtures/"
                 "output_transaction_tests.rs"
             ),
+            read("crates/sorafs_manifest/src/bin/common/fixture_fs.rs"),
         )
     )
     assert "fn parse_args(" in generator
@@ -640,8 +643,10 @@ def test_por_fixture_generator_has_a_strict_isolated_output_root() -> None:
 def test_pdp_fixture_generator_has_a_strict_isolated_output_root() -> None:
     """The PDP precursor cannot ambiguously redirect or alias fixture writes."""
 
-    generator = read(
-        "crates/sorafs_manifest/src/bin/generate_pdp_fixtures.rs"
+    entrypoint = read("crates/sorafs_manifest/src/bin/generate_pdp_fixtures.rs")
+    assert '#[path = "common/fixture_fs.rs"]\nmod fixture_fs;' in entrypoint
+    generator = "\n".join(
+        (entrypoint, read("crates/sorafs_manifest/src/bin/common/fixture_fs.rs"))
     )
     assert "fn parse_args(" in generator
     assert 'Some("--output-dir")' in generator
@@ -654,7 +659,7 @@ def test_pdp_fixture_generator_has_a_strict_isolated_output_root() -> None:
     assert "MAX_OUTPUT_PATH_BYTES" in generator
     assert "MAX_OUTPUT_PATH_COMPONENTS" in generator
     assert "`--output-dir` must name a bounded PDP fixture directory" in generator
-    assert "struct BoundOutputDirectory" in generator
+    assert "struct BoundDirectory" in generator
     assert "require_real_directory_ancestry" in generator
     assert "same_directory_identity" in generator
     assert "fn write_fixture_file(" in generator

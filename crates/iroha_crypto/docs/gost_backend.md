@@ -69,9 +69,8 @@ Hardening` roadmap line items and will be updated as decisions land.
   `make gost-bench-update` to rebaseline (`scripts/update_gost_baseline.sh` is a convenience helper).
   `make gost-dudect` runs the constant-time timing guard in isolation. The full workflow is captured in
   `specs/crypto/gost_performance.md`.
-- Streebog (`0.11.0-rc.2`) is mirrored under `vendor/streebog` and patched into the workspace so the
-  build no longer depends on crates.io for the hash implementation. Update the mirror when RustCrypto
-  publishes a stable `0.11.x` release.
+- Streebog comes from the stable crates.io `0.11.0` release, pinned by checksum in `Cargo.lock`;
+  the workspace no longer vendors or patches it. See `specs/crypto/dependency_audits.md`.
 - Next steps: integrate dudect measurements alongside the Criterion harness and
   gate CI on acceptable variance once the timing scripts stabilize.
 

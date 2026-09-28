@@ -888,6 +888,7 @@ impl ModerationEvidenceViewerAccessKind {
 }
 /// Payload-free local evidence viewer access-log append request.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ModerationEvidenceViewerAccessInput {
     /// Session id that owns the access event.
     pub session_id: [u8; 16],
@@ -1763,6 +1764,7 @@ impl ModerationEvidenceViewerRuntime {
             entry_limit: entry_limit.max(1),
         }
     }
+    #[cfg(test)]
     pub(crate) fn create_session(
         &mut self,
         input: ModerationEvidenceViewerSessionInput,
@@ -1788,6 +1790,7 @@ impl ModerationEvidenceViewerRuntime {
             }
         }
     }
+    #[cfg(test)]
     pub(crate) fn record_access(
         &mut self,
         input: ModerationEvidenceViewerAccessInput,
@@ -3608,6 +3611,7 @@ pub(crate) fn open_moderation_quarantine_object_range(
     Ok(output)
 }
 /// Rewrap a per-object DEK without decrypting or rewriting ciphertext chunks.
+#[cfg(test)]
 pub(crate) fn rewrap_moderation_quarantine_object(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
     record: &ModerationQuarantineObjectRecord,
@@ -3685,6 +3689,7 @@ pub(crate) fn rewrap_moderation_quarantine_object(
     })?;
     Ok((replacement_record, bytes))
 }
+#[cfg(test)]
 fn authenticate_moderation_quarantine_ciphertext(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
     dek: &[u8; 32],
@@ -4345,6 +4350,7 @@ pub(crate) fn evidence_viewer_session_record_from_input(
         .map_err(|message| ModerationEvidenceViewerError::InvalidInput { message })?;
     Ok(record)
 }
+#[cfg(test)]
 fn evidence_viewer_access_event_record_from_input(
     sequence: u64,
     input: ModerationEvidenceViewerAccessInput,

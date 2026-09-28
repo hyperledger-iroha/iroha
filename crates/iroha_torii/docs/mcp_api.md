@@ -306,7 +306,8 @@ Returns paginated tool descriptors.
 Params:
 
 - `cursor` (optional numeric-string offset)
-- `toolset_version` or `toolsetVersion` (optional client version hash)
+- `toolsetVersion` (optional client version hash, matching the emitted
+  `_meta.iroha.toolsetVersion`)
 
 Result:
 
@@ -598,7 +599,11 @@ Body/headers behavior:
 - When `body_base64` is used and `content_type` is omitted, Torii defaults to Norito MIME.
 - `arguments.headers` entries for `content-length`, `host`, and `connection` are ignored.
 
-Many purpose-built `iroha.*` tools also accept flat shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`, `offset`).
+Many purpose-built `iroha.*` read tools also accept flat path and query
+shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`,
+`offset`). Request payloads are different: every tool that forwards a request
+body requires it in the `body` object, and top-level arguments are never
+assembled into a body.
 Rely on each tool’s `inputSchema` for authoritative accepted fields.
 
 Do not place a raw private key in `arguments`, `body`, or forwarded headers.

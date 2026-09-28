@@ -237,64 +237,6 @@ where
     })
 }
 #[cfg(feature = "app_api")]
-async fn collect_torii_list_json_payloads<F, Fut>(
-    routes: &[RoutingDecision],
-    working_set_bytes: usize,
-    max_body_bytes: usize,
-    mut fetch: F,
-) -> Result<ToriiFanoutJsonPayloads, Response>
-where
-    F: FnMut(RoutingDecision) -> Fut,
-    Fut: std::future::Future<Output = Response>,
-{
-    let mut diagnostics = ToriiFanoutDiagnostics::default();
-    let mut last_not_found = None;
-    let mut last_route_unavailable = None;
-    let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
-    let mut payloads = budget.try_retained_vec(routes.len())?;
-    for route in routes {
-        diagnostics.record_attempt();
-        let response = fetch(*route).await;
-        if response.status() == StatusCode::NOT_FOUND {
-            diagnostics.record_skipped_response(&response);
-            last_not_found = Some(summarize_skipped_torii_route_response(response));
-            continue;
-        }
-        if torii_response_has_reject_code(&response, "route_unavailable") {
-            diagnostics.record_skipped_response(&response);
-            last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
-            continue;
-        }
-        match torii_json_body_value(response, &mut budget).await {
-            Ok(payload) => {
-                diagnostics.record_success();
-                budget.push_retained(&mut payloads, payload)?;
-            }
-            Err(response) => {
-                diagnostics.record_skipped_response(&response);
-                return Err(with_torii_fanout_headers(response, diagnostics));
-            }
-        }
-    }
-    if payloads.is_empty() {
-        let response = last_not_found.unwrap_or_else(|| {
-            last_route_unavailable.unwrap_or_else(|| {
-                torii_proxy_error_response(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "no dataspace returned a matching result",
-                )
-            })
-        });
-        return Err(with_torii_fanout_headers(response, diagnostics));
-    }
-    Ok(ToriiFanoutJsonPayloads {
-        payloads,
-        diagnostics,
-        budget,
-    })
-}
-#[cfg(feature = "app_api")]
 async fn collect_torii_routed_list_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
     working_set_bytes: usize,

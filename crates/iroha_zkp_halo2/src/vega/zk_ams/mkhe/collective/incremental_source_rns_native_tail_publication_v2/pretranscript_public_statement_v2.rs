@@ -14,12 +14,22 @@
     reason = "the sealed source-only coordinator awaits live correspondence and repeat-read conformance"
 )]
 
+#[cfg(test)]
 use core::{convert::Infallible, fmt};
 
+#[cfg(test)]
 use super::super::super::super::{
     direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
-    rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
     rns_native_public_polynomial_reader::RnsNativePublicPolynomialRoleV1,
+    rns_native_rlwe_source_statement::{
+        derive_rns_native_pre_transcript_record_facts_v1,
+        validate_rns_native_pre_transcript_public_facts_v1,
+    },
+    rns_native_source::ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+    rns_native_transcript::{ZkAmsMkheRnsNativePublicContextV1, ZkAmsMkheRnsNativeTranscriptV1},
+};
+use super::super::super::super::{
+    rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
     rns_native_rlwe_source_statement::{
         RNS_NATIVE_PRETRANSCRIPT_CANONICAL_CHECKS_V1,
         RNS_NATIVE_PRETRANSCRIPT_GLOBAL_ALIAS_BYTES_V1,
@@ -32,17 +42,14 @@ use super::super::super::super::{
         RNS_NATIVE_PRETRANSCRIPT_SIGNED_CHECKS_V1,
         RNS_NATIVE_PRETRANSCRIPT_SOURCE_PLAINTEXT_BYTES_V1,
         RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1, RnsNativePublicRecordMetadataV1,
-        derive_rns_native_pre_transcript_record_facts_v1,
-        validate_rns_native_pre_transcript_public_facts_v1,
     },
     rns_native_source::{
         ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_SOURCE_TOTAL_FILE_BYTES_V1,
-        ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSourceLayoutV1,
+        ZK_AMS_MKHE_RNS_NATIVE_SOURCE_TOTAL_FILE_BYTES_V1, ZkAmsMkheRnsNativeSourceLayoutV1,
         ZkAmsMkheRnsNativeSourceReceiptV1,
     },
-    rns_native_transcript::{ZkAmsMkheRnsNativePublicContextV1, ZkAmsMkheRnsNativeTranscriptV1},
 };
+#[cfg(test)]
 use super::RnsNativeExistingReaderBridgeV2;
 
 const RECORDS_V2: usize = 43;
@@ -178,6 +185,7 @@ const _: () = {
     assert!(!RNS_NATIVE_PRETRANSCRIPT_RELEASE_AUTHORIZED_V2);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativePreTranscriptPublicStatementErrorV2 {
     InvalidBridge,
@@ -187,12 +195,14 @@ pub(super) enum RnsNativePreTranscriptPublicStatementErrorV2 {
     Transcript,
 }
 
+#[cfg(test)]
 impl fmt::Display for RnsNativePreTranscriptPublicStatementErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativePreTranscriptPublicStatementErrorV2 {}
 
 /// Exact source-derived facts retained only inside the consuming coordinator.
@@ -222,6 +232,7 @@ const _: () = {
 };
 
 impl RnsNativePreTranscriptPublicStatementFactsV2 {
+    #[cfg(test)]
     fn start_transcript_v2(
         &self,
     ) -> Result<ZkAmsMkheRnsNativeTranscriptV1, RnsNativePreTranscriptPublicStatementErrorV2> {
@@ -269,11 +280,13 @@ impl RnsNativePreTranscriptPublicStatementFactsV2 {
 /// must replace this token only after proving that the source snapshot and
 /// publication bridge originate from the same encryption lifecycle and after
 /// qualifying repeated random reads.
+#[cfg(test)]
 pub(super) struct RnsNativePreTranscriptLiveCorrespondenceV2 {
     never: Infallible,
 }
 
 /// Move-only owner before the exact public transcript context is started.
+#[cfg(test)]
 #[must_use = "the source/publication authority must be consumed exactly once"]
 pub(super) struct RnsNativePreTranscriptPublicStatementV2<K, P, S>
 where
@@ -290,6 +303,7 @@ where
 /// fields, facts, source, bridge, or raw-parts transition. Only the sealed
 /// source-only child can consume it into claimed-qPCS/source preflight; no live
 /// production source-preflight integration exists.
+#[cfg(test)]
 #[must_use = "started pre-transcript authority must be consumed only by its sealed handoff"]
 pub(super) struct RnsNativeStartedPreTranscriptPublicStatementV2<K, P, S>
 where
@@ -302,6 +316,7 @@ where
     facts: RnsNativePreTranscriptPublicStatementFactsV2,
 }
 
+#[cfg(test)]
 impl<K, P, S> RnsNativePreTranscriptPublicStatementV2<K, P, S>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -351,6 +366,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn prepare_existing_reader_inner_v2<K, P, S>(
     bridge: RnsNativeExistingReaderBridgeV2<K, P>,
     mut source: S,
@@ -418,6 +434,7 @@ where
     })
 }
 
+#[cfg(test)]
 type ArtifactInventoryV2 = (
     Box<[[u8; 32]]>,
     Box<[[u8; 32]]>,
@@ -425,6 +442,7 @@ type ArtifactInventoryV2 = (
     Box<[[u8; 32]]>,
 );
 
+#[cfg(test)]
 fn derive_artifact_inventory_v2<F>(
     mut artifact_digest: F,
 ) -> Result<ArtifactInventoryV2, RnsNativePreTranscriptPublicStatementErrorV2>
@@ -499,6 +517,7 @@ where
     ))
 }
 
+#[cfg(test)]
 fn required_artifact_digest_v2<F>(
     artifact_digest: &mut F,
     role: RnsNativePublicPolynomialRoleV1,
@@ -647,8 +666,10 @@ where
     })
 }
 
+#[cfg(test)]
 #[path = "pretranscript_public_statement_v2/claimed_qpcs_source_carrier_v2.rs"]
 mod claimed_qpcs_source_carrier_v2;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use claimed_qpcs_source_carrier_v2::{
     RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,
 };

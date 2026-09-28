@@ -6,7 +6,7 @@ use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::SignatureOf;
 use iroha_data_model::oracle::{
-    AggregationOutput, ConnectorRequest, FeedConfig, FeedConfigVersion, FeedSlot, Observation,
+    AggregationOutput, FeedConfig, FeedConfigVersion, FeedSlot, Observation,
     OracleAggregationError, OracleId, ReplayKey, aggregate_observations,
 };
 use norito::codec::{Decode, Encode};
@@ -69,30 +69,6 @@ pub fn aggregate(
     observations: &[Observation],
 ) -> Result<AggregationOutput, OracleAggregationError> {
     aggregate_observations(config, slot, request_hash, submitter, observations)
-}
-/// Validate a connector request before hashing/sending.
-///
-/// # Errors
-///
-/// Returns [`OracleAggregationError`] when the request feed id/version or redaction
-/// policy is invalid.
-pub fn validate_connector_request(
-    config: &FeedConfig,
-    request: &ConnectorRequest,
-) -> Result<(), OracleAggregationError> {
-    if request.feed_id != config.feed_id
-        || request.feed_config_version != config.feed_config_version
-    {
-        return Err(OracleAggregationError::Model(
-            iroha_data_model::oracle::OracleModelError::FeedVersionMismatch {
-                expected: config.feed_config_version,
-                provided: request.feed_config_version,
-            },
-        ));
-    }
-    request
-        .validate_redaction()
-        .map_err(OracleAggregationError::from)
 }
 /// In-memory aggregator that validates observations and produces a report/outcome.
 #[derive(Debug)]

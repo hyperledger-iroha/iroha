@@ -5,6 +5,7 @@
 //! This projection does not authorize a transition or replace qualified snapshot recovery.
 
 use super::*;
+#[cfg(test)]
 use crate::zk::kagemusha_v1_recursion::kagemusha_candidate_envelope_digest_v1;
 
 /// Maximum canonical State public-input archive accepted by the native testnet observer.
@@ -30,6 +31,7 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
+    #[cfg(test)]
     /// Export the original State proof and its exact public inputs for a live outgoing operation.
     ///
     /// Candidate, committed, and installed operations retain the proof inside the hardware-anchored

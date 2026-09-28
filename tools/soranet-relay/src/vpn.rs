@@ -9,16 +9,14 @@ use crate::{
     vpn_adapter::{VpnAdapter, VpnBridge},
 };
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-use iroha_data_model::soranet::{
-    RelayId,
-    vpn::{
-        VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
-        VpnControlPlaneV1, VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassV1, VpnFlowLabelV1,
-        VpnHelperTicketV1, VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
-        VpnSignedSessionReceiptV1, VpnTariffV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
-        vpn_tariff_meter_hash_v1,
-    },
+use iroha_data_model::soranet::vpn::{
+    VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
+    VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassV1, VpnFlowLabelV1, VpnHelperTicketV1,
+    VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1, VpnSignedSessionReceiptV1, VpnTariffV1,
+    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1, vpn_tariff_meter_hash_v1,
 };
+#[cfg(test)]
+use iroha_data_model::soranet::{RelayId, vpn::VpnControlPlaneV1};
 use iroha_primitives::numeric::Quantity;
 use std::{
     cmp::max,
@@ -255,6 +253,7 @@ impl VpnOverlay {
         )
     }
     /// Build a control-plane envelope for clients using the configured routes/DNS.
+    #[cfg(test)]
     pub fn control_plane_envelope(
         &self,
         entry_guard: RelayId,

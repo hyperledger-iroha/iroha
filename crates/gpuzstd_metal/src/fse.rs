@@ -1,4 +1,6 @@
-use crate::bitstream::{BitWriter, BitstreamError};
+#[cfg(test)]
+use crate::bitstream::BitWriter;
+use crate::bitstream::BitstreamError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FseError {
     InvalidTable,
@@ -35,6 +37,7 @@ pub(crate) struct DecodeEntry {
     pub(crate) nb_bits: u8,
     pub(crate) new_state: u32,
 }
+#[cfg(test)]
 pub(crate) fn normalize_counts(counts: &[u32], table_log: u8) -> Result<Vec<i16>, FseError> {
     if table_log > MAX_TABLE_LOG {
         return Err(FseError::InvalidTable);
@@ -221,6 +224,7 @@ pub(crate) fn build_tables(
         FseDTable { table_log, decode },
     ))
 }
+#[cfg(test)]
 pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>, FseError> {
     if symbols.is_empty() {
         return Ok(0u32.to_le_bytes().to_vec());

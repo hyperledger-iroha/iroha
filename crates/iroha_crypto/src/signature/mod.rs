@@ -11,8 +11,7 @@ pub(crate) mod sm;
 #[cfg(feature = "sm")]
 use crate::sm::Sm2Signature;
 use crate::{
-    Algorithm, Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, error::ParseError, ffi,
-    hex_decode,
+    Algorithm, Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, error::ParseError, hex_decode,
 };
 use core::marker::PhantomData;
 use derive_more::{Deref, DerefMut};
@@ -23,19 +22,24 @@ use norito::core::{self as ncore, DecodeFromSlice};
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use std::{cell::RefCell, format, string::String, vec, vec::Vec};
 use zeroize::Zeroize;
-ffi::ffi_item! {
-    /// Represents a signature of the data (`Block` or `Transaction` for example).
-    #[derive(
-        Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, derive_more::Debug, Hash, IntoSchema,
-    )]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_crypto::signature::Signature")]
-    #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
-    #[repr(transparent)]
-    #[debug("{{ {} }}", hex::encode_upper(payload))]
-    pub struct Signature {
-        payload: ConstVec<u8>
-    }
+/// Represents a signature of the data (`Block` or `Transaction` for example).
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    derive_more::Debug,
+    Hash,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::signature::Signature")]
+#[repr(transparent)]
+#[debug("{{ {} }}", hex::encode_upper(payload))]
+pub struct Signature {
+    payload: ConstVec<u8>,
 }
 
 impl Zeroize for Signature {
@@ -572,22 +576,18 @@ impl<T> From<SignatureOf<T>> for Signature {
         signature
     }
 }
-ffi::ffi_item! {
-    /// Represents signature of the data (`Block` or `Transaction` for example).
-    // Lint triggers when expanding #[codec(skip)]
-    #[allow(clippy::default_trait_access, clippy::unsafe_derive_deserialize)]
-    #[derive(Deref, DerefMut, TypeId)]
-    // Transmute guard
-    #[repr(transparent)]
-    pub struct SignatureOf<T>(
-        #[deref]
-        #[deref_mut]
-        Signature,
-        PhantomData<T>,
-    );
-    // SAFETY: `SignatureOf` has no trap representation in `Signature`
-    ffi_type(unsafe {robust})
-}
+/// Represents signature of the data (`Block` or `Transaction` for example).
+// Lint triggers when expanding #[codec(skip)]
+#[allow(clippy::default_trait_access, clippy::unsafe_derive_deserialize)]
+#[derive(Deref, DerefMut, TypeId)]
+// Transmute guard
+#[repr(transparent)]
+pub struct SignatureOf<T>(
+    #[deref]
+    #[deref_mut]
+    Signature,
+    PhantomData<T>,
+);
 impl<T> core::fmt::Debug for SignatureOf<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple(core::any::type_name::<Self>())

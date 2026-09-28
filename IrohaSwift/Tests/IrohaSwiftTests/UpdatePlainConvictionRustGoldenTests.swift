@@ -146,7 +146,7 @@ final class UpdatePlainConvictionRustGoldenTests: XCTestCase {
         var admissionReader = CanonicalNoritoReader(data: fields[7])
         XCTAssertEqual(
             try admissionReader.readUInt32LE(),
-            TransactionAdmissionIntentV1.queuePlanSynced.rawValue
+            TransactionAdmissionIntentV1.ordinary.rawValue
         )
         XCTAssertEqual(admissionReader.remaining(), 0)
 

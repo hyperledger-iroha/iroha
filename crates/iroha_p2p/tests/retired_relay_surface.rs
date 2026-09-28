@@ -29,8 +29,8 @@ fn retired_classical_noise_surface_is_absent() {
         "the classical Noise handshake feature must stay retired"
     );
     assert!(
-        manifest.contains("[target.'cfg(any())'.dependencies]\nsnow = \"0.10\""),
-        "the protected Snow lockfile pin must remain impossible to select"
+        !manifest.contains("snow ="),
+        "the retired Snow Noise library must not return as a dependency"
     );
     assert!(
         !peer.contains("HandshakeNoise"),

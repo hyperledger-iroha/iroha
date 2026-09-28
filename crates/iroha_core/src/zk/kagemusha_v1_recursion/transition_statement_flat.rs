@@ -3,25 +3,36 @@
 //! Every body byte comes from assigned state/Guard cells. The one typed asset UUID is
 //! SHA-bound to the assigned normalized asset identity through its exact canonical frame.
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use core::ops::Range;
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use halo2_base::{
     AssignedValue, Context,
     gates::{RangeChip, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
 };
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use iroha_data_model::kagemusha::kagemusha_canonical_mint_frame_prefix_v1;
 
-use super::{KagemushaAssignedStateRelationV1, KagemushaStateRelationWitnessV1};
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+use super::KagemushaAssignedStateRelationV1;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+use super::KagemushaStateRelationWitnessV1;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use crate::zk::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     kagemusha_v1_state::KAGEMUSHA_TRANSITION_STATEMENT_BODY_BYTES_V1,
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const DOMAIN: &[u8] = b"iroha:kagemusha:v1:transition-statement\0";
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const ASSET_DOMAIN: &[u8] = b"iroha:kagemusha:v1:asset-identity";
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 const ASSET_FRAME_BYTES: usize = 72;
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// State-cell source of the canonical transition digest and exact journal revision.
 ///
 /// Only `constrain_transition_statement_source_v1` constructs this from the SHA transcript.
@@ -31,15 +42,17 @@ const ASSET_FRAME_BYTES: usize = 72;
 pub(in super::super) struct KagemushaDerivedTransitionStatementSourceV1<F: KagemushaPoseidonFieldV1>
 {
     digest: [PastaSha256ByteV1<F>; 32],
-    journal_revision_after: AssignedValue<F>,
-}
-
-impl<F: KagemushaPoseidonFieldV1> KagemushaDerivedTransitionStatementSourceV1<F> {
-    /// Bind a proposed journal opening to the SHA-derived digest and State revision cells.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "verified prepared-intent proof is not installed")
     )]
+    journal_revision_after: AssignedValue<F>,
+}
+
+#[cfg(test)]
+impl<F: KagemushaPoseidonFieldV1> KagemushaDerivedTransitionStatementSourceV1<F> {
+    #[cfg(test)]
+    /// Bind a proposed journal opening to the SHA-derived digest and State revision cells.
     pub(in super::super) fn constrain_journal_opening_v1(
         &self,
         ctx: &mut Context<F>,
@@ -54,6 +67,7 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaDerivedTransitionStatementSourceV1<F>
     }
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn uint_le<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -67,6 +81,7 @@ fn uint_le<F: KagemushaPoseidonFieldV1>(
         .collect()
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn digest_le<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -78,6 +93,7 @@ fn digest_le<F: KagemushaPoseidonFieldV1>(
         .collect()
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -132,6 +148,7 @@ fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Compute the exact native flat transition digest from constrained state cells.
 ///
 /// The witness supplies only a typed asset UUID for a canonical-frame hash preimage;
@@ -148,6 +165,7 @@ pub(in super::super) fn constrain_transition_statement_digest_v1<F: KagemushaPos
     Ok(constrain_transition_statement_source_v1(builder, jobs, state, witness)?.digest)
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Export the canonical transition SHA result without reassigning host digest bytes.
 #[allow(clippy::too_many_lines)]
 pub(in super::super) fn constrain_transition_statement_source_v1<F: KagemushaPoseidonFieldV1>(

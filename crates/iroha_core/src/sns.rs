@@ -11,6 +11,8 @@ use crate::state::{
 };
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
+#[cfg(test)]
+use iroha_data_model::nexus::DataSpaceMetadata;
 use iroha_data_model::sns::pricing::{
     PricingError, enforce_policy_active, label_matches_tier, payment_asset_definition_id,
     pick_pricing_tier, required_payment_amount, tier_by_pricing_class, validate_term_bounds,
@@ -26,7 +28,7 @@ use iroha_data_model::{
     alias_setup::{AccountAliasName, AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     isi::{alias_setup::EnsureAlias, register::RegisterBox},
-    nexus::{DataSpaceCatalog, DataSpaceMetadata},
+    nexus::DataSpaceCatalog,
     permission::Permission,
     sns::{
         AuctionKind, ControllerType, NameAuctionStateV1, NameControllerV1, NameRecordV1,
@@ -90,6 +92,7 @@ pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
 pub const ALIAS_CATALOG_MAPPING_CONFLICT_CODE: &str = "alias.catalog.mapping_conflict";
 /// Name-record metadata key carrying the expected numeric id of a dataspace alias.
 pub const SNS_DATASPACE_ID_METADATA_KEY: &str = "sns.dataspace_id";
+#[cfg(test)]
 const SNS_DYNAMIC_DATASPACE_FAULT_TOLERANCE: u32 = 1;
 /// Maximum number of persisted alias auto-renew records examined in one block.
 ///
@@ -1505,6 +1508,7 @@ pub(crate) fn try_seed_default_namespace_policies(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Seed the current fixed namespace policies required by the on-chain SNS model.
 ///
 /// Existing state is validated exactly and is never migrated or rewritten.
@@ -1744,6 +1748,7 @@ fn ensure_selector_is_mutable(selector: &NameSelectorV1) -> Result<(), SnsError>
     }
     Ok(())
 }
+#[cfg(test)]
 fn canonicalize_request_selector(
     selector: NameSelectorV1,
     catalog: &DataSpaceCatalog,
@@ -1854,6 +1859,7 @@ pub(crate) fn native_payment_for_quote(quote: &LeaseQuote) -> LeasePayment {
 ///
 /// Returns [`SnsError`] when the alias is invalid, already registered, or does
 /// not satisfy the active suffix policy.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn quote_account_alias_registration(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -1863,26 +1869,16 @@ pub fn quote_account_alias_registration(
     pricing_class_hint: Option<u8>,
     now_ms: u64,
 ) -> Result<LeaseQuote, SnsError> {
-    let selector = selector_for_account_alias(alias, catalog)
-        .map_err(|err| SnsError::BadRequest(err.to_string()))?;
-    ensure_selector_is_mutable(&selector)?;
-    let policy = policy_or_not_found(world, selector.suffix_id)?;
-    enforce_policy_active(&policy)?;
-    enforce_reserved_label_assignment(
-        SnsNamespace::AccountAlias,
-        &policy,
-        &selector,
+    quote_account_alias_registration_inner(
+        world,
+        catalog,
+        alias,
         owner,
+        term_years,
+        pricing_class_hint,
         now_ms,
-    )?;
-    if record_by_selector(world, &selector)?.is_some() {
-        return Err(SnsError::Conflict(format!(
-            "selector `{}` is already registered",
-            selector.normalized_label()
-        )));
-    }
-    let tier = pick_pricing_tier(&policy, &selector, pricing_class_hint)?;
-    lease_quote(selector, &policy, &tier, term_years, now_ms)
+        None,
+    )
 }
 /// Quote account-alias registration only when policy and configured fee asset agree exactly.
 pub fn quote_account_alias_registration_with_configured_fee_asset(
@@ -1895,11 +1891,35 @@ pub fn quote_account_alias_registration_with_configured_fee_asset(
     now_ms: u64,
     configured_fee_asset_selector: &str,
 ) -> Result<LeaseQuote, SnsError> {
+    quote_account_alias_registration_inner(
+        world,
+        catalog,
+        alias,
+        owner,
+        term_years,
+        pricing_class_hint,
+        now_ms,
+        Some(configured_fee_asset_selector),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn quote_account_alias_registration_inner(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    owner: &AccountId,
+    term_years: u8,
+    pricing_class_hint: Option<u8>,
+    now_ms: u64,
+    configured_fee_asset_selector: Option<&str>,
+) -> Result<LeaseQuote, SnsError> {
     let selector = selector_for_account_alias(alias, catalog)
         .map_err(|err| SnsError::BadRequest(err.to_string()))?;
     ensure_selector_is_mutable(&selector)?;
     let policy = policy_or_not_found(world, selector.suffix_id)?;
-    ensure_policy_matches_configured_payment_asset(world, &policy, configured_fee_asset_selector)?;
+    if let Some(configured) = configured_fee_asset_selector {
+        ensure_policy_matches_configured_payment_asset(world, &policy, configured)?;
+    }
     enforce_policy_active(&policy)?;
     enforce_reserved_label_assignment(
         SnsNamespace::AccountAlias,
@@ -1922,6 +1942,7 @@ pub fn quote_account_alias_registration_with_configured_fee_asset(
 /// # Errors
 ///
 /// Returns [`SnsError`] when the alias is missing, immutable, or no longer eligible for renewal.
+#[cfg(test)]
 pub fn quote_account_alias_renewal(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -1929,30 +1950,7 @@ pub fn quote_account_alias_renewal(
     term_years: u8,
     now_ms: u64,
 ) -> Result<LeaseQuote, SnsError> {
-    let selector = selector_for_account_alias(alias, catalog)
-        .map_err(|err| SnsError::BadRequest(err.to_string()))?;
-    ensure_selector_is_mutable(&selector)?;
-    let policy = policy_or_not_found(world, selector.suffix_id)?;
-    enforce_policy_active(&policy)?;
-    let mut record = record_or_not_found(world, &selector)?;
-    refresh_lifecycle(&mut record, now_ms);
-    match record.status {
-        NameStatus::Tombstoned(_) => {
-            return Err(SnsError::Conflict(format!(
-                "registration `{}` is tombstoned",
-                selector.normalized_label()
-            )));
-        }
-        NameStatus::Frozen(_) => {
-            return Err(SnsError::Conflict(format!(
-                "registration `{}` is frozen",
-                selector.normalized_label()
-            )));
-        }
-        _ => {}
-    }
-    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
-    lease_quote(selector, &policy, &tier, term_years, record.expires_at_ms)
+    quote_account_alias_renewal_inner(world, catalog, alias, term_years, now_ms, None)
 }
 /// Quote account-alias renewal only when policy and configured fee asset agree exactly.
 pub fn quote_account_alias_renewal_with_configured_fee_asset(
@@ -1963,11 +1961,30 @@ pub fn quote_account_alias_renewal_with_configured_fee_asset(
     now_ms: u64,
     configured_fee_asset_selector: &str,
 ) -> Result<LeaseQuote, SnsError> {
+    quote_account_alias_renewal_inner(
+        world,
+        catalog,
+        alias,
+        term_years,
+        now_ms,
+        Some(configured_fee_asset_selector),
+    )
+}
+fn quote_account_alias_renewal_inner(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    term_years: u8,
+    now_ms: u64,
+    configured_fee_asset_selector: Option<&str>,
+) -> Result<LeaseQuote, SnsError> {
     let selector = selector_for_account_alias(alias, catalog)
         .map_err(|err| SnsError::BadRequest(err.to_string()))?;
     ensure_selector_is_mutable(&selector)?;
     let policy = policy_or_not_found(world, selector.suffix_id)?;
-    ensure_policy_matches_configured_payment_asset(world, &policy, configured_fee_asset_selector)?;
+    if let Some(configured) = configured_fee_asset_selector {
+        ensure_policy_matches_configured_payment_asset(world, &policy, configured)?;
+    }
     enforce_policy_active(&policy)?;
     let mut record = record_or_not_found(world, &selector)?;
     refresh_lifecycle(&mut record, now_ms);
@@ -1989,39 +2006,10 @@ pub fn quote_account_alias_renewal_with_configured_fee_asset(
     let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
     lease_quote(selector, &policy, &tier, term_years, record.expires_at_ms)
 }
-/// Quote the cost and resulting lifecycle for registering a SNS name.
-///
-/// # Errors
-///
-/// Returns [`SnsError`] when the selector is invalid, the suffix policy is missing or inactive,
-/// the label is reserved for another owner, or the name is already registered.
-pub fn quote_name_registration(
-    world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
-    selector: NameSelectorV1,
-    owner: &AccountId,
-    term_years: u8,
-    pricing_class_hint: Option<u8>,
-    now_ms: u64,
-) -> Result<LeaseQuote, SnsError> {
-    let (namespace, canonical_selector) = canonicalize_request_selector(selector, catalog)?;
-    ensure_selector_is_mutable(&canonical_selector)?;
-    let policy = policy_or_not_found(world, canonical_selector.suffix_id)?;
-    enforce_policy_active(&policy)?;
-    enforce_reserved_label_assignment(namespace, &policy, &canonical_selector, owner, now_ms)?;
-    if record_by_selector(world, &canonical_selector)?.is_some() {
-        return Err(SnsError::Conflict(format!(
-            "selector `{}` is already registered",
-            canonical_selector.normalized_label()
-        )));
-    }
-    let tier = pick_pricing_tier(&policy, &canonical_selector, pricing_class_hint)?;
-    lease_quote(canonical_selector, &policy, &tier, term_years, now_ms)
-}
 /// Quote registration for a catalog-free, pre-resolved canonical selector.
 ///
-/// Unlike [`quote_name_registration`], account aliases are parsed from their
-/// complete textual form and do not require a static dataspace catalog. Callers
+/// Account aliases are parsed from their complete textual form and do not
+/// require a static dataspace catalog. Callers
 /// must separately validate the textual dataspace against its pinned numeric ID.
 ///
 /// # Errors
@@ -2123,35 +2111,6 @@ pub fn quote_resolved_name_renewal(
         ));
     }
     Ok(quote)
-}
-/// Quote the cost and resulting lifecycle for renewing a SNS name.
-///
-/// # Errors
-///
-/// Returns [`SnsError`] when the name or policy is missing, immutable, tombstoned, or no longer
-/// satisfies the pricing class used for the original registration.
-pub fn quote_name_renewal(
-    world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
-    namespace: SnsNamespace,
-    literal: &str,
-    term_years: u8,
-    now_ms: u64,
-) -> Result<LeaseQuote, SnsError> {
-    let selector = selector_for_namespace_literal(namespace, literal, catalog)?;
-    ensure_selector_is_mutable(&selector)?;
-    let policy = policy_or_not_found(world, selector.suffix_id)?;
-    enforce_policy_active(&policy)?;
-    let mut record = record_or_not_found(world, &selector)?;
-    refresh_lifecycle(&mut record, now_ms);
-    if matches!(record.status, NameStatus::Tombstoned(_)) {
-        return Err(SnsError::Conflict(format!(
-            "registration `{}` is tombstoned",
-            selector.normalized_label()
-        )));
-    }
-    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
-    lease_quote(selector, &policy, &tier, term_years, record.expires_at_ms)
 }
 fn persist_record(state_transaction: &mut StateTransaction<'_, '_>, record: &NameRecordV1) {
     state_transaction
@@ -2851,6 +2810,7 @@ pub fn active_dataspace_id_by_alias(
 ) -> Option<DataSpaceId> {
     resolve_active_dataspace_id_by_alias(world, catalog, alias, now_ms).ok()
 }
+#[cfg(test)]
 /// Resolve active dataspace metadata from the bootstrap catalog or SNS.
 ///
 /// # Errors

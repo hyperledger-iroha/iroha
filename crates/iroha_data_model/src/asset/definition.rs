@@ -131,7 +131,6 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(u8)]
     pub enum AssetBalancePolicy {
         /// Keep balances in a global bucket shared across dataspaces.
@@ -161,7 +160,6 @@ mod model {
     #[allow(clippy::multiple_inherent_impl)]
     #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::definition::model::AssetDefinition")]
     pub struct AssetDefinition {
@@ -234,7 +232,6 @@ mod model {
         IntoSchema,
         Default,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(u8)]
     pub enum Mintable {
         /// Regular asset with elastic supply. Can be minted and burned.
@@ -269,7 +266,6 @@ mod model {
         DeriveFast,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(transparent)]
     pub struct MintabilityTokens {
         #[getset(get_copy = "pub")]
@@ -363,7 +359,6 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(u8)]
     pub enum ConfidentialPolicyMode {
         /// Asset behaves transparently; shielded instructions are rejected.
@@ -396,7 +391,6 @@ mod model {
         DeriveFast,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct ConfidentialPolicyTransition {
         /// Identifier of the new mode to transition into.
         #[getset(get_copy = "pub")]
@@ -433,7 +427,6 @@ mod model {
         DeriveFast,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetConfidentialPolicy {
         /// Current mode for shielded versus transparent handling.
         #[getset(get_copy = "pub")]

@@ -8,7 +8,7 @@ V1 covers app-role Connect plus numeric asset transfers:
 
 1. Create a Connect app session and wallet launch URI.
 2. Wait for wallet approval and capture the approved account/signing key.
-3. Build canonical signable transfer payload bytes and a payload hash.
+3. Build canonical signable transfer payload bytes with `Ordinary` admission and a payload hash.
 4. Request a wallet signature.
 5. Finalize the signed transaction, submit it to Torii, and wait for a terminal
    pipeline status.
@@ -34,6 +34,10 @@ Every SDK exposes the same facade methods with native naming conventions:
   transaction, submits it to Torii, and optionally waits for final status.
 - `transferWithWallet(session, input)` runs draft, signature request,
   finalization, submission, and status wait as one call.
+
+The transfer facade requires one authoritative route. Torii rejects a transfer
+that resolves to multiple routes before accepting it; the facade does not claim
+atomic multi-dataspace ownership or silently rewrite an explicit admission intent.
 
 V1 accepts Ed25519 signatures only. SDKs must fail closed with
 `unsupported_signature_algorithm` for other algorithms unless that SDK already

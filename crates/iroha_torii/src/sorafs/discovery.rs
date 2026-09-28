@@ -1,7 +1,9 @@
 //! Provider advert ingestion and validation for Torii's SoraFS discovery pipeline.
 #[cfg(test)]
 mod finalized_admission_tests;
-use super::admission::{AdmissionCheckError, AdmissionRegistry, verify_advert_against_envelope};
+use super::admission::{
+    AdmissionRegistry, ProviderAdmissionAdvertError, verify_advert_against_envelope,
+};
 use crate::secure_file_metadata::{self, SecureMetadata};
 use blake3::hash as blake3_hash;
 use norito::{
@@ -351,7 +353,7 @@ pub enum AdvertError {
         /// Provider identifier whose admission failed.
         provider_id: [u8; 32],
         /// Reason the admission check rejected the advert.
-        error: AdmissionCheckError,
+        error: ProviderAdmissionAdvertError,
     },
 }
 impl ReplayCheckpointStore {

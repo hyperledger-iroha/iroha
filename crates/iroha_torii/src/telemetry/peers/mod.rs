@@ -6,17 +6,17 @@ use crate::{
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::ShutdownSignal;
-use iroha_logger::prelude::*;
 use iroha_torii_shared::configuration::Configuration;
 use monitor::Metrics as PeerMetricsSnapshot;
 pub use monitor::Update;
+#[cfg(test)]
+use std::time::Duration;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     net::SocketAddr,
     str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 use tokio::{
     sync::RwLock,
@@ -107,6 +107,7 @@ pub struct GeoLookupConfig {
     pub endpoint: Option<Url>,
 }
 impl GeoLookupConfig {
+    #[cfg(test)]
     pub fn disabled() -> Self {
         Self {
             enabled: false,
@@ -361,6 +362,7 @@ impl PeerTelemetryService {
         let guard = self.peers.read().await;
         guard.values().map(PeerState::info).collect()
     }
+    #[cfg(test)]
     pub async fn peers_status(&self) -> Vec<PeerStatusDto> {
         let first_seen_by_block = {
             let propagation = self.propagation.read().await;

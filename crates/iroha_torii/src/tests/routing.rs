@@ -1,13 +1,9 @@
 #[cfg(all(test, feature = "telemetry"))]
 mod tests {
     use super::{sorafs_capacity_tests::build_por_challenge, *};
-    use crate::mk_app_state_for_tests;
     use http::StatusCode;
     use http_body_util::BodyExt;
-    use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::v2_status,
-        telemetry::StateTelemetry,
-    };
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_crypto::{Algorithm, Hash, HashOf};
     use iroha_data_model::{
         block::{
@@ -22,16 +18,10 @@ mod tests {
             EventBox,
             pipeline::{BlockEvent, BlockStatus},
         },
-        sorafs::capacity::ProviderId,
     };
-    use iroha_model_base::metadata::Metadata;
     use iroha_telemetry::metrics::Metrics;
-    use std::{
-        io::Cursor,
-        sync::{Arc, Mutex},
-    };
+    use std::sync::Arc;
     use tokio::runtime::Runtime;
-    static SUMERAGI_V2_STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
     fn install_passive_diagnostic_lane_artifact(
         state: &CoreState,
         kura: &Kura,

@@ -1,7 +1,6 @@
 //! Connect session, relay, and WebSocket tests.
 
 use super::*;
-use base64::Engine as _;
 use iroha_crypto::{Hash, KeyPair};
 use std::{collections::BTreeMap, num::NonZeroU64};
 use tokio::time::{Duration, timeout};
@@ -681,7 +680,7 @@ async fn peer_claim_absolute_expiry_is_retained_and_pruned() {
         "management-token",
         "relay-token",
     );
-    claim.expires_at_ms = unix_time_ms().saturating_add(60_000);
+    claim.expires_at_ms = crate::utils::unix_now_ms().saturating_add(60_000);
     let sid = claim.sid;
     let expires_at_ms = claim.expires_at_ms;
     bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
@@ -723,7 +722,7 @@ async fn expired_peer_claim_rejects_tokens_and_management_reads() {
     );
     let session = Arc::new(Session::new(
         SessionOrigin::PeerClaimed,
-        Some(unix_time_ms()),
+        Some(crate::utils::unix_now_ms()),
     ));
     *session.app_token_hash.lock().await = Some(claim.token_app_hash);
     *session.management_token_hash.lock().await = Some(claim.token_management_hash);

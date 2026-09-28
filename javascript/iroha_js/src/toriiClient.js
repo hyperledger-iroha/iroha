@@ -22144,7 +22144,7 @@ async function normalizeContractCallDraftResponse(
     draftIntent,
     localSigningContext,
     "contractCall draft",
-    "queue_plan_synced",
+    "ordinary",
   );
   return response;
 }

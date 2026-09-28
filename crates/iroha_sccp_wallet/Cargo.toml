@@ -11,16 +11,5 @@ workspace = true
 
 # Never linked into irohad: `ci/dependency_budget.json` forbids the `sccp_wallet` layer there.
 [dependencies]
-iroha_sccp = { workspace = true }
-iroha_sccp_rpc = { workspace = true }
-iroha_data_model = { workspace = true, default-features = false }
-iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
-iroha_config = { workspace = true }
-iroha_wallet = { workspace = true }
-norito = { workspace = true, features = ["base-codec"] }
-tiny-keccak = { workspace = true, features = ["keccak"] }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
-hex = { workspace = true, features = ["std"] }
-zeroize = { workspace = true }
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std", "zeroize"] }
-k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "sha256", "std"] }
+# TODO(ws22/ws51): declare dependencies together with the wallet implementation;
+# the module skeleton does not reference any crate yet.

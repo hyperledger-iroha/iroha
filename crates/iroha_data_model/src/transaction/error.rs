@@ -27,7 +27,6 @@ mod model {
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     // SAFETY: `TransactionLimitError` has no trap representation in `String`
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct TransactionLimitError {
         /// Reason why transaction exceeds limits
         pub reason: String,
@@ -36,7 +35,6 @@ mod model {
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::error::model::InstructionExecutionFail")]
     #[derive(Getters, Debug, Clone, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct InstructionExecutionFail {
         /// Instruction for which execution failed
         #[getset(get = "pub")]
@@ -51,7 +49,6 @@ mod model {
     #[display("Failed to execute IVM bytecode: {reason}")]
     #[repr(transparent)]
     // SAFETY: `IvmExecutionFail` has no trap representation in `String`
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct IvmExecutionFail {
         /// Error which happened during execution
         pub reason: String,
@@ -60,7 +57,6 @@ mod model {
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::error::model::TriggerExecutionFail")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(u32)]
     pub enum TriggerExecutionFail {
         /// Exceeded maximum depth for synchronous trigger execution or chained data triggers.
@@ -115,7 +111,6 @@ mod model {
     )]
     #[ignore_extra_doc_attributes]
     #[derive(thiserror::Error)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum TransactionRejectionReason {
         /// Account does not exist
         AccountDoesNotExist(

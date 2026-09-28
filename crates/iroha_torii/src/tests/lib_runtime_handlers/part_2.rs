@@ -1323,12 +1323,11 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
-    iroha_data_model::isi::Mint::asset_numeric(77_u32, asset.clone())
+    iroha_data_model::isi::Mint::asset_quantity(77_u32, asset.clone())
         .execute(&ALICE_ID, &mut tx)
         .expect("fund exact native holding");
     tx.apply();
     block.commit_world_overlay_for_testing().unwrap();
-    drop(block);
     assert!(super::torii_all_dataspace_routes(app.as_ref()).len() > 1);
     for query in [
         iroha_data_model::query::SingularQueryBox::from(

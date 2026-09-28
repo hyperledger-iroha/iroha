@@ -86,6 +86,7 @@ impl ChallengeRecord {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn to_status(&self) -> PorChallengeStatusV1 {
         let mut status = PorChallengeStatusV1 {
             version: POR_CHALLENGE_STATUS_VERSION_V1,
@@ -2110,7 +2111,10 @@ fn resolve_public_endpoint(host: &str, port: u16) -> Result<Vec<SocketAddr>, Ran
             "DNS for `{host}` must yield 1..={MAX_DRAND_DNS_ADDRESSES} addresses"
         )));
     }
-    if addresses.iter().any(|address| !is_public_ip(address.ip())) {
+    if addresses
+        .iter()
+        .any(|address| !crate::utils::is_public_ip(address.ip()))
+    {
         return Err(RandomnessError::Configuration(format!(
             "DNS for `{host}` resolved to a non-public address"
         )));
@@ -2127,7 +2131,9 @@ async fn revalidate_pinned_dns(endpoint: &DrandEndpoint) -> Result<(), Randomnes
     current.dedup();
     if current.is_empty()
         || current.len() > MAX_DRAND_DNS_ADDRESSES
-        || current.iter().any(|address| !is_public_ip(address.ip()))
+        || current
+            .iter()
+            .any(|address| !crate::utils::is_public_ip(address.ip()))
         || current != endpoint.pinned_addrs
     {
         return Err(RandomnessError::Endpoint(format!(
@@ -2136,50 +2142,6 @@ async fn revalidate_pinned_dns(endpoint: &DrandEndpoint) -> Result<(), Randomnes
         )));
     }
     Ok(())
-}
-#[cfg(feature = "app_api")]
-fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_ipv4(ip),
-        IpAddr::V6(ip) => is_public_ipv6(ip),
-    }
-}
-#[cfg(feature = "app_api")]
-fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || ip.is_unspecified()
-        || octets[0] == 0
-        || octets[0] >= 240
-        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
-        || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
-        || (octets[0] == 198 && (18..=19).contains(&octets[1])))
-}
-#[cfg(feature = "app_api")]
-fn is_public_ipv6(ip: Ipv6Addr) -> bool {
-    let segments = ip.segments();
-    let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
-    let documentation_v2 = segments[0] == 0x3fff && (segments[1] & 0xf000) == 0;
-    let orchid = segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010;
-    let transition = (segments[0] == 0x2001 && segments[1] == 0)
-        || segments[0] == 0x2002
-        || ip.to_ipv4_mapped().is_some();
-    !((segments[0] & 0xe000) != 0x2000
-        || ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || documentation
-        || documentation_v2
-        || orchid
-        || transition)
 }
 #[cfg(feature = "app_api")]
 fn parse_and_verify_drand_response(

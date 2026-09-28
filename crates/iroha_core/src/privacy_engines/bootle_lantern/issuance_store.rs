@@ -10,8 +10,6 @@
 use super::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
 #[cfg(any(unix, test))]
 use std::io::Read;
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -21,6 +19,11 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 use thiserror::Error;
+#[cfg(test)]
+use {
+    std::sync::atomic::AtomicBool, std::sync::atomic::AtomicU8, std::sync::atomic::AtomicUsize,
+    std::sync::atomic::Ordering,
+};
 const STORE_RECORD_MAGIC_V1: [u8; 4] = *b"ILS1";
 const STORE_RECORD_VERSION_V1: u8 = 1;
 const STORE_RECORD_EXTENSION_V1: &str = ".bls1";
@@ -287,11 +290,13 @@ impl StoredAuthorizationV1 {
             .is_some_and(|elapsed| elapsed >= retention)
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[derive(Debug)]
 struct InMemoryStateV1 {
     records: BTreeMap<[u8; 32], StoredAuthorizationV1>,
     canonical_bytes: u64,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Mutex-backed bounded store for deterministic tests and ephemeral tooling.
 ///
 /// Because this store has no reopen boundary, explicit recovery treats every
@@ -305,6 +310,7 @@ pub struct BootleLanternInMemoryIssuanceStoreV1 {
     #[cfg(test)]
     fail_next_completion: AtomicBool,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl BootleLanternInMemoryIssuanceStoreV1 {
     /// Construct an empty store with default bounds.
     #[must_use]
@@ -329,11 +335,13 @@ impl BootleLanternInMemoryIssuanceStoreV1 {
         self.fail_next_completion.store(true, Ordering::SeqCst);
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl Default for BootleLanternInMemoryIssuanceStoreV1 {
     fn default() -> Self {
         Self::new()
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl BootleLanternIssuanceStoreV1 for BootleLanternInMemoryIssuanceStoreV1 {
     fn register_fresh_v1(
         &self,
@@ -1207,6 +1215,7 @@ fn classify_preflight_v1(
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProcessingRecoveryScopeV1 {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     All,
     FileOpenSnapshot,
 }
@@ -1312,6 +1321,7 @@ trait StoreCapacityStateV1 {
     fn records_len_v1(&self) -> usize;
     fn canonical_bytes_v1(&self) -> u64;
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl StoreCapacityStateV1 for InMemoryStateV1 {
     fn records_len_v1(&self) -> usize {
         self.records.len()
@@ -1364,6 +1374,7 @@ fn replace_size_v1(
         .filter(|total| *total <= max_total)
         .ok_or(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn commit_in_memory_candidate_v1(
     state: &mut InMemoryStateV1,
     candidate: StoredAuthorizationV1,

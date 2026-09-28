@@ -666,10 +666,10 @@ fn cli_public_input_preparation_never_accepts_private_credentials() {
 }
 
 #[test]
-fn beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install() {
+fn beacon_bootstrap_window_reserves_real_current_canary_and_install() {
     // Each case executes and signs its own real genesis; changing only a raw
     // manifest would fail authentication before reaching the production guard.
-    for epoch in [8, 9, 12] {
+    for epoch in [6, 7, 12] {
         let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let fixture = Fixture::build_with_epoch(epoch);
         let mut inventory = sample_inventory_fixture();
@@ -687,9 +687,9 @@ fn beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install() {
             &inventory.validators,
             &inventory.validator_clients,
         );
-        if epoch == 8 {
-            let error = result.expect_err("pulse 7 leaves no preceding installation carrier");
-            assert!(format!("{error:#}").contains("first mandatory beacon pulse after height 7"));
+        if epoch == 6 {
+            let error = result.expect_err("pulse 5 leaves no preceding installation carrier");
+            assert!(format!("{error:#}").contains("first mandatory beacon pulse after height 5"));
         } else {
             result.expect("the native signed epoch permits installation before the pulse");
         }

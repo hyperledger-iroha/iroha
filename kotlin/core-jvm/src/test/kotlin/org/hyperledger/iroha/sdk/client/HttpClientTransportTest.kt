@@ -1035,7 +1035,7 @@ class HttpClientTransportTest {
                 authority = authority,
                 creationTimeMs = creationTimeMs,
                 executable = Executable.contractCall(invocation),
-                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+                admissionIntent = TransactionAdmissionIntent.ORDINARY,
                 feePayment = quotedFeePayment,
                 metadata = metadata,
             ),
@@ -1176,7 +1176,7 @@ class HttpClientTransportTest {
             authority = authority,
             creationTimeMs = 123_456L,
             executable = Executable.contractCall(invocation),
-            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            admissionIntent = TransactionAdmissionIntent.ORDINARY,
             feePayment = feePayment,
             metadata = metadata,
         )
@@ -1197,7 +1197,7 @@ class HttpClientTransportTest {
             base.copy(metadata = mapOf("attacker" to JsonValue.bool(true))),
             base.copy(timeToLiveMs = 99_999L),
             base.copy(nonce = 7L),
-            base.copy(admissionIntent = TransactionAdmissionIntent.ORDINARY),
+            base.copy(admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED),
             base.copy(attachments = listOf(attachment)),
             base.copy(feePayment = testFeePayment(5_001L)),
         )
@@ -1225,11 +1225,11 @@ class HttpClientTransportTest {
                 ).join()
             }
             assertNotNull(error.cause)
-            if (substituted.admissionIntent == TransactionAdmissionIntent.ORDINARY) {
+            if (substituted.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
                 assertTrue(
                     generateSequence(error.cause) { it.cause }.any {
                         it.message?.contains(
-                            "transaction payload admission intent must be QUEUE_PLAN_SYNCED",
+                            "transaction payload admission intent must be ORDINARY",
                         ) == true
                     },
                 )
@@ -1254,7 +1254,7 @@ class HttpClientTransportTest {
             authority = authority,
             creationTimeMs = 654_321L,
             executable = Executable.contractCall(invocation),
-            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            admissionIntent = TransactionAdmissionIntent.ORDINARY,
             feePayment = testFeePayment(5_000L),
         )
         val encodedPayload = NoritoJavaCodecAdapter(

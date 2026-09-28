@@ -37,16 +37,7 @@ use std::{format, str::FromStr, string::String, vec::Vec};
 )]
 #[display("{hash}${domain}")]
 #[getset(get = "pub")]
-#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::rwa::RwaId")]
 pub struct RwaId {
     /// Domain that scopes the lot identifier.
@@ -58,14 +49,6 @@ pub struct RwaId {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[getset(get = "pub")]
 #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct RwaParentRef {
     /// Parent lot contributing to the child lot.
     pub rwa: RwaId,
@@ -79,14 +62,6 @@ pub struct RwaParentRef {
 )]
 #[getset(get = "pub")]
 #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct RwaControlPolicy {
     /// Explicit controller accounts allowed to operate enabled controls on this lot.
     pub controller_accounts: Vec<AccountId>,
@@ -119,14 +94,6 @@ pub struct RwaControlPolicy {
 #[display("{id}")]
 #[derive(DeriveFast, DeriveJsonSer, DeriveJsonDe)]
 #[norito(no_fast_from_json)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::rwa::Rwa")]
 pub struct Rwa {
@@ -168,14 +135,6 @@ pub struct Rwa {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[getset(get = "pub")]
 #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct NewRwa {
     /// Domain that will scope the generated lot identifier.
     pub domain: DomainId,

@@ -2266,10 +2266,13 @@ impl WsvHost {
             return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
         }
         for (from, to, asset, amount) in entries {
-            if !self
-                .wsv
-                .transfer(&self.caller, from.clone(), to.clone(), asset.clone(), amount)
-            {
+            if !self.wsv.transfer(
+                &self.caller,
+                from.clone(),
+                to.clone(),
+                asset.clone(),
+                amount,
+            ) {
                 return Err(VMError::PermissionDenied);
             }
         }
@@ -4495,9 +4498,6 @@ impl IVMHost for WsvHost {
         Self: 'static,
     {
         self
-    }
-    fn supports_concurrent_blocks(&self) -> bool {
-        false
     }
     fn begin_tx(&mut self, _declared: &crate::parallel::StateAccessSet) -> Result<(), VMError> {
         self.actual_access.read_keys.clear();

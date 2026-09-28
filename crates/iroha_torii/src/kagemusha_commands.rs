@@ -262,6 +262,7 @@ pub(crate) async fn handle_top_up(
     let request =
         validate_top_up_signed_transaction(app.state.network_id_ref(), &transaction)?.clone();
     require_idempotency_key(&headers, request.operation_id)?;
+    crate::require_current_transaction_admission(transaction.admission_intent())?;
     let runtime = require_command_runtime(&app)?;
     let transaction_hash = transaction.hash();
     let binding = KagemushaOperationBinding {
@@ -368,6 +369,9 @@ pub(crate) async fn handle_redeem(
             format!("KAGEMUSHA V1 redemption request is invalid: {source}"),
         )
     })?;
+    // The monetary protocol still requires this intent. Refuse before operation
+    // reservation or issuer signing until the current driver can execute it.
+    crate::require_current_transaction_admission(TransactionAdmissionIntent::QueuePlanSynced)?;
     let binding = KagemushaOperationBinding {
         operation_id: request.operation_id,
         kind: KagemushaOperationKindV1::Redemption,
@@ -1129,6 +1133,128 @@ mod tests {
     use super::*;
     use iroha_data_model::{Level, block::BlockHeader, isi::Log, transaction::FeePaymentIntent};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+    #[tokio::test]
+    async fn unsupported_current_admission_precedes_monetary_reservation_signing_and_pending() {
+        use crate::utils::extractors::tests::{
+            kagemusha_ingress_redemption_fixture, kagemusha_ingress_top_up_fixture,
+        };
+        use iroha_core::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
+        use iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1;
+        let top_up = kagemusha_ingress_top_up_fixture();
+        let redemption = kagemusha_ingress_redemption_fixture();
+        top_up.validate_shape().unwrap();
+        redemption.validate_shape().unwrap();
+        let payer_key =
+            KeyPair::try_from_seed(vec![0x44; 32], iroha_crypto::Algorithm::Ed25519).unwrap();
+        assert_eq!(top_up.payer, AccountId::new(payer_key.public_key().clone()));
+        let signed = TransactionBuilder::new(
+            top_up.network_id,
+            top_up.payer.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([TopUpKagemushaV1::new(top_up.clone()).unwrap()])
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .sign(payer_key.private_key());
+        validate_top_up_signed_transaction(&top_up.network_id, &signed).unwrap();
+        let bytes =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let runtime = Arc::new(KagemushaCommandRuntime {
+            // A supported redemption would require an issuer. The unsupported
+            // contract must be classified before requesting or invoking one.
+            redemption_issuer: None,
+            registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
+                NonZeroUsize::new(2).unwrap(),
+                NonZeroUsize::new(2 * OPERATION_ACCOUNTED_BYTES).unwrap(),
+            ))),
+        });
+        {
+            let app = Arc::get_mut(&mut app).unwrap();
+            app.state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                app.state.chain_id_ref().clone(),
+                top_up.network_id,
+            ));
+            app.kagemusha_commands = Some(runtime.clone());
+        }
+        let journal = tempfile::tempdir().unwrap();
+        let path = journal.path().join("unsupported-monetary.norito");
+        app.queue
+            .install_plan_journal(&path, 1024 * 1024, true)
+            .unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let headers = |operation_id: [u8; 32]| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "idempotency-key",
+                axum::http::HeaderValue::from_str(&hex::encode(operation_id)).unwrap(),
+            );
+            headers
+        };
+        let top_up_binding = KagemushaOperationBinding {
+            operation_id: top_up.operation_id,
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: top_up.canonical_digest().unwrap(),
+            top_up_transaction_hash: Some(signed.hash()),
+        };
+        let redemption_binding = KagemushaOperationBinding {
+            operation_id: redemption.operation_id,
+            kind: KagemushaOperationKindV1::Redemption,
+            request_digest: redemption.canonical_digest().unwrap(),
+            top_up_transaction_hash: None,
+        };
+        let mut retained_reservations = Vec::new();
+        for expected_registry_len in [0, 2] {
+            for result in [
+                handle_top_up(
+                    app.clone(),
+                    headers(top_up.operation_id),
+                    None,
+                    Bytes::from(bytes.clone()),
+                )
+                .await,
+                handle_redeem(
+                    app.clone(),
+                    headers(redemption.operation_id),
+                    None,
+                    redemption.clone(),
+                )
+                .await,
+            ] {
+                assert!(
+                    matches!(
+                        result,
+                        Err(Error::AppQueryValidation {
+                            code: "unsupported_transaction_admission",
+                            ..
+                        })
+                    ),
+                    "unsupported monetary intent must not become Pending, a signing error, or an accepted receipt"
+                );
+            }
+            assert_eq!(runtime.registry.lock().entries.len(), expected_registry_len);
+            assert_eq!(app.queue.active_len(), 0);
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            if expected_registry_len == 0 {
+                for binding in [top_up_binding, redemption_binding] {
+                    let SubmissionClaim::Reserved(reservation) = runtime.claim(binding).unwrap()
+                    else {
+                        panic!("fresh reservation")
+                    };
+                    retained_reservations.push(reservation);
+                }
+            }
+        }
+        drop(retained_reservations);
+        assert!(runtime.registry.lock().entries.is_empty());
+    }
 
     #[test]
     fn operation_id_accepts_every_nonzero_32_byte_value() {

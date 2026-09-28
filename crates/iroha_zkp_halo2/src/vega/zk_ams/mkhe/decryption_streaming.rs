@@ -99,15 +99,6 @@ pub const ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1: [u8;
 pub enum ZkAmsMkheDecryptionStreamingBlockerV1 {
     /// Canonical empty blocker slot. Only slots at or above `blocker_count` may contain this value.
     NoBlocker = 0,
-    /// Historical compatibility value retained for downstream exhaustive
-    /// matches. The bounded prover no longer activates this blocker.
-    StagedProverOutputMissing = 1,
-    /// Historical compatibility value retained for downstream exhaustive
-    /// matches. It is no longer an active implementation blocker.
-    CompactAuthorityConstructionStillNative = 2,
-    /// Historical work-ceiling blocker retained for exhaustive downstream
-    /// matches. The staged-local 120-attempt policy no longer activates it.
-    StagedProverWorkCeilingExceeded = 3,
 }
 /// Phase-specific source accounting for the bounded verifier topology.
 ///
@@ -131,9 +122,8 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     pub native_rns_polynomial_bytes: u64,
     /// Exact bytes in one release RNS limb.
     pub rns_limb_bytes: u64,
-    /// Exact owner plus heap payload of the compact streaming ciphertext
-    /// manifest. The legacy field name is retained for evidence codec parity.
-    pub ciphertext_input_bytes: u64,
+    /// Exact owner plus heap payload of the compact streaming ciphertext manifest.
+    pub compact_ciphertext_manifest_bytes: u64,
     /// One in-place full-RNS aggregate.
     pub aggregate_bytes: u64,
     /// One exact canonical `ZADP` proof buffer.
@@ -174,10 +164,8 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     pub ciphertext_linear_passes: u8,
     /// Lower bound of the explicitly excluded native reference combine path.
     pub native_reference_lower_bound_bytes: u64,
-    /// Lower bound inherited by the current compact-authority bridge before the returned compact
-    /// statement exists. The legacy field name is kept; it now records the exact enumerated
-    /// large-buffer peak of the bounded authority constructor.
-    pub compact_authority_construction_lower_bound_bytes: u64,
+    /// Exact enumerated large-buffer peak of the bounded compact-authority constructor.
+    pub compact_authority_construction_peak_bytes: u64,
     /// One retained aggregate `b` construction buffer.
     pub compact_authority_aggregate_bytes: u64,
     /// The borrowed public share's common `a` and party `b` payloads.
@@ -393,7 +381,8 @@ fn derive_streaming_residency_evidence_v1()
     let native_rns_polynomial_bytes = rns_limb_bytes
         .checked_mul(limbs)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let ciphertext_input_bytes = (size_of::<ZkAmsMkheStreamingCollectiveCiphertextV1>() as u64)
+    let compact_ciphertext_manifest_bytes = (size_of::<ZkAmsMkheStreamingCollectiveCiphertextV1>()
+        as u64)
         .checked_add(
             (size_of::<ZkAmsMkheDirectObjectPointerV1>() as u64)
                 .checked_mul(limbs)
@@ -425,12 +414,12 @@ fn derive_streaming_residency_evidence_v1()
     .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let direct_read_buffer_bytes = ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 as u64;
     let sparse_challenge_bytes = degree;
-    let common_retained = ciphertext_input_bytes
+    let common_retained = compact_ciphertext_manifest_bytes
         .checked_add(aggregate_bytes)
         .and_then(|value| value.checked_add(proof_view_backing_bytes))
         .and_then(|value| value.checked_add(manifest_preflight_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let manifest_preflight_peak_bytes = ciphertext_input_bytes
+    let manifest_preflight_peak_bytes = compact_ciphertext_manifest_bytes
         .checked_add(manifest_preflight_bytes)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let proof_load_peak_bytes = common_retained
@@ -458,7 +447,7 @@ fn derive_streaming_residency_evidence_v1()
         .and_then(|value| value.checked_add(direct_read_buffer_bytes))
         .and_then(|value| value.checked_add(sparse_challenge_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let crt_decode_peak_bytes = ciphertext_input_bytes
+    let crt_decode_peak_bytes = compact_ciphertext_manifest_bytes
         .checked_add(aggregate_bytes)
         .and_then(|value| value.checked_add(degree.checked_mul(32)?))
         .and_then(|value| value.checked_add(manifest_preflight_bytes))
@@ -552,7 +541,7 @@ fn derive_streaming_residency_evidence_v1()
     let staged_prover_common_a_limb_frame_scratch_bytes =
         u64::try_from(active_collective_public_a_limb_frame_bytes_v1())
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let staged_prover_witness_base_bytes = ciphertext_input_bytes
+    let staged_prover_witness_base_bytes = compact_ciphertext_manifest_bytes
         .checked_add(staged_prover_party_state_witness_bytes)
         .and_then(|value| value.checked_add(staged_prover_smudge_witness_bytes))
         .and_then(|value| value.checked_add(staged_prover_common_a_context_bytes))
@@ -584,7 +573,7 @@ fn derive_streaming_residency_evidence_v1()
         .and_then(|value| value.checked_add(staged_prover_sparse_challenge_terms_bytes))
         .and_then(|value| value.checked_add(staged_prover_direct_io_buffer_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let staged_prover_self_verification_peak_bytes = ciphertext_input_bytes
+    let staged_prover_self_verification_peak_bytes = compact_ciphertext_manifest_bytes
         .checked_add(staged_prover_party_state_witness_bytes)
         .and_then(|value| value.checked_add(staged_prover_common_a_context_bytes))
         .and_then(|value| value.checked_add(proof_view_backing_bytes))
@@ -829,7 +818,7 @@ fn derive_streaming_residency_evidence_v1()
     let mut evidence = ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
         native_rns_polynomial_bytes,
         rns_limb_bytes,
-        ciphertext_input_bytes,
+        compact_ciphertext_manifest_bytes,
         aggregate_bytes,
         proof_view_backing_bytes,
         manifest_preflight_bytes,
@@ -851,7 +840,7 @@ fn derive_streaming_residency_evidence_v1()
         ciphertext_linear_passes: 17,
         native_reference_lower_bound_bytes: legacy
             .native_combine_relation_residency_lower_bound_bytes,
-        compact_authority_construction_lower_bound_bytes: compact_authority_enumerated_peak_bytes,
+        compact_authority_construction_peak_bytes: compact_authority_enumerated_peak_bytes,
         compact_authority_aggregate_bytes,
         compact_authority_absorbed_share_rns_bytes,
         compact_authority_share_proof_bytes,
@@ -954,7 +943,7 @@ fn streaming_residency_evidence_digest(
     for value in [
         evidence.native_rns_polynomial_bytes,
         evidence.rns_limb_bytes,
-        evidence.ciphertext_input_bytes,
+        evidence.compact_ciphertext_manifest_bytes,
         evidence.aggregate_bytes,
         evidence.proof_view_backing_bytes,
         evidence.manifest_preflight_bytes,
@@ -969,7 +958,7 @@ fn streaming_residency_evidence_digest(
         evidence.enumerated_verifier_peak_bytes,
         evidence.governed_workspace_ceiling_bytes,
         evidence.native_reference_lower_bound_bytes,
-        evidence.compact_authority_construction_lower_bound_bytes,
+        evidence.compact_authority_construction_peak_bytes,
         evidence.compact_authority_aggregate_bytes,
         evidence.compact_authority_absorbed_share_rns_bytes,
         evidence.compact_authority_share_proof_bytes,

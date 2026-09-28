@@ -19,24 +19,33 @@
 //! TODO: Wire only into a reviewed consuming-prover path after assignment/replay, query, and
 //! argument lifetimes are bounded. The borrowed prover is unchanged and remains the oracle.
 
-use std::{cell::Cell, path::PathBuf, rc::Rc};
+#[cfg(test)]
+use std::path::PathBuf;
+use std::{cell::Cell, rc::Rc};
 
 use halo2_proofs::poly::stored_advice::{
-    STORED_SCALAR_BYTES_V1, STORED_SCALARS_PER_CHUNK_V1, StoredPastaFieldV1,
-    StoredPolynomialBasisV1, StoredPolynomialErrorV1, StoredPolynomialLayoutV1,
-    StoredPolynomialProviderV1, StoredPolynomialRoleV1, StoredPolynomialSnapshotV1,
-    StoredPolynomialWriterV1,
+    STORED_SCALAR_BYTES_V1, STORED_SCALARS_PER_CHUNK_V1, StoredPolynomialErrorV1,
+    StoredPolynomialLayoutV1, StoredPolynomialSnapshotV1, StoredPolynomialWriterV1,
 };
+#[cfg(test)]
+use halo2_proofs::poly::stored_advice::{
+    StoredPastaFieldV1, StoredPolynomialBasisV1, StoredPolynomialProviderV1, StoredPolynomialRoleV1,
+};
+#[cfg(test)]
+use iroha_crypto::confidential_spool::ConfidentialSpoolLayoutV1;
 use iroha_crypto::confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1, ConfidentialSpoolLayoutV1,
-    ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
+    ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1, ConfidentialSpoolSnapshotV1,
+    ConfidentialSpoolWriterV1,
 };
+#[cfg(test)]
 use rand_core_06::{OsRng, RngCore as _};
 use zeroize::Zeroizing;
 
 const CHUNK_BYTES: usize = STORED_SCALAR_BYTES_V1 * STORED_SCALARS_PER_CHUNK_V1;
+#[cfg(test)]
 const MAX_LIVE_SNAPSHOTS_PER_PROOF: usize = 512;
 
+#[cfg(test)]
 /// Single-threaded per-proof store owner with a shared one-operation plaintext window.
 ///
 /// This type deliberately provides neither `Clone` nor `Debug`. Its handle budget is a
@@ -49,6 +58,7 @@ pub struct CoreStoredPolynomialProviderV1 {
     handles: Rc<LiveSnapshotBudget>,
 }
 
+#[cfg(test)]
 impl CoreStoredPolynomialProviderV1 {
     /// Create a fresh process-local proof context without consuming transcript randomness.
     ///
@@ -77,6 +87,13 @@ impl CoreStoredPolynomialProviderV1 {
 
 struct LiveSnapshotBudget {
     live: Cell<usize>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the test-gated lease acquisition enforces the limit"
+        )
+    )]
     limit: usize,
 }
 
@@ -85,6 +102,7 @@ struct LiveSnapshotBudget {
 struct LiveSnapshotLease(Rc<LiveSnapshotBudget>);
 
 impl LiveSnapshotLease {
+    #[cfg(test)]
     fn acquire(budget: &Rc<LiveSnapshotBudget>) -> Result<Self, StoredPolynomialErrorV1> {
         let live = budget.live.get();
         if live >= budget.limit {
@@ -138,6 +156,7 @@ pub struct CoreStoredPolynomialSnapshotV1 {
     panic_on_read: bool,
 }
 
+#[cfg(test)]
 impl StoredPolynomialProviderV1 for CoreStoredPolynomialProviderV1 {
     type Writer = CoreStoredPolynomialWriterV1;
 

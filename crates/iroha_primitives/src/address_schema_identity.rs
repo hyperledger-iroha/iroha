@@ -1,4 +1,4 @@
-//! Captured frame identities for the FFI-owned address family.
+//! Captured frame identities for the socket-address family.
 
 use crate::addr::{
     IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrHost, SocketAddrV4, SocketAddrV6,

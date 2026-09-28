@@ -4,7 +4,6 @@
 mod stream_token_body;
 mod stream_token_enforcement;
 use axum::{
-    Json,
     body::{Body, Bytes},
     extract::{
         ConnectInfo, Extension, Path, State,
@@ -27,19 +26,14 @@ use blake3::hash as blake3_hash;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
 use futures::{SinkExt, StreamExt, stream};
 use hex::{ToHex, encode};
-use http::header::{
-    AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, VARY, WARNING,
-};
-use hyper::body::Body as HyperBody;
+use http::header::{CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, VARY};
 use iroha_core::{
-    smartcontracts::{
-        ValidSingularQuery, isi::sorafs::manifest_pin_policy_constraints_from_config,
-    },
+    smartcontracts::ValidSingularQuery,
     state::{StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly},
     tx::external_entrypoint_hash_from_signed_hash as external_hash,
 };
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, PublicKey, Signature,
+    Algorithm, Hash, HashOf, PublicKey,
     sorafs::proof_token::{
         ModerationAction as ProofTokenModerationAction, ProofToken, ProofTokenDigestKey,
     },
@@ -83,13 +77,11 @@ use iroha_data_model::{
         },
     },
     role::RoleId,
-    soracloud::SoraRouteVisibilityV1,
     sorafs::{
         capacity::ProviderId,
         moderation::{
             AdversarialCorpusManifestV1, MODERATION_COMMITTEE_MAX_RESULTS_V1,
-            ModerationCommitteeAggregateV1, ModerationReproManifestV1,
-            ModerationSignedScreeningResultV1,
+            ModerationReproManifestV1, ModerationSignedScreeningResultV1,
         },
         moderation_ledger::{
             REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1,
@@ -146,17 +138,15 @@ use iroha_torii_shared::sorafs_moderation_api::{
     SorafsModerationDeadLetterPrepareResponseV1, SorafsModerationDeadLetterResolutionActionV1,
 };
 use mv::storage::StorageReadOnly;
-use norito::derive::{JsonDeserialize, NoritoDeserialize, NoritoSerialize};
-use norito::json::{self, Map, Number, Value};
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use norito::json::{self, Map, Value};
 #[cfg(test)]
 use sorafs_car::FileEntry;
 use sorafs_car::verifier::CarVerifier;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, ChunkFetchSpec, ChunkStoreError, FilePlan,
-    compute_chunk_plan_digest_sha3,
     por_json::sample_to_map,
     proof_stream::{ProofStreamItem, ProofStreamSequenceVerifier, ProofStreamVerificationContext},
-    verifier::CarVerifyError,
 };
 use sorafs_chunker::ChunkProfile;
 #[cfg(test)]
@@ -169,13 +159,12 @@ use sorafs_manifest::{
     GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1, GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1,
     GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1,
     GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1, GovernanceDagBlockV1, GovernanceDagHeadV1,
-    GovernanceLogPayloadV1, MAX_PROOF_STREAM_SAMPLE_COUNT, MAX_REPUTATION_TRUST_EDGES, ManifestV1,
-    OrderbookSignatureV1, PathDiversityPolicy, ProofStreamHttpRequestV1, ProofStreamKind,
-    ProofStreamTier, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
-    ProviderReputationV1, QosHints, RendezvousTopic, ReputationMerkleProofV1,
-    ReputationSnapshotEventV1, ReputationSnapshotV1,
+    GovernanceLogPayloadV1, MAX_REPUTATION_TRUST_EDGES, ManifestV1, OrderbookSignatureV1,
+    PathDiversityPolicy, ProofStreamHttpRequestV1, ProofStreamKind, ProofStreamTier,
+    ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
+    ReputationMerkleProofV1, ReputationSnapshotEventV1, ReputationSnapshotV1,
     SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_GATEWAY_PROFILE_VERSION,
-    SettlementReceiptV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TransportHintV1, TransportProtocol, chunker_registry,
     deal::XorQuantity,
@@ -185,7 +174,6 @@ use sorafs_manifest::{
         PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
         PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpCommitmentV1,
     },
-    por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrStatus, potr_request_scope_digest_v1},
     repair::RepairReportV1,
     validate_governance_dag_head_against_rotatable_chain_v1, validate_manifest,
@@ -216,14 +204,13 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
     convert::{Infallible, TryInto},
-    fs,
     io::{self, Cursor},
     net::SocketAddr,
-    num::{NonZeroU32, NonZeroUsize},
+    num::NonZeroUsize,
     path::{Component, Path as StdPath, PathBuf},
     str::FromStr,
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -232,7 +219,7 @@ use stream_token_body::{
     ensure_stream_token_lease_active, read_chunk_with_stream_token_lease,
     stream_token_response_body,
 };
-use stream_token_enforcement::{RangeFetchConcurrencyGuard, enforce_stream_token_for_request};
+use stream_token_enforcement::enforce_stream_token_for_request;
 #[cfg(test)]
 fn canonical_fixture_manifest_root_cid() -> ManifestRootCid {
     let manifest: ManifestV1 = norito::decode_from_bytes(include_bytes!(
@@ -242,19 +229,17 @@ fn canonical_fixture_manifest_root_cid() -> ManifestRootCid {
     ManifestRootCid::try_from_slice(&manifest.root_cid)
         .expect("fixture manifest root CID must be canonical")
 }
+use crate::sorafs::pending_evidence_blocks_absence_retry;
 #[cfg(test)]
-use crate::sorafs::registry::{
-    PinRegistryMetricsSummary, PinRegistrySnapshot, collect_pin_registry,
-};
+use crate::sorafs::registry::{PinRegistryMetricsSummary, collect_pin_registry};
 use crate::{
     JsonBody, SharedAppState, json_entry, json_object,
     routing::MaybeTelemetry,
     sorafs::{
-        AdmissionRegistry, AliasCacheEnforcement, AliasCachePolicyExt, AliasCachePolicyHttpExt,
-        AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision,
-        MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
-        MAX_TOKEN_FUTURE_SKEW_SECS, SorafsAction, StreamTokenHeaderError, StreamTokenIssuerError,
-        StreamTokenQuotaSubject, TokenOverrides, decode_token_base64,
+        AdmissionRegistry, AliasCachePolicyExt, BLINDED_CID_LEN, MAX_CLIENT_ID_BYTES,
+        MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES, MAX_TOKEN_FUTURE_SKEW_SECS,
+        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaSubject, TokenOverrides,
+        decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             capability_name,
@@ -269,8 +254,8 @@ use crate::{
         },
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryError,
-            RegistryAlias, RegistryError, collect_alias_page, collect_replication_order_page,
-            collect_snapshot, lineage_to_json,
+            RegistryAlias, collect_alias_page, collect_replication_order_page, collect_snapshot,
+            lineage_to_json,
         },
         site::{
             content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
@@ -278,17 +263,27 @@ use crate::{
         },
     },
     utils::{
-        extractors::{ExtractAccept, JsonOnly, JsonOrNoritoVersioned, NoritoJson},
+        extractors::{ExtractAccept, JsonOnly, JsonOrNoritoVersioned},
         if_none_match_matches,
     },
 };
+#[cfg(test)]
+use iroha_crypto::Signature;
+#[cfg(test)]
+use sorafs_car::compute_chunk_plan_digest_sha3;
+#[cfg(test)]
+use sorafs_manifest::MAX_PROOF_STREAM_SAMPLE_COUNT;
 use sorafs_orchestrator::appeals::{
     AppealClass, AppealDecision, AppealDisbursementInput, AppealDisbursementPlan,
     AppealPricingConfig, AppealQuote, AppealQuoteInput, AppealSettlementBreakdown,
     AppealSettlementConfig, AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
 };
+#[cfg(test)]
+use std::fs;
+#[cfg(test)]
+use std::num::NonZeroU32;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::RwLock;
 const HEADER_SORA_REQ_BLINDED_CID: &str = "sora-req-blinded-cid";
 const HEADER_SORA_REQ_SALT_EPOCH: &str = "sora-req-salt-epoch";
 const HEADER_SORA_REQ_NONCE: &str = "sora-req-nonce";
@@ -302,12 +297,11 @@ const HEADER_SORA_VERIFYING_KEY: &str = "x-sorafs-verifying-key";
 const HEADER_SORA_CHUNK_RANGE: &str = "x-sora-chunk-range";
 const HEADER_SORA_CHUNK_DIGEST: &str = "x-sorafs-chunk-digest";
 const HEADER_SORA_NAME: &str = "sora-name";
+#[cfg(test)]
 const HEADER_SORA_PROOF: &str = "sora-proof";
 const HEADER_SORA_MANIFEST_ENVELOPE: &str = "x-sorafs-manifest-envelope";
-const HEADER_SORA_CID: &str = "sora-cid";
 const HEADER_SORA_REGION: &str = "x-sorafs-region";
 const HEADER_SORA_CACHE_TTL: &str = "x-sorafs-cache-ttl";
-const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_TOKEN_ID: &str = "x-sorafs-token-id";
 const HEADER_SORA_ISSUANCE_QUOTA_REMAINING: &str = "x-sorafs-issuance-quota-remaining";
@@ -317,7 +311,9 @@ const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
 const HEADER_SORA_POTR_STATUS: &str = "sora-potr-status";
 const MODERATION_QUARANTINE_OBJECT_PAYLOAD_VARY: &str =
     "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
+#[cfg(test)]
 const APP_STATIC_SITE_CONFIG_NAME: &str = super::site::APP_STATIC_SITE_CONFIG_NAME;
+#[cfg(test)]
 const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const MIME_CAR: &str = "application/vnd.ipld.car";
 const MIME_OCTET_STREAM: &str = "application/octet-stream";
@@ -338,19 +334,13 @@ const ORDERBOOK_ROUTE_EVENTS: &str = "/v1/sorafs/orderbook/events";
 const ORDERBOOK_ROUTE_EVENTS_STREAM: &str = "/v1/sorafs/orderbook/events/stream";
 const ORDERBOOK_ROUTE_EVENTS_WS: &str = "/v1/sorafs/orderbook/events/ws";
 const MODERATION_ROUTE_BALLOTS: &str = "/v1/sorafs/moderation/ballots";
-const MODERATION_ROUTE_COMMITS: &str = "/v1/sorafs/moderation/ballots/commits";
-const MODERATION_ROUTE_CHALLENGES: &str = "/v1/sorafs/moderation/ballots/challenges";
-const MODERATION_ROUTE_CHALLENGE_RESOLUTIONS: &str =
-    "/v1/sorafs/moderation/ballots/challenges/resolve";
-const MODERATION_ROUTE_REVEALS: &str = "/v1/sorafs/moderation/ballots/reveals";
-const MODERATION_ROUTE_TALLY: &str = "/v1/sorafs/moderation/ballots/tally";
-const MODERATION_ROUTE_EVENTS: &str = "/v1/sorafs/moderation/ballots/events";
-const MODERATION_ROUTE_NO_SHOW_PLAN_SUFFIX: &str = "no-show-plan";
-const MODERATION_ROUTE_MODEL_REGISTRY: &str = "/v1/sorafs/moderation/model-registry";
+#[cfg(test)]
 const MODERATION_ROUTE_MODEL_REGISTRY_REPRO: &str =
     "/v1/sorafs/moderation/model-registry/repro-manifests";
+#[cfg(test)]
 const MODERATION_ROUTE_MODEL_REGISTRY_CORPORA: &str =
     "/v1/sorafs/moderation/model-registry/corpora";
+#[cfg(test)]
 const MODERATION_ROUTE_SCREENING_RESULTS: &str = "/v1/sorafs/moderation/screening-results";
 const MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES: usize = 256 * 1024;
 const MODERATION_SCREENING_MEMBER_MAX_CANONICAL_BYTES: usize = 64 * 1024;
@@ -358,6 +348,7 @@ const MODERATION_ROUTE_QUARANTINE: &str = "/v1/sorafs/moderation/quarantine";
 const EVIDENCE_ROUTE_SIGNED_AUDIT: &str = "/v1/evidence/audit";
 const EVIDENCE_ROUTE_SIGNED_STATUS: &str = "/v1/evidence/status";
 const MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX: &str = "object";
+#[cfg(test)]
 const MODERATION_ROUTE_QUARANTINE_OPERATOR_PANEL_SUFFIX: &str = "operator-panel";
 const MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX: &str = "review";
 const MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX: &str = "release";
@@ -404,6 +395,7 @@ const APPEAL_FINANCE_ROUTE_DEPOSITS: &str = "/v1/sorafs/appeals/finance/deposits
 const APPEAL_FINANCE_ROUTE_DEPOSIT_CONFIRM: &str = "/v1/sorafs/appeals/finance/deposits/confirm";
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_DEPOSIT_SETTLE: &str = "/v1/sorafs/appeals/finance/deposits/settle";
+#[cfg(test)]
 const APPEAL_FINANCE_ROUTE_DEPOSIT_SUBMIT_SETTLEMENT: &str =
     "/v1/sorafs/appeals/finance/deposits/submit-settlement";
 #[cfg(test)]
@@ -466,6 +458,7 @@ impl ResponseError {
     fn into_response(self) -> Response {
         *self.0
     }
+    #[cfg(test)]
     fn status(&self) -> StatusCode {
         self.0.status()
     }
@@ -549,44 +542,6 @@ fn enforce_chunker_support_gateway(
         )),
     }
 }
-fn registry_chunker_error(profile: &str, supported_profiles: &[String]) -> Response {
-    let mut details = Map::new();
-    details.insert("profile".into(), Value::String(profile.to_string()));
-    let supported_values = supported_profiles
-        .iter()
-        .map(|handle| Value::String(handle.clone()))
-        .collect();
-    details.insert("supported_profiles".into(), Value::Array(supported_values));
-    let mut body = Map::new();
-    body.insert("error".into(), Value::String("unsupported_chunker".into()));
-    body.insert(
-        "message".into(),
-        Value::String(format!(
-            "chunk profile {profile} is not enabled on this provider"
-        )),
-    );
-    body.insert("details".into(), Value::Object(details));
-    (StatusCode::NOT_ACCEPTABLE, JsonBody(Value::Object(body))).into_response()
-}
-fn registry_chunker_unknown(profile: &str) -> Response {
-    let mut details = Map::new();
-    details.insert("profile".into(), Value::String(profile.to_string()));
-    let mut body = Map::new();
-    body.insert(
-        "error".into(),
-        Value::String("chunker_support_unknown".into()),
-    );
-    body.insert(
-        "message".into(),
-        Value::String("registry cannot confirm chunk profile support for this provider".into()),
-    );
-    body.insert("details".into(), Value::Object(details));
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        JsonBody(Value::Object(body)),
-    )
-        .into_response()
-}
 fn next_request_id() -> String {
     let counter = REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
@@ -636,21 +591,15 @@ struct PotrProbeParams {
 struct PotrProbeContext {
     params: PotrProbeParams,
     wall_start: SystemTime,
-    timer_start: Instant,
 }
 fn begin_potr_probe(
     headers: &HeaderMap,
     wall_start: SystemTime,
-    timer_start: Instant,
 ) -> Result<Option<PotrProbeContext>, Response> {
     let Some(params) = parse_potr_request_header(headers)? else {
         return Ok(None);
     };
-    Ok(Some(PotrProbeContext {
-        params,
-        wall_start,
-        timer_start,
-    }))
+    Ok(Some(PotrProbeContext { params, wall_start }))
 }
 fn parse_potr_request_header(headers: &HeaderMap) -> Result<Option<PotrProbeParams>, Response> {
     let raw_value = match single_header_value(headers, HEADER_SORA_POTR_REQUEST) {
@@ -1127,15 +1076,6 @@ where
     );
     response
 }
-struct AliasPresentation {
-    json: Value,
-    evaluation: crate::sorafs::AliasProofEvaluation,
-    decision: crate::sorafs::CacheDecision,
-    status_label: String,
-    alias_label: String,
-    manifest_digest_hex: String,
-    proof_b64: String,
-}
 fn prepare_alias_presentation(
     alias: &RegistryAlias,
     lineage: &ManifestLineageSummary,
@@ -1144,7 +1084,7 @@ fn prepare_alias_presentation(
     enforcement: crate::sorafs::AliasCacheEnforcement,
     telemetry: &crate::routing::MaybeTelemetry,
     now_secs: u64,
-) -> ApiResult<AliasPresentation> {
+) -> ApiResult<Value> {
     let base = match alias.to_json() {
         Ok(value) => value,
         Err(err) => {
@@ -1212,15 +1152,7 @@ fn prepare_alias_presentation(
     let mut map = match base {
         Value::Object(map) => map,
         other => {
-            return Ok(AliasPresentation {
-                json: other,
-                evaluation,
-                decision,
-                status_label,
-                alias_label: alias.alias_label().to_string(),
-                manifest_digest_hex: alias.manifest_digest_hex().to_string(),
-                proof_b64,
-            });
+            return Ok(other);
         }
     };
     fn insert_json_field(
@@ -1341,15 +1273,7 @@ fn prepare_alias_presentation(
                 .collect(),
         ),
     );
-    Ok(AliasPresentation {
-        json: Value::Object(map),
-        evaluation,
-        decision,
-        status_label,
-        alias_label: alias.alias_label().to_string(),
-        manifest_digest_hex: alias.manifest_digest_hex().to_string(),
-        proof_b64,
-    })
+    Ok(Value::Object(map))
 }
 fn decision_outcome_str(outcome: crate::sorafs::CacheDecisionOutcome) -> &'static str {
     match outcome {
@@ -1494,6 +1418,7 @@ fn governance_evaluation_json(governance: &crate::sorafs::GovernanceAssessment) 
     );
     Value::Object(map)
 }
+#[cfg(test)]
 fn decision_warning_header(decision: &crate::sorafs::CacheDecision) -> Option<HeaderValue> {
     if matches!(decision.outcome, crate::sorafs::CacheDecisionOutcome::Hold) {
         if has_reason(decision, "ApprovedSuccessorGrace") {
@@ -1545,6 +1470,7 @@ fn decision_warning_header(decision: &crate::sorafs::CacheDecision) -> Option<He
     }
     None
 }
+#[cfg(test)]
 fn status_code_for_decision(decision: &crate::sorafs::CacheDecision) -> StatusCode {
     if has_reason(decision, "GovernanceRevoked") {
         StatusCode::GONE
@@ -1558,6 +1484,7 @@ fn status_code_for_decision(decision: &crate::sorafs::CacheDecision) -> StatusCo
         StatusCode::SERVICE_UNAVAILABLE
     }
 }
+#[cfg(test)]
 fn message_for_decision(decision: &crate::sorafs::CacheDecision) -> &'static str {
     if has_reason(decision, "GovernanceRevoked") {
         "alias proof revoked by governance"
@@ -1575,111 +1502,9 @@ fn message_for_decision(decision: &crate::sorafs::CacheDecision) -> &'static str
         "alias proof unavailable; refresh required"
     }
 }
-fn retry_after_header(seconds: u64) -> Option<HeaderValue> {
-    if seconds == 0 {
-        None
-    } else {
-        Some(
-            HeaderValue::from_str(&seconds.to_string())
-                .expect("retry-after header must be ASCII digits"),
-        )
-    }
-}
+#[cfg(test)]
 fn has_reason(decision: &crate::sorafs::CacheDecision, needle: &str) -> bool {
     decision.reasons.iter().any(|reason| reason == needle)
-}
-fn alias_policy_error_response(
-    alias: &AliasPresentation,
-    policy: &crate::sorafs::AliasCachePolicy,
-    status: StatusCode,
-    message: &str,
-) -> Response {
-    let mut entries = vec![
-        json_entry("error", message.to_string()),
-        json_entry("alias", alias.alias_label.clone()),
-        json_entry("cache_state", Value::String(alias.status_label.clone())),
-        json_entry(
-            "proof_generated_at_unix",
-            json::to_value(&alias.evaluation.generated_at_unix).unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "proof_expires_at_unix",
-            json::to_value(&alias.evaluation.expires_at_unix).unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "proof_age_seconds",
-            json::to_value(&alias.evaluation.age.as_secs()).unwrap_or(Value::Null),
-        ),
-    ];
-    if let Some(remaining) = alias.evaluation.expires_in {
-        entries.push(json_entry(
-            "proof_expires_in_seconds",
-            json::to_value(&remaining.as_secs()).unwrap_or(Value::Null),
-        ));
-    }
-    entries.push(json_entry(
-        "cache_decision",
-        Value::String(decision_outcome_str(alias.decision.outcome).to_owned()),
-    ));
-    entries.push(json_entry(
-        "cache_reasons",
-        Value::Array(
-            alias
-                .decision
-                .reasons
-                .iter()
-                .cloned()
-                .map(Value::String)
-                .collect(),
-        ),
-    ));
-    entries.push(json_entry(
-        "cache_serve_until_unix",
-        json::to_value(&alias.decision.serve_until_unix).unwrap_or(Value::Null),
-    ));
-    entries.push(json_entry(
-        "status_label",
-        Value::String(alias.status_label.clone()),
-    ));
-    let response_body = json_object(entries);
-    let mut response = (status, JsonBody(response_body)).into_response();
-    let headers = response.headers_mut();
-    if let Ok(name) = HeaderValue::from_str(&alias.alias_label) {
-        headers.insert(HeaderName::from_static(HEADER_SORA_NAME), name);
-    }
-    if let Ok(label) = HeaderValue::from_str(&alias.status_label) {
-        headers.insert(HeaderName::from_static(HEADER_SORA_PROOF_STATUS), label);
-    }
-    headers.insert(AGE, alias.evaluation.age_header());
-    if let Some(warning) = decision_warning_header(&alias.decision) {
-        headers.append(WARNING, warning);
-    } else if let Some(warning) = alias.evaluation.warning_header() {
-        headers.append(WARNING, warning);
-    }
-    let mut cache_control_set = false;
-    if has_reason(&alias.decision, "GovernanceRevoked") {
-        headers.insert(CACHE_CONTROL, policy.revocation_cache_control_header());
-        cache_control_set = true;
-        if let Some(retry) = retry_after_header(policy.revocation_ttl_secs()) {
-            headers.insert(RETRY_AFTER, retry);
-        }
-    }
-    if status == StatusCode::NOT_FOUND {
-        headers.insert(CACHE_CONTROL, policy.negative_cache_control_header());
-        cache_control_set = true;
-        if let Some(retry) = retry_after_header(policy.negative_ttl_secs()) {
-            headers.insert(RETRY_AFTER, retry);
-        }
-    }
-    if status == StatusCode::SERVICE_UNAVAILABLE && !headers.contains_key(RETRY_AFTER) {
-        if let Some(retry) = retry_after_header(policy.refresh_window_secs()) {
-            headers.insert(RETRY_AFTER, retry);
-        }
-    }
-    if !cache_control_set {
-        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    }
-    response
 }
 #[cfg(test)]
 mod cache_tests {
@@ -1871,11 +1696,6 @@ impl ByteRange {
             .saturating_sub(self.start)
             .saturating_add(1)
     }
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StorageFileLayout {
-    path: Vec<String>,
-    size: u64,
 }
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
@@ -5979,16 +5799,6 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_kind(
     })
     .await
 }
-struct VerifiedGovernanceRuntimeState {
-    blocks: Vec<GovernanceDagBlockV1>,
-    encoded_blake3_hex: Vec<String>,
-    encoded_len: Vec<u64>,
-    raw_ipfs_cid: Vec<String>,
-    block_positions_by_cid: BTreeMap<String, usize>,
-    head: GovernanceDagHeadV1,
-    head_blake3_hex: String,
-    head_raw_ipfs_cid: String,
-}
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GovernanceDagSourceMetadata {
     source: &'static str,
@@ -8145,17 +7955,6 @@ fn verify_governance_car_segment_artifacts(
 fn load_governance_dag_runtime_index(
     state: &SharedAppState,
 ) -> Result<(Value, GovernanceDagSourceMetadata), Response> {
-    load_verified_governance_dag_runtime_index(state).map(|(index, _verified)| index)
-}
-fn load_verified_governance_dag_runtime_index(
-    state: &SharedAppState,
-) -> Result<
-    (
-        (Value, GovernanceDagSourceMetadata),
-        VerifiedGovernanceRuntimeState,
-    ),
-    Response,
-> {
     let _ = governance_dag_root_dir(state)?;
     let snapshot = state
         .sorafs_node
@@ -8194,9 +7993,8 @@ fn load_verified_governance_dag_runtime_index(
             "governance DAG runtime index uses an unsupported schema",
         ));
     }
-    let verified =
-        verify_and_bind_governance_dag_runtime_index(state, &mut index, snapshot.head_bytes())?;
-    Ok(((index, metadata), verified))
+    verify_and_bind_governance_dag_runtime_index(state, &mut index, snapshot.head_bytes())?;
+    Ok((index, metadata))
 }
 fn read_bounded_governance_dag_file(
     state: &SharedAppState,
@@ -8322,6 +8120,7 @@ fn governance_dag_source_payload_bytes(
         )
     })
 }
+#[cfg(test)]
 fn governance_dag_raw_ipfs_cid(bytes: &[u8]) -> String {
     const CID_VERSION_V1: u8 = 0x01;
     const RAW_CODEC: u8 = 0x55;
@@ -8408,7 +8207,7 @@ fn verify_and_bind_governance_dag_runtime_index(
     state: &SharedAppState,
     index: &mut Value,
     head_bytes: &[u8],
-) -> Result<VerifiedGovernanceRuntimeState, Response> {
+) -> Result<(), Response> {
     let root = governance_dag_root_dir(state)?;
     let context = "governance DAG runtime index";
     let index_object = index.as_object().ok_or_else(|| {
@@ -8466,9 +8265,6 @@ fn verify_and_bind_governance_dag_runtime_index(
         ));
     }
     let mut verified_blocks = Vec::with_capacity(blocks.len());
-    let mut verified_encoded_blake3 = Vec::with_capacity(blocks.len());
-    let mut verified_encoded_len = Vec::with_capacity(blocks.len());
-    let mut verified_raw_ipfs_cid = Vec::with_capacity(blocks.len());
     let mut block_positions_by_cid = BTreeMap::new();
     let mut by_encoded_blake3 = Map::new();
     let mut by_source_payload_blake3 = Map::new();
@@ -8626,9 +8422,6 @@ fn verify_and_bind_governance_dag_runtime_index(
         );
         append_governance_lookup_position(&mut by_payload_kind, payload_kind, position_u64);
         verified_blocks.push(block);
-        verified_encoded_blake3.push(encoded_blake3_hex);
-        verified_encoded_len.push(encoded_len);
-        verified_raw_ipfs_cid.push(governance_dag_raw_ipfs_cid(&block_bytes));
     }
     let head: GovernanceDagHeadV1 =
         decode_canonical_governance_dag_value(head_bytes, "governance DAG head")?;
@@ -8670,16 +8463,7 @@ fn verify_and_bind_governance_dag_runtime_index(
         Value::Object(by_source_payload_blake3),
     );
     index_object.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-    Ok(VerifiedGovernanceRuntimeState {
-        blocks: verified_blocks,
-        encoded_blake3_hex: verified_encoded_blake3,
-        encoded_len: verified_encoded_len,
-        raw_ipfs_cid: verified_raw_ipfs_cid,
-        block_positions_by_cid,
-        head,
-        head_blake3_hex: encode(blake3_hash(head_bytes).as_bytes()),
-        head_raw_ipfs_cid: governance_dag_raw_ipfs_cid(head_bytes),
-    })
+    Ok(())
 }
 fn governance_dag_root_dir(state: &SharedAppState) -> Result<PathBuf, Response> {
     governance_dag_root_dir_with_message(state, "sorafs governance DAG directory is not configured")
@@ -16924,21 +16708,6 @@ fn classify_exact_repair_entrypoint_outcome(
         }
     }
 }
-fn local_repair_evidence_blocks_absence_retry(
-    queue_pending: bool,
-    cache_kind: Option<crate::PipelineStatusKind>,
-) -> bool {
-    queue_pending
-        || matches!(
-            cache_kind,
-            Some(
-                crate::PipelineStatusKind::Queued
-                    | crate::PipelineStatusKind::Approved
-                    | crate::PipelineStatusKind::Committed
-                    | crate::PipelineStatusKind::Applied
-            )
-        )
-}
 fn classify_exact_repair_delivery(
     transaction_outcome: RepairAuthoritativeTransactionOutcomeV1,
     finalized_cursor: RepairFinalizedCursorV1,
@@ -17554,8 +17323,8 @@ mod repair_transaction_forwarder_tests {
     #[test]
     fn authoritative_absence_requires_cursor_advance_and_no_pending_signal() {
         let cursor = finalized_cursor();
-        assert!(local_repair_evidence_blocks_absence_retry(true, None));
-        assert!(local_repair_evidence_blocks_absence_retry(
+        assert!(pending_evidence_blocks_absence_retry(true, None));
+        assert!(pending_evidence_blocks_absence_retry(
             false,
             Some(crate::PipelineStatusKind::Queued),
         ));
@@ -17590,10 +17359,8 @@ mod repair_transaction_forwarder_tests {
     #[test]
     fn expired_cache_entry_is_neither_pending_nor_authoritative_rejection() {
         let cursor = finalized_cursor();
-        let blocks_retry = local_repair_evidence_blocks_absence_retry(
-            false,
-            Some(crate::PipelineStatusKind::Expired),
-        );
+        let blocks_retry =
+            pending_evidence_blocks_absence_retry(false, Some(crate::PipelineStatusKind::Expired));
         assert!(!blocks_retry);
         assert_eq!(
             classify_exact_repair_delivery(
@@ -18115,7 +17882,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                         .pipeline_status_cache
                         .lookup(transaction_hash)
                         .map(|entry| entry.kind);
-                    local_repair_evidence_blocks_absence_retry(queue_pending, cache_kind)
+                    pending_evidence_blocks_absence_retry(queue_pending, cache_kind)
                 });
         let (reconciliation, exact_observation) = if let Some(transaction_hash) =
             exact_transaction_hash.as_ref()
@@ -18295,7 +18062,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                     .lookup(transaction_hash)
                     .map(|entry| entry.kind);
                 let local_evidence_blocks_absence_retry = local_evidence_before_observation
-                    || local_repair_evidence_blocks_absence_retry(
+                    || pending_evidence_blocks_absence_retry(
                         queue_pending_after_observation,
                         cache_kind_after_observation,
                     );
@@ -24706,7 +24473,7 @@ pub(crate) async fn handle_get_sorafs_aliases(
             &state.telemetry,
             now_secs,
         ) {
-            Ok(presentation) => alias_values.push(presentation.json),
+            Ok(json) => alias_values.push(json),
             Err(err) => return err.into_response(),
         }
     }
@@ -25431,26 +25198,6 @@ fn is_cid_derived_isolated_origin(
         )
     })
 }
-fn content_type_is_active(content_type: &str) -> bool {
-    let media_type = content_type
-        .split(';')
-        .next()
-        .unwrap_or(content_type)
-        .trim();
-    matches!(
-        media_type,
-        "text/html"
-            | "text/css"
-            | "application/xhtml+xml"
-            | "application/javascript"
-            | "text/javascript"
-            | "image/svg+xml"
-            | "application/xml"
-            | "text/xml"
-            | "application/pdf"
-            | "application/wasm"
-    )
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SiteResponseRange {
     offset: u64,
@@ -25858,15 +25605,13 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     let Some(path) = path_components_for_request(&raw_path, "index.html") else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if stored
-        .file_by_path(&path)
-        .is_some_and(|_| content_type_is_active(content_type_for_path(&path)))
-        && !is_cid_derived_isolated_origin(
-            &headers,
-            &cid,
-            &state.sorafs_gateway_config.untrusted_hosting,
-        )
-    {
+    if stored.file_by_path(&path).is_some_and(|_| {
+        iroha_torii_shared::content_mime::is_active_media_type(content_type_for_path(&path))
+    }) && !is_cid_derived_isolated_origin(
+        &headers,
+        &cid,
+        &state.sorafs_gateway_config.untrusted_hosting,
+    ) {
         if let Some(response) = redirect_cid_gateway_request(&state, &headers, &uri, &cid, true) {
             return response;
         }
@@ -27263,7 +27008,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     };
     let request_timer = Instant::now();
     let request_wall_start = SystemTime::now();
-    let potr_probe = match begin_potr_probe(&headers, request_wall_start, request_timer) {
+    let potr_probe = match begin_potr_probe(&headers, request_wall_start) {
         Ok(probe) => probe,
         Err(response) => return response,
     };
@@ -27907,7 +27652,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
     };
     let request_timer = Instant::now();
     let request_wall_start = SystemTime::now();
-    let potr_probe = match begin_potr_probe(&headers, request_wall_start, request_timer) {
+    let potr_probe = match begin_potr_probe(&headers, request_wall_start) {
         Ok(probe) => probe,
         Err(response) => return response,
     };
@@ -29591,48 +29336,10 @@ fn range_not_satisfiable(total_length: u64, message: String) -> Response {
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_tests {
     use super::*;
-    use crate::{
-        mk_app_state_for_tests,
-        sorafs::{AdmissionRegistry, StreamTokenIssuer},
-        utils::extractors::JsonOnly,
-    };
-    use axum::{body, http::Uri};
-    use ed25519_dalek::{Signer as _, SigningKey};
-    use iroha_config::parameters::actual::{
-        SorafsGovernanceDagService, SorafsGovernanceDagServiceView,
-    };
-    use sorafs_car::{
-        CarBuildPlan, CarWriter,
-        multi_fetch::{
-            FetchOptions, FetchProvider, ProviderMetadata, RangeCapability, StreamBudget,
-            fetch_plan_parallel,
-        },
-    };
-    use sorafs_manifest::{
-        BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, ManifestBuilder, PinPolicy,
-        ProviderAdvertV1,
-        capacity::{
-            REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
-            ReplicationOrderV1,
-        },
-        pin_registry::{
-            AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
-        },
-        provider_admission::ProviderAdmissionEnvelopeV1,
-    };
+    use sorafs_car::{CarBuildPlan, CarWriter};
+    use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
     use sorafs_node::{config::StorageConfig, store::StorageBackend};
-    use std::{
-        fmt, fs,
-        io::Write,
-        num::NonZeroU32,
-        path::PathBuf,
-        sync::{
-            Arc, RwLock,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
-    use tempfile::{TempDir, tempdir};
+    use tempfile::tempdir;
     fn canonical_fixture_car_stats(
         plan: &CarBuildPlan,
         payload: &[u8],
@@ -30464,12 +30171,6 @@ fn pin_projection_with_attestation<T>(
         }
     }
 }
-#[cfg(test)]
-fn pin_snapshot_with_attestation(
-    state: &SharedAppState,
-) -> ApiResult<(Value, PinRegistrySnapshot)> {
-    pin_projection_with_attestation(state, collect_pin_registry)
-}
 fn parse_manifest_digest_hex(hex_str: &str) -> ApiResult<[u8; 32]> {
     let digest = parse_canonical_hex_fixed::<32>(hex_str, "manifest digest")
         .map_err(|error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)))?;
@@ -30837,8 +30538,13 @@ mod storage_backend_error_tests {
         let response = storage_backend_error(StorageBackendError::PayloadUnavailable {
             manifest_id: "damaged-manifest".to_owned(),
         });
-        assert_eq!(response.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
-        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
         let text = std::str::from_utf8(&bytes).unwrap();
         assert!(text.contains("quarantined"));
         assert!(!text.contains("damaged-manifest"));
@@ -30952,172 +30658,6 @@ mod storage_backend_error_tests {
             "1"
         );
     }
-}
-fn car_verification_refusal(
-    state: &SharedAppState,
-    profile: &str,
-    provider_id: Option<&[u8; 32]>,
-    scope: &'static str,
-    err: CarVerifyError,
-) -> Response {
-    let (detail_code, reason) = match err {
-        CarVerifyError::ManifestCarSizeMismatch { .. } => (
-            "manifest_car_size_mismatch",
-            "manifest CAR size mismatch detected during verification",
-        ),
-        CarVerifyError::ManifestCarDigestMismatch => (
-            "manifest_car_digest_mismatch",
-            "manifest CAR digest mismatch detected during verification",
-        ),
-        CarVerifyError::ManifestContentLengthMismatch { .. } => (
-            "manifest_content_length_mismatch",
-            "manifest content length mismatch detected during verification",
-        ),
-        CarVerifyError::ManifestRootMismatch => (
-            "manifest_root_mismatch",
-            "manifest root CID mismatch detected during verification",
-        ),
-        CarVerifyError::PlanRootMismatch => (
-            "plan_root_mismatch",
-            "CAR root CID does not match the canonical supplied plan",
-        ),
-        CarVerifyError::BlockRootMismatch => (
-            "block_root_mismatch",
-            "block CAR root CID mismatch detected during range verification",
-        ),
-        CarVerifyError::ManifestMultihashMismatch(_) => (
-            "manifest_multihash_mismatch",
-            "manifest multihash mismatch detected during verification",
-        ),
-        CarVerifyError::ChunkProfileMismatch => (
-            "chunk_profile_mismatch",
-            "manifest chunk profile is inconsistent with proof bundle",
-        ),
-        CarVerifyError::ExpectedRangeMismatch { .. } => (
-            "range_expected_mismatch",
-            "range verification failed: expected range mismatch",
-        ),
-        CarVerifyError::ExpectedRangeNotChunkAligned { .. } => (
-            "range_not_chunk_aligned",
-            "range verification failed: expected range is not chunk aligned",
-        ),
-        CarVerifyError::RangeExceedsContentLength { .. } => (
-            "range_exceeds_content_length",
-            "range verification failed: range exceeds manifest content length",
-        ),
-        CarVerifyError::ChunkLengthMismatch { .. } => (
-            "chunk_length_mismatch",
-            "chunk length mismatch detected in proof bundle",
-        ),
-        CarVerifyError::ChunkSizeExceeded { .. } => (
-            "chunk_size_exceeds_limit",
-            "chunk size exceeds configured verification limit",
-        ),
-        CarVerifyError::ChunkDigestMismatch { .. } => (
-            "chunk_digest_mismatch",
-            "chunk digest mismatch detected in proof bundle",
-        ),
-        CarVerifyError::ChunkOffsetMismatch { .. } => (
-            "chunk_offset_mismatch",
-            "chunk offset mismatch detected in proof bundle",
-        ),
-        CarVerifyError::PlanChunkCountMismatch { .. } => (
-            "plan_chunk_count_mismatch",
-            "chunk count mismatch detected in proof bundle",
-        ),
-        CarVerifyError::PlanContentLengthMismatch { .. } => (
-            "plan_content_length_mismatch",
-            "plan content length mismatch detected during verification",
-        ),
-        CarVerifyError::InvalidPlanChunkLength { .. } => (
-            "invalid_plan_chunk_length",
-            "proof plan contains a zero-length or oversized chunk",
-        ),
-        CarVerifyError::UnknownChunkDigest { .. } => (
-            "unknown_chunk_digest",
-            "unknown chunk digest encountered during verification",
-        ),
-        CarVerifyError::NodeDigestMismatch { .. } => (
-            "node_digest_mismatch",
-            "node digest mismatch detected during verification",
-        ),
-        CarVerifyError::NonContiguousChunkRange { .. } => (
-            "non_contiguous_chunk_range",
-            "non-contiguous chunk range detected in proof bundle",
-        ),
-        CarVerifyError::UnexpectedChunkOrder => (
-            "unexpected_chunk_order",
-            "chunk sections are not in canonical plan order",
-        ),
-        CarVerifyError::EmptyRange => (
-            "empty_range",
-            "empty range detected during proof verification",
-        ),
-        CarVerifyError::PlanChunkIndexOutOfRange { .. } => (
-            "plan_chunk_index_out_of_range",
-            "chunk index outside expected range detected",
-        ),
-        CarVerifyError::Plan(_) => ("plan_corrupted", "chunk plan failed integrity validation"),
-        CarVerifyError::UnsupportedDigestLength { .. } => (
-            "unsupported_digest_length",
-            "unsupported digest length encountered during verification",
-        ),
-        CarVerifyError::UnsupportedMultihash { .. } => (
-            "unsupported_multihash",
-            "unsupported multihash encountered during verification",
-        ),
-        CarVerifyError::UnsupportedSectionCodec { .. } => (
-            "unsupported_section_codec",
-            "unsupported CAR section codec encountered",
-        ),
-        CarVerifyError::InvalidIndexOffset => (
-            "invalid_index_offset",
-            "invalid CAR index offset encountered",
-        ),
-        CarVerifyError::NonCanonicalCar => (
-            "noncanonical_car",
-            "CAR DAG, index, header, or trailing bytes are not canonical",
-        ),
-        CarVerifyError::TruncatedSection { .. }
-        | CarVerifyError::TruncatedCid { .. }
-        | CarVerifyError::Truncated
-        | CarVerifyError::InvalidPragma
-        | CarVerifyError::InvalidHeader
-        | CarVerifyError::InvalidCarv1Header(_)
-        | CarVerifyError::VarintOverflow
-        | CarVerifyError::NonCanonicalVarint
-        | CarVerifyError::HeaderTruncated
-        | CarVerifyError::CanonicalCar(_)
-        | CarVerifyError::ChunkStore(_)
-        | CarVerifyError::AllocationFailed { .. }
-        | CarVerifyError::InternalInvariant(_) => (
-            "car_parse_error",
-            "CAR verification failed due to malformed payload",
-        ),
-    };
-    let mut details = vec![("error_kind", Value::from(detail_code))];
-    if let CarVerifyError::ExpectedRangeMismatch {
-        expected_start,
-        expected_end,
-        actual_start,
-        actual_end,
-    } = err
-    {
-        details.push(("expected_start", Value::from(expected_start)));
-        details.push(("expected_end", Value::from(expected_end)));
-        details.push(("actual_start", Value::from(actual_start)));
-        details.push(("actual_end", Value::from(actual_end)));
-    }
-    gateway_refusal_response(
-        state,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "proof_mismatch",
-        reason,
-        Some(profile),
-        provider_id,
-        scope,
-        details,
-    )
 }
 pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> {
     chunk_profile_from_manifest_descriptor(manifest)
@@ -31522,6 +31062,7 @@ fn record_range_capability_metrics(cache: &ProviderAdvertCache, telemetry: &Mayb
 #[cfg(not(feature = "telemetry"))]
 fn record_range_capability_metrics(_cache: &ProviderAdvertCache, _telemetry: &MaybeTelemetry) {}
 fn admission_error_reason(err: &AdvertError) -> &'static str {
+    use crate::sorafs::ProviderAdmissionAdvertError as Admission;
     match err {
         AdvertError::Decode(_) => "decode",
         AdvertError::Validation(AdvertValidationError::Expired { .. }) => "stale",
@@ -31536,12 +31077,12 @@ fn admission_error_reason(err: &AdvertError) -> &'static str {
         AdvertError::UnknownCapabilities { .. } => "unknown_capabilities",
         AdvertError::AdmissionMissing { .. } => "admission_missing",
         AdvertError::AdmissionFailed { error, .. } => match error {
-            crate::sorafs::AdmissionCheckError::NetworkMismatch { .. } => "network_mismatch",
-            crate::sorafs::AdmissionCheckError::Digest(_) => "digest_error",
-            crate::sorafs::AdmissionCheckError::BodyMismatch => "body_mismatch",
-            crate::sorafs::AdmissionCheckError::BodyDigestMismatch { .. } => "body_digest_mismatch",
-            crate::sorafs::AdmissionCheckError::AdvertKeyMismatch => "advert_key_mismatch",
-            crate::sorafs::AdmissionCheckError::ExpiryAfterRetention { .. } => "retention_expired",
+            Admission::NetworkMismatch { .. } => "network_mismatch",
+            Admission::Digest(_) => "digest_error",
+            Admission::BodyMismatch => "body_mismatch",
+            Admission::BodyDigestMismatch { .. } => "body_digest_mismatch",
+            Admission::AdvertKeyMismatch => "advert_key_mismatch",
+            Admission::ExpiryAfterRetention { .. } => "retention_expired",
         },
     }
 }
@@ -31575,7 +31116,7 @@ pub(crate) fn init_cache(
 mod advert_tests {
     use super::*;
     use crate::{
-        build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
+        build_sorafs_gateway_security, mk_app_state_for_tests,
         sorafs::{
             StreamTokenIssuer,
             registry::{
@@ -31595,7 +31136,6 @@ mod advert_tests {
         response::IntoResponse,
         routing::{get, post},
     };
-    use base64::Engine as _;
     use blake3;
     use ed25519_dalek::{Signer, SigningKey};
     use http_body_util::BodyExt;
@@ -31612,7 +31152,7 @@ mod advert_tests {
         Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature as IrohaSignature, SignatureOf,
     };
     use iroha_data_model::{
-        Encode, IntoKeyValue, Registrable,
+        Encode, Registrable,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetId},
         block::BlockHeader,
@@ -31648,7 +31188,7 @@ mod advert_tests {
                 PinPolicy as RegistryPinPolicy, PinResourceUsage, PinStatus,
                 ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
                 ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord,
-                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
             },
             proof_ledger::{
                 PROOF_OUTCOME_RECORD_VERSION_V1, PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1,
@@ -31669,8 +31209,8 @@ mod advert_tests {
         AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv,
         CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
         EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
-        EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
-        PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
+        EndpointMetadata, EndpointMetadataKey, ManifestBuilder, PROVIDER_ADVERT_VERSION_V1,
+        PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
         ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
         ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
         REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
@@ -31681,7 +31221,7 @@ mod advert_tests {
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SignatureAlgorithm, SignedReputationSnapshotV1, SoraFsAppealFinanceAccountFlowV1,
         SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
-        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer, TradeEventV1,
+        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
         build_reputation_snapshot,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1,
@@ -31693,9 +31233,6 @@ mod advert_tests {
         pdp::{
             PDP_GOVERNANCE_ARCHIVE_VERSION_V1, PdpChallengeV1, PdpGovernanceArchiveV1,
             PdpRejectionReasonV1, PdpTerminalDecisionV1,
-        },
-        pin_registry::{
-            AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
         por::{
             AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
@@ -34383,13 +33920,6 @@ mod advert_tests {
     }
     fn moderation_uri(path: &'static str) -> Uri {
         Uri::from_static(path)
-    }
-    fn moderation_ballot_no_show_plan_uri(case_id: &str, round_id: &str) -> Uri {
-        format!(
-            "{MODERATION_ROUTE_BALLOTS}/{case_id}/{round_id}/{MODERATION_ROUTE_NO_SHOW_PLAN_SUFFIX}"
-        )
-        .parse()
-        .expect("moderation no-show plan URI")
     }
     fn moderation_quarantine_action_uri(quarantine_id_hex: &str, suffix: &str) -> Uri {
         format!("{MODERATION_ROUTE_QUARANTINE}/{quarantine_id_hex}/{suffix}")
@@ -37998,44 +37528,6 @@ mod advert_tests {
             deadline_epoch,
         )
     }
-    fn fresh_alias_proof_bytes_for_test(alias: &str) -> Vec<u8> {
-        let now = crate::sorafs::unix_now_secs();
-        let generated_at_unix = now.saturating_sub(30);
-        let expires_at_unix = now.saturating_add(3_600);
-        let binding = AliasBindingV1 {
-            alias: alias.to_owned(),
-            manifest_cid: vec![0x42; 32],
-            bound_at: generated_at_unix,
-            expiry_epoch: expires_at_unix,
-        };
-        let merkle_path = Vec::new();
-        let registry_root = alias_merkle_root(&binding, &merkle_path).expect("alias merkle root");
-        let mut bundle = AliasProofBundleV1 {
-            binding,
-            registry_root,
-            registry_height: 1,
-            generated_at_unix,
-            expires_at_unix,
-            merkle_path,
-            council_signatures: Vec::new(),
-        };
-        let message = alias_proof_signature_digest(&bundle);
-        let keypair = checked_test_keypair(0x28);
-        let signature = checked_test_signature(keypair.private_key(), message.as_ref());
-        let mut signer = [0_u8; 32];
-        signer.copy_from_slice(
-            keypair
-                .public_key()
-                .try_to_bytes()
-                .expect("fixture public key must be valid")
-                .1,
-        );
-        bundle.council_signatures.push(CouncilSignature {
-            signer,
-            signature: signature.payload().to_vec(),
-        });
-        norito::to_bytes(&bundle).expect("encode fresh alias proof bundle")
-    }
     fn seed_registry_manifest_for_gateway(
         state: &CoreState,
         manifest: &ManifestV1,
@@ -38179,136 +37671,6 @@ mod advert_tests {
     fn plan_for_pin_payload(manifest: &ManifestV1, payload: &[u8]) -> CarBuildPlan {
         let profile = chunk_profile_for_manifest(manifest).expect("registered chunk profile");
         CarBuildPlan::single_file_with_profile(payload, profile).expect("pin payload plan")
-    }
-    fn seed_paid_pin_record_for_plan_with_mutation(
-        state: &SharedAppState,
-        manifest: &ManifestV1,
-        plan: &CarBuildPlan,
-        mutate: impl FnOnce(&mut PinManifestRecord),
-    ) {
-        let mut block = state.state.block(default_block_header());
-        let mut tx = block.transaction();
-        let manifest_digest = ManifestDigest::new(
-            manifest
-                .digest()
-                .expect("compute manifest digest for paid pin seed")
-                .into(),
-        );
-        let manifest_root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
-            .expect("paid pin fixture manifest root CID must be canonical");
-        let policy = registry_policy_for_manifest(manifest);
-        let amount = state
-            .state
-            .view()
-            .world()
-            .sorafs_pricing()
-            .public_pin_fee(
-                policy.storage_class,
-                plan.content_length,
-                policy.min_replicas,
-                5,
-                policy.retention_epoch,
-            )
-            .expect("paid pin fixture fee");
-        let mut manifest_record = PinManifestRecord::new(
-            manifest_digest.clone(),
-            manifest_root_cid,
-            chunker_handle_for_manifest(manifest),
-            compute_chunk_plan_digest_sha3(&plan.chunks),
-            manifest.por_root,
-            plan.content_length,
-            policy,
-            test_account(),
-            5,
-            None,
-            None,
-            Metadata::default(),
-        );
-        manifest_record.record_pin_fee_payment(PinFeePayment {
-            paid_by: test_account(),
-            fee_asset_id: state.state.gov.sorafs_pin_fee_asset_id.clone(),
-            treasury_account_id: state.state.gov.sorafs_pin_fee_treasury_account.clone(),
-            amount,
-        });
-        manifest_record.approve(5, None);
-        mutate(&mut manifest_record);
-        tx.world_mut_for_testing()
-            .pin_manifests_mut_for_testing()
-            .insert(manifest_digest, manifest_record);
-        tx.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit paid pin seed block");
-    }
-    fn seed_paid_pin_record_for_plan(
-        state: &SharedAppState,
-        manifest: &ManifestV1,
-        plan: &CarBuildPlan,
-    ) {
-        seed_paid_pin_record_for_plan_with_mutation(state, manifest, plan, |_| {});
-    }
-    fn seed_paid_pin_record_for_payload(
-        state: &SharedAppState,
-        manifest: &ManifestV1,
-        payload: &[u8],
-    ) -> CarBuildPlan {
-        let plan = plan_for_pin_payload(manifest, payload);
-        seed_paid_pin_record_for_plan(state, manifest, &plan);
-        plan
-    }
-    fn paid_pin_record_for_manifest(
-        state: &SharedAppState,
-        manifest: &ManifestV1,
-    ) -> PinManifestRecord {
-        let digest = ManifestDigest::new(
-            manifest
-                .digest()
-                .expect("compute manifest digest for paid pin record lookup")
-                .into(),
-        );
-        state
-            .state
-            .view()
-            .world()
-            .pin_manifests()
-            .get(&digest)
-            .cloned()
-            .expect("paid pin record should be seeded")
-    }
-    fn signed_manifest_envelope_b64(record: &PinManifestRecord, seed: u8) -> String {
-        let keypair = checked_test_keypair(seed);
-        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
-        let mut sig_entry = Map::new();
-        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
-        sig_entry.insert(
-            "signer".into(),
-            Value::from(hex::encode(
-                keypair
-                    .public_key()
-                    .try_to_bytes()
-                    .expect("fixture public key must be valid")
-                    .1,
-            )),
-        );
-        sig_entry.insert(
-            "signature".into(),
-            Value::from(hex::encode(signature.payload())),
-        );
-        let mut envelope = Map::new();
-        envelope.insert(
-            "manifest_blake3".into(),
-            Value::from(hex::encode(record.digest.as_bytes())),
-        );
-        envelope.insert(
-            "chunk_digest_sha3_256".into(),
-            Value::from(hex::encode(record.chunk_digest_sha3_256)),
-        );
-        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
-        envelope.insert(
-            "signatures".into(),
-            Value::Array(vec![Value::Object(sig_entry)]),
-        );
-        BASE64_STANDARD.encode(norito::json::to_vec(&Value::Object(envelope)).expect("json"))
     }
     fn test_account() -> AccountId {
         let public_key: PublicKey =
@@ -38530,9 +37892,6 @@ mod advert_tests {
     }
     fn sorafs_node_with_temp_storage() -> (sorafs_node::NodeHandle, TempDir) {
         sorafs_node_with_temp_storage_policy(false)
-    }
-    fn sorafs_node_with_temp_storage_and_repair() -> (sorafs_node::NodeHandle, TempDir) {
-        sorafs_node_with_temp_storage_policy(true)
     }
     fn sorafs_node_without_storage_with_repair() -> (sorafs_node::NodeHandle, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -42178,9 +41537,6 @@ mod advert_tests {
     }
     fn make_signed_advert_with_host(host_pattern: &str) -> ProviderFixture {
         make_signed_advert_with_host_and_provider(host_pattern, [0x11; 32])
-    }
-    fn make_signed_advert_for_provider(provider_id: [u8; 32]) -> ProviderFixture {
-        make_signed_advert_with_host_and_provider("storage.example.test", provider_id)
     }
     fn make_signed_advert_with_host_and_provider(
         host_pattern: &str,

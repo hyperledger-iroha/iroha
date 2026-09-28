@@ -1060,6 +1060,9 @@ pub mod isi {
 /// Implementations for account queries.
 pub mod query {
     use super::*;
+    use crate::smartcontracts::isi::query::json_predicate::{
+        predicate_value_equals_str, predicate_values_contain_str,
+    };
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::{StateReadOnly, WorldReadOnly},
@@ -1302,14 +1305,6 @@ pub mod query {
             "uaid" | "universal_account_id" => Some(details.uaid().map(ToString::to_string)),
             _ => None,
         }
-    }
-    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-        matches!(value, Value::String(raw) if raw == expected)
-    }
-    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-        values
-            .iter()
-            .any(|value| matches!(value, Value::String(raw) if raw == expected))
     }
     fn account_field_is_id(field: &str) -> bool {
         matches!(field, "id" | "account" | "account_id")

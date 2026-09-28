@@ -6,6 +6,7 @@
 
 use super::*;
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::MintFoldEffectV1")]
 pub(super) struct MintFoldEffectV1 {
@@ -71,6 +72,7 @@ struct LocalTransitionTransportStatementV1 {
     normalized_guard_statement_digest: DigestV1,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapIntentPreimageV1")]
 struct BootstrapIntentPreimageV1 {
@@ -78,6 +80,7 @@ struct BootstrapIntentPreimageV1 {
     statement: BootstrapStatementV1,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapRecoveryPreimageV1")]
 struct BootstrapRecoveryPreimageV1 {
@@ -118,6 +121,7 @@ pub(super) fn local_transition_transport_digest(
     )
 }
 
+#[cfg(test)]
 pub(super) fn bootstrap_guard_context(
     artifacts: KagemushaRecursionArtifactsV1,
     statement: &BootstrapStatementV1,
@@ -308,6 +312,7 @@ pub(super) fn transition_statement_digest_preimage_v1(
     Ok(message)
 }
 
+#[cfg(test)]
 pub(super) fn transport_semantic_digest(
     normalized_guard_statement_digest: DigestV1,
 ) -> Result<DigestV1, KagemushaStateErrorV1> {

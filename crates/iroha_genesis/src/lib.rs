@@ -1011,6 +1011,7 @@ impl RawGenesisTx {
     }
 }
 /// Peer PoP entry used to merge PoPs into topology entries.
+#[cfg(test)]
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode,
 )]
@@ -1892,6 +1893,7 @@ impl RawGenesisTransaction {
     /// This deliberately refuses to rewrite a transaction that also carries parameters, IVM
     /// triggers, or topology. Callers can therefore perform a narrow transaction-boundary migration
     /// without silently moving any other genesis semantics.
+    #[cfg(test)]
     pub fn replace_instruction_only_transaction(
         &mut self,
         index: usize,
@@ -2740,11 +2742,6 @@ impl GenesisBuilder {
         self.current_tx_mut().instructions.push(instruction);
         self
     }
-    /// Entry an IVM trigger to the end of entries.
-    pub fn append_ivm_trigger(mut self, ivm_trigger: GenesisIvmTrigger) -> Self {
-        self.current_tx_mut().ivm_triggers.push(ivm_trigger);
-        self
-    }
     /// Overwrite the initial topology of the current transaction.
     pub fn set_topology<T: Into<GenesisTopologyEntry>>(mut self, topology: Vec<T>) -> Self {
         self.current_tx_mut().topology = topology.into_iter().map(Into::into).collect();
@@ -2755,6 +2752,7 @@ impl GenesisBuilder {
     /// # Panics
     ///
     /// Panics if the input contains duplicate peers or peers not present in the topology.
+    #[cfg(test)]
     pub fn set_topology_pop(mut self, topology_pop: Vec<GenesisPeerPop>) -> Self {
         if topology_pop.is_empty() {
             return self;

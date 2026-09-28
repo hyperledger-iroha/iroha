@@ -359,3 +359,9 @@ unchanged guard and do not call the transition. Observed release records physica
 poison before later payload cleanup. `BptreeMapWriteTxn::abort_retaining` unlocks
 into an opaque original cleanup owner even if an edit failed; unlike detach, it
 exposes no read, edit, reattachment or publication capability.
+
+The upstream `tests/bptree_map.rs` range, get and remove properties run as
+fixed-seed randomized cases over `rand` instead of `proptest`, and the manifest
+drops its `sptr` dependency (the sources use std strict-provenance APIs). This
+keeps the vendored workspace member inside the reviewed dependency budget, which
+denies `proptest` in every required graph.

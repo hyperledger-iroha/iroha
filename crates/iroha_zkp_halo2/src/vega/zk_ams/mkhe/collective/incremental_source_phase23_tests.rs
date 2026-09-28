@@ -1439,9 +1439,11 @@ fn exact_test_only_correspondence_seal_v1(source: &str) -> bool {
             let Some(end) = matching_pair_v1(&tokens, index + 2, b'{', b'}') else {
                 return false;
             };
+            // The seal and its only consumer are parked behind `cfg(test)` together.
+            let test_gate = [Word("cfg"), Punct(b'('), Word("test"), Punct(b')')];
             if depth != 0
                 || !outer_attributes_v1(&tokens[item_start..index])
-                    .is_some_and(|attrs| attrs.is_empty())
+                    .is_some_and(|attrs| attrs == [test_gate.as_slice()])
                 || tokens[index + 3..end] != expected_body
             {
                 return false;
@@ -1765,10 +1767,11 @@ fn module_graph_and_context_authority_remain_private_and_fail_closed() {
         "phase23_rns_link",
         "mkhe/phase23_rns_link.rs"
     ));
+    // The declaration plus one test-only re-export of the materialized plane context.
     assert!(exact_word_count_v1(
         incremental,
         "incremental_source_phase23",
-        1
+        2
     ));
     assert!(exact_word_count_v1(mkhe, "global_lookup_statement_v1", 1));
     assert!(exact_word_count_v1(mkhe, "phase23_rns_link", 1));
@@ -2306,10 +2309,12 @@ const TEST_CONTEXT_SIGNATURE: TestContextSignature =
     ));
 
     const SEAL: &str = r#"
+#[cfg(test)]
 enum Phase23ContextCorrespondenceSealV1 {
     #[cfg(test)]
     TestOnly,
 }
+#[cfg(test)]
 #[allow(dead_code)]
 fn materialize_encrypt_and_publish_phase23_source_v1<I, R, K, P>(
     _correspondence: Phase23ContextCorrespondenceSealV1,
@@ -2322,6 +2327,16 @@ fn materialize_encrypt_and_publish_phase23_source_v1<I, R, K, P>(
     assert!(!exact_test_only_correspondence_seal_v1(&SEAL.replacen(
         "#[cfg(test)]",
         "#[cfg(any(test, feature = \"escape\"))]",
+        1
+    )));
+    assert!(!exact_test_only_correspondence_seal_v1(&SEAL.replacen(
+        "#[cfg(test)]\nenum",
+        "enum",
+        1
+    )));
+    assert!(!exact_test_only_correspondence_seal_v1(&SEAL.replacen(
+        "    #[cfg(test)]\n    TestOnly",
+        "    #[cfg(any(test, feature = \"escape\"))]\n    TestOnly",
         1
     )));
     assert!(!exact_test_only_correspondence_seal_v1(&SEAL.replacen(

@@ -49,10 +49,8 @@ thiserror = { workspace = true }
 nonzero_ext = { workspace = true }
 hex = { workspace = true, features = ["std"] }
 soranet_pq = { workspace = true }
-rust_decimal = { workspace = true, default-features = false, features = ["std"] }
 iroha_torii_shared = { workspace = true }
 toml = { workspace = true }
-blake2 = { workspace = true }
 zeroize = { workspace = true }
 
 

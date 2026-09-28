@@ -58,7 +58,7 @@ fn production_boundary_cannot_compile_or_route_the_oracle_crates() {
     // primitives do not independently enable a verifier or an oracle backend.
     assert!(CRATE_MANIFEST.contains("parallel = [\"full\", \"dep:rayon\"]"));
     assert!(CRATE_MANIFEST.contains("default = [\"full\", \"parallel\"]"));
-    assert!(CRATE_MANIFEST.contains("model-primitives = []"));
+    assert!(CRATE_MANIFEST.contains("model-primitives = [\"dep:iroha_zkp_poseidon\"]"));
     assert!(VEGA_FACADE.contains("#[path = \"vega/canonical_mc_exact.rs\"]"));
     for forbidden_path in [
         "vega_prover",

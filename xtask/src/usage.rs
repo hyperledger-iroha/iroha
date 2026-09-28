@@ -6,7 +6,7 @@ fn print_usage() {
         "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Validate and emit Torii's static OpenAPI authority through a live router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
+        "    Validate and emit Torii's compiled OpenAPI authority (the feature-pruned document Torii serves at /openapi.json). --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"

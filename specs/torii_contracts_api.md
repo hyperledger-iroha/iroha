@@ -76,10 +76,12 @@ and submit through the standard transaction pipeline.
 
 ### Contract-call response shape
 
-Contract-call preparation binds `QueuePlanSynced` in the signed payload. Local
-signing and detached-signature submission both require globally certified public
-admission of those exact bytes. The Rust and maintained SDK validators reject
-an `Ordinary` contract-call draft before signing or submission.
+Contract-call preparation binds `Ordinary` in the signed payload and resolves
+one authoritative route before exposing signing bytes. Local signing and
+detached-signature submission preserve those exact bytes through durable ingress.
+Multi-route preparation is rejected because the current consensus executor does
+not support that admission mode. Acceptance reports pending custody; authenticated
+committed execution is required to prove application.
 
 `POST /v1/contracts/call` returns the closed `ContractCallResponseDto` shape
 described in [the lifecycle API](torii/contract_lifecycle_app_api.md#response-contractcallresponsedto).

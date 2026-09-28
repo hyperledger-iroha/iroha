@@ -79,18 +79,12 @@ pub struct Memory {
     /// Unlike `dirty_chunks`, this set is not drained by Merkle commits. It
     /// lets warm VM reuse restore only pages the guest actually changed.
     modified_chunks: HashSet<usize>,
-    /// Transaction-owned leaves tracked independently from runtime-template lifecycle changes.
-    ///
-    /// Program loaders deliberately clear `modified_chunks` after installing a
-    /// new template. Block execution keeps this second set active so a loader
-    /// invoked from a host callback cannot hide earlier transaction writes.
-    block_modified_chunks: Option<HashSet<usize>>,
     /// Number of times a program loader established a new runtime baseline.
     template_generation: u64,
     /// Opaque identity of the runtime baseline that owns this memory image.
     ///
     /// Ordinary independent clones receive a fresh identity. Runtime-template
-    /// snapshots and exact sequential-block checkpoints explicitly preserve it.
+    /// snapshots explicitly preserve it.
     baseline_lineage: Arc<()>,
     /// Addresses read during execution when access tracking is enabled.
     read_log: Mutex<Vec<AccessRange>>,
@@ -333,9 +327,6 @@ impl Memory {
         for i in first..last {
             self.dirty_chunks.insert(i);
             self.modified_chunks.insert(i);
-            if let Some(block_modified) = &mut self.block_modified_chunks {
-                block_modified.insert(i);
-            }
         }
         // Mark the tree as dirty so the root is recomputed lazily on the next
         // `commit()` or `root()` call.
@@ -384,7 +375,6 @@ impl Memory {
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),
-            block_modified_chunks: None,
             template_generation: 0,
             baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),
@@ -897,10 +887,6 @@ impl Memory {
         self.baseline_lineage = Arc::new(());
         self.clear_tracking();
     }
-    /// Start independent dirty tracking for a block worker's transaction sequence.
-    pub(crate) fn begin_block_transaction_tracking(&mut self) {
-        self.block_modified_chunks = Some(HashSet::new());
-    }
     /// Return the current runtime-template lifecycle generation.
     pub(crate) const fn template_generation(&self) -> u64 {
         self.template_generation
@@ -921,52 +907,10 @@ impl Memory {
         &mut self,
         template: &Memory,
     ) -> Result<(), MemoryTemplateMismatch> {
-        self.reset_from_template_inner(template, false)
-    }
-    /// Validate that two images can use the same in-place reset geometry.
-    pub(crate) fn ensure_template_geometry(
-        &self,
-        template: &Memory,
-    ) -> Result<(), MemoryTemplateMismatch> {
-        let current = self.geometry();
-        let template = template.geometry();
-        if current == template {
-            Ok(())
-        } else {
-            Err(MemoryTemplateMismatch { current, template })
-        }
-    }
-    /// Restore transaction-owned memory, including code installed since the block template.
-    pub(crate) fn reset_for_block_transaction(
-        &mut self,
-        template: &Memory,
-    ) -> Result<(), MemoryTemplateMismatch> {
-        self.reset_from_template_inner(template, true)
-    }
-    fn reset_from_template_inner(
-        &mut self,
-        template: &Memory,
-        restore_code: bool,
-    ) -> Result<(), MemoryTemplateMismatch> {
         self.ensure_template_geometry(template)?;
         const CHUNK: usize = 32;
         let mut modified = self.modified_chunks.iter().copied().collect::<Vec<_>>();
-        if restore_code {
-            if let Some(block_modified) = &self.block_modified_chunks {
-                modified.extend(block_modified.iter().copied());
-            } else {
-                // A host can replace the public Memory value during a
-                // callback. Losing the active tracker must degrade to an exact
-                // reset rather than allowing untracked bytes to survive.
-                modified.extend(0..self.data.len().div_ceil(CHUNK));
-            }
-            let code_bytes = self.code_length.max(template.code_length);
-            let code_bytes = usize::try_from(code_bytes)
-                .expect("IVM code length always fits the host address space");
-            modified.extend(0..code_bytes.div_ceil(CHUNK));
-        }
         modified.sort_unstable();
-        modified.dedup();
         for index in &modified {
             let start = index.saturating_mul(CHUNK);
             if start >= self.data.len() {
@@ -986,11 +930,21 @@ impl Memory {
         self.dirty = template.dirty;
         self.dirty_chunks = template.dirty_chunks.clone();
         self.modified_chunks.clear();
-        if restore_code && let Some(block_modified) = &mut self.block_modified_chunks {
-            block_modified.clear();
-        }
         self.clear_tracking();
         Ok(())
+    }
+    /// Validate that two images can use the same in-place reset geometry.
+    pub(crate) fn ensure_template_geometry(
+        &self,
+        template: &Memory,
+    ) -> Result<(), MemoryTemplateMismatch> {
+        let current = self.geometry();
+        let template = template.geometry();
+        if current == template {
+            Ok(())
+        } else {
+            Err(MemoryTemplateMismatch { current, template })
+        }
     }
     fn geometry(&self) -> MemoryGeometry {
         MemoryGeometry {
@@ -1040,7 +994,6 @@ impl Clone for Memory {
             dirty: self.dirty,
             dirty_chunks: self.dirty_chunks.clone(),
             modified_chunks: HashSet::new(),
-            block_modified_chunks: None,
             template_generation: self.template_generation,
             baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),
@@ -1049,20 +1002,6 @@ impl Clone for Memory {
     }
 }
 impl Memory {
-    /// Restore tracking state omitted by the ordinary independent-memory clone.
-    ///
-    /// A sequential block checkpoint uses a regular [`Clone`] for the large
-    /// byte and Merkle-tree image, then calls this helper so a later runtime
-    /// template reset still knows which pre-block bytes must be restored.
-    pub(crate) fn preserve_checkpoint_tracking_from(&mut self, source: &Self) {
-        self.modified_chunks.clone_from(&source.modified_chunks);
-        self.block_modified_chunks
-            .clone_from(&source.block_modified_chunks);
-        self.baseline_lineage = Arc::clone(&source.baseline_lineage);
-        self.read_log = Mutex::new(source.read_log.lock().clone());
-        self.write_log = Mutex::new(source.write_log.lock().clone());
-    }
-
     #[inline]
     fn check_output_append_only(&mut self, addr: u64, len: u64) -> Result<(), VMError> {
         // Only enforce within OUTPUT region; allow arbitrary writes elsewhere.
@@ -1155,26 +1094,6 @@ mod tests {
         );
     }
     #[test]
-    fn block_reset_restores_code_hidden_by_template_cleaning() {
-        let mut template = Memory::new();
-        let expected_root = template.current_root();
-        let mut worker = template.clone();
-        worker.begin_block_transaction_tracking();
-        worker.load_code(&[0xA5; 65]).unwrap();
-        worker.commit();
-        worker.mark_template_clean();
-        assert!(worker.modified_chunks.is_empty());
-        assert_ne!(worker.current_root(), expected_root);
-
-        worker
-            .reset_for_block_transaction(&template)
-            .expect("worker and block template geometries match");
-
-        assert_eq!(&worker.data[..96], &[0; 96]);
-        assert_eq!(worker.code_len(), 0);
-        assert_eq!(worker.current_root(), expected_root);
-    }
-    #[test]
     fn shorter_code_load_clears_prior_tail_and_matches_fresh_root() {
         let short = [0x11, 0x22, 0x33, 0x44];
         let mut historical = Memory::new();
@@ -1224,27 +1143,6 @@ mod tests {
         assert_eq!(memory.code_len(), Memory::HEAP_START);
         assert_eq!(memory.load_u8(0), Ok(0xA5));
         assert_eq!(memory.load_u8(Memory::HEAP_START - 1), Ok(0xA5));
-    }
-    #[test]
-    fn block_tracking_survives_template_cleaning_for_non_code_writes() {
-        let mut template = Memory::new();
-        let expected_root = template.current_root();
-        let mut worker = template.clone();
-        worker.begin_block_transaction_tracking();
-        worker
-            .store_u64(Memory::HEAP_START, 0xDEAD_BEEF)
-            .expect("write transaction heap");
-        worker.load_code(&[0xA5; 4]).unwrap();
-        worker.commit();
-        worker.mark_template_clean();
-        assert!(worker.modified_chunks.is_empty());
-
-        worker
-            .reset_for_block_transaction(&template)
-            .expect("worker and block template geometries match");
-
-        assert_eq!(worker.load_u64(Memory::HEAP_START), Ok(0));
-        assert_eq!(worker.current_root(), expected_root);
     }
     #[test]
     fn program_heap_clear_scrubs_inactive_capacity_and_resets_allocator() {
@@ -1353,7 +1251,6 @@ mod tests {
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),
-            block_modified_chunks: None,
             template_generation: 0,
             baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),
@@ -1395,7 +1292,6 @@ mod tests {
             dirty: false,
             dirty_chunks: HashSet::new(),
             modified_chunks: HashSet::new(),
-            block_modified_chunks: None,
             template_generation: 0,
             baseline_lineage: Arc::new(()),
             read_log: Mutex::new(Vec::new()),

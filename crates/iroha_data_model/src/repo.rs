@@ -46,7 +46,6 @@ mod model {
     #[display("{name}")]
     #[getset(get = "pub")]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
 
     pub struct RepoAgreementId {
         /// Logical name assigned by the initiating desk or workflow.

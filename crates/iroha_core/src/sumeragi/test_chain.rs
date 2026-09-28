@@ -22,7 +22,7 @@ use iroha_data_model::{
     block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
     domain::Domain,
     isi::{InstructionBox, Log},
-    parameter::system::SumeragiConsensusMode,
+    parameter::system::{Parameter, SumeragiConsensusMode},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
@@ -99,6 +99,8 @@ pub struct TestChainConfig {
     pub genesis_key: KeyPair,
     /// Instructions of the genesis's ordinary transaction.
     pub genesis_instructions: Vec<InstructionBox>,
+    /// Explicit parameters carried by the authoritative signed genesis snapshot.
+    pub genesis_parameters: Vec<Parameter>,
     /// Consensus mode carried by the signed genesis and used for execution.
     pub consensus_mode: SumeragiConsensusMode,
     /// Creation time of the first genesis transaction in milliseconds.
@@ -111,6 +113,7 @@ impl core::fmt::Debug for TestChainConfig {
             .field("chain_id", &self.chain_id)
             .field("genesis_account", &self.genesis_key.public_key())
             .field("genesis_instructions", &self.genesis_instructions.len())
+            .field("genesis_parameters", &self.genesis_parameters.len())
             .field("genesis_time_ms", &self.genesis_time_ms)
             .finish_non_exhaustive()
     }
@@ -125,6 +128,7 @@ impl TestChainConfig {
             world,
             genesis_key: KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519),
             genesis_instructions: Vec::new(),
+            genesis_parameters: Vec::new(),
             consensus_mode: SumeragiConsensusMode::Permissioned,
             genesis_time_ms,
         }
@@ -201,6 +205,7 @@ impl CertifiedTestChain {
             mut world,
             genesis_key,
             genesis_instructions,
+            genesis_parameters,
             consensus_mode,
             genesis_time_ms,
         } = config;
@@ -239,6 +244,7 @@ impl CertifiedTestChain {
             &genesis_key,
             &validators,
             genesis_instructions,
+            genesis_parameters,
             consensus_mode,
             genesis_time_ms,
         ) {
@@ -687,6 +693,7 @@ fn build_genesis(
     genesis_key: &KeyPair,
     validators: &[(PeerId, Vec<u8>)],
     instructions: Vec<InstructionBox>,
+    parameters: Vec<Parameter>,
     consensus_mode: SumeragiConsensusMode,
     genesis_time_ms: u64,
 ) -> Result<(SignedBlock, iroha_genesis::RawGenesisTransaction), String> {
@@ -708,6 +715,9 @@ fn build_genesis(
         .with_kagemusha_mint_finality_genesis_parameters(
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
         );
+    let builder = parameters
+        .into_iter()
+        .fold(builder, GenesisBuilder::append_parameter);
     let builder = instructions
         .into_iter()
         .fold(builder, GenesisBuilder::append_instruction);

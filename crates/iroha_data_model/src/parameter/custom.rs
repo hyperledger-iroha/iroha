@@ -130,7 +130,6 @@ mod model {
         Encode,
         IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct CustomParameterId(pub Name);
     /// A custom blockchain parameter
     #[derive(norito::NoritoSchema)]

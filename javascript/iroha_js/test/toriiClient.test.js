@@ -1547,7 +1547,7 @@ function multisigDraftForBindings({
 }
 
 function contractDraftForBindings(options = {}) {
-  return multisigDraftForBindings({ ...options, admissionIntent: 1 });
+  return multisigDraftForBindings({ ...options, admissionIntent: 0 });
 }
 
 class ContractToriiClient extends ToriiClient {
@@ -22393,7 +22393,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
     draftIntent,
   };
   const cases = [
-    ...[0, 2].map((admissionIntent) => [
+    ...[1, 2].map((admissionIntent) => [
       `rehashed admission intent ${admissionIntent}`,
       (value) => {
         const replacement = Buffer.alloc(4);
@@ -22402,16 +22402,16 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
       },
       (error) => {
         assert.match(error.message, /one canonical transaction payload/);
-        assert.match(error.cause?.message ?? "", /TransactionAdmissionIntent::QueuePlanSynced/);
+        assert.match(error.cause?.message ?? "", /TransactionAdmissionIntent::Ordinary/);
         return true;
       },
     ]),
     [
-      "colluding Ordinary admission",
+      "colluding retired admission",
       (value) => {
-        const ordinary = multisigDraftForBindings({ authority: FIXTURE_ALICE_ID, feePayment, creationTimeMs: 42 });
-        value.transaction_payload_b64 = ordinary.transaction_payload_b64;
-        value.signing_message_b64 = ordinary.signing_message_b64;
+        const retired = multisigDraftForBindings({ authority: FIXTURE_ALICE_ID, feePayment, creationTimeMs: 42, admissionIntent: 1 });
+        value.transaction_payload_b64 = retired.transaction_payload_b64;
+        value.signing_message_b64 = retired.signing_message_b64;
       },
       /canonical transaction payload bound to the requested signer/,
     ],

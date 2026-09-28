@@ -25,7 +25,6 @@ mod model {
     #[display("[{id}]")]
     #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::domain::model::Domain")]
     pub struct Domain {
@@ -55,7 +54,6 @@ mod model {
     )]
     #[norito(no_fast_from_json)]
     #[display("[{id}]")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::domain::model::NewDomain")]
     pub struct NewDomain {

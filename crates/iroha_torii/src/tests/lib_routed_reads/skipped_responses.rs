@@ -88,7 +88,7 @@ async fn fanout_collectors_release_skipped_reservations_before_next_route() {
         RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
     ];
     for skipped in [StatusCode::NOT_FOUND, StatusCode::SERVICE_UNAVAILABLE] {
-        for collector in 0..4 {
+        for collector in 0..3 {
             let pool = Arc::new(tokio::sync::Semaphore::new(1));
             let fetch =
                 |route| std::future::ready(skipped_response_test_fetch(&pool, route, skipped));
@@ -105,17 +105,6 @@ async fn fanout_collectors_release_skipped_reservations_before_next_route() {
                     (result.payloads.len(), result.diagnostics)
                 }
                 1 => {
-                    let result = collect_torii_list_json_payloads(
-                        &routes,
-                        routed_read_test_working_set_bytes(),
-                        ROUTED_READ_TEST_BODY_BYTES,
-                        fetch,
-                    )
-                    .await
-                    .expect("list should reach the second route");
-                    (result.payloads.len(), result.diagnostics)
-                }
-                2 => {
                     let result = collect_torii_routed_list_json_payloads(
                         &routes,
                         routed_read_test_working_set_bytes(),

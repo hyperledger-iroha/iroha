@@ -5,8 +5,6 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     use crate::filter::FieldPath;
     use crate::{json_array, json_object, json_value};
-    #[cfg(feature = "app_api")]
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         json_object(pairs)
     }
@@ -203,7 +201,6 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn asset_holder_filter_adapter_accepts_asset_and_scope_eq() {
-        use iroha_test_samples::ALICE_ID;
         let asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),

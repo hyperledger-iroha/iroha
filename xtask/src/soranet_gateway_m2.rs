@@ -1,11 +1,11 @@
 //! SNNet-15M2 beta bundle generator for the SoraGlobal Gateway CDN. Extends the M1 alpha pack with
 //! DoQ/ODoH preview configs, trustless CAR verifier wiring, GAR compliance rollup, and hardening
 //! baselines ahead of GA. PQ readiness is qualified separately by the strict gateway PQ command.
+use crate::soranet_common::sanitize_label;
 use crate::{
     gar, soranet_gateway, soranet_gateway_billing, soranet_gateway_hardening, soranet_gateway_ops,
     soranet_pop,
 };
-use blake3::Hasher as Blake3;
 use eyre::{Result, WrapErr, eyre};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
@@ -374,17 +374,6 @@ gateway:\n\
     ));
     out
 }
-fn sanitize_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_string()
-}
 fn summarize_path(path: &Path, root: &Path) -> String {
     match path.strip_prefix(root) {
         Ok(stripped) => stripped.display().to_string(),
@@ -396,12 +385,4 @@ fn default_data_retention() -> u32 {
 }
 fn default_log_retention() -> u32 {
     30
-}
-/// Compute a BLAKE3 digest for the supplied file.
-#[allow(dead_code)]
-fn file_blake3_hex(path: &Path) -> Result<String> {
-    let mut hasher = Blake3::new();
-    let mut file = fs::File::open(path).wrap_err_with(|| format!("open {}", path.display()))?;
-    std::io::copy(&mut file, &mut hasher).wrap_err_with(|| format!("hash {}", path.display()))?;
-    Ok(hasher.finalize().to_hex().to_string())
 }

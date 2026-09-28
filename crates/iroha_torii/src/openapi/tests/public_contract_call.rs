@@ -1,7 +1,7 @@
-// Public contract preparation and certified-admission schema bindings.
+// Public contract preparation and current durable-admission schema bindings.
 
 #[test]
-fn public_contract_call_schema_matches_exact_queue_plan_handoff() {
+fn public_contract_call_schema_matches_exact_current_admission() {
     for (label, document) in [
         ("package authority", canonical_document()),
         ("compiled spec", generate_spec()),
@@ -64,9 +64,10 @@ fn public_contract_call_schema_matches_exact_queue_plan_handoff() {
             schema_ref("ContractCallResponse")
         );
         for phrase in [
-            "QueuePlanSynced",
+            "Ordinary",
             "never re-quoted",
-            "durable certified admission",
+            "durable single-route queue admission",
+            "rejected before any durable pending promise",
             "100000ms",
         ] {
             assert!(

@@ -1840,7 +1840,6 @@ pub mod asset_alias;
 pub mod asset_transfer_control;
 /// Confidential registry management instructions. Bridge proof ingestion instructions.
 pub mod bridge;
-pub mod sccp;
 /// Confidential registry management instructions.
 pub mod confidential;
 /// Content lane instructions.
@@ -1882,6 +1881,7 @@ pub mod retail_daily_limit;
 pub mod runtime_upgrade;
 /// Real-world asset lot instructions.
 pub mod rwa;
+pub mod sccp;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
 /// Smart contract code management instructions.
@@ -2136,7 +2136,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum InstructionExecutionError {
             /// Instruction does not adhere to Iroha DSL specification
             Evaluate(#[source] InstructionEvaluationError),
@@ -2183,7 +2182,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AssetTransferAdmissionError {
             /// `HoldingLimitExceeded`: {0}
             HoldingLimitExceeded(Box<str>),
@@ -2216,7 +2214,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AccountAdmissionQuotaScope {
             /// Transaction-scoped quota.
             Transaction,
@@ -2241,7 +2238,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AccountAdmissionError {
             /// Implicit account creation is disabled.
             ImplicitAccountCreationDisabled,
@@ -2277,7 +2273,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionInvalidPolicy {
             /// Human-readable reason describing the invalid payload.
             pub reason: String,
@@ -2299,7 +2294,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionDefaultRoleError {
             /// Role that could not be assigned.
             pub role: crate::role::RoleId,
@@ -2323,7 +2317,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionQuotaExceeded {
             /// Scope of the quota that was exceeded.
             pub scope: AccountAdmissionQuotaScope,
@@ -2349,7 +2342,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionFeeUnsatisfied {
             /// Asset definition used to charge the fee.
             pub asset_definition: crate::asset::AssetDefinitionId,
@@ -2375,7 +2367,6 @@ pub mod error {
         )]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionMinInitialAmountUnsatisfied {
             /// Asset definition subject to the minimum requirement.
             pub asset_definition: crate::asset::AssetDefinitionId,
@@ -2402,7 +2393,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum InstructionEvaluationError {
             /// Unsupported parameter type for instruction of type `{0}`
             Unsupported(InstructionType),
@@ -2426,7 +2416,6 @@ pub mod error {
             thiserror::Error,
         )]
         #[display("Expected {expected:?}, actual {actual:?}")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = "iroha_data_model::isi::error::model::Mismatch")]
         pub struct Mismatch<T>
@@ -2525,7 +2514,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum TypeError {
             /// Asset definition numeric spec mismatch (asset can't hold provided numeric value)
             AssetNumericSpec(#[source] Mismatch<NumericSpec>),
@@ -2549,7 +2537,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum MathError {
             /// Overflow error occurred inside instruction
             Overflow,
@@ -2586,7 +2573,6 @@ pub mod error {
         )]
         #[norito(tag = "kind", content = "content")]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[repr(u8)]
         pub enum MintabilityError {
             /// This asset cannot be minted more than once and it was already minted
@@ -2614,7 +2600,6 @@ pub mod error {
         #[norito(tag = "kind", content = "content")]
         #[ignore_extra_doc_attributes]
         #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
         #[repr(u8)]
         pub enum InvalidParameterError {
             /// Invalid smart contract: {0}
@@ -2639,7 +2624,6 @@ pub mod error {
             crate :: DeriveJsonDeserialize,
             thiserror::Error,
         )]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct RepetitionError {
             /// Instruction type
             #[getset(get = "pub")]
@@ -2783,12 +2767,13 @@ pub mod prelude {
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             AdvanceSorafsReserveLifecycle, AppendSorafsPorReputationJournalEntry,
-            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, AssertSorafsPublicationV1, BindManifestAlias,
-            CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
-            CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
-            DrawSorafsReserveCredit, ExpireReplicationOrder, ExpireSorafsModerationChallenge,
-            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
-            InitializeSorafsProviderAdmissionV1, MaintainSorafsOrderbook, MatchSorafsOrderbook,
+            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest,
+            AssertSorafsPublicationV1, BindManifestAlias, CancelSorafsOrderbookOrder,
+            ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch, CompleteReplicationOrder,
+            DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
+            ExpireReplicationOrder, ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+            FinalizeSorafsModerationSortition, InitializeSorafsProviderAdmissionV1,
+            IssueReplicationOrder, MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
             MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
             MutateSorafsStreamTokenCustody, MutateSorafsTopologyAuthority,

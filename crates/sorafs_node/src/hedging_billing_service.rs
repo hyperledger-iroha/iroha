@@ -155,13 +155,16 @@ const HEDGE_EXECUTION_AUTHORIZATION_DOMAIN_V1: &[u8] = b"sorafs.hedging.executio
 const HEDGE_EXECUTION_AUTHORIZATION_SIGNATURE_DOMAIN_V1: &[u8] =
     b"sorafs.hedging.execution-authorization-signature.v1";
 const HEDGE_EXECUTION_RECEIPT_DOMAIN_V1: &[u8] = b"sorafs.hedging.execution-receipt.v1";
+#[cfg(test)]
 const HEDGE_EXECUTION_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] =
     b"sorafs.hedging.execution-receipt-signature.v1";
 const EPOCH_TRANSITION_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.epoch-transition.v1";
 const EPOCH_TRANSITION_SIGNATURE_DOMAIN_V1: &[u8] =
     b"sorafs.hedging-billing.epoch-transition-signature.v1";
 const EPOCH_WITNESS_RECORD_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.epoch-witness-record.v1";
+#[cfg(test)]
 const COMPACTED_SOURCE_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.compacted-source.v1";
+#[cfg(test)]
 const COMPACTED_ECONOMIC_STATE_DOMAIN_V1: &[u8] =
     b"sorafs.hedging-billing.compacted-economic-state.v1";
 const RETAINED_EPOCH_STATE_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.retained-epoch-state.v1";
@@ -1242,6 +1245,7 @@ pub struct HedgingBillingEpochWitnessRecordV1 {
     pub revision: [u8; 32],
 }
 impl HedgingBillingEpochWitnessRecordV1 {
+    #[cfg(test)]
     fn new(
         network_id: NetworkId,
         epoch_sequence: u64,
@@ -2512,6 +2516,7 @@ impl HedgeExecutionSubmissionReceiptV1 {
     pub fn receipt_digest(&self) -> Result<[u8; 32], HedgingBillingServiceError> {
         execution_receipt_digest(self)
     }
+    #[cfg(test)]
     fn validate(
         &self,
         policy: &GovernedHedgeExecutionPolicyV1,
@@ -2549,6 +2554,7 @@ impl HedgeExecutionSubmissionReceiptV1 {
 ///
 /// No service loop invokes this trait. The only submission helper requires a valid authorization,
 /// performs authoritative lookup first, and uses the authorization identity as its idempotency key.
+#[cfg(test)]
 pub trait GovernedHedgeExecutionAdapter: Send + Sync + fmt::Debug {
     /// Return the current venue identity and receipt key.
     ///
@@ -3494,6 +3500,7 @@ pub struct HedgingBillingReconcileOutcomeV1 {
 }
 /// Result of sealing and atomically installing one new billing epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct HedgingBillingEpochTransitionOutcomeV1 {
     /// New monotonic epoch sequence.
     pub epoch_sequence: u64,
@@ -4174,6 +4181,8 @@ pub struct HedgingBillingService {
     journal_verifier: Arc<dyn HedgingBillingJournalVerifier>,
     publisher: Arc<dyn BillingStatementPublisher>,
     acknowledgement_authority: Arc<dyn BillingStatementAcknowledgementAuthority>,
+    /// Read only by the test-only epoch transition until a governed transition path is wired.
+    #[cfg(test)]
     epoch_witness_store: Arc<dyn HedgingBillingEpochWitnessStore>,
     store: AtomicCheckpointStore,
     state: Mutex<RuntimeState>,
@@ -4321,6 +4330,7 @@ impl HedgingBillingService {
             journal_verifier,
             publisher,
             acknowledgement_authority,
+            #[cfg(test)]
             epoch_witness_store,
             store,
             state: Mutex::new(RuntimeState {
@@ -4728,6 +4738,7 @@ impl HedgingBillingService {
     /// Rejects unsettled economic state, incomplete or skipped frontiers,
     /// policy forks/rollback, signer substitution, invalid consensus proof,
     /// witness-store fork/rollback, capacity failure, and uncertain durability.
+    #[cfg(test)]
     pub fn transition_epoch(
         self,
         next_policy: HedgingBillingServicePolicyV1,
@@ -5779,6 +5790,7 @@ impl HedgingBillingService {
     /// The statement, canonical account, and idempotency nonce form the
     /// domain-separated request binding. The bounded proof authenticates that
     /// binding and is never copied into the response projection.
+    #[cfg(test)]
     pub fn api_acknowledge_statement(
         &self,
         request: &BillingStatementAcknowledgementRequestV1,
@@ -5796,8 +5808,8 @@ impl HedgingBillingService {
     ///
     /// # Errors
     ///
-    /// Returns the same bounded runtime API errors as [`Self::api_acknowledge_statement`], and maps
-    /// a failed fence to the caller-supplied service error without changing the local checkpoint.
+    /// Returns bounded runtime API errors for rejected requests, proofs, and checkpoint writes, and
+    /// maps a failed fence to the caller-supplied service error without changing the local checkpoint.
     pub fn api_acknowledge_statement_with_precommit_fence(
         &self,
         request: &BillingStatementAcknowledgementRequestV1,
@@ -6163,6 +6175,7 @@ impl HedgingBillingService {
     /// # Errors
     ///
     /// Fails when the runtime state lock is poisoned.
+    #[cfg(test)]
     pub fn statement_delivery_projections(
         &self,
     ) -> Result<Vec<BillingStatementDeliveryProjectionV1>, HedgingBillingServiceError> {
@@ -6233,6 +6246,7 @@ impl HedgingBillingService {
     /// # Errors
     ///
     /// Rejects an invalid venue identity or any adapter enabling automatic execution in V1.
+    #[cfg(test)]
     pub fn validate_execution_adapter(
         policy: &GovernedHedgeExecutionPolicyV1,
         adapter: &dyn GovernedHedgeExecutionAdapter,
@@ -6260,6 +6274,7 @@ impl HedgingBillingService {
     ///
     /// Rejects unknown/overflow intents, substituted policies or venues, forged/expired
     /// authorizations and receipts, automatic adapters, and fixed external failures.
+    #[cfg(test)]
     pub fn submit_authorized_hedge_intent(
         &self,
         execution_policy: &GovernedHedgeExecutionPolicyV1,

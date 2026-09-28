@@ -1,10 +1,4 @@
 //! Developer automation entrypoint for repository maintenance tasks.
-use axum::{
-    Router,
-    body::{self, Body},
-    extract::ConnectInfo,
-    http::Request,
-};
 use eyre::eyre;
 use iroha_config::{
     base::read::ConfigReader,
@@ -13,16 +7,8 @@ use iroha_config::{
         user,
     },
 };
-use iroha_core::{
-    EventsSender,
-    iso_bridge::reference_data::{
-        DatasetSnapshot, ReferenceDataError, ReferenceDataSnapshots, SnapshotState,
-    },
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    queue::Queue,
-    state::{State, World},
+use iroha_core::iso_bridge::reference_data::{
+    DatasetSnapshot, ReferenceDataError, ReferenceDataSnapshots, SnapshotState,
 };
 use iroha_crypto::{Algorithm, PublicKey};
 #[cfg(test)]
@@ -31,12 +17,8 @@ use iroha_data_model::{
     account::address::compliance_vectors::compliance_vectors_json, nexus::AssetPermissionManifest,
 };
 use iroha_service_model::soranet::RolloutPhase;
-use iroha_torii::{
-    MaybeTelemetry, OnlinePeersProvider,
-    test_utils::{TestDataDirGuard, mk_minimal_root_cfg},
-};
 use norito::{
-    derive::JsonSerialize,
+    derive::{JsonDeserialize, JsonSerialize},
     json::{self, Value},
     streaming::{
         codec::{BundleContextId, ContextFrequency},
@@ -45,7 +27,6 @@ use norito::{
     to_bytes,
 };
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     cmp::Ordering,
@@ -55,10 +36,8 @@ use std::{
     ffi::OsStr,
     fmt::Write as FmtWrite,
     fs,
-    net::SocketAddr,
     path::{Path, PathBuf},
     process,
-    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 #[cfg(unix)]
@@ -71,8 +50,6 @@ use time::{
     Date, OffsetDateTime,
     format_description::{self, well_known::Rfc3339},
 };
-use tokio::runtime::Builder as TokioRuntimeBuilder;
-use tower::ServiceExt;
 mod da;
 mod vote_tally;
 use fastpq::{BenchInput, BenchManifestOptions};
@@ -111,6 +88,7 @@ mod sorafs;
 mod soranet;
 mod soranet_bug_bounty;
 mod soranet_chaos;
+mod soranet_common;
 mod soranet_gar_controller;
 mod soranet_gateway;
 mod soranet_gateway_billing;
@@ -512,7 +490,7 @@ impl AccelerationOutputFormat {
         }
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSerialize)]
 struct AccelerationConfigReport {
     enable_simd: bool,
     enable_metal: bool,
@@ -524,7 +502,7 @@ struct AccelerationConfigReport {
     prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
     prefer_cpu_sha2_max_leaves_x86: Option<usize>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSerialize)]
 struct AccelerationBackendReport {
     supported: bool,
     configured: bool,
@@ -532,7 +510,7 @@ struct AccelerationBackendReport {
     parity_ok: bool,
     last_error: Option<String>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSerialize)]
 struct AccelerationStateReport {
     config: AccelerationConfigReport,
     simd: AccelerationBackendReport,
@@ -597,7 +575,7 @@ fn render_acceleration_state(
     format: AccelerationOutputFormat,
 ) -> Result<String, Box<dyn Error>> {
     match format {
-        AccelerationOutputFormat::Json => Ok(serde_json::to_string_pretty(state)?),
+        AccelerationOutputFormat::Json => Ok(json::to_string_pretty(state)?),
         AccelerationOutputFormat::Table => Ok(format_acceleration_table(state)),
     }
 }
@@ -718,7 +696,7 @@ struct SoradnsVerifyGarOptions {
 impl IsoFixtures {
     fn load(path: &Path) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
-        let value: Value = norito::json::from_str(&raw)?;
+        let value: Value = json::from_str(&raw)?;
         Ok(Self {
             instruments: string_array(&value, "instruments")?,
             bics: string_array(&value, "bics")?,
@@ -941,7 +919,7 @@ fn bundle_accel_label(accel: actual::BundleAcceleration) -> &'static str {
         actual::BundleAcceleration::Gpu => "gpu",
     }
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(JsonSerialize)]
 struct ContextRemapRow {
     original: u16,
     remapped: Option<u16>,
@@ -949,12 +927,12 @@ struct ContextRemapRow {
     total_bits: u64,
     dominant_symbol: Option<SymbolCount>,
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(JsonSerialize)]
 struct SymbolCount {
     symbol: u8,
     count: u64,
 }
-#[derive(Serialize, JsonSerialize)]
+#[derive(JsonSerialize)]
 struct ContextRemapReport {
     input: String,
     total_contexts: usize,
@@ -965,7 +943,7 @@ struct ContextRemapReport {
 const CONTEXT_SYMBOL_CAP: usize = 1 << 4;
 fn streaming_context_remap(options: StreamingContextRemapOptions) -> Result<(), Box<dyn Error>> {
     let raw = fs::read_to_string(&options.input)?;
-    let telemetry: Value = norito::json::from_str(&raw)?;
+    let telemetry: Value = json::from_str(&raw)?;
     let Some(raw_contexts) = telemetry
         .get("context_frequencies")
         .and_then(Value::as_array)
@@ -1223,7 +1201,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             }
             println!("{message}");
             if let Some(path) = report {
-                let rendered = serde_json::to_string_pretty(&adoption)?;
+                let rendered = json::to_string_pretty(&adoption)?;
                 fs::write(&path, rendered)?;
                 println!("sorafs adoption check report written to {}", path.display());
             }
@@ -1232,7 +1210,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             let diff = sorafs::adoption::run_scoreboard_diff(options)?;
             sorafs::adoption::print_scoreboard_diff(&diff);
             if let Some(path) = report {
-                let rendered = serde_json::to_string_pretty(&diff)?;
+                let rendered = json::to_string_pretty(&diff)?;
                 fs::write(&path, rendered)?;
                 println!(
                     "sorafs scoreboard diff report written to {}",
@@ -1242,7 +1220,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SorafsBurnInCheck { options, output } => {
             let summary = sorafs::adoption::run_burn_in_check(options)?;
-            let rendered = serde_json::to_string_pretty(&summary)?;
+            let rendered = json::to_string_pretty(&summary)?;
             if let Some(path) = output {
                 fs::write(path, rendered)?;
             } else {
@@ -1510,7 +1488,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 soranet::ConstantRateOutputFormat::Json => {
-                    let rendered = serde_json::to_string_pretty(&report)?;
+                    let rendered = json::to_string_pretty(&report)?;
                     println!("{rendered}");
                 }
                 soranet::ConstantRateOutputFormat::Markdown => {
@@ -1530,7 +1508,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 }
             }
             if let Some(target) = json_out {
-                let mut serialized = serde_json::to_string_pretty(&report)?;
+                let mut serialized = json::to_string_pretty(&report)?;
                 serialized.push('\n');
                 match target {
                     JsonTarget::Stdout => {
@@ -1615,7 +1593,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             let summaries =
                 soradns::derive_host_summaries_with_pretty_suffix(&names, &pretty_suffix)?;
             if let Some(target) = json {
-                let mut rendered = serde_json::to_string_pretty(&summaries)?;
+                let mut rendered = json::to_string_pretty(&summaries)?;
                 rendered.push('\n');
                 match target {
                     JsonTarget::Stdout => {
@@ -1646,7 +1624,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             headers_out,
         } => {
             let render = soradns::build_binding_template(&options)?;
-            let mut rendered = serde_json::to_string_pretty(&render.payload)?;
+            let mut rendered = json::to_string_pretty(&render.payload)?;
             rendered.push('\n');
             match json {
                 Some(JsonTarget::Stdout) | None => {
@@ -1668,7 +1646,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SoradnsGarTemplate { options, output } => {
             let payload = soradns::build_gar_template(&options)?;
-            let mut rendered = serde_json::to_string_pretty(&payload)?;
+            let mut rendered = json::to_string_pretty(&payload)?;
             rendered.push('\n');
             match output {
                 Some(JsonTarget::Stdout) | None => {
@@ -1681,7 +1659,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SoradnsAcmePlan { options, output } => {
             let plan = soradns::build_acme_plan(&options)?;
-            let mut rendered = serde_json::to_string_pretty(&plan)?;
+            let mut rendered = json::to_string_pretty(&plan)?;
             rendered.push('\n');
             match output {
                 JsonTarget::Stdout => {
@@ -1694,7 +1672,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SoradnsCachePlan { options, output } => {
             let plan = soradns::build_cache_invalidation_plan(&options)?;
-            let mut rendered = serde_json::to_string_pretty(&plan)?;
+            let mut rendered = json::to_string_pretty(&plan)?;
             rendered.push('\n');
             match output {
                 JsonTarget::Stdout => {
@@ -1707,7 +1685,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SoradnsRoutePlan { options, output } => {
             let plan = soradns::build_route_plan(&options)?;
-            let mut rendered = serde_json::to_string_pretty(&plan)?;
+            let mut rendered = json::to_string_pretty(&plan)?;
             rendered.push('\n');
             match output {
                 JsonTarget::Stdout => {
@@ -1746,7 +1724,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::SoradnsVerifyGar { options } => {
             let summary = soradns::verify_gar_payload(&options.gar_path, &options.expectations)?;
             if let Some(target) = &options.json_out {
-                let mut rendered = serde_json::to_string_pretty(&summary.to_json_value())?;
+                let mut rendered = json::to_string_pretty(&summary.to_json_value())?;
                 rendered.push('\n');
                 match target {
                     JsonTarget::Stdout => {
@@ -9456,7 +9434,7 @@ fn generate_openapi(
     signing_payload: Option<PathBuf>,
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let spec_bytes = require_release_router_openapi(try_generate_router_openapi())?;
+    let spec_bytes = canonical_release_openapi(&iroha_torii::openapi::generate_spec())?;
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
     if emits_manifest
         && !outputs
@@ -9521,20 +9499,18 @@ fn generate_openapi(
     }
     Ok(())
 }
-fn require_release_router_openapi(
-    generated: Result<Option<Vec<u8>>, Box<dyn Error>>,
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let spec_bytes = generated
-        .map_err(|err| format!("failed to generate OpenAPI from Torii router: {err}"))?
-        .ok_or("Torii OpenAPI generation failed closed: the router exposed no authority")?;
-    let spec = validated_release_openapi_value(&spec_bytes)?;
-    Ok(norito::json::to_vec_pretty(&spec)?)
+/// Validate Torii's compiled OpenAPI authority and render it as canonical pretty JSON.
+///
+/// The document is the same feature-pruned projection Torii serves at `/openapi.json`.
+fn canonical_release_openapi(spec: &Value) -> Result<Vec<u8>, Box<dyn Error>> {
+    openapi_validation::validate_release_openapi_spec(spec)?;
+    Ok(json::to_vec_pretty(spec)?)
 }
 fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     validated_release_openapi_value(spec_bytes).map(|_| ())
 }
 fn validated_release_openapi_value(spec_bytes: &[u8]) -> Result<Value, Box<dyn Error>> {
-    let spec = norito::json::from_slice::<Value>(spec_bytes)
+    let spec = json::from_slice::<Value>(spec_bytes)
         .map_err(|err| format!("failed to parse release OpenAPI document as JSON: {err}"))?;
     openapi_validation::validate_release_openapi_spec(&spec)?;
     Ok(spec)
@@ -9602,14 +9578,14 @@ struct OpenApiCargoLockPinV1 {
     bytes: u64,
     sha256_hex: String,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct OpenApiManifest {
     version: u32,
     generated_unix_ms: u64,
     generator_commit: Option<String>,
     generator_dirty: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     generator_source_sha256_hex: Option<String>,
     artifact: OpenApiArtifact,
 }
@@ -9620,8 +9596,8 @@ struct OpenApiGeneratorProvenance {
     dirty: bool,
     source_sha256_hex: Option<String>,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct OpenApiArtifact {
     path: String,
     bytes: u64,
@@ -9629,21 +9605,21 @@ struct OpenApiArtifact {
     blake3_hex: String,
     signature: Option<SignatureEnvelope>,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SignatureEnvelope {
     algorithm: String,
     public_key_hex: String,
     signature_hex: String,
 }
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SignerAllowlist {
     version: u32,
     allow: Vec<AllowedSigner>,
 }
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct AllowedSigner {
     algorithm: String,
     public_key_hex: String,
@@ -9741,7 +9717,7 @@ fn write_openapi_manifest_from_bytes(
         write_openapi_signing_payload_new(path, &signing_payload)?;
         println!("wrote {}", path.display());
     }
-    let manifest_json = serde_json::to_string_pretty(&manifest)?;
+    let manifest_json = json::to_string_pretty(&manifest)?;
     write_openapi_manifest_atomic(manifest_path, manifest_json.as_bytes())?;
     println!("wrote {}", manifest_path.display());
     Ok(())
@@ -10153,7 +10129,7 @@ fn verify_openapi_manifest(
             manifest_path.display()
         )
     })?;
-    let manifest: OpenApiManifest = serde_json::from_str(&manifest_text).map_err(|err| {
+    let manifest: OpenApiManifest = json::from_str(&manifest_text).map_err(|err| {
         format!(
             "failed to parse {} as JSON manifest: {err}",
             manifest_path.display()
@@ -10266,7 +10242,7 @@ fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Bo
     }
     let contents = fs::read(input)
         .map_err(|err| format!("failed to read manifest JSON `{}`: {err}", input.display()))?;
-    let manifest: AssetPermissionManifest = norito::json::from_slice(&contents).map_err(|err| {
+    let manifest: AssetPermissionManifest = json::from_slice(&contents).map_err(|err| {
         format!(
             "failed to parse `{}` as capability manifest JSON: {err}",
             input.display()
@@ -10493,14 +10469,13 @@ fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Err
             path.display()
         )
     })?;
-    let envelope: SignatureEnvelope =
-        serde_json::from_str(&text).map_err(|err| -> Box<dyn Error> {
-            format!(
-                "failed to parse signature envelope {}: {err}",
-                path.display()
-            )
-            .into()
-        })?;
+    let envelope: SignatureEnvelope = json::from_str(&text).map_err(|err| -> Box<dyn Error> {
+        format!(
+            "failed to parse signature envelope {}: {err}",
+            path.display()
+        )
+        .into()
+    })?;
     validate_signature_envelope_fields(&envelope)?;
     Ok(envelope)
 }
@@ -10565,7 +10540,7 @@ fn load_signer_allowlist(path: &Path) -> Result<SignerAllowlist, Box<dyn Error>>
     let _: Value = json::from_str(&contents)
         .map_err(|err| format!("invalid duplicate-free allowlist JSON: {err}"))?;
     let allowlist: SignerAllowlist =
-        serde_json::from_str(&contents).map_err(|err| format!("invalid allowlist JSON: {err}"))?;
+        json::from_str(&contents).map_err(|err| format!("invalid allowlist JSON: {err}"))?;
     if allowlist.version != 1 {
         return Err(format!(
             "unsupported allowlist version {}; expected 1",
@@ -11469,7 +11444,7 @@ fn update_sha256_os_str_component(hasher: &mut Sha256, label: &[u8], value: &OsS
 #[cfg(test)]
 mod acceleration_state_tests {
     use super::*;
-    use serde_json::Value;
+    use norito::json::Value;
     use soranet_pq::MlDsaSuite;
     #[test]
     fn parse_nexus_lane_maintenance_read_only_inventory() {
@@ -11774,17 +11749,17 @@ mod acceleration_state_tests {
         );
         let json =
             render_acceleration_state(&state, AccelerationOutputFormat::Json).expect("render json");
-        let parsed: Value = serde_json::from_str(&json).expect("json parse");
-        assert_eq!(parsed["config"]["max_gpus"], serde_json::json!(2));
-        assert_eq!(parsed["config"]["enable_simd"], serde_json::json!(true));
-        assert_eq!(parsed["simd"]["supported"], serde_json::json!(true));
-        assert_eq!(parsed["metal"]["supported"], serde_json::json!(true));
-        assert_eq!(parsed["cuda"]["supported"], serde_json::json!(false));
+        let parsed: Value = json::from_str(&json).expect("json parse");
+        assert_eq!(parsed["config"]["max_gpus"], norito::json!(2));
+        assert_eq!(parsed["config"]["enable_simd"], norito::json!(true));
+        assert_eq!(parsed["simd"]["supported"], norito::json!(true));
+        assert_eq!(parsed["metal"]["supported"], norito::json!(true));
+        assert_eq!(parsed["cuda"]["supported"], norito::json!(false));
         assert_eq!(
             parsed["metal"]["last_error"],
-            serde_json::json!("policy disabled")
+            norito::json!("policy disabled")
         );
-        assert_eq!(parsed["simd"]["last_error"], serde_json::Value::Null);
+        assert_eq!(parsed["simd"]["last_error"], json::Value::Null);
     }
 }
 #[cfg(test)]
@@ -11807,7 +11782,7 @@ mod openapi_tests {
         fs::write(path, RELEASE_OPENAPI_FIXTURE).expect("write release OpenAPI fixture");
     }
     fn empty_openapi_stub() -> Value {
-        norito::json::from_slice(
+        json::from_slice(
             br#"{
   "openapi": "3.1.0",
   "info": {"title": "Torii fixture", "version": "1.0.0"},
@@ -12116,21 +12091,9 @@ mod openapi_tests {
         }
     }
     #[test]
-    fn router_generation_failures_and_empty_documents_fail_closed() {
-        let missing = require_release_router_openapi(Ok(None))
-            .expect_err("missing router document must fail closed");
-        assert!(missing.to_string().contains("generation failed closed"));
-        let failed = require_release_router_openapi(Err("router setup failed".into()))
-            .expect_err("router generation error must fail closed");
-        assert!(
-            failed
-                .to_string()
-                .contains("failed to generate OpenAPI from Torii router")
-        );
-        let empty = require_release_router_openapi(Ok(Some(
-            norito::json::to_vec(&empty_openapi_stub()).expect("serialize empty OpenAPI"),
-        )))
-        .expect_err("an empty OpenAPI document must never be accepted");
+    fn empty_documents_fail_closed() {
+        let empty = canonical_release_openapi(&empty_openapi_stub())
+            .expect_err("an empty OpenAPI document must never be accepted");
         assert!(
             empty
                 .to_string()
@@ -12138,28 +12101,25 @@ mod openapi_tests {
         );
     }
     #[test]
-    fn current_router_document_satisfies_release_validation() {
-        let bytes = require_release_router_openapi(try_generate_router_openapi())
-            .expect("the current Torii router must satisfy release OpenAPI validation");
-        let spec = norito::json::from_slice::<Value>(&bytes)
-            .expect("validated router OpenAPI remains canonical JSON");
+    fn compiled_torii_document_satisfies_release_validation() {
+        let bytes = canonical_release_openapi(&iroha_torii::openapi::generate_spec())
+            .expect("the compiled Torii OpenAPI authority must satisfy release validation");
+        let spec = json::from_slice::<Value>(&bytes)
+            .expect("validated Torii OpenAPI remains canonical JSON");
         openapi_validation::validate_release_openapi_spec(&spec)
-            .expect("the canonicalized router document remains release-valid");
+            .expect("the canonicalized Torii document remains release-valid");
     }
     #[test]
-    fn router_generation_canonicalizes_json_without_losing_exact_integers() {
+    fn canonical_rendering_preserves_exact_integers() {
         let exact = br#"{
   "openapi": "3.1.0",
   "info": {"title": "Torii fixture", "version": "1.0.0"},
   "paths": {"/health": {"get": {"responses": {"200": {"description": "ok"}}}}},
   "components": {"schemas": {"Height": {"type": "integer", "maximum": 18446744073709551615}}}
-}"#
-        .to_vec();
-
-        let emitted = require_release_router_openapi(Ok(Some(exact.clone())))
-            .expect("exact router document must be accepted");
-        let parsed = norito::json::from_slice::<Value>(&exact).expect("parse router fixture");
-        let canonical = norito::json::to_vec_pretty(&parsed).expect("render canonical fixture");
+}"#;
+        let parsed = json::from_slice::<Value>(exact).expect("parse OpenAPI fixture");
+        let emitted = canonical_release_openapi(&parsed).expect("exact document must be accepted");
+        let canonical = json::to_vec_pretty(&parsed).expect("render canonical fixture");
 
         assert_eq!(emitted, canonical);
         assert!(
@@ -12170,28 +12130,13 @@ mod openapi_tests {
         );
         assert!(!emitted.ends_with(b"\n"));
     }
-    #[test]
-    fn router_state_uses_configured_genesis_identity() {
-        let _data_dir = TestDataDirGuard::new();
-        let cfg = mk_minimal_root_cfg();
-        let kura = Kura::blank_kura_for_testing();
-        let (network_id, state) = openapi_router_state(&cfg, kura, LiveQueryStore::start_test());
-        assert_eq!(
-            network_id,
-            iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash)
-        );
-        assert_eq!(state.network_id_ref(), &network_id);
-        assert_eq!(state.chain_id_ref(), &cfg.common.chain);
-    }
-    include!("tests/openapi_router_storage_isolation.rs");
     // Direct fragment keeps this cohesive OpenAPI regression test together under the source cap.
     include!("tests/openapi_empty_manifest_writers.rs");
     #[test]
     fn manifest_verifier_rejects_digest_matching_empty_openapi() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("torii.json");
-        let stub_bytes =
-            norito::json::to_vec(&empty_openapi_stub()).expect("serialize empty OpenAPI");
+        let stub_bytes = json::to_vec(&empty_openapi_stub()).expect("serialize empty OpenAPI");
         fs::write(&spec_path, &stub_bytes).expect("write empty OpenAPI");
         let manifest_path = tmp.path().join("manifest.json");
         let manifest = OpenApiManifest {
@@ -12210,7 +12155,7 @@ mod openapi_tests {
         };
         fs::write(
             &manifest_path,
-            serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
+            json::to_vec_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("write matching manifest");
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -12272,7 +12217,7 @@ mod openapi_tests {
   }
 }"#;
         let parsed: OpenApiManifest =
-            serde_json::from_slice(v1).expect("V1 remains syntactically distinct");
+            json::from_slice(v1).expect("V1 remains syntactically distinct");
         assert_ne!(parsed.version, OPENAPI_MANIFEST_VERSION);
         let err = encode_openapi_manifest_signing_payload(&parsed, b"x")
             .expect_err("V1 manifests must not produce a signing payload");
@@ -12291,7 +12236,7 @@ mod openapi_tests {
     "signature": null
   }
 }"#;
-        let err = serde_json::from_slice::<OpenApiManifest>(unknown)
+        let err = json::from_slice::<OpenApiManifest>(unknown)
             .expect_err("unknown V1 compatibility fields must fail closed");
         assert!(err.to_string().contains("unknown field"));
     }
@@ -12313,7 +12258,7 @@ mod openapi_tests {
         let envelope_path = tmp.path().join("signature.json");
         fs::write(
             &envelope_path,
-            serde_json::to_string_pretty(&signature).expect("serialize signature"),
+            json::to_string_pretty(&signature).expect("serialize signature"),
         )
         .expect("write detached envelope");
         let manifest_path = tmp.path().join("manifest.json");
@@ -12458,16 +12403,15 @@ mod openapi_tests {
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean, None)
             .expect("write unsigned manifest");
         let mut manifest: OpenApiManifest =
-            serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
+            json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
                 .expect("parse unsigned manifest");
         let original_sha256 = manifest.artifact.sha256_hex.clone();
         fs::write(&spec_path, ALTERED_RELEASE_OPENAPI_FIXTURE).expect("alter OpenAPI fixture");
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean, None)
             .expect("rewrite content-changed manifest");
-        manifest = serde_json::from_slice(
-            &fs::read(&manifest_path).expect("read content-changed manifest"),
-        )
-        .expect("parse content-changed manifest");
+        manifest =
+            json::from_slice(&fs::read(&manifest_path).expect("read content-changed manifest"))
+                .expect("parse content-changed manifest");
         assert_eq!(manifest.generated_unix_ms, clean.generated_unix_ms);
         assert_ne!(manifest.artifact.sha256_hex, original_sha256);
         let dirty = OpenApiGeneratorProvenance {
@@ -12478,10 +12422,9 @@ mod openapi_tests {
         };
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &dirty, None)
             .expect("rewrite provenance-changed manifest");
-        manifest = serde_json::from_slice(
-            &fs::read(&manifest_path).expect("read provenance-changed manifest"),
-        )
-        .expect("parse provenance-changed manifest");
+        manifest =
+            json::from_slice(&fs::read(&manifest_path).expect("read provenance-changed manifest"))
+                .expect("parse provenance-changed manifest");
         assert_eq!(manifest.generated_unix_ms, dirty.generated_unix_ms);
         assert!(manifest.generator_dirty);
         assert_eq!(manifest.generator_commit, None);
@@ -12500,18 +12443,18 @@ mod openapi_tests {
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance, None)
             .expect("write unsigned manifest");
         let mut manifest: OpenApiManifest =
-            serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
+            json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
                 .expect("parse unsigned manifest");
         manifest.generated_unix_ms = OPENAPI_MANIFEST_MAX_SAFE_INTEGER + 1;
         fs::write(
             &manifest_path,
-            serde_json::to_vec_pretty(&manifest).expect("serialize unsafe-time manifest"),
+            json::to_vec_pretty(&manifest).expect("serialize unsafe-time manifest"),
         )
         .expect("write unsafe-time manifest");
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance, None)
             .expect("replace unsafe existing timestamp");
         let rewritten: OpenApiManifest =
-            serde_json::from_slice(&fs::read(&manifest_path).expect("read rewritten manifest"))
+            json::from_slice(&fs::read(&manifest_path).expect("read rewritten manifest"))
                 .expect("parse rewritten manifest");
         assert_eq!(rewritten.generated_unix_ms, provenance.generated_unix_ms);
         assert!(rewritten.generated_unix_ms <= OPENAPI_MANIFEST_MAX_SAFE_INTEGER);
@@ -12529,16 +12472,16 @@ mod openapi_tests {
             None,
         )
         .expect("write unsigned manifest");
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
+        let mut manifest: json::Value =
+            json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
                 .expect("parse unsigned manifest");
         manifest
             .as_object_mut()
             .expect("manifest must be an object")
-            .insert("unexpected".to_owned(), serde_json::json!(true));
+            .insert("unexpected".to_owned(), norito::json!(true));
         fs::write(
             &manifest_path,
-            serde_json::to_vec_pretty(&manifest).expect("serialize malformed manifest"),
+            json::to_vec_pretty(&manifest).expect("serialize malformed manifest"),
         )
         .expect("write malformed manifest");
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -12586,10 +12529,9 @@ mod openapi_tests {
             .expect("write dirty unsigned manifest");
         verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect("explicitly allowed dirty unsigned manifest should verify");
-        let manifest: OpenApiManifest = serde_json::from_slice(
-            &fs::read(&manifest_path).expect("read dirty unsigned manifest"),
-        )
-        .expect("parse dirty unsigned manifest");
+        let manifest: OpenApiManifest =
+            json::from_slice(&fs::read(&manifest_path).expect("read dirty unsigned manifest"))
+                .expect("parse dirty unsigned manifest");
         assert!(manifest.generator_dirty);
         assert_eq!(manifest.generator_commit, None);
         assert_eq!(
@@ -13054,7 +12996,7 @@ mod openapi_tests {
         .expect("sign manifest");
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
-            serde_json::from_str(&manifest_json).expect("parse manifest json");
+            json::from_str(&manifest_json).expect("parse manifest json");
         let signature = manifest
             .artifact
             .signature
@@ -13063,7 +13005,7 @@ mod openapi_tests {
         signature.signature_hex = "00".repeat(signature.signature_hex.len() / 2);
         fs::write(
             &manifest_path,
-            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+            json::to_string_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("rewrite manifest");
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -13201,11 +13143,11 @@ mod openapi_tests {
         .expect("write unsigned manifest");
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
-            serde_json::from_str(&manifest_json).expect("parse manifest json");
+            json::from_str(&manifest_json).expect("parse manifest json");
         manifest.artifact.path = "../torii.json".to_owned();
         fs::write(
             &manifest_path,
-            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+            json::to_string_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("rewrite manifest");
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -13232,11 +13174,11 @@ mod openapi_tests {
             .expect("write unsigned manifest");
             let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
             let mut manifest: OpenApiManifest =
-                serde_json::from_str(&manifest_json).expect("parse manifest json");
+                json::from_str(&manifest_json).expect("parse manifest json");
             manifest.artifact.path = artifact_path.to_owned();
             fs::write(
                 &manifest_path,
-                serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+                json::to_string_pretty(&manifest).expect("serialize manifest"),
             )
             .expect("rewrite manifest");
             let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -13263,11 +13205,11 @@ mod openapi_tests {
         .expect("write unsigned manifest");
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
-            serde_json::from_str(&manifest_json).expect("parse manifest json");
+            json::from_str(&manifest_json).expect("parse manifest json");
         manifest.artifact.path = "other.json".to_owned();
         fs::write(
             &manifest_path,
-            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+            json::to_string_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("rewrite manifest");
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -13580,7 +13522,7 @@ mod openapi_tests {
         .expect("sign manifest");
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let manifest: OpenApiManifest =
-            serde_json::from_str(&manifest_json).expect("parse manifest json");
+            json::from_str(&manifest_json).expect("parse manifest json");
         let signer = manifest
             .artifact
             .signature
@@ -13691,7 +13633,7 @@ mod space_directory_tests {
     #[test]
     fn reject_unsupported_manifest_version() {
         assert!(
-            norito::json::from_str::<AssetPermissionManifest>(INVALID_MANIFEST).is_err(),
+            json::from_str::<AssetPermissionManifest>(INVALID_MANIFEST).is_err(),
             "unsupported manifest versions must be rejected"
         );
     }
@@ -13791,7 +13733,7 @@ mod streaming_bundle_tests {
                 }
             ]
         });
-        let json = norito::json::to_string_pretty(&telemetry).expect("serialize telemetry string");
+        let json = json::to_string_pretty(&telemetry).expect("serialize telemetry string");
         fs::write(&telemetry_path, json).expect("write telemetry");
         let output_path = tmp.path().join("remap.json");
         streaming_context_remap(StreamingContextRemapOptions {
@@ -13801,7 +13743,7 @@ mod streaming_bundle_tests {
         })
         .expect("remap");
         let rendered = fs::read_to_string(output_path).expect("read remap output");
-        let value: Value = norito::json::from_str(&rendered).expect("json");
+        let value: Value = json::from_str(&rendered).expect("json");
         assert_eq!(
             value
                 .get("kept")
@@ -13821,135 +13763,6 @@ mod streaming_bundle_tests {
             None
         );
     }
-}
-fn try_generate_router_openapi() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-    let runtime = TokioRuntimeBuilder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(generate_router_openapi_async())
-}
-async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-    const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json"];
-    let _data_dir = TestDataDirGuard::new();
-    let mut cfg = mk_minimal_root_cfg();
-    let mut tokens = vec!["Test-Token".to_owned()];
-    if let Ok(single) = std::env::var("TORII_OPENAPI_TOKEN")
-        && !single.is_empty()
-    {
-        tokens.push(single);
-    }
-    if let Some(env_tokens) = std::env::var_os("IROHA_TORII_OPENAPI_TOKENS") {
-        tokens.extend(
-            env_tokens
-                .to_string_lossy()
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_owned()),
-        );
-    }
-    cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = tokens.clone().into();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query_store = LiveQueryStore::start_test();
-    let (network_id, state) = openapi_router_state(&cfg, kura.clone(), query_store);
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(Default::default());
-    let _peers_tx_guard = peers_tx;
-    let torii = iroha_torii::Torii::new_with_handle(
-        cfg.common.chain.clone(),
-        network_id,
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
-        iroha_torii::ToriiRuntimeDeps::new(
-            // This in-process schema fixture never owns a deployed node or release identity.
-            iroha_core::release_identity::BuildIdentity::from_compiled_parts(
-                env!("CARGO_PKG_VERSION"),
-                Some("local-fast-build"),
-                None,
-                None,
-                None,
-                None,
-            )?,
-            MaybeTelemetry::disabled(),
-        ),
-    )?;
-    let router_runtime = torii
-        .api_router_for_tests()
-        .map_err(|error| eyre!("failed to initialize Torii router: {error}"))?;
-    let spec =
-        fetch_openapi_from_router(router_runtime.router(), OPENAPI_ENDPOINT_CANDIDATES).await;
-    router_runtime.shutdown().await;
-    Ok(spec)
-}
-fn openapi_router_state(
-    cfg: &actual::Root,
-    kura: Arc<Kura>,
-    query_store: iroha_core::query::store::LiveQueryStoreHandle,
-) -> (iroha_data_model::NetworkId, Arc<State>) {
-    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let state = State::new_with_chain_and_network_id_for_testing(
-        World::default(),
-        kura,
-        query_store,
-        cfg.common.chain.clone(),
-        network_id,
-    );
-    (network_id, Arc::new(state))
-}
-async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Option<Vec<u8>> {
-    let mut token_header = std::env::var("TORII_OPENAPI_TOKEN")
-        .ok()
-        .filter(|value| !value.is_empty());
-    if token_header.is_none() {
-        token_header = std::env::var("IROHA_TORII_OPENAPI_TOKENS")
-            .ok()
-            .and_then(|list| list.split(',').find(|s| !s.is_empty()).map(str::to_owned));
-    }
-    if token_header.is_none() {
-        token_header = Some("Test-Token".to_owned());
-    }
-    for path in candidates {
-        let mut builder = Request::builder().uri(*path);
-        if let Some(token) = token_header.as_deref() {
-            builder = builder.header("x-api-token", token);
-        }
-        let mut request = builder.body(Body::empty()).ok()?;
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let response = router.clone().into_service().oneshot(request).await.ok()?;
-        if !response.status().is_success() {
-            continue;
-        }
-        let bytes = match body::to_bytes(response.into_body(), usize::MAX).await {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                eprintln!("failed to read OpenAPI body from {path}: {err}");
-                continue;
-            }
-        };
-        if bytes.is_empty() {
-            continue;
-        }
-        match norito::json::from_slice::<Value>(bytes.as_ref()) {
-            Ok(_) => return Some(bytes.to_vec()),
-            Err(err) => {
-                eprintln!("failed to parse OpenAPI JSON from {path}: {err}");
-            }
-        }
-    }
-    None
 }
 fn generate_dev_vote_fixture(
     output: PathBuf,
@@ -14039,7 +13852,7 @@ fn write_summary_json(summary: &BundleSummary, target: JsonTarget) -> Result<(),
     write_json_output(&value, target)
 }
 pub(crate) fn write_json_output(value: &Value, target: JsonTarget) -> Result<(), Box<dyn Error>> {
-    let mut json_text = norito::json::to_string_pretty(value)?;
+    let mut json_text = json::to_string_pretty(value)?;
     json_text.push('\n');
     match target {
         JsonTarget::Stdout => {
@@ -14088,7 +13901,7 @@ fn handle_attestation_manifest(
                         path.display()
                     )
                 })?;
-                let parsed: Value = norito::json::from_str(&existing)?;
+                let parsed: Value = json::from_str(&existing)?;
                 if parsed["hash_algorithm"] != manifest["hash_algorithm"] {
                     return Err(format!(
                         "attestation manifest at {} has hash_algorithm {:?}, expected {:?}",
@@ -14161,7 +13974,7 @@ fn handle_attestation_manifest(
                 }
                 Ok(())
             } else {
-                let mut text = norito::json::to_string_pretty(&manifest)?;
+                let mut text = json::to_string_pretty(&manifest)?;
                 text.push('\n');
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)?;

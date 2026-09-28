@@ -1195,6 +1195,7 @@ pub(crate) struct MusubiProviderAttestationJournalStoreSnapshotV1 {
 impl MusubiProviderAttestationJournalStoreSnapshotV1 {
     /// Construct the unique empty-store snapshot.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn empty() -> Self {
         Self {
             revision: None,
@@ -1206,6 +1207,7 @@ impl MusubiProviderAttestationJournalStoreSnapshotV1 {
     /// # Errors
     ///
     /// Returns an error for empty or hard-oversized bytes.
+    #[cfg(test)]
     pub(crate) fn from_checkpoint_bytes(
         checkpoint_bytes: Vec<u8>,
     ) -> Result<Self, MusubiProviderAttestationJournalStoreErrorV1> {
@@ -1245,6 +1247,13 @@ impl MusubiProviderAttestationJournalStoreSnapshotV1 {
     }
 }
 /// Outcome of one content-addressed compare-and-swap operation.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production journal store is wired; the file-backed adapter is test-only"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MusubiProviderAttestationJournalCasOutcomeV1 {
     /// The replacement became, or was already, the latest durable checkpoint.
@@ -1256,6 +1265,13 @@ pub(crate) enum MusubiProviderAttestationJournalCasOutcomeV1 {
     Conflict,
 }
 /// Payload-free error returned by the abstract journal checkpoint store.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production journal store is wired; the file-backed adapter is test-only"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum MusubiProviderAttestationJournalStoreErrorV1 {
     /// The backing store is temporarily unavailable.
@@ -2179,6 +2195,7 @@ impl MusubiProviderAttestationJournalV1 {
     /// # Errors
     ///
     /// Returns an error when any policy bound is invalid.
+    #[cfg(test)]
     pub(crate) fn new(
         store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
         policy: MusubiProviderAttestationJournalPolicyV1,
@@ -3290,6 +3307,7 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     /// # Errors
     ///
     /// Returns an error when any journal policy bound is invalid.
+    #[cfg(test)]
     pub(crate) fn new_initialized(
         store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
         policy: MusubiProviderAttestationJournalPolicyV1,
@@ -3299,6 +3317,7 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
         Self::new(store, policy, clock, checkpoint_scope, false)
     }
     /// Bind a journal runtime only after ordinary open proved an existing H0.
+    #[cfg(test)]
     pub(crate) fn new_opened(
         store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
         policy: MusubiProviderAttestationJournalPolicyV1,
@@ -3307,6 +3326,7 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     ) -> Result<Self, MusubiProviderAttestationJournalErrorV1> {
         Self::new(store, policy, clock, checkpoint_scope, true)
     }
+    #[cfg(test)]
     fn new(
         store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
         policy: MusubiProviderAttestationJournalPolicyV1,
@@ -3886,6 +3906,7 @@ fn decode_checkpoint(
 /// The file-store adapter uses this crate-private boundary to bind physical two-slot generations to
 /// the journal schema without exposing the private checkpoint DTO. Every retained intent must
 /// belong to the exact configured exact network and provider.
+#[cfg(test)]
 pub(crate) fn validate_musubi_provider_attestation_journal_checkpoint_bytes_v1(
     bytes: &[u8],
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -3905,6 +3926,7 @@ pub(crate) fn validate_musubi_provider_attestation_journal_checkpoint_bytes_v1(
 /// The checkpoint-seal protocol uses this crate-private projection to prove
 /// that its public head metadata describes the exact private DTO bytes without
 /// exposing any entry, receipt, or retry-state fields.
+#[cfg(test)]
 pub(crate) fn validate_musubi_provider_attestation_journal_checkpoint_metadata_v1(
     bytes: &[u8],
     policy: MusubiProviderAttestationJournalPolicyV1,

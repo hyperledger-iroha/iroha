@@ -336,6 +336,7 @@ pub enum PrivateSettlementAuditorApprovalErrorV1 {
     SigningFailed,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Decrypt, validate, policy-check, and sign one local-auditor approval.
 ///
 /// The caller must supply the exact governed hybrid decryption secret and the

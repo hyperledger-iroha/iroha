@@ -133,30 +133,55 @@ pub(super) const MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1: usize =
 
 /// Public-instance offsets shared by both mint-authorization parities.
 pub(crate) mod public_instance {
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const VERSION: usize = 0;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const SEMANTIC_LO: usize = 1;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const OPERATION_LO: usize = 3;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const RELEASE_LO: usize = 5;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const SUITE_LO: usize = 7;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const VK_LO: usize = 9;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const MANIFEST_LO: usize = 11;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const NETWORK_LO: usize = 13;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const ASSET_LO: usize = 15;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const INCARNATION_LO: usize = 17;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const SCALE: usize = 19;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const POOL_LO: usize = 20;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const AMOUNT: usize = 22;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const PAYER_LO: usize = 23;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const RECIPIENT_LO: usize = 25;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CREDENTIAL_LO: usize = 27;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const PROFILE_LO: usize = 29;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const POLICY_EPOCH: usize = 31;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const RECIPIENT_COMMITMENT_LO: usize = 32;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CREDIT_COMMITMENT_LO: usize = 34;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const RECIPIENT_KEY_LO: usize = 36;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const ISSUANCE_LO: usize = 38;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CREDIT_ID_LO: usize = 40;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const CIPHERTEXT_LO: usize = 42;
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(crate) const HARDWARE_AUTHORIZATION_LO: usize = 44;
     pub(crate) const EQ_AUDIT_LO: usize = 46;
     pub(crate) const EP_AUDIT_LO: usize = 48;
@@ -703,40 +728,6 @@ fn validate_recursive_witness_v1(
         return Err("mint-authorization Eq/Ep hash-claim carrier bindings do not match".to_owned());
     }
     witness.relation.hardware_authorization_digest()
-}
-
-/// Build the release-pinned, mutually audited mint-authorization pair.
-#[expect(
-    dead_code,
-    reason = "Retain paired construction for circuit qualification; production builds one parity at a time"
-)]
-pub(crate) fn build_kagemusha_mint_authorization_pair_v1(
-    eq_parameters: &ParamsIPA<EqAffine>,
-    ep_parameters: &ParamsIPA<EpAffine>,
-    eq_svk: &IpaSuccinctVerifyingKey<EqAffine>,
-    ep_svk: &IpaSuccinctVerifyingKey<EpAffine>,
-    witness: &KagemushaMintAuthorizationRecursiveWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaMintAuthorizationEqCircuitV1,
-        KagemushaMintAuthorizationEpCircuitV1,
-        DigestV1,
-        DigestV1,
-    ),
-    String,
-> {
-    let audits = derive_kagemusha_mint_authorization_deferred_audits_v1(
-        eq_parameters,
-        ep_parameters,
-        eq_svk,
-        ep_svk,
-        witness,
-    )?;
-    let (eq, _) =
-        build_kagemusha_mint_authorization_eq_v1(ep_parameters, eq_svk, witness, &audits)?;
-    let (ep, _) =
-        build_kagemusha_mint_authorization_ep_v1(eq_parameters, ep_svk, witness, &audits)?;
-    Ok((eq, ep, audits.eq_digest, audits.ep_digest))
 }
 
 /// Discover both deferred recursive audits while retaining no paired Base circuit graphs.

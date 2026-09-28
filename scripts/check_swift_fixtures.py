@@ -491,12 +491,12 @@ def validate_fee_payment(
 
 
 def validate_admission_intent(
-    value: object, context: str, *, shared: bool
+    value: object, context: str
 ) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"{context} must be an object")
     require_exact_fields(value, frozenset({"intent", "value"}), context)
-    expected = "ordinary" if shared else "queue_plan_synced"
+    expected = "ordinary"
     if value["intent"] != expected or value["value"] is not None:
         raise ValueError(
             f"{context} must be exactly {{'intent': '{expected}', 'value': null}}"
@@ -562,7 +562,7 @@ def validate_payload_body(value: object, context: str, *, shared: bool) -> Paylo
         value["fee_payment"], f"{context}.fee_payment", shared=shared
     )
     validate_admission_intent(
-        value["admission_intent"], f"{context}.admission_intent", shared=shared
+        value["admission_intent"], f"{context}.admission_intent"
     )
     requires_gas_limit = validate_executable(
         value["executable"], f"{context}.executable", shared=shared

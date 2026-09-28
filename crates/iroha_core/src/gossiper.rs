@@ -1832,11 +1832,6 @@ impl TransactionGossiper {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
         let crypto_cfg = self.state.crypto();
-        let certified_hashes = txs
-            .iter()
-            .filter(|tx| tx.queue_plan_admitted_input().is_some())
-            .map(GossipTransaction::hash)
-            .collect::<HashSet<_>>();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
         let state = self.state.as_ref();
         let committed_transactions = state.transactions.view();
@@ -1856,6 +1851,12 @@ impl TransactionGossiper {
         }
         let mut materialized = Vec::with_capacity(batch_txs);
         for (idx, tx) in txs.into_iter().enumerate() {
+            if tx.queue_plan_admitted_input().is_some() {
+                iroha_logger::warn!(
+                    "dropping unsupported_transaction_admission gossip before certificate custody"
+                );
+                continue;
+            }
             let Some(route) = routes.get(idx).copied() else {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
                 self.record_drop_metric(
@@ -1888,6 +1889,10 @@ impl TransactionGossiper {
                 );
                 continue;
             };
+            if let Err(error) = crate::queue::validate_current_admission_route(&plan) {
+                iroha_logger::warn!(%error, "dropping unsupported_transaction_admission gossip");
+                continue;
+            }
             if plan.coordinator_route() != RoutingDecision::new(route.lane_id, route.dataspace_id) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
@@ -2027,10 +2032,6 @@ impl TransactionGossiper {
             }
             let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_admitted_input().is_some();
-            if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
-                crate::status::inc_gossip_duplicate_known_skipped();
-                continue;
-            }
             if !batch_seen_hashes.insert(entrypoint_hash) {
                 crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
@@ -2066,6 +2067,12 @@ impl TransactionGossiper {
                         continue;
                     }
                 };
+            if let Err(error) =
+                crate::queue::validate_current_admission_intent(entrypoint.admission_intent())
+            {
+                iroha_logger::warn!(%error, "dropping unsupported_transaction_admission gossip");
+                continue;
+            }
             let prepared = match &entrypoint {
                 TransactionEntrypoint::External(signed) => {
                     Some(AcceptedTransaction::prepare_gossip_signed_metadata(
@@ -2571,11 +2578,6 @@ impl TransactionGossiper {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
         let crypto_cfg = self.state.crypto();
-        let certified_hashes = txs
-            .iter()
-            .filter(|tx| tx.queue_plan_admitted_input().is_some())
-            .map(GossipTransaction::hash)
-            .collect::<HashSet<_>>();
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
         let state = self.state.as_ref();
         let committed_transactions = state.transactions.view();
@@ -2587,6 +2589,12 @@ impl TransactionGossiper {
             // Every terminal validation/queue outcome is final. Only a typed
             // publication wait clears this bit; later passes cannot replay it.
             progress.complete(idx);
+            if tx.queue_plan_admitted_input().is_some() {
+                iroha_logger::warn!(
+                    "dropping unsupported_transaction_admission gossip before certificate custody"
+                );
+                continue;
+            }
             let Some(route) = routes.get(idx).copied() else {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
                 self.record_drop_metric(
@@ -2619,6 +2627,10 @@ impl TransactionGossiper {
                 );
                 continue;
             };
+            if let Err(error) = crate::queue::validate_current_admission_route(&advertised_plan) {
+                iroha_logger::warn!(%error, "dropping unsupported_transaction_admission gossip");
+                continue;
+            }
             if advertised_plan.coordinator_route()
                 != RoutingDecision::new(route.lane_id, route.dataspace_id)
             {
@@ -2809,10 +2821,6 @@ impl TransactionGossiper {
             }
             let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_admitted_input().is_some();
-            if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
-                crate::status::inc_gossip_duplicate_known_skipped();
-                continue;
-            }
             if !batch_seen_hashes.insert(entrypoint_hash) {
                 crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
@@ -2850,6 +2858,12 @@ impl TransactionGossiper {
                     continue;
                 }
             };
+            if let Err(error) =
+                crate::queue::validate_current_admission_intent(entrypoint.admission_intent())
+            {
+                iroha_logger::warn!(%error, "dropping unsupported_transaction_admission gossip");
+                continue;
+            }
             let payload = tx.payload();
             let queue_plan_certificate = tx.queue_plan_admitted_input();
             match (
@@ -4875,68 +4889,105 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         (gossiper, signed, binding, certificate, journal_dir)
     }
     #[test]
-    fn exact_pending_queue_plan_certificate_hands_off_body_in_owned_and_shared_gossip() {
-        for shared in [false, true] {
-            let (gossiper, signed, binding, certificate, _journal_dir) =
-                exact_pending_queue_plan_gossip_fixture(if shared {
-                    "shared-exact-pending-queue-plan"
-                } else {
-                    "owned-exact-pending-queue-plan"
+    fn current_gossip_rejects_certified_unsupported_intent_before_persistence_or_deferral() {
+        for future in [false, true] {
+            for shared in [false, true] {
+                let (gossiper, signed, _binding, certificate, journal_dir) =
+                    publication_queue_plan_gossip_fixture("current-unsupported-certified", future);
+                // Crypto verification remains available independently of live admission.
+                validate_queue_plan_gossip_certificate(
+                    gossiper.state.as_ref(),
+                    &certificate,
+                    &TransactionEntrypoint::External(signed),
+                    &default_plan(),
+                )
+                .expect("genuine signed certificate still verifies without admitting work");
+                let journal_path = journal_dir.path().join("queue_plan_gossip.norito");
+                let journal_before =
+                    std::fs::read(&journal_path).expect("read journal before gossip");
+                let certificates_before = gossiper
+                    .state
+                    .kura()
+                    .pending_queue_plan_admission_certificates()
+                    .expect("certificate inventory");
+                let message = Arc::new(TransactionGossip {
+                    txs: vec![
+                        GossipTransaction::from_queue_plan_admitted_input(Arc::new(certificate))
+                            .expect("structural complete input"),
+                    ],
+                    routes: vec![GossipRoute {
+                        lane_id: LaneId::SINGLE,
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                    }],
+                    plans: vec![default_plan()],
+                    plane: GossipPlane::Public,
                 });
-            let message = TransactionGossip {
-                txs: vec![
-                    GossipTransaction::from_queue_plan_admitted_input(Arc::new(
-                        certificate.clone(),
-                    ))
-                    .expect("structural complete input"),
-                ],
-                routes: vec![GossipRoute {
-                    lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                }],
-                plans: vec![default_plan()],
-                plane: GossipPlane::Public,
-            };
-
-            if shared {
-                let message = Arc::new(decode_gossip_message(&message));
-                let retained = Arc::clone(&message);
-                gossiper.handle_transaction_gossip(message);
-                assert_eq!(
-                    retained.txs.len(),
-                    1,
-                    "the retained Arc must force the shared gossip branch"
+                let retained = shared.then(|| Arc::clone(&message));
+                let pending = gossiper.handle_retained_gossip(
+                    RetainedGossip::synthetic_for_test(message),
+                    GossipProgress::default(),
+                    Some(tokio::time::Instant::now() + Duration::from_secs(10)),
                 );
-            } else {
-                gossiper.handle_transaction_gossip(Arc::new(message));
+                assert!(
+                    pending.is_none(),
+                    "unsupported work must not retain a future retry"
+                );
+                assert_eq!(gossiper.queue.queued_len(), 0);
+                assert_eq!(std::fs::read(&journal_path).unwrap(), journal_before);
+                assert_eq!(
+                    gossiper
+                        .state
+                        .kura()
+                        .pending_queue_plan_admission_certificates()
+                        .unwrap(),
+                    certificates_before
+                );
+                drop(retained);
             }
-
-            assert_eq!(
-                gossiper.queue.queued_len(),
-                1,
-                "exact Pending QueuePlan proof must hand off the body in both gossip branches"
+        }
+    }
+    #[test]
+    fn current_gossip_rejects_uncertified_unsupported_work_without_suppressing_ordinary() {
+        for shared in [false, true] {
+            let gossiper = closed_test_gossiper(NonZeroU32::new(1).unwrap());
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+            let unsupported = TransactionBuilder::new_with_time_source(
+                test_network_id(),
+                (*ALICE_ID).clone(),
+                &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "unsupported intent".to_owned())])
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .sign(ALICE_KEYPAIR.private_key());
+            drop(time_handle);
+            let (multiroute, _) = build_transaction("unsupported multi-route");
+            let (ordinary, _) = build_transaction("supported ordinary after rejected work");
+            let ordinary_hash = TransactionEntrypoint::External(ordinary.clone()).hash();
+            let multiroute_plan = RoutingPlan::native_amx(
+                RoutingDecision::default(),
+                vec![crate::queue::RouteLeg::new(
+                    RoutingDecision::default(),
+                    crate::queue::RouteLegRole::Participant,
+                )],
             );
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-            let durable = gossiper
-                .queue
-                .durable_plan_admission_claim_with_state(&accepted, gossiper.state.as_ref())
-                .expect("read exact Pending QueuePlan gossip durable claim")
-                .expect("exact Pending QueuePlan gossip must own a durable claim");
-            let reconstructed =
-                crate::torii_proxy::queue_plan_binding_from_durable_admission(&durable)
-                    .expect("reconstruct exact Pending QueuePlan gossip binding");
-            assert_eq!(reconstructed, binding);
-            let pending_certificates = gossiper
-                .state
-                .kura()
-                .pending_queue_plan_admission_certificates()
-                .expect("read persisted QueuePlan gossip certificates");
-            assert!(
-                pending_certificates
-                    .iter()
-                    .any(|(_, bytes)| bytes == &certificate),
-                "the certificate must be durable before the body is admitted"
-            );
+            let message = Arc::new(decode_gossip_message(&TransactionGossip {
+                txs: vec![unsupported.into(), multiroute.into(), ordinary.into()],
+                routes: vec![
+                    GossipRoute {
+                        lane_id: LaneId::SINGLE,
+                        dataspace_id: DataSpaceId::UNIVERSAL
+                    };
+                    3
+                ],
+                plans: vec![default_plan(), multiroute_plan, default_plan()],
+                plane: GossipPlane::Public,
+            }));
+            let retained = shared.then(|| Arc::clone(&message));
+            gossiper.handle_transaction_gossip(message);
+            assert_eq!(gossiper.queue.queued_len(), 1);
+            assert!(gossiper.queue.contains_entrypoint_hash(ordinary_hash));
+            drop(retained);
         }
     }
     #[test]

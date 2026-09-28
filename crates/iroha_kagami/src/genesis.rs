@@ -193,7 +193,7 @@ mod authority_tests {
         )
         .build_raw()
         .expect("complete authority fixture");
-        ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+        let _ = ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
             &manifest,
             &test_peers(0x90),
         )

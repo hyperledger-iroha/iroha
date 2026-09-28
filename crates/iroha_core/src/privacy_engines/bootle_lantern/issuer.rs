@@ -4,11 +4,12 @@
 //! derive its governed policy, prove a blinded holder request, verify and sign that request, then
 //! let the holder independently finalize and validate the credential before any presentation proof
 //! is produced. There is no direct or trusted-issuance shortcut.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use super::issuance_store::BootleLanternInMemoryIssuanceStoreV1;
 pub use super::issuance_store::{
-    BootleLanternFileIssuanceStoreV1, BootleLanternInMemoryIssuanceStoreV1,
-    BootleLanternIssuanceClaimV1, BootleLanternIssuancePreflightV1,
-    BootleLanternIssuanceStoreConfigV1, BootleLanternIssuanceStoreErrorV1,
-    BootleLanternIssuanceStoreV1,
+    BootleLanternFileIssuanceStoreV1, BootleLanternIssuanceClaimV1,
+    BootleLanternIssuancePreflightV1, BootleLanternIssuanceStoreConfigV1,
+    BootleLanternIssuanceStoreErrorV1, BootleLanternIssuanceStoreV1,
 };
 use super::{
     codec::{
@@ -651,12 +652,15 @@ impl BootleLanternBlindIssuanceRequestV1 {
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
+    #[cfg(test)]
     pub(super) const fn issuance_authorization_digest_v1(&self) -> [u8; 32] {
         self.issuance_authorization_digest
     }
+    #[cfg(test)]
     pub(super) const fn scope_digest_v1(&self) -> [u8; 32] {
         self.scope_digest
     }
+    #[cfg(test)]
     pub(super) const fn policy_record_digest_v1(&self) -> [u8; 32] {
         *self.policy_record_digest.as_bytes()
     }
@@ -957,12 +961,15 @@ impl core::fmt::Debug for BootleLanternBlindIssuanceResponseV1 {
     }
 }
 impl BootleLanternBlindIssuanceResponseV1 {
+    #[cfg(test)]
     pub(super) const fn request_digest_v1(&self) -> [u8; 32] {
         self.request_digest
     }
+    #[cfg(test)]
     pub(super) const fn scope_digest_v1(&self) -> [u8; 32] {
         self.scope_digest
     }
+    #[cfg(test)]
     pub(super) const fn policy_record_digest_v1(&self) -> [u8; 32] {
         *self.policy_record_digest.as_bytes()
     }
@@ -1228,6 +1235,7 @@ pub fn holder_prepare_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
     };
     Ok((request, state))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Prepare the canonical holder P1 request with fresh operating-system randomness.
 ///
 /// This is the production holder entrypoint. Deterministic and fault-injected

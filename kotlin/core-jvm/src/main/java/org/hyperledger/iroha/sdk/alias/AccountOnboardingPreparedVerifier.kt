@@ -169,8 +169,8 @@ object AccountOnboardingPreparedVerifier {
             "prepared onboarding transaction hash differs from the envelope"
         }
         val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload())
-        require(payload.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
-            "prepared onboarding transaction must use QueuePlanSynced admission"
+        require(payload.admissionIntent == TransactionAdmissionIntent.ORDINARY) {
+            "prepared onboarding transaction must use Ordinary admission"
         }
         requirePreparedOperationLifetime(payload, binding)
         require(

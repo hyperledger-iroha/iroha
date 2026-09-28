@@ -19,7 +19,7 @@ use ciborium::{de::from_reader, value::Value as CborValue};
 use iroha_config::parameters::actual::{
     OperatorAuthLockout, OperatorWebAuthnAlgorithm, OperatorWebAuthnConfig, ToriiOperatorAuth,
 };
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey};
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
 use parking_lot::Mutex;
 use rand::rand_core::{TryCryptoRng, TryRngCore as _};
@@ -36,7 +36,7 @@ use std::{
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use url::Url;
 const HEADER_OPERATOR_SESSION: &str = "x-iroha-operator-session";
@@ -1045,7 +1045,7 @@ impl OperatorAuth {
             let err = OperatorAuthError::invalid_payload("credential id mismatch");
             return Err(self.record_error(ctx, ACTION_REGISTER_VERIFY, err));
         }
-        let created_at_ms = now_ms();
+        let created_at_ms = crate::utils::unix_now_ms();
         let credential = StoredCredential {
             id: auth_data.credential_id.clone(),
             public_key: auth_data.cose_key.public_key.clone(),
@@ -1480,6 +1480,7 @@ impl OperatorAuth {
         self.session_generation(session)
             .ok_or_else(OperatorAuthError::invalid_session)
     }
+    #[cfg(test)]
     fn session_valid(&self, token: &str) -> bool {
         self.session_generation(token).is_some()
     }
@@ -1617,14 +1618,6 @@ enum TokenCheck {
 }
 fn operator_credentials_path(base: &Path) -> PathBuf {
     base.join("operator_auth").join(CREDENTIALS_FILENAME)
-}
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 #[cfg(test)]
 fn random_bytes(len: usize) -> Result<Vec<u8>, OperatorAuthError> {

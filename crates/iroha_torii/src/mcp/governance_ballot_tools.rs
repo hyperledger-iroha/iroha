@@ -56,7 +56,7 @@ fn exact_network_governance_ballot_tool(
         .input_schema
         .as_object_mut()
         .expect("governance ballot MCP schema is an object");
-    schema.insert("required".to_owned(), norito::json!(["headers"]));
+    schema.insert("required".to_owned(), norito::json!(["body", "headers"]));
     let properties = schema
         .get_mut("properties")
         .and_then(Value::as_object_mut)
@@ -71,9 +71,6 @@ fn exact_network_governance_ballot_tool(
         for (field, field_schema) in optional_request_fields {
             body_properties.insert((*field).to_owned(), field_schema.clone());
         }
-    }
-    for (field, field_schema) in optional_request_fields {
-        properties.insert((*field).to_owned(), field_schema.clone());
     }
     properties.insert(
         "headers".to_owned(),

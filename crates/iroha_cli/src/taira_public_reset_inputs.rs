@@ -10,9 +10,11 @@ mod context_release;
 #[path = "taira_public_reset_context.rs"]
 mod reset_context;
 pub(super) use reset_context::{
-    DerivedResetContext, ResetArtifactIntentV1, ResetContextInputs, ResetTopologyIntentV1,
-    decode_reset_topology_intent, derive_reset_context, validate_topology_intent,
+    DerivedResetContext, ResetContextInputs, ResetTopologyIntentV1, decode_reset_topology_intent,
+    derive_reset_context,
 };
+#[cfg(any(target_os = "linux", test))]
+pub(super) use reset_context::{ResetArtifactIntentV1, validate_topology_intent};
 
 pub(super) fn topology_canary_request(bytes: &[u8]) -> Result<AccountOnboardingPlanRequestV1> {
     let (intent, _guard) = decode_reset_topology_intent(bytes)?;

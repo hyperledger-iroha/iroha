@@ -37,11 +37,13 @@ use snark_verifier::{
     },
 };
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+use super::state_relation::public_instance;
 use super::{
     KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1, KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1,
     KAGEMUSHA_IPA_POSEIDON_PARTIAL_ROUNDS_V1, KAGEMUSHA_IPA_POSEIDON_RATE_V1,
     KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1, KAGEMUSHA_IPA_POSEIDON_WIDTH_V1,
-    KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaPastaParityV1, state_relation::public_instance,
+    KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaPastaParityV1,
 };
 use crate::zk::pasta_cycle_loader::{
     DeferredBatchedEquationWitnessV1, DeferredEquationWitness, DeferredScalarEccChip, LIMB_BITS,
@@ -91,6 +93,7 @@ mod proof_bytes;
 pub(super) use proof_bytes::canonical_loaded_proof_bytes_v1;
 pub(super) use proof_bytes::verify_hybrid_ordinary_proof_and_stream_v1;
 use proof_bytes::verify_ordinary_proof_and_stream_v1;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::verify_ordinary_proof_with_canonical_bytes_v1;
 pub(super) use proof_bytes::verify_two_carrier_hybrid_ordinary_proof_and_stream_v1;
 
@@ -793,10 +796,11 @@ where
     }))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Complete same-parity material needed to verify one predecessor and fold its opening claim.
 ///
 /// `protocol` must be witness-loaded and identity-constrained by the enclosing circuit before it
-/// reaches [`constrain_parent_and_history_v1`].  This type is private to prevent callers from
+/// reaches [`constrain_parent_and_history_into_loader_v1`].  This type is private to prevent callers from
 /// accidentally treating a host-selected protocol as authenticated.
 pub(super) struct KagemushaDeferredParentWitnessV1<'a, C>
 where
@@ -806,15 +810,6 @@ where
     pub(super) proof_bytes: &'a [u8],
     pub(super) predecessor_history: &'a IpaAccumulator<C, NativeLoader>,
     pub(super) fold_proof_bytes: &'a [u8],
-}
-
-/// One ordinary helper proof verified as part of a fixed multi-proof scalar pass.
-pub(super) struct KagemushaDeferredOrdinaryProofWitnessV1<'a, C>
-where
-    C: CurveAffineExt,
-{
-    pub(super) instances: &'a [Vec<C::ScalarExt>],
-    pub(super) proof_bytes: &'a [u8],
 }
 
 /// Scalar-half output that the reciprocal parity must fully constrain.
@@ -906,194 +901,13 @@ where
     }
 }
 
-/// Run the complete authenticated scalar predecessor pass against a state-relation builder.
-///
-/// The fixed 544-byte successor history is appended to the parity proof's public instance column
-/// as 34 injective `u128` limbs. The compiled-protocol identity and deferred-equation audit are
-/// equality-bound to the common positions already assigned by the state relation.
-#[expect(
-    dead_code,
-    reason = "Retained authenticated scalar-pass composition entry point; shipping composites bind each phase separately"
-)]
-pub(super) fn constrain_authenticated_scalar_parent_pass_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    succinct_vk: &IpaSuccinctVerifyingKey<C>,
-    native_protocol: &PlonkProtocol<C>,
-    parity: KagemushaPastaParityV1,
-    fixed_structure_digest: [u8; 32],
-    witness: KagemushaDeferredParentWitnessV1<'_, C>,
-    successor_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    let (protocol_offset, audit_offset) = match parity {
-        KagemushaPastaParityV1::Eq => (
-            public_instance::EQ_PROTOCOL_LO,
-            public_instance::EQ_DEFERRED_AUDIT_LO,
-        ),
-        KagemushaPastaParityV1::Ep => (
-            public_instance::EP_PROTOCOL_LO,
-            public_instance::EP_DEFERRED_AUDIT_LO,
-        ),
-    };
-    let public = builder
-        .assigned_instances
-        .first()
-        .ok_or(Error::InvalidInstances)?;
-    let expected_protocol: [AssignedValue<C::ScalarExt>; 2] = public
-        .get(protocol_offset..protocol_offset + 2)
-        .ok_or(Error::InvalidInstances)?
-        .try_into()
-        .map_err(|_| Error::InvalidInstances)?;
-    let expected_audit: [AssignedValue<C::ScalarExt>; 2] = public
-        .get(audit_offset..audit_offset + 2)
-        .ok_or(Error::InvalidInstances)?
-        .try_into()
-        .map_err(|_| Error::InvalidInstances)?;
-    let range = builder.range_chip();
-    let history_limbs = successor_history
-        .chunks_exact(16)
-        .map(|chunk| {
-            let value = C::ScalarExt::from_u128(u128::from_le_bytes(
-                chunk.try_into().expect("history chunk has sixteen bytes"),
-            ));
-            let assigned = builder.main(0).load_witness(value);
-            range.range_check(builder.main(0), assigned, 128);
-            assigned
-        })
-        .collect::<Vec<_>>();
-    if history_limbs.len() != accumulator_limb_count() {
-        return Err(Error::InvalidInstances);
-    }
-    builder
-        .assigned_instances
-        .first_mut()
-        .ok_or(Error::InvalidInstances)?
-        .extend(history_limbs.iter().copied());
-    let (coordinate, scalar_integer) = deferred_field_chips_v1::<C>(&range);
-    let loader = deferred_loader_v1(builder, &coordinate, &scalar_integer);
-    let output = constrain_authenticated_parent_and_history_v1(
-        builder,
-        succinct_vk,
-        native_protocol,
-        parity,
-        fixed_structure_digest,
-        &expected_protocol,
-        witness,
-        &history_limbs,
-        loader,
-    )?;
-    for (actual, expected) in output.audit_digest_limbs.iter().zip(expected_audit) {
-        builder.main(0).constrain_equal(actual, &expected);
-    }
-    Ok(output)
-}
-
-/// Bind the exact native parent protocol and then verify/fold one predecessor in a single call.
-///
-/// Keeping protocol authentication and proof parsing adjacent prevents a future composite circuit
-/// from accidentally passing a host-selected loaded protocol to the scalar verifier.
-pub(super) fn constrain_authenticated_parent_and_history_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    succinct_vk: &IpaSuccinctVerifyingKey<C>,
-    native_protocol: &PlonkProtocol<C>,
-    parity: KagemushaPastaParityV1,
-    fixed_structure_digest: [u8; 32],
-    expected_protocol_limbs: &[AssignedValue<C::ScalarExt>; 2],
-    witness: KagemushaDeferredParentWitnessV1<'_, C>,
-    successor_history_limbs: &[AssignedValue<C::ScalarExt>],
-    loader: DeferredLoader<'_, C>,
-) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    let loaded = load_and_constrain_parent_protocol_v1(
-        &loader,
-        native_protocol,
-        parity,
-        fixed_structure_digest,
-        expected_protocol_limbs,
-    )?;
-    constrain_parent_and_history_v1(
-        builder,
-        succinct_vk,
-        &loaded.protocol,
-        witness,
-        successor_history_limbs,
-        loader,
-    )
-}
-
-/// Verify one predecessor proof, fold its current opening claim with its carried history, and
-/// equality-bind the folded accumulator to the current proof's public history limbs.
-///
-/// The `protocol` argument is already loaded through the enclosing circuit's authenticated
-/// dynamic-protocol relation.  This function intentionally cannot load an unconstrained native
-/// protocol itself.
-pub(super) fn constrain_parent_and_history_v1<'chip, C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    succinct_vk: &IpaSuccinctVerifyingKey<C>,
-    protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
-    witness: KagemushaDeferredParentWitnessV1<'_, C>,
-    successor_history_limbs: &[AssignedValue<C::ScalarExt>],
-    loader: DeferredLoader<'chip, C>,
-) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    if witness.instances.len() != protocol.num_instance.len()
-        || witness
-            .instances
-            .iter()
-            .zip(&protocol.num_instance)
-            .any(|(column, expected)| column.len() != *expected)
-        || successor_history_limbs.len() != accumulator_limb_count()
-    {
-        return Err(Error::InvalidInstances);
-    }
-    let instances = witness
-        .instances
-        .iter()
-        .map(|column| {
-            column
-                .iter()
-                .map(|value| loader.assign_scalar(*value))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    let current = verify_ordinary_proof_v1(
-        &loader,
-        succinct_vk,
-        protocol,
-        &instances,
-        witness.proof_bytes,
-    )?;
-    let predecessor_history = load_native_accumulator(&loader, witness.predecessor_history)?;
-    let folded = verify_fold(
-        &loader,
-        succinct_vk,
-        &[current, predecessor_history],
-        witness.fold_proof_bytes,
-    )?;
-    bind_accumulator_limbs(&loader, &folded, successor_history_limbs)?;
-
-    finalize_deferred_audit_v1(builder, loader)
-}
-
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Verify/fold one parent into an existing shared loader without finalizing its audit.
 ///
 /// When `enabled` is zero (the bootstrap base case), the parser and scalar verifier keep their
 /// fixed shape but the carried successor history is selected directly from the already-valid
 /// seed accumulator. The caller must use this same selector for every emitted parent equation in
-/// [`finalize_deferred_audit_plan_v1`].
+/// [`finalize_deferred_audit_plan_with_u128_binding_v1`].
 pub(super) fn constrain_parent_and_history_into_loader_v1<'chip, C>(
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
     protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
@@ -1247,37 +1061,6 @@ where
     ))
 }
 
-/// Snapshot one shared loader after every scalar-verifier proof has been constrained.
-///
-/// Sibling helper relations use this after verifying all fixed credential/helper proofs through
-/// the same loader. A single audit then commits the complete source namespace and every equation,
-/// so the reciprocal parity cannot omit one proof selectively.
-pub(super) fn finalize_deferred_audit_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    loader: DeferredLoader<'_, C>,
-) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    finalize_tagged_deferred_audit_v1(builder, loader, KAGEMUSHA_PARENT_EQUATION_TAG_V1)
-}
-
-/// Snapshot a combined scalar-verifier audit with a nonzero circuit-family tag.
-pub(super) fn finalize_tagged_deferred_audit_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    loader: DeferredLoader<'_, C>,
-    equation_tag: u32,
-) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    finalize_tagged_deferred_audit_with_u128_binding_v1(builder, loader, equation_tag, &[])
-}
-
 /// Snapshot a tagged scalar-verifier audit and bind a fixed list of canonical
 /// `u128` values into the same field-native transcript.
 ///
@@ -1312,36 +1095,6 @@ where
         assigned_selectors,
         vec![true; equation_count],
         bound_values,
-    )
-}
-
-/// Snapshot one mixed-role scalar-verifier audit after every proof equation has been emitted.
-///
-/// The assigned selectors are constrained circuit values. The parallel booleans are their exact
-/// witnesses and are replayed by the reciprocal parity when it enforces the curve equations.
-#[expect(
-    dead_code,
-    reason = "Retained unbound audit adapter for reciprocal relation qualification"
-)]
-pub(super) fn finalize_deferred_audit_plan_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    loader: DeferredLoader<'_, C>,
-    equation_tags: Vec<u32>,
-    assigned_selectors: Vec<AssignedValue<C::ScalarExt>>,
-    equation_selectors: Vec<bool>,
-) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    finalize_deferred_audit_plan_with_u128_binding_v1(
-        builder,
-        loader,
-        equation_tags,
-        assigned_selectors,
-        equation_selectors,
-        &[],
     )
 }
 
@@ -1412,47 +1165,6 @@ where
     };
     *builder.pool(0) = loader.take_ctx();
     Ok(output)
-}
-
-/// Derive a source-major deferred batch entirely in the native-scalar half.
-///
-/// The first-stage Poseidon transcript is identical to the V1 full audit.  Its
-/// nonzero digest becomes the Fiat-Shamir challenge used to fold every tagged,
-/// selector-gated equation into one coefficient per source.  This helper
-/// intentionally stops before cross-parity authentication; callers must bind
-/// every returned field before using the compact host witness in a reciprocal
-/// circuit.
-#[expect(
-    dead_code,
-    reason = "Retained standalone tagged-batch adapter for reciprocal relation qualification"
-)]
-pub(super) fn finalize_tagged_native_deferred_batch_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    loader: DeferredLoader<'_, C>,
-    equation_tag: u32,
-) -> Result<KagemushaNativeDeferredBatchV1<C>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    if equation_tag == 0 {
-        return Err(Error::InvalidInstances);
-    }
-    let equation_count = loader.ecc_chip().equation_count();
-    let assigned_selectors = {
-        let mut ctx = loader.ctx_mut();
-        (0..equation_count)
-            .map(|_| ctx.main().load_constant(C::ScalarExt::ONE))
-            .collect::<Vec<_>>()
-    };
-    derive_native_deferred_batch_with_u128_binding_v1(
-        builder,
-        loader,
-        vec![equation_tag; equation_count],
-        assigned_selectors,
-        &[],
-    )
 }
 
 pub(super) fn derive_native_deferred_batch_with_u128_binding_v1<C>(
@@ -1766,7 +1478,6 @@ where
     Ok(output)
 }
 
-const KAGEMUSHA_PARENT_EQUATION_TAG_V1: u32 = 1;
 const KAGEMUSHA_DEFERRED_AUDIT_BOUND_VALUES_TAG_V1: u64 = u64::from_le_bytes(*b"kgmbnd_1");
 const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-hash-claim-deferred-batch";
@@ -1774,67 +1485,6 @@ const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_VERSION_V1: u32 = 1;
 const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_INPUTS_TAG_V1: u64 = u64::from_le_bytes(*b"kgminp_1");
 const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_SOURCES_TAG_V1: u64 = u64::from_le_bytes(*b"kgmsrc_1");
 const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_EQUATIONS_TAG_V1: u64 = u64::from_le_bytes(*b"kgmeqn_1");
-
-/// Constrain one scalar-verifier audit in the reciprocal Pasta parity.
-///
-/// This is the authority-completing half of [`constrain_parent_and_history_v1`]: it assigns every
-/// emitted source and coefficient, recomputes the identical field-native Poseidon audit, binds its
-/// canonical two-`u128` limbs to the shared public instance, and evaluates the complete batched
-/// curve equation through the dedicated dense MSM machine.
-#[expect(
-    dead_code,
-    reason = "Retained complete parent-audit composition entry point alongside bound production audits"
-)]
-pub(super) fn constrain_reciprocal_parent_audit_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::Base>,
-    witness: &DeferredEquationWitness<C>,
-    equation_selectors: &[bool],
-    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
-    dense_jobs: &mut PastaDenseMsmJobsV1<C>,
-) -> Result<(), String>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
-    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
-{
-    constrain_reciprocal_audit_plan_v1(
-        builder,
-        witness,
-        &vec![KAGEMUSHA_PARENT_EQUATION_TAG_V1; witness.equations.len()],
-        equation_selectors,
-        expected_audit_limbs,
-        dense_jobs,
-    )
-}
-
-/// Constrain one tagged scalar-verifier audit in the reciprocal Pasta parity.
-#[expect(
-    dead_code,
-    reason = "Retained tagged-audit adapter alongside bound production audits"
-)]
-pub(super) fn constrain_reciprocal_tagged_audit_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::Base>,
-    witness: &DeferredEquationWitness<C>,
-    equation_selectors: &[bool],
-    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
-    equation_tag: u32,
-    dense_jobs: &mut PastaDenseMsmJobsV1<C>,
-) -> Result<(), String>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
-    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
-{
-    let equation_tags = vec![equation_tag; witness.equations.len()];
-    constrain_reciprocal_audit_plan_v1(
-        builder,
-        witness,
-        &equation_tags,
-        equation_selectors,
-        expected_audit_limbs,
-        dense_jobs,
-    )
-}
 
 /// Consume a compact native deferred batch, constrain its aggregate equation,
 /// and return the complete source-major carrier reconstructed in the
@@ -1990,32 +1640,6 @@ where
     }
     *builder.pool(0) = ctx;
     Ok(())
-}
-
-/// Constrain one mixed-role scalar-verifier audit in the reciprocal Pasta parity.
-pub(super) fn constrain_reciprocal_audit_plan_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::Base>,
-    witness: &DeferredEquationWitness<C>,
-    equation_tags: &[u32],
-    equation_selectors: &[bool],
-    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
-    dense_jobs: &mut PastaDenseMsmJobsV1<C>,
-) -> Result<(), String>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
-    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
-{
-    constrain_reciprocal_audit_plan_with_u128_binding_v1(
-        builder,
-        witness,
-        equation_tags,
-        equation_selectors,
-        expected_audit_limbs,
-        &[],
-        &[],
-        ReciprocalMsmV1::Dense(dense_jobs),
-    )
 }
 
 /// Consume a deferred audit whose Poseidon transcript also binds a canonical
@@ -2243,8 +1867,9 @@ where
 
 /// Succinctly verify one ordinary proof with an already identity-bound protocol.
 ///
-/// Multiple calls may share one loader; callers must invoke [`finalize_deferred_audit_v1`] once
-/// after the last proof and enforce that combined output in the reciprocal parity.
+/// Multiple calls may share one loader; callers must invoke
+/// [`finalize_tagged_deferred_audit_with_u128_binding_v1`] once after the last proof and enforce
+/// that combined output in the reciprocal parity.
 pub(super) fn verify_ordinary_proof_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -2261,61 +1886,6 @@ where
         verify_ordinary_proof_and_stream_v1(loader, succinct_vk, protocol, instances, proof_bytes)?
             .0,
     )
-}
-
-/// Verify a fixed non-empty list of ordinary helper proofs through one identity-bound protocol.
-///
-/// Every proof contributes equations to the same loader. The caller must subsequently invoke
-/// [`finalize_deferred_audit_v1`] exactly once so the reciprocal parity constrains the union.
-#[expect(
-    dead_code,
-    reason = "Retained batch ordinary-proof adapter for private recursive circuit composition"
-)]
-pub(super) fn verify_ordinary_proofs_v1<'chip, C>(
-    loader: &DeferredLoader<'chip, C>,
-    succinct_vk: &IpaSuccinctVerifyingKey<C>,
-    protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
-    witnesses: &[KagemushaDeferredOrdinaryProofWitnessV1<'_, C>],
-) -> Result<Vec<DeferredAccumulator<'chip, C>>, Error>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    if witnesses.is_empty() {
-        return Err(Error::InvalidInstances);
-    }
-    witnesses
-        .iter()
-        .map(|witness| {
-            if witness.instances.len() != protocol.num_instance.len()
-                || witness
-                    .instances
-                    .iter()
-                    .zip(&protocol.num_instance)
-                    .any(|(column, expected)| column.len() != *expected)
-            {
-                return Err(Error::InvalidInstances);
-            }
-            let instances = witness
-                .instances
-                .iter()
-                .map(|column| {
-                    column
-                        .iter()
-                        .map(|value| loader.assign_scalar(*value))
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-            verify_ordinary_proof_v1(
-                loader,
-                succinct_vk,
-                protocol,
-                &instances,
-                witness.proof_bytes,
-            )
-        })
-        .collect()
 }
 
 pub(super) fn verify_fold<'chip, C>(

@@ -4,12 +4,15 @@
 //! selector identifies configuration, while the installed unit identifies the
 //! daemon actually selected by systemd. Neither is inferred from a prior plan.
 use super::*;
+#[cfg(any(target_os = "linux", test))]
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
 };
 
+#[cfg(any(target_os = "linux", test))]
 const HOST_PUBLIC_KEY: &str = "/etc/ssh/ssh_host_ed25519_key.pub";
+#[cfg(any(target_os = "linux", test))]
 const UNIT_PROPERTIES: &str = "LoadState,FragmentPath,DropInPaths,NeedDaemonReload,ActiveState,SubState,MainPID,ControlPID,Job";
 
 /// Run on the approved Linux guest through its pinned SSH route, after stopping validators.
@@ -23,6 +26,7 @@ pub(in super::super::super::super) struct CaptureDispatcherCurrentRuntime {
     output: PathBuf,
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn host_identity(observed: &mut Observed) -> Result<String> {
     let key = observed.pin(Path::new(HOST_PUBLIC_KEY), Some(0o644), 16 * 1024)?;
     let bytes = admission::read(&key)?;
@@ -38,6 +42,7 @@ fn host_identity(observed: &mut Observed) -> Result<String> {
     ))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn unit_properties(unit: &str) -> Result<BTreeMap<String, String>> {
     let bytes = super::super::super::run_host_command(
         super::super::super::SYSTEMCTL,
@@ -67,6 +72,7 @@ fn unit_properties(unit: &str) -> Result<BTreeMap<String, String>> {
     Ok(fields)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn require_unit(unit: &str, fragment: &str, running: bool) -> Result<()> {
     let fields = unit_properties(unit)?;
     need(
@@ -97,6 +103,7 @@ fn require_unit(unit: &str, fragment: &str, running: bool) -> Result<()> {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn selected_release(slug: &str) -> Result<(String, String)> {
     let service = format!("/srv/taira/{slug}");
     let selector = Path::new(&service).join("current");
@@ -122,6 +129,7 @@ fn selected_release(slug: &str) -> Result<(String, String)> {
 }
 
 /// Accept only the exact installed launcher assignment, without executing it.
+#[cfg(any(target_os = "linux", test))]
 fn daemon_in_unit(bytes: &[u8], slug: &str) -> Result<(String, String)> {
     let text = std::str::from_utf8(bytes)?;
     let config = format!("/srv/taira/{slug}/current/config/config.toml");
@@ -167,6 +175,7 @@ fn daemon_in_unit(bytes: &[u8], slug: &str) -> Result<(String, String)> {
     Ok((daemon.to_owned(), commit.to_owned()))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn artifact(
     observed: &mut Observed,
     role: &str,
@@ -185,6 +194,7 @@ fn artifact(
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn capture_validator(slug: &str, observed: &mut Observed) -> Result<ValidatorAdmittedReleaseV1> {
     let (release_root, commit) = selected_release(slug)?;
     let unit = format!("iroha3d-{slug}.service");
@@ -238,6 +248,7 @@ fn capture_validator(slug: &str, observed: &mut Observed) -> Result<ValidatorAdm
     Ok(prior)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn capture_edge(observed: &mut Observed) -> Result<EdgeAdmittedReleaseV1> {
     let (release_root, commit) = selected_release("edge")?;
     require_unit("nginx.service", "/etc/systemd/system/nginx.service", true)?;

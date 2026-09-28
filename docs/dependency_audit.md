@@ -53,7 +53,8 @@ Legitimacy and “main crate” assessment (spotlight):
 - BLS12-381/ZK: `blstrs`, `halo2_*` — widely used in production ZK ecosystems; legitimate.
 - PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — legit reference crates.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — canonical modern Rust TLS stack.
-- Noise: `snow` — canonical implementation.
+- Noise: none. The retired classical Noise transport and its `snow`
+  lockfile pin were removed; TLS-over-TCP is the mandatory P2P transport.
 - Serialization: Norito is the canonical workspace codec. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
 - FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate; prefer Rustls over OpenSSL in production paths (current code already does).
 

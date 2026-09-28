@@ -55,8 +55,6 @@ pub mod multi_fetch;
 pub mod musubi;
 #[cfg(feature = "manifest")]
 pub mod payload_verifier;
-#[cfg(feature = "manifest")]
-pub mod publisher;
 pub mod policy;
 #[cfg(feature = "manifest")]
 #[path = "proof_stream.rs"]
@@ -65,12 +63,15 @@ pub mod proof_stream;
 #[path = "proof_stream_transport.rs"]
 pub mod proof_stream_transport;
 #[cfg(feature = "manifest")]
+pub mod publisher;
+#[cfg(feature = "manifest")]
 pub mod reference;
 pub mod scoreboard;
 #[cfg(feature = "manifest")]
 pub mod streaming_verifier;
 #[cfg(feature = "cli")]
 pub mod taikai;
+pub mod taikai_bundle;
 #[cfg(feature = "manifest")]
 pub mod trustless;
 #[cfg(feature = "manifest")]

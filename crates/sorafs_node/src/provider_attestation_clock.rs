@@ -13,8 +13,11 @@
 //! recoverable without putting private journal DTOs in the public provider contract.
 use crate::provider_attestation_journal::{
     MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
-    MusubiProviderAttestationJournalPolicyV1,
     musubi_provider_attestation_journal_checkpoint_revision_v1,
+};
+#[cfg(test)]
+use crate::provider_attestation_journal::{
+    MusubiProviderAttestationJournalPolicyV1,
     validate_musubi_provider_attestation_journal_checkpoint_metadata_v1,
 };
 use crate::provider_ingest_runtime::ProviderIngestFutureV1;
@@ -189,6 +192,7 @@ impl MusubiProviderAttestationJournalCheckpointHeadV1 {
     ///
     /// Returns an error for a zero sequence or revision. An untimed sequence-1
     /// enqueue checkpoint may legitimately retain a zero UNIX-time floor.
+    #[cfg(test)]
     pub(crate) fn try_new(
         checkpoint_sequence: u64,
         checkpoint_revision: [u8; 32],
@@ -256,6 +260,7 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
     /// # Errors
     ///
     /// Returns an error for an inert scope digest.
+    #[cfg(test)]
     pub(crate) fn initial(
         scope_digest: [u8; 32],
     ) -> Result<Self, MusubiProviderAttestationJournalCheckpointSealErrorV1> {
@@ -268,6 +273,7 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
     /// Returns an error unless the checkpoint sequence advances by exactly
     /// one, its revision changes, its UNIX floor does not regress, and both
     /// the record generation and checkpoint sequence can advance.
+    #[cfg(test)]
     pub(crate) fn successor(
         previous: &Self,
         head: MusubiProviderAttestationJournalCheckpointHeadV1,
@@ -307,6 +313,7 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
         next.validate_successor_of(previous)?;
         Ok(next)
     }
+    #[cfg(test)]
     fn new(
         scope_digest: [u8; 32],
         generation: u64,
@@ -869,6 +876,7 @@ pub fn musubi_provider_attestation_journal_checkpoint_blob_revision_v1(
 ///
 /// Fails closed for invalid scope/binding, an uninitialized clock, a different
 /// existing head, timeout, qualification drift, or unresolved CAS outcome.
+#[cfg(test)]
 pub(crate) async fn initialize_musubi_provider_attestation_journal_checkpoint_seal_v1(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -908,6 +916,7 @@ pub(crate) async fn initialize_musubi_provider_attestation_journal_checkpoint_se
 ///
 /// Fails closed for invalid policy/scope/blob/head/lineage, absent H0, clock
 /// disagreement, qualification drift, provider timeout, rollback, or fork.
+#[cfg(test)]
 pub(crate) async fn seal_musubi_provider_attestation_journal_checkpoint_v1(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -984,6 +993,7 @@ pub(crate) async fn seal_musubi_provider_attestation_journal_checkpoint_v1(
 ///
 /// Fails closed for absent H0, malformed or noncanonical state, policy/scope disagreement, an
 /// observed time above the sealed clock floor, provider timeout, or qualification drift.
+#[cfg(test)]
 pub(crate) async fn load_musubi_provider_attestation_journal_checkpoint_v1(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -1024,6 +1034,7 @@ pub(crate) async fn load_musubi_provider_attestation_journal_checkpoint_v1(
     ensure_checkpoint_head_unchanged(scope_digest, &record, seal_binding, seal).await?;
     Ok((record, Some(checkpoint_blob)))
 }
+#[cfg(test)]
 async fn validate_authoritative_checkpoint_record_blob(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -1044,6 +1055,7 @@ async fn validate_authoritative_checkpoint_record_blob(
     .ok_or(MusubiProviderAttestationJournalCheckpointSealErrorV1::MissingBlob)?;
     validate_checkpoint_blob(scope, policy, head, &blob)
 }
+#[cfg(test)]
 async fn ensure_checkpoint_head_unchanged(
     scope_digest: [u8; 32],
     expected: &MusubiProviderAttestationJournalCheckpointHeadRecordV1,
@@ -1064,6 +1076,7 @@ async fn ensure_checkpoint_head_unchanged(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_checkpoint_scope_policy(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -1077,6 +1090,7 @@ fn validate_checkpoint_scope_policy(
     }
     scope.scope_digest()
 }
+#[cfg(test)]
 fn validate_checkpoint_blob(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -1104,6 +1118,7 @@ fn validate_checkpoint_blob(
     }
     Ok(())
 }
+#[cfg(test)]
 async fn load_checkpoint_clock_floor(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1121,6 +1136,7 @@ async fn load_checkpoint_clock_floor(
         .ok_or(MusubiProviderAttestationJournalCheckpointSealErrorV1::Uninitialized)?;
     Ok(record.floor_unix_ms())
 }
+#[cfg(test)]
 async fn put_checkpoint_blob_and_readback(
     scope_digest: [u8; 32],
     checkpoint_revision: [u8; 32],
@@ -1169,6 +1185,7 @@ async fn put_checkpoint_blob_and_readback(
         }
     }
 }
+#[cfg(test)]
 async fn load_checkpoint_blob_authoritative(
     scope_digest: [u8; 32],
     checkpoint_revision: [u8; 32],
@@ -1196,6 +1213,7 @@ async fn load_checkpoint_blob_authoritative(
     }
     Ok(loaded)
 }
+#[cfg(test)]
 async fn load_checkpoint_head_authoritative(
     scope_digest: [u8; 32],
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1221,6 +1239,7 @@ async fn load_checkpoint_head_authoritative(
     }
     Ok(loaded)
 }
+#[cfg(test)]
 async fn load_checkpoint_head_record_authoritative(
     scope_digest: [u8; 32],
     record_digest: [u8; 32],
@@ -1250,6 +1269,7 @@ async fn load_checkpoint_head_record_authoritative(
     }
     Ok(loaded)
 }
+#[cfg(test)]
 async fn commit_checkpoint_head_and_readback(
     scope_digest: [u8; 32],
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1340,6 +1360,7 @@ async fn commit_checkpoint_head_and_readback(
         }
     }
 }
+#[cfg(test)]
 fn classify_checkpoint_head_change(
     expected: &MusubiProviderAttestationJournalCheckpointHeadRecordV1,
     authoritative: &MusubiProviderAttestationJournalCheckpointHeadRecordV1,
@@ -1360,12 +1381,14 @@ fn mutation_outcome_is_ambiguous(
         Err(MusubiProviderAttestationClockSealErrorV1::Ambiguous)
     )
 }
+#[cfg(test)]
 fn qualify_checkpoint_seal(
     expected: &MusubiProviderAttestationClockSealBindingV1,
     seal: &dyn MusubiProviderAttestationClockSealV1,
 ) -> Result<(), MusubiProviderAttestationJournalCheckpointSealErrorV1> {
     qualify_seal(expected, seal).map_err(map_clock_checkpoint_error)
 }
+#[cfg(test)]
 fn map_checkpoint_seal_error(
     error: MusubiProviderAttestationClockSealErrorV1,
 ) -> MusubiProviderAttestationJournalCheckpointSealErrorV1 {
@@ -1381,6 +1404,7 @@ fn map_checkpoint_seal_error(
         }
     }
 }
+#[cfg(test)]
 fn map_clock_checkpoint_error(
     error: MusubiProviderAttestationClockErrorV1,
 ) -> MusubiProviderAttestationJournalCheckpointSealErrorV1 {
@@ -1616,6 +1640,7 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
     pub const fn scope_digest(&self) -> [u8; 32] {
         self.scope_digest
     }
+    #[cfg(test)]
     pub(crate) async fn initialize_journal_checkpoint_seal(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1631,6 +1656,7 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         )
         .await
     }
+    #[cfg(test)]
     pub(crate) async fn load_journal_checkpoint(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1651,6 +1677,7 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         )
         .await
     }
+    #[cfg(test)]
     pub(crate) async fn seal_journal_checkpoint(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1674,6 +1701,7 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         )
         .await
     }
+    #[cfg(test)]
     pub(crate) async fn load_journal_checkpoint_direct_predecessor(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1720,6 +1748,7 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         }
         Ok((predecessor, Some(blob)))
     }
+    #[cfg(test)]
     fn validate_journal_checkpoint_scope_binding(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,

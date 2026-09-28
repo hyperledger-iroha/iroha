@@ -1,10 +1,12 @@
-//! Exact JSON and schema identities for deployment-scoped final-promotion permissions.
+//! Exact JSON and schema identities for deployment-scoped final-promotion and topology
+//! permissions.
 use crate::permission::{
     Permission as _,
     sorafs::{
         CanCheckSorafsFinalPromotion, CanCheckSorafsFinalPromotionAccountCustody,
-        CanManageSorafsFinalPromotionAccountCustody, CanManageSorafsFinalPromotionCustody,
-        CanOperateSorafsFinalPromotion,
+        CanCheckSorafsTopologyApproval, CanManageSorafsFinalPromotionAccountCustody,
+        CanManageSorafsFinalPromotionCustody, CanManageSorafsTopologyCustody,
+        CanOperateSorafsFinalPromotion, CanOperateSorafsTopologyApproval,
     },
 };
 use iroha_data_model::permission::Permission;
@@ -48,6 +50,31 @@ fn final_promotion_permission_json_is_closed_and_preserves_exact_deployment() {
     check!(CanCheckSorafsFinalPromotion);
     check!(CanManageSorafsFinalPromotionAccountCustody);
     check!(CanCheckSorafsFinalPromotionAccountCustody);
+    check!(CanManageSorafsTopologyCustody);
+    check!(CanOperateSorafsTopologyApproval);
+    check!(CanCheckSorafsTopologyApproval);
+}
+
+#[test]
+fn topology_permissions_are_distinct_per_action_and_deployment() {
+    let token = |capability: usize, deployment: &str| -> Permission {
+        let deployment_id = deployment.to_owned();
+        match capability {
+            0 => CanManageSorafsTopologyCustody { deployment_id }.into(),
+            1 => CanOperateSorafsTopologyApproval { deployment_id }.into(),
+            _ => CanCheckSorafsTopologyApproval { deployment_id }.into(),
+        }
+    };
+    for capability in 0..3 {
+        let exact = token(capability, "production-primary");
+        assert_ne!(exact, token(capability, "production-secondary"));
+        for other in 0..3 {
+            assert_eq!(
+                exact == token(other, "production-primary"),
+                capability == other
+            );
+        }
+    }
 }
 
 #[test]

@@ -43,6 +43,11 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(receipt.transactionHashHex, receipt.signedTransaction.hashHex)
         XCTAssertEqual(receipt.signedTransaction.payload, connect.lastSignable?.payloadBytes)
         XCTAssertEqual(receipt.signedTransaction.signedTransaction.isEmpty, false)
+        var payloadReader = CanonicalNoritoReader(data: receipt.signedTransaction.payload)
+        for _ in 0..<7 { _ = try payloadReader.readCompactField() }
+        var admissionReader = CanonicalNoritoReader(data: try payloadReader.readCompactField())
+        XCTAssertEqual(try admissionReader.readUInt32LE(), TransactionAdmissionIntentV1.ordinary.rawValue)
+        XCTAssertEqual(admissionReader.remaining(), 0)
     }
 
     func testBuildTransferDraftFailsClosedWithoutSigningPublicKey() throws {

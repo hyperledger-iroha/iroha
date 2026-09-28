@@ -9,6 +9,7 @@
 use std::sync::{Arc, OnceLock};
 
 use super::secret_polynomial::SecretPolynomial;
+#[cfg(any(test, feature = "fastpq-gpu"))]
 use crate::digest384_batch::Digest384LastFieldJob;
 use fastpq_isi::{
     FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1, GoldilocksDigest384OwnedDomainPrefixV1,
@@ -308,12 +309,23 @@ pub(super) const MAX_PREPARED_HASH_FRAME_BYTES: usize = 8 * 1024;
 
 /// Exact canonical body held in one fixed allocation and erased on every exit.
 /// Prefix state contains only public domain metadata and the body length.
+///
+/// Only required-device leaf hashing constructs this frame, but every build
+/// sizes it in the DEEP leaf-batch payload charge so admission stays identical.
+#[cfg_attr(
+    not(any(test, feature = "fastpq-gpu")),
+    expect(
+        dead_code,
+        reason = "CPU-only builds size but never construct device leaf frames"
+    )
+)]
 pub(super) struct PreparedHashFrame {
     cached: GoldilocksDigest384OwnedDomainPrefixV1,
     index: u64,
     encoded: SecretPolynomial<u8>,
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 impl PreparedHashFrame {
     /// Preserve the optimized canonical cached CPU implementation.
     pub(super) fn hash_cpu(&self) -> crate::Result<Digest> {
@@ -549,6 +561,7 @@ impl Context {
     }
 
     /// Prepare the same canonical body and typed cached domain for bounded hashing.
+    #[cfg(any(test, feature = "fastpq-gpu"))]
     pub(super) fn prepare_hash_frame(&self, frame: &Frame<'_>) -> crate::Result<PreparedHashFrame> {
         let length = norito::canonical_frame_len(frame)?;
         if length > MAX_PREPARED_HASH_FRAME_BYTES {

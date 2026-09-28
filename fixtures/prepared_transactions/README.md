@@ -14,6 +14,9 @@ the decoded 32 bytes of `receipt.plan_hash`, encoded as lowercase hexadecimal
 (the JSON hash literal itself is not the binding value); its deadline cannot exceed `receipt.body.valid_until_ms`.
 The faucet semantic hash uses the existing domain-separated canonical claim hash.
 Signed creation time plus positive TTL cannot exceed the binding deadline.
+Current onboarding and faucet transactions bind `Ordinary` admission. Preparation
+requires one authoritative route, and submission revalidates that route before
+durable queue custody. A pending receipt never claims committed execution.
 
 Onboarding authority remains the dedicated scoped token and configured signer.
 Verify the original request, expected network, trusted issuer, and signed receipt

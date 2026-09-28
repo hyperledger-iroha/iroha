@@ -106,7 +106,6 @@ mod model {
         crate :: DeriveJsonDeserialize,
     )]
     #[norito(decode_from_slice)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::block::model::SignedBlock")]
     pub struct SignedBlock {
@@ -1003,7 +1002,6 @@ pub mod error {
             Encode,
             IntoSchema,
         )]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum BlockRejectionReason {
             /// Block was rejected during consensus.
             ConsensusBlockRejection,
@@ -1681,7 +1679,10 @@ mod tests {
         assert_eq!(canonical_block.first(), Some(&1), "signed block V1 prefix");
         // signatures, payload, result, commit_certificate
         let mut block = split_default_norito_fields(&canonical_block[1..], 4);
-        let mut payload = split_default_norito_fields(&block[1], 7);
+        // header, external_entrypoints, da_commitments, da_proof_policies,
+        // da_pin_intents, npos_consensus_effects, global_beacon_pulse,
+        // execution_context
+        let mut payload = split_default_norito_fields(&block[1], 8);
         assert_eq!(&payload[1][..8], &1_u64.to_le_bytes());
         let entrypoints = split_default_norito_fields(&payload[1][8..], 1);
         assert_eq!(entrypoints[0], canonical_entrypoint[1..]);

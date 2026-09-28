@@ -13,7 +13,6 @@ mod model {
     /// Strict `sorafs://...` URI literal used for logo links.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct SorafsUri(pub(super) ConstString);
 }
 impl SorafsUri {

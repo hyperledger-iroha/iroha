@@ -7,14 +7,13 @@ use iroha_data_model::ministry::{
     PolicyJuryBallotMode, PolicyJuryBallotRevealV1, PolicyJuryFailoverPlan, PolicyJurySortitionV1,
     PolicyJuryVoteChoice, PolicyJuryWaitlistEntry,
 };
+use norito::{derive::JsonDeserialize, json};
 use rand::{
     SeedableRng,
     distr::{Distribution, weighted::WeightedIndex},
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core_06::{OsRng as SecureOsRng, RngCore as SecureRngCore};
-use serde::Deserialize;
-use serde_json::Value as JsonValue;
 use std::{
     error::Error,
     fs,
@@ -61,7 +60,7 @@ pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
     match command {
         Command::Sortition(options) => {
             let manifest = run_sortition(&options)?;
-            let json = norito::json::to_json_pretty(&manifest).map_err(|err| {
+            let json = json::to_json_pretty(&manifest).map_err(|err| {
                 format!("failed to serialize policy jury sortition manifest: {err}")
             })?;
             if let Some(path) = options.output_path {
@@ -92,7 +91,7 @@ fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Bo
             options.roster_path.display()
         )
     })?;
-    let roster: JuryRoster = serde_json::from_slice(&roster_bytes).map_err(|err| {
+    let roster: JuryRoster = json::from_slice(&roster_bytes).map_err(|err| {
         format!(
             "failed to parse policy jury roster JSON from `{}`: {err}",
             options.roster_path.display()
@@ -204,9 +203,9 @@ fn run_ballot_verify(options: &BallotVerifyOptions) -> Result<(), Box<dyn Error>
             options.reveal_path.display()
         )
     })?;
-    let commit: PolicyJuryBallotCommitV1 = norito::json::from_slice(&commit_bytes)
+    let commit: PolicyJuryBallotCommitV1 = json::from_slice(&commit_bytes)
         .map_err(|err| format!("failed to parse ballot commitment JSON: {err}"))?;
-    let reveal: PolicyJuryBallotRevealV1 = norito::json::from_slice(&reveal_bytes)
+    let reveal: PolicyJuryBallotRevealV1 = json::from_slice(&reveal_bytes)
         .map_err(|err| format!("failed to parse ballot reveal JSON: {err}"))?;
     commit
         .verify_reveal(&reveal)
@@ -248,10 +247,10 @@ fn build_ballot_pair(
 }
 fn write_json_artifact<T>(value: &T, path: Option<&Path>, label: &str) -> Result<(), Box<dyn Error>>
 where
-    T: norito::json::JsonSerialize + ?Sized,
+    T: json::JsonSerialize + ?Sized,
 {
-    let json = norito::json::to_json_pretty(value)
-        .map_err(|err| format!("failed to serialize {label}: {err}"))?;
+    let json =
+        json::to_json_pretty(value).map_err(|err| format!("failed to serialize {label}: {err}"))?;
     if let Some(target) = path {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|err| {
@@ -326,11 +325,11 @@ fn perform_draws(
     }
     Ok(draws)
 }
-#[derive(Deserialize)]
+#[derive(JsonDeserialize)]
 struct JuryRoster {
     format_version: u32,
     jurors: Vec<JuryCandidate>,
-    #[serde(default)]
+    #[norito(default)]
     default_grace_period_secs: Option<u32>,
 }
 impl JuryRoster {
@@ -349,7 +348,7 @@ impl JuryRoster {
     }
     fn eligible_jurors(&self) -> Result<Vec<EligibleJuror>, Box<dyn Error>> {
         let mut members = Vec::new();
-        for (index, juror) in self.jurors.iter().cloned().enumerate() {
+        for juror in self.jurors.iter().cloned() {
             if !juror.eligible {
                 continue;
             }
@@ -360,34 +359,25 @@ impl JuryRoster {
                 )
                 .into());
             }
-            members.push(EligibleJuror {
-                member: juror,
-                original_index: index,
-            });
+            members.push(EligibleJuror { member: juror });
         }
         Ok(members)
     }
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, JsonDeserialize)]
 struct JuryCandidate {
     juror_id: String,
     pop_identity: String,
-    #[serde(default = "default_weight")]
+    #[norito(default = "default_weight")]
     weight: u64,
-    #[serde(default = "default_true")]
+    #[norito(default = "default_true")]
     eligible: bool,
-    #[serde(default)]
+    #[norito(default)]
     grace_period_secs: Option<u32>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    #[serde(rename = "metadata")]
-    metadata: Option<JsonValue>,
 }
 #[derive(Clone)]
 struct EligibleJuror {
     member: JuryCandidate,
-    #[allow(dead_code)]
-    original_index: usize,
 }
 struct DrawRef {
     index: usize,

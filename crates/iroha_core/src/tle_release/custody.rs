@@ -3,19 +3,18 @@
 use std::{collections::BTreeMap, sync::RwLock};
 
 use iroha_data_model::governance::types::TleKeySessionId;
+#[cfg(test)]
 use mv::storage::StorageReadOnly as _;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use crate::{
-    state::{StateReadOnly, WorldReadOnly as _},
-    tle_release::{
-        AuthorizedTleReleaseContextV1, InMemoryTlePartialReleaseSignerV1,
-        TleKeySessionPublicStateV1, TlePartialReleaseCapabilityAttestationV1,
-        TlePartialReleaseCapabilityErrorV1, TlePartialReleaseShareV1, TlePartialReleaseSignerV1,
-        TleProjectedPartialReleaseSignerV1, ValidatedTleKeySessionV1,
-        ValidatedTleReleaseProjectionV1,
-    },
+#[cfg(test)]
+use crate::state::{StateReadOnly, WorldReadOnly as _};
+use crate::tle_release::{
+    AuthorizedTleReleaseContextV1, InMemoryTlePartialReleaseSignerV1, TleKeySessionPublicStateV1,
+    TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1,
+    TlePartialReleaseShareV1, TlePartialReleaseSignerV1, TleProjectedPartialReleaseSignerV1,
+    ValidatedTleKeySessionV1, ValidatedTleReleaseProjectionV1,
 };
 
 /// Process-local, zeroizing owner for active and retiring TLE release shares.
@@ -102,6 +101,7 @@ impl RuntimeTleReleaseShareCustodyV1 {
         self.insert_validated_share(signer)
     }
 
+    #[cfg(test)]
     /// Import a scalar triple against the exact committed public transcript.
     ///
     /// This is the preferred software-custody entry point once the node has a
@@ -132,6 +132,7 @@ impl RuntimeTleReleaseShareCustodyV1 {
         self.import_components(public_state, participant_index, components)
     }
 
+    #[cfg(test)]
     /// Retire and zeroize one share after every committed reference is expired.
     ///
     /// The deployment's authenticated rotation coordinator must first make the

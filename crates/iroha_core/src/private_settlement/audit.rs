@@ -10,21 +10,26 @@ use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead as _, KeyInit as _, Payload},
 };
-use iroha_crypto::{
-    Hash, HybridError, HybridKemCiphertext, HybridSecretKey, HybridSuite, hybrid_decapsulate,
-    hybrid_encapsulate,
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_crypto::HybridError;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_crypto::hybrid_encapsulate;
+use iroha_crypto::{Hash, HybridKemCiphertext, HybridSecretKey, HybridSuite, hybrid_decapsulate};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::nexus::{
+    ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementWrappedDekV1,
 };
 use iroha_data_model::{
     account::AccountId,
     nexus::{
-        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1,
-        PrivateSettlementAuditAadV1, PrivateSettlementAuditCapsuleV1,
-        PrivateSettlementAuditPolicyV1, PrivateSettlementCapsulePaddingV1,
-        PrivateSettlementValidationError, PrivateSettlementWrappedDekV1,
+        PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1, PrivateSettlementAuditAadV1,
+        PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditPolicyV1,
+        PrivateSettlementCapsulePaddingV1, PrivateSettlementValidationError,
         private_settlement_audit_plaintext_commitment_v1 as data_model_plaintext_commitment_v1,
     },
 };
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use rand::rand_core::TryCryptoRng;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -90,27 +95,7 @@ pub fn private_settlement_audit_plaintext_commitment_v1(
         .map_err(|_| PrivateSettlementAuditCryptoErrorV1::CanonicalEncoding)
 }
 
-/// Seal one canonical private leg plaintext using operating-system entropy.
-///
-/// # Errors
-///
-/// Returns a typed failure for invalid policy/AAD, plaintext size or commitment
-/// mismatch, unavailable entropy, or a cryptographic failure.
-pub fn seal_private_settlement_audit_capsule_v1(
-    canonical_plaintext: &[u8],
-    aad: PrivateSettlementAuditAadV1,
-    padding: PrivateSettlementCapsulePaddingV1,
-    policy: &PrivateSettlementAuditPolicyV1,
-) -> Result<PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditCryptoErrorV1> {
-    seal_private_settlement_audit_capsule_v1_with_rng(
-        canonical_plaintext,
-        aad,
-        padding,
-        policy,
-        &mut OsRng,
-    )
-}
-
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Seal one canonical private leg plaintext using injected cryptographic entropy.
 ///
 /// The plaintext is encrypted once. Each governed auditor receives an
@@ -272,6 +257,7 @@ fn maximum_plaintext_bytes(padding: PrivateSettlementCapsulePaddingV1) -> usize 
         .saturating_sub(AUDIT_PLAINTEXT_HEADER_BYTES_V1)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn validate_aad_against_policy(
     aad: &PrivateSettlementAuditAadV1,
     policy: &PrivateSettlementAuditPolicyV1,
@@ -300,6 +286,7 @@ fn validate_aad_against_policy(
     Ok(())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn fill_nonzero_random<R: TryCryptoRng + ?Sized>(
     rng: &mut R,
     destination: &mut [u8],
@@ -352,6 +339,7 @@ fn frame_public_aad(
     Ok(framed)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn aead_encrypt(
     key: &[u8; AUDIT_DEK_BYTES_V1],
     nonce: &[u8; 24],
@@ -398,6 +386,7 @@ fn aead_decrypt(
         .map_err(|_| PrivateSettlementAuditCryptoErrorV1::CryptographicFailure)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn map_hybrid_seal_error(error: HybridError) -> PrivateSettlementAuditCryptoErrorV1 {
     match error {
         HybridError::RandomBytes { .. } => {

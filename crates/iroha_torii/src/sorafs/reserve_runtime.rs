@@ -298,30 +298,6 @@ fn classify_local_reserve_transaction_submission(
         _ => ReserveTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
-fn local_reserve_evidence_blocks_absence_retry(
-    queue_pending: bool,
-    cache_kind: Option<crate::PipelineStatusKind>,
-) -> bool {
-    queue_pending
-        || matches!(
-            cache_kind,
-            Some(
-                crate::PipelineStatusKind::Queued
-                    | crate::PipelineStatusKind::Approved
-                    | crate::PipelineStatusKind::Committed
-                    | crate::PipelineStatusKind::Applied
-            )
-        )
-}
-fn retained_reserve_transaction_digest(
-    retained_digest: Option<[u8; 32]>,
-    signed_transaction_bytes: Option<&[u8]>,
-) -> Option<[u8; 32]> {
-    let retained_digest = retained_digest.filter(|digest| *digest != [0; 32])?;
-    let signed_transaction_bytes = signed_transaction_bytes?;
-    (*blake3_hash(signed_transaction_bytes).as_bytes() == retained_digest)
-        .then_some(retained_digest)
-}
 fn classify_reserve_envelope(
     retained_digest: Option<[u8; 32]>,
     signed_transaction_bytes: Option<&[u8]>,
@@ -333,7 +309,7 @@ fn classify_reserve_envelope(
         return ReserveEnvelopeReconciliationV1::Unavailable;
     }
     let Some(transaction_digest) =
-        retained_reserve_transaction_digest(retained_digest, signed_transaction_bytes)
+        super::retained_transaction_digest(retained_digest, signed_transaction_bytes)
     else {
         return ReserveEnvelopeReconciliationV1::Unavailable;
     };
@@ -422,7 +398,7 @@ fn inspect_indexed_reserve_transaction(
         }),
     )
 }
-fn reserve_finalized_cursor_from_view(
+pub(super) fn reserve_finalized_cursor_from_view(
     view: &impl StateReadOnly,
 ) -> Option<ReserveFinalizedCursorV1> {
     u64::try_from(view.block_hashes().len())
@@ -1242,7 +1218,7 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
         }
         let exact_transaction = match delivery.signed_transaction_bytes.as_deref() {
             Some(bytes) => {
-                if retained_reserve_transaction_digest(delivery.transaction_digest, Some(bytes))
+                if super::retained_transaction_digest(delivery.transaction_digest, Some(bytes))
                     .is_none()
                 {
                     scan.deferred = scan.deferred.saturating_add(1);
@@ -1270,7 +1246,7 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
                 .pipeline_status_cache
                 .lookup(hash)
                 .map(|entry| entry.kind);
-            local_reserve_evidence_blocks_absence_retry(queue_pending, cache_kind)
+            super::pending_evidence_blocks_absence_retry(queue_pending, cache_kind)
         });
         let Some(observation) = observe_reserve_transaction_in_one_finalized_view(
             state,
@@ -1297,7 +1273,7 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
                 .pipeline_status_cache
                 .lookup(hash)
                 .map(|entry| entry.kind);
-            local_reserve_evidence_blocks_absence_retry(queue_pending, cache_kind)
+            super::pending_evidence_blocks_absence_retry(queue_pending, cache_kind)
         });
         let envelope = match observation.transaction_outcome {
             Some(outcome) => classify_reserve_envelope(

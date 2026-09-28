@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **849** · Unique variables: **209**
+Total references: **847** · Unique variables: **207**
 
 ## CARGO (prod: 2, test: 3)
 
@@ -104,14 +104,6 @@ Total references: **849** · Unique variables: **209**
 ## CARGO_FEATURE_FASTPQ_GPU (build: 1)
 
 - build: crates/fastpq_prover/build.rs:19 — `let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();`
-
-## CARGO_FEATURE_FFI_EXPORT (prod: 1)
-
-- prod: crates/build-support/src/lib.rs:301 — `let ffi_export = std::env::var_os("CARGO_FEATURE_FFI_EXPORT").is_some();`
-
-## CARGO_FEATURE_FFI_IMPORT (prod: 1)
-
-- prod: crates/build-support/src/lib.rs:300 — `let ffi_import = std::env::var_os("CARGO_FEATURE_FFI_IMPORT").is_some();`
 
 ## CARGO_INCREMENTAL (test: 1)
 

@@ -7,26 +7,25 @@
 //! manifest validation, policy admission, and payload readback.
 
 use axum::{
-    body::Body,
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 #[cfg(not(feature = "app_api"))]
 use iroha_core::state::StateReadOnly as _;
-use std::{
-    net::SocketAddr,
-    sync::LazyLock,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
+use std::sync::LazyLock;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::{JsonBody, SharedAppState, json_entry, json_object};
 
 const MAX_PUBLIC_GATEWAY_INFLIGHT: usize = 64;
+#[cfg(not(feature = "app_api"))]
 const MAX_SITE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(not(feature = "app_api"))]
 const MAX_LOCAL_MANIFEST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(not(feature = "app_api"))]
 const DEFAULT_FILE_LIST_LIMIT: usize = 50;
+#[cfg(not(feature = "app_api"))]
 const MAX_FILE_LIST_LIMIT: usize = 500;
 const CLIENT_STORAGE_TOKEN_HEADERS: [&str; 2] = ["x-sorafs-stream-token", "x-sorafs-token-id"];
 
@@ -1217,27 +1216,6 @@ async fn read_site_file(
 }
 
 #[cfg(not(feature = "app_api"))]
-fn content_type_is_active(content_type: &str) -> bool {
-    matches!(
-        content_type
-            .split(';')
-            .next()
-            .unwrap_or(content_type)
-            .trim(),
-        "text/html"
-            | "text/css"
-            | "application/xhtml+xml"
-            | "application/javascript"
-            | "text/javascript"
-            | "image/svg+xml"
-            | "application/xml"
-            | "text/xml"
-            | "application/pdf"
-            | "application/wasm"
-    )
-}
-
-#[cfg(not(feature = "app_api"))]
 fn is_cid_derived_origin(
     headers: &HeaderMap,
     cid: &str,
@@ -1351,10 +1329,11 @@ async fn handle_get_sorafs_cid_path_inner(
         return StatusCode::NOT_FOUND.into_response();
     };
     let hosting = &state.sorafs_gateway_config.untrusted_hosting;
-    if stored
-        .file_by_path(&path)
-        .is_some_and(|_| content_type_is_active(super::site::content_type_for_path(&path)))
-        && !is_cid_derived_origin(&headers, &cid, hosting)
+    if stored.file_by_path(&path).is_some_and(|_| {
+        iroha_torii_shared::content_mime::is_active_media_type(super::site::content_type_for_path(
+            &path,
+        ))
+    }) && !is_cid_derived_origin(&headers, &cid, hosting)
     {
         if let Some(response) = active_content_redirect(&headers, &uri, &cid, hosting) {
             return response;

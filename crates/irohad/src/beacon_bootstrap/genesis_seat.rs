@@ -1,7 +1,6 @@
 //! Signed-genesis trust root and one-owner beacon DKG provisioning.
 
 use super::*;
-use iroha_data_model::parameter::system::SumeragiNposParameters;
 
 const REQUEST_SCHEMA: &str = "iroha.global-beacon.bootstrap.request.v1";
 const BUNDLE_SCHEMA: &str = "iroha.global-beacon.bootstrap.bundle.v1";
@@ -95,12 +94,9 @@ fn first_required_pulse_height(genesis: &GenesisProof) -> Result<u64> {
         .manifest
         .effective_parameters()
         .map_err(|_| Error::InvalidInput)?;
-    let npos = parameters
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
-        .ok_or(Error::InvalidInput)?;
-    npos.epoch_length_blocks()
+    parameters
+        .sumeragi()
+        .epoch_length_blocks
         .get()
         .checked_sub(1)
         .ok_or(Error::Height)

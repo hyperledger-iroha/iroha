@@ -34,10 +34,11 @@ use iroha_data_model::bridge::{
     SccpReplayBoundaryV1, SccpReplayDomainV1, SccpReplayForestV1, SccpRouteKeyV1,
     SccpSparseMerkleWitnessV1,
 };
+#[cfg(test)]
+use iroha_sccp::SccpReplayArchiveCheckpointBodyV1;
 use iroha_sccp::{
-    SccpReplayArchiveCheckpointBodyV1, SccpReplayArchiveCheckpointSetEntryV1,
-    SccpReplayArchiveDecodeLimitsV1, SccpReplayArchiveHeadFinalityV1,
-    SccpReplayArchiveProviderErrorV1, SccpReplayArchiveProviderV1,
+    SccpReplayArchiveCheckpointSetEntryV1, SccpReplayArchiveDecodeLimitsV1,
+    SccpReplayArchiveHeadFinalityV1, SccpReplayArchiveProviderErrorV1, SccpReplayArchiveProviderV1,
     SccpReplayArchiveReplicaBindingV1, SccpReplayArchiveReplicaPolicyV1,
     SccpReplayArchiveSignedCheckpointSetV1, SccpReplayArchiveSignedCheckpointV1,
     SccpReplayArchiveSnapshotV1, SccpReplayArchiveV1, SccpReplayRootResponseV1,

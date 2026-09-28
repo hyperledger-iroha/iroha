@@ -60,8 +60,8 @@ use governance_ballot_tools::{
     iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,
 };
 pub(crate) use protocol::{
-    ValidatedRequest as ValidatedProtocolRequest, ValidationError, ValidationErrorKind,
-    decorate_modern_response, validate_request as validate_protocol_request,
+    ValidatedRequest as ValidatedProtocolRequest, ValidationErrorKind, decorate_modern_response,
+    validate_request as validate_protocol_request,
 };
 use registry::semantics::{
     AuthorityClass, MutationNature, OperationKind, RetrySemantics, Sensitivity, ToolSemantics,
@@ -133,7 +133,6 @@ const TARGET_RESPONSE_TOO_LARGE_MESSAGE: &str =
 const TARGET_RESPONSE_READ_FAILED_MESSAGE: &str = "target response body could not be read";
 const TARGET_RESPONSE_TIMEOUT_MESSAGE: &str = "target response body read timed out";
 const MCP_STRICT_BODY_SCHEMA_EXTENSION: &str = "x-iroha-mcp-strict-body";
-const MCP_FLAT_BODY_SCHEMA_EXTENSION: &str = "x-iroha-mcp-flat-body";
 const NONZERO_UPPER_HEX_PATTERN: &str = "^(?!0+$)(?:[0-9A-F]{2})+$";
 const GOVERNANCE_PROPOSAL_ID_V1_PATTERN: &str = "^[0-9a-f]{64}$";
 const HEADER_X_API_TOKEN: &str = "x-api-token";
@@ -870,24 +869,13 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
         .get(MCP_STRICT_BODY_SCHEMA_EXTENSION)
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let flat_body = root
-        .get(MCP_FLAT_BODY_SCHEMA_EXTENSION)
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     let is_object_schema = root.get("type").and_then(Value::as_str) == Some("object");
     if is_object_schema {
         let mut strict = schema.clone();
         if let Some(object) = strict.as_object_mut() {
             object.remove(MCP_STRICT_BODY_SCHEMA_EXTENSION);
-            object.remove(MCP_FLAT_BODY_SCHEMA_EXTENSION);
         }
         stricten_tool_input_schema(&mut strict, false, strict_body);
-        if flat_body {
-            strict
-                .as_object_mut()
-                .expect("object schema remains an object")
-                .insert("additionalProperties".into(), Value::Bool(true));
-        }
         return strict;
     }
     norito::json!({
@@ -2173,8 +2161,7 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
     let visible_tools = visible_tools_for_app(app);
     let toolset_version = compute_toolset_version(&visible_tools);
     let list_changed = params
-        .get("toolset_version")
-        .or_else(|| params.get("toolsetVersion"))
+        .get("toolsetVersion")
         .and_then(Value::as_str)
         .is_some_and(|client| client != toolset_version);
     let requested_start = match params.get("cursor") {
@@ -2402,18 +2389,13 @@ async fn handle_named_tool_call(
     if let ToolBacking::InProcess(in_process) = tool_spec.backing() {
         let tool_result = match in_process {
             InProcessTool::TransactionsPrepare => {
-                match dispatch_iroha_transactions_prepare(&app, arguments) {
-                    Ok(result) => mcp_tool_success(result),
-                    Err(err) => mcp_tool_error(err),
-                }
+                dispatch_iroha_transactions_prepare(&app, arguments)
             }
             InProcessTool::TransactionsInspect => {
-                match dispatch_iroha_transactions_inspect(&app, arguments) {
-                    Ok(result) => mcp_tool_success(result),
-                    Err(err) => mcp_tool_error(err),
-                }
+                dispatch_iroha_transactions_inspect(&app, arguments)
             }
-        };
+        }
+        .map_or_else(mcp_tool_error, mcp_tool_success);
         return jsonrpc_result_response(id, tool_result);
     }
     let purpose_built_dispatch = match validate_purpose_built_dispatch_backing(tool_spec) {
@@ -2423,899 +2405,432 @@ async fn handle_named_tool_call(
         }
     };
     if !purpose_built_dispatch {
-        let tool_result =
-            match dispatch_openapi_tool(&app, inbound_headers, tool_spec, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            };
+        let tool_result = dispatch_openapi_tool(&app, inbound_headers, tool_spec, arguments)
+            .await
+            .map_or_else(mcp_tool_error, mcp_tool_success);
         return jsonrpc_result_response(id, tool_result);
     }
-    let tool_result = match name {
-        "iroha.connect.ws.ticket" => build_connect_ws_ticket(arguments, inbound_headers)
-            .map(mcp_tool_success)
-            .unwrap_or_else(mcp_tool_error),
+    let result: Result<Value, String> = match name {
+        "iroha.connect.ws.ticket" => build_connect_ws_ticket(arguments, inbound_headers),
         "iroha.connect.session.create" => {
-            match dispatch_connect_session_create(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_connect_session_create(&app, inbound_headers, arguments).await
         }
         "iroha.connect.session.delete" => {
-            match dispatch_connect_session_delete(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_connect_session_delete(&app, inbound_headers, arguments).await
         }
         "iroha.connect.session.status" => {
-            match dispatch_connect_session_status(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_connect_session_status(&app, inbound_headers, arguments).await
         }
-        "iroha.vpn.profile" => {
-            match dispatch_iroha_vpn_profile(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.vpn.profile" => dispatch_iroha_vpn_profile(&app, inbound_headers, arguments).await,
         "iroha.vpn.quotes.create" => {
-            match dispatch_iroha_vpn_quotes_create(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_vpn_quotes_create(&app, inbound_headers, arguments).await
         }
         "iroha.vpn.sessions.create" => {
-            match dispatch_iroha_vpn_sessions_create(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_vpn_sessions_create(&app, inbound_headers, arguments).await
         }
         "iroha.vpn.sessions.get" => {
-            match dispatch_iroha_vpn_sessions_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_vpn_sessions_get(&app, inbound_headers, arguments).await
         }
         "iroha.vpn.receipts.list" => {
-            match dispatch_iroha_vpn_receipts_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_vpn_receipts_list(&app, inbound_headers, arguments).await
         }
         "iroha.vpn.receipts.submit" => {
-            match dispatch_iroha_vpn_receipts_submit(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_vpn_receipts_submit(&app, inbound_headers, arguments).await
         }
-        "iroha.health" => match dispatch_iroha_health(&app, inbound_headers, arguments).await {
-            Ok(result) => mcp_tool_success(result),
-            Err(err) => mcp_tool_error(err),
-        },
+        "iroha.health" => dispatch_iroha_health(&app, inbound_headers, arguments).await,
         "iroha.parameters.get" => {
-            match dispatch_iroha_parameters_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_parameters_get(&app, inbound_headers, arguments).await
         }
         "iroha.node.capabilities" => {
-            match dispatch_iroha_node_capabilities(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_node_capabilities(&app, inbound_headers, arguments).await
         }
         "iroha.node.query_projection_shard_catalog" => {
-            match dispatch_iroha_node_query_projection_shard_catalog(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_node_query_projection_shard_catalog(&app, inbound_headers, arguments)
+                .await
         }
         "iroha.node.query_projection_checkpoint" => {
-            match dispatch_iroha_node_query_projection_checkpoint(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_node_query_projection_checkpoint(&app, inbound_headers, arguments).await
         }
-        "iroha.da.ingest" => {
-            match dispatch_iroha_da_ingest(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.da.ingest" => dispatch_iroha_da_ingest(&app, inbound_headers, arguments).await,
         "iroha.da.proof_policies" => {
-            match dispatch_iroha_da_proof_policies(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_proof_policies(&app, inbound_headers, arguments).await
         }
         "iroha.da.manifests.get" => {
-            match dispatch_iroha_da_manifests_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_manifests_get(&app, inbound_headers, arguments).await
         }
         "iroha.da.commitments.list" => {
-            match dispatch_iroha_da_commitments_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_commitments_list(&app, inbound_headers, arguments).await
         }
         "iroha.da.commitments.prove" => {
-            match dispatch_iroha_da_commitments_prove(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_commitments_prove(&app, inbound_headers, arguments).await
         }
         "iroha.da.commitments.verify" => {
-            match dispatch_iroha_da_commitments_verify(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_commitments_verify(&app, inbound_headers, arguments).await
         }
         "iroha.da.pin_intents.list" => {
-            match dispatch_iroha_da_pin_intents_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_pin_intents_list(&app, inbound_headers, arguments).await
         }
         "iroha.da.pin_intents.prove" => {
-            match dispatch_iroha_da_pin_intents_prove(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_pin_intents_prove(&app, inbound_headers, arguments).await
         }
         "iroha.da.pin_intents.verify" => {
-            match dispatch_iroha_da_pin_intents_verify(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_da_pin_intents_verify(&app, inbound_headers, arguments).await
         }
         "iroha.runtime.abi.active" => {
-            match dispatch_iroha_runtime_abi_active(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_runtime_abi_active(&app, inbound_headers, arguments).await
         }
         "iroha.runtime.abi.hash" => {
-            match dispatch_iroha_runtime_abi_hash(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_runtime_abi_hash(&app, inbound_headers, arguments).await
         }
         "iroha.runtime.metrics" => {
-            match dispatch_iroha_runtime_metrics(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_runtime_metrics(&app, inbound_headers, arguments).await
         }
         "iroha.runtime.upgrades.list" => {
-            match dispatch_iroha_runtime_upgrades_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_runtime_upgrades_list(&app, inbound_headers, arguments).await
         }
         "iroha.runtime.upgrades.propose" => {
-            match dispatch_iroha_runtime_upgrades_propose(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_runtime_upgrades_propose(&app, inbound_headers, arguments).await
         }
         "iroha.runtime.upgrades.activate" => {
-            match dispatch_iroha_runtime_upgrades_activate(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_runtime_upgrades_activate(&app, inbound_headers, arguments).await
         }
         "iroha.runtime.upgrades.cancel" => {
-            match dispatch_iroha_runtime_upgrades_cancel(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_runtime_upgrades_cancel(&app, inbound_headers, arguments).await
         }
         "iroha.bridge.finality.proof" => {
-            match dispatch_iroha_bridge_finality_proof(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_bridge_finality_proof(&app, inbound_headers, arguments).await
         }
         "iroha.bridge.finality.bundle" => {
-            match dispatch_iroha_bridge_finality_bundle(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_bridge_finality_bundle(&app, inbound_headers, arguments).await
         }
-        "iroha.proofs.query" => {
-            match dispatch_iroha_proofs_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.proofs.query" => dispatch_iroha_proofs_query(&app, inbound_headers, arguments).await,
         "iroha.gov.contract.get" => {
-            match dispatch_iroha_gov_contract_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_contract_get(&app, inbound_headers, arguments).await
         }
         "iroha.gov.proposals.deploy_contract" => {
-            match dispatch_iroha_gov_proposals_deploy_contract(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_proposals_deploy_contract(&app, inbound_headers, arguments).await
         }
         "iroha.gov.parliament.attempts.draft" => {
-            match dispatch_iroha_gov_parliament_attempt_draft(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_parliament_attempt_draft(&app, inbound_headers, arguments).await
         }
         "iroha.gov.parliament.attempts.get" => {
-            match dispatch_iroha_gov_parliament_attempt_get(&app, inbound_headers, arguments).await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_parliament_attempt_get(&app, inbound_headers, arguments).await
         }
         "iroha.gov.parliament.ballots.timed_ovn_casting_context.get" => {
-            match dispatch_iroha_gov_parliament_timed_ovn_casting_context_get(
+            dispatch_iroha_gov_parliament_timed_ovn_casting_context_get(
                 &app,
                 inbound_headers,
                 arguments,
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get" => {
-            match dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
+            dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
                 &app,
                 inbound_headers,
                 arguments,
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.gov.parliament.ballots.tle_release_context.get" => {
-            match dispatch_iroha_gov_parliament_tle_release_context_get(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_parliament_tle_release_context_get(&app, inbound_headers, arguments)
+                .await
         }
         "iroha.gov.parliament.ballots.tle_partial_release.create" => {
-            match dispatch_iroha_gov_parliament_tle_partial_release_create(
+            dispatch_iroha_gov_parliament_tle_partial_release_create(
                 &app,
                 inbound_headers,
                 arguments,
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.gov.parliament.transitions.draft" => {
-            match dispatch_iroha_gov_parliament_transition_draft(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_parliament_transition_draft(&app, inbound_headers, arguments).await
         }
         "iroha.gov.proposals.get" => {
-            match dispatch_iroha_gov_proposals_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_proposals_get(&app, inbound_headers, arguments).await
         }
         "iroha.gov.locks.get" => {
-            match dispatch_iroha_gov_locks_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_locks_get(&app, inbound_headers, arguments).await
         }
         "iroha.gov.referenda.get" => {
-            match dispatch_iroha_gov_referenda_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_referenda_get(&app, inbound_headers, arguments).await
         }
         "iroha.gov.tally.get" => {
-            match dispatch_iroha_gov_tally_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_tally_get(&app, inbound_headers, arguments).await
         }
         "iroha.gov.ballots.zk_v1" => {
-            match dispatch_iroha_gov_ballots_zk_v1(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_ballots_zk_v1(&app, inbound_headers, arguments).await
         }
         "iroha.gov.ballots.zk_v1.ballot_proof" => {
-            match dispatch_iroha_gov_ballots_zk_v1_ballot_proof(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_ballots_zk_v1_ballot_proof(&app, inbound_headers, arguments).await
         }
         "iroha.gov.ballots.plain" => {
-            match dispatch_iroha_gov_ballots_plain(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_ballots_plain(&app, inbound_headers, arguments).await
         }
         "iroha.gov.protected_namespaces.list" => {
-            match dispatch_iroha_gov_protected_namespaces_list(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_protected_namespaces_list(&app, inbound_headers, arguments).await
         }
         "iroha.gov.protected_namespaces.update" => {
-            match dispatch_iroha_gov_protected_namespaces_update(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_protected_namespaces_update(&app, inbound_headers, arguments).await
         }
         "iroha.gov.unlocks.stats" => {
-            match dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, arguments).await
         }
         "iroha.gov.citizens.count" => {
-            match dispatch_iroha_gov_citizens_count(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_gov_citizens_count(&app, inbound_headers, arguments).await
         }
         "iroha.aliases.resolve" => {
-            match dispatch_iroha_aliases_resolve(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_aliases_resolve(&app, inbound_headers, arguments).await
         }
         "iroha.aliases.resolve_index" => {
-            match dispatch_iroha_aliases_resolve_index(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_aliases_resolve_index(&app, inbound_headers, arguments).await
         }
         "iroha.aliases.by_account" => {
-            match dispatch_iroha_aliases_by_account(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_aliases_by_account(&app, inbound_headers, arguments).await
         }
         "iroha.contracts.code.get" => {
-            match dispatch_iroha_contracts_code_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_contracts_code_get(&app, inbound_headers, arguments).await
         }
         "iroha.contracts.code.bytes.get" => {
-            match dispatch_iroha_contracts_code_bytes_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_contracts_code_bytes_get(&app, inbound_headers, arguments).await
         }
         "iroha.contracts.call" => {
-            match dispatch_iroha_contracts_call(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_contracts_call(&app, inbound_headers, arguments).await
         }
-        "iroha.contracts.view" => {
-            match dispatch_contract_view(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.contracts.view" => dispatch_contract_view(&app, inbound_headers, arguments).await,
         "iroha.contracts.call_and_wait" => {
-            match dispatch_iroha_contracts_call_and_wait(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_contracts_call_and_wait(&app, inbound_headers, arguments).await
         }
         "iroha.contracts.state.get" => {
-            match dispatch_iroha_contracts_state_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_contracts_state_get(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.list" => {
-            match dispatch_iroha_accounts_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_list(&app, inbound_headers, arguments).await
         }
-        "iroha.accounts.get" => {
-            match dispatch_iroha_accounts_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.accounts.qr" => {
-            match dispatch_iroha_accounts_qr(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.accounts.get" => dispatch_iroha_accounts_get(&app, inbound_headers, arguments).await,
+        "iroha.accounts.qr" => dispatch_iroha_accounts_qr(&app, inbound_headers, arguments).await,
         "iroha.accounts.query" => {
-            match dispatch_iroha_accounts_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_query(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.onboard.submit" => {
-            match dispatch_iroha_accounts_onboard_submit(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_onboard_submit(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.onboard.plan" => {
-            match dispatch_iroha_accounts_onboard_plan(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_onboard_plan(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.onboard.prepare" => {
-            match dispatch_iroha_accounts_onboard_prepare(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_onboard_prepare(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.faucet.policy" => {
-            match dispatch_iroha_accounts_faucet_policy(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_faucet_policy(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.faucet.prepare" => {
-            match dispatch_iroha_accounts_faucet_prepare(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_faucet_prepare(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.faucet.submit" => {
-            match dispatch_iroha_accounts_faucet_submit(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_accounts_faucet_submit(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.transactions" => {
-            match dispatch_iroha_account_transactions(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_account_transactions(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.history" => {
-            match dispatch_iroha_account_history(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_account_history(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.transactions.query" => {
-            match dispatch_iroha_account_transactions_query(&app, inbound_headers, arguments).await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_account_transactions_query(&app, inbound_headers, arguments).await
         }
         "iroha.transactions.query" => {
-            match dispatch_iroha_transactions_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_transactions_query(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.assets" => {
-            match dispatch_iroha_account_assets(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_account_assets(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.assets.query" => {
-            match dispatch_iroha_account_assets_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_account_assets_query(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.permissions" => {
-            match dispatch_iroha_account_permissions(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_account_permissions(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.portfolio" => {
-            match dispatch_iroha_account_portfolio(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_account_portfolio(&app, inbound_headers, arguments).await
         }
-        "iroha.domains.list" => {
-            match dispatch_iroha_domains_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.domains.get" => {
-            match dispatch_iroha_domains_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.domains.list" => dispatch_iroha_domains_list(&app, inbound_headers, arguments).await,
+        "iroha.domains.get" => dispatch_iroha_domains_get(&app, inbound_headers, arguments).await,
         "iroha.domains.query" => {
-            match dispatch_iroha_domains_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_domains_query(&app, inbound_headers, arguments).await
         }
         name if musubi_v1_tool_definition(name).is_some() => {
-            match dispatch_iroha_musubi_v1(&app, inbound_headers, name, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_musubi_v1(&app, inbound_headers, name, arguments).await
         }
         "iroha.subscriptions.plans.list" => {
-            match dispatch_iroha_subscriptions_plans_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_plans_list(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.plans.create" => {
-            match dispatch_iroha_subscriptions_plans_create(&app, inbound_headers, arguments).await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_plans_create(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.list" => {
-            match dispatch_iroha_subscriptions_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_list(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.create" => {
-            match dispatch_iroha_subscriptions_create(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_create(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.get" => {
-            match dispatch_iroha_subscriptions_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_get(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.pause" => {
-            match dispatch_iroha_subscriptions_pause(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_pause(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.resume" => {
-            match dispatch_iroha_subscriptions_resume(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_resume(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.cancel" => {
-            match dispatch_iroha_subscriptions_cancel(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_cancel(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.keep" => {
-            match dispatch_iroha_subscriptions_keep(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_keep(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.usage" => {
-            match dispatch_iroha_subscriptions_usage(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_usage(&app, inbound_headers, arguments).await
         }
         "iroha.subscriptions.charge_now" => {
-            match dispatch_iroha_subscriptions_charge_now(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_subscriptions_charge_now(&app, inbound_headers, arguments).await
         }
         "iroha.assets.definitions" => {
-            match dispatch_iroha_asset_definitions(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_asset_definitions(&app, inbound_headers, arguments).await
         }
         "iroha.assets.definitions.get" => {
-            match dispatch_iroha_asset_definitions_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_asset_definitions_get(&app, inbound_headers, arguments).await
         }
         "iroha.assets.definitions.query" => {
-            match dispatch_iroha_asset_definitions_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_asset_definitions_query(&app, inbound_headers, arguments).await
         }
         "iroha.assets.holders" => {
-            match dispatch_iroha_asset_holders(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_asset_holders(&app, inbound_headers, arguments).await
         }
         "iroha.assets.holders.query" => {
-            match dispatch_iroha_asset_holders_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_asset_holders_query(&app, inbound_headers, arguments).await
         }
-        "iroha.assets.list" => {
-            match dispatch_iroha_assets_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.assets.get" => {
-            match dispatch_iroha_assets_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.assets.list" => dispatch_iroha_assets_list(&app, inbound_headers, arguments).await,
+        "iroha.assets.get" => dispatch_iroha_assets_get(&app, inbound_headers, arguments).await,
         "iroha.nfts.chain.list" => {
-            match dispatch_iroha_nfts_chain_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_nfts_chain_list(&app, inbound_headers, arguments).await
         }
-        "iroha.nfts.list" => {
-            match dispatch_iroha_nfts_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.nfts.get" => match dispatch_iroha_nfts_get(&app, inbound_headers, arguments).await {
-            Ok(result) => mcp_tool_success(result),
-            Err(err) => mcp_tool_error(err),
-        },
-        "iroha.nfts.query" => {
-            match dispatch_iroha_nfts_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.nfts.list" => dispatch_iroha_nfts_list(&app, inbound_headers, arguments).await,
+        "iroha.nfts.get" => dispatch_iroha_nfts_get(&app, inbound_headers, arguments).await,
+        "iroha.nfts.query" => dispatch_iroha_nfts_query(&app, inbound_headers, arguments).await,
         "iroha.rwas.chain.list" => {
-            match dispatch_iroha_rwas_chain_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_rwas_chain_list(&app, inbound_headers, arguments).await
         }
-        "iroha.rwas.list" => {
-            match dispatch_iroha_rwas_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.rwas.get" => match dispatch_iroha_rwas_get(&app, inbound_headers, arguments).await {
-            Ok(result) => mcp_tool_success(result),
-            Err(err) => mcp_tool_error(err),
-        },
-        "iroha.rwas.query" => {
-            match dispatch_iroha_rwas_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.rwas.list" => dispatch_iroha_rwas_list(&app, inbound_headers, arguments).await,
+        "iroha.rwas.get" => dispatch_iroha_rwas_get(&app, inbound_headers, arguments).await,
+        "iroha.rwas.query" => dispatch_iroha_rwas_query(&app, inbound_headers, arguments).await,
         "iroha.iso20022.pacs008.submit" => {
-            match dispatch_iroha_iso20022_pacs008_submit(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_iso20022_pacs008_submit(&app, inbound_headers, arguments).await
         }
         "iroha.iso20022.pacs009.submit" => {
-            match dispatch_iroha_iso20022_pacs009_submit(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_iso20022_pacs009_submit(&app, inbound_headers, arguments).await
         }
         "iroha.iso20022.pacs002.submit" => {
-            match dispatch_iroha_iso20022_lifecycle_submit(
+            dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
                 arguments,
                 "/v1/iso20022/pacs002",
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.iso20022.pacs004.submit" => {
-            match dispatch_iroha_iso20022_lifecycle_submit(
+            dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
                 arguments,
                 "/v1/iso20022/pacs004",
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.iso20022.camt056.submit" => {
-            match dispatch_iroha_iso20022_lifecycle_submit(
+            dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
                 arguments,
                 "/v1/iso20022/camt056",
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.iso20022.sese023.submit" => {
-            match dispatch_iroha_iso20022_lifecycle_submit(
+            dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
                 arguments,
                 "/v1/iso20022/sese023",
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.iso20022.sese024.submit" => {
-            match dispatch_iroha_iso20022_lifecycle_submit(
+            dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
                 arguments,
                 "/v1/iso20022/sese024",
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.iso20022.sese025.submit" => {
-            match dispatch_iroha_iso20022_lifecycle_submit(
+            dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
                 arguments,
                 "/v1/iso20022/sese025",
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.iso20022.colr012.submit" => {
-            match dispatch_iroha_iso20022_lifecycle_submit(
+            dispatch_iroha_iso20022_lifecycle_submit(
                 &app,
                 inbound_headers,
                 arguments,
                 "/v1/iso20022/colr012",
             )
             .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
         }
         "iroha.iso20022.status.get" => {
-            match dispatch_iroha_iso20022_status_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_iso20022_status_get(&app, inbound_headers, arguments).await
         }
         "iroha.queries.submit" => {
-            match dispatch_iroha_queries_submit(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_queries_submit(&app, inbound_headers, arguments).await
         }
         "iroha.transactions.list" => {
-            match dispatch_iroha_transactions_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_transactions_list(&app, inbound_headers, arguments).await
         }
         "iroha.transactions.get" => {
-            match dispatch_iroha_transactions_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_transactions_get(&app, inbound_headers, arguments).await
         }
         "iroha.instructions.list" => {
-            match dispatch_iroha_instructions_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_instructions_list(&app, inbound_headers, arguments).await
         }
         "iroha.instructions.get" => {
-            match dispatch_iroha_instructions_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_instructions_get(&app, inbound_headers, arguments).await
         }
-        "iroha.blocks.list" => {
-            match dispatch_iroha_blocks_list(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.blocks.get" => {
-            match dispatch_iroha_blocks_get(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
+        "iroha.blocks.list" => dispatch_iroha_blocks_list(&app, inbound_headers, arguments).await,
+        "iroha.blocks.get" => dispatch_iroha_blocks_get(&app, inbound_headers, arguments).await,
         "iroha.transactions.submit" => {
-            match dispatch_iroha_transactions_submit(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_transactions_submit(&app, inbound_headers, arguments).await
         }
         "iroha.transactions.submit_and_wait" => {
-            match dispatch_iroha_transactions_submit_and_wait(&app, inbound_headers, arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_transactions_submit_and_wait(&app, inbound_headers, arguments).await
         }
         "iroha.transactions.wait" => {
-            match dispatch_iroha_transactions_wait(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_transactions_wait(&app, inbound_headers, arguments).await
         }
         "iroha.transactions.status" => {
-            match dispatch_iroha_transactions_status(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
+            dispatch_iroha_transactions_status(&app, inbound_headers, arguments).await
         }
-        _ => mcp_tool_error(format!(
+        _ => Err(format!(
             "purpose-built dispatch contract `{name}` has no implementation"
         )),
     };
+    let tool_result = result.map_or_else(mcp_tool_error, mcp_tool_success);
     jsonrpc_result_response(id, tool_result)
 }
 fn validate_tool_arguments(tool: &ToolSpec, arguments: &Map) -> Result<(), String> {
@@ -5110,8 +4625,23 @@ macro_rules! declare_mcp_dispatch_wrappers {
         query_post {
             $( $query_post_name:ident => $query_post_route:literal; )*
         }
-        height_get {
-            $( $height_get_name:ident => $height_get_route:literal; )*
+        path_get {
+            $(
+                $path_get_name:ident => (
+                    $path_get_key:literal,
+                    |$path_get_arguments:ident| $path_get_extract:expr,
+                    $path_get_route:literal
+                );
+            )*
+        }
+        path_query_get {
+            $(
+                $path_query_get_name:ident => (
+                    $path_query_get_key:literal,
+                    |$path_query_get_arguments:ident| $path_query_get_extract:expr,
+                    $path_query_get_route:literal
+                );
+            )*
         }
     ) => {
         $(
@@ -5143,7 +4673,7 @@ macro_rules! declare_mcp_dispatch_wrappers {
                 arguments: &Map,
             ) -> Result<Value, String> {
                 let body =
-                    build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+                    build_required_object_body(arguments)?;
                 let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
                 dispatch_route(
                     app,
@@ -5213,16 +4743,50 @@ macro_rules! declare_mcp_dispatch_wrappers {
             }
         )*
         $(
-            async fn $height_get_name(
+            async fn $path_get_name(
                 app: &SharedAppState,
                 inbound_headers: &HeaderMap,
                 arguments: &Map,
             ) -> Result<Value, String> {
-                let height = extract_height_argument(arguments)?;
-                let mut path_args = Map::new();
-                path_args.insert("height".into(), Value::String(height));
-                let path_value = Value::Object(path_args);
-                let route = fill_path_template($height_get_route, Some(&path_value))?;
+                let route = {
+                    let $path_get_arguments: &Map = arguments;
+                    single_path_route($path_get_route, $path_get_key, $path_get_extract?)?
+                };
+                dispatch_route(
+                    app,
+                    inbound_headers,
+                    Method::GET,
+                    route.as_str(),
+                    arguments.get("headers"),
+                    Vec::new(),
+                    None,
+                    arguments
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+                .await
+            }
+        )*
+        $(
+            async fn $path_query_get_name(
+                app: &SharedAppState,
+                inbound_headers: &HeaderMap,
+                arguments: &Map,
+            ) -> Result<Value, String> {
+                let route = {
+                    let $path_query_get_arguments: &Map = arguments;
+                    single_path_route(
+                        $path_query_get_route,
+                        $path_query_get_key,
+                        $path_query_get_extract?,
+                    )?
+                };
+                let route = append_query_arguments(
+                    route,
+                    arguments,
+                    &["path", $path_query_get_key, "query", "headers", "accept"],
+                )?;
                 dispatch_route(
                     app,
                     inbound_headers,
@@ -5295,10 +4859,141 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_nfts_query => "/v1/nfts/query";
         dispatch_iroha_rwas_query => "/v1/rwas/query";
     }
-    height_get {
-        dispatch_iroha_bridge_finality_proof => "/v1/bridge/finality/{height}";
-        dispatch_iroha_bridge_finality_bundle => "/v1/bridge/finality/bundle/{height}";
+    path_get {
+        dispatch_iroha_bridge_finality_proof => (
+            "height",
+            |arguments| extract_height_argument(arguments),
+            "/v1/bridge/finality/{height}"
+        );
+        dispatch_iroha_bridge_finality_bundle => (
+            "height",
+            |arguments| extract_height_argument(arguments),
+            "/v1/bridge/finality/bundle/{height}"
+        );
+        dispatch_iroha_da_manifests_get => (
+            "ticket",
+            |arguments| extract_ticket_argument(arguments),
+            "/v1/da/manifests/{ticket}"
+        );
+        dispatch_iroha_gov_contract_get => (
+            "contract_address",
+            |arguments| extract_contract_address_argument(arguments),
+            "/v1/gov/contracts/{contract_address}"
+        );
+        dispatch_iroha_gov_proposals_get => (
+            "id",
+            |arguments| extract_governance_proposal_id_argument(arguments),
+            "/v1/gov/proposals/{id}"
+        );
+        dispatch_iroha_gov_locks_get => (
+            "rid",
+            |arguments| extract_governance_selector_argument(arguments, "rid", "referendum id"),
+            "/v1/gov/locks/{rid}"
+        );
+        dispatch_iroha_gov_referenda_get => (
+            "id",
+            |arguments| extract_governance_selector_argument(arguments, "id", "referendum id"),
+            "/v1/gov/referenda/{id}"
+        );
+        dispatch_iroha_gov_tally_get => (
+            "id",
+            |arguments| extract_governance_selector_argument(arguments, "id", "tally id"),
+            "/v1/gov/tally/{id}"
+        );
+        dispatch_iroha_contracts_code_get => (
+            "code_hash",
+            |arguments| extract_code_hash_argument(arguments),
+            "/v1/contracts/code/{code_hash}"
+        );
+        dispatch_iroha_contracts_code_bytes_get => (
+            "code_hash",
+            |arguments| extract_code_hash_argument(arguments),
+            "/v1/contracts/code-bytes/{code_hash}"
+        );
+        dispatch_iroha_accounts_get => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}"
+        );
+        dispatch_iroha_accounts_qr => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/explorer/accounts/{account_id}/qr"
+        );
+        dispatch_iroha_account_permissions => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/permissions"
+        );
+        dispatch_iroha_domains_get => (
+            "domain_id",
+            |arguments| extract_domain_id_argument(arguments),
+            "/v1/explorer/domains/{domain_id}"
+        );
+        dispatch_iroha_subscriptions_get => (
+            "subscription_id",
+            |arguments| extract_subscription_id_argument(arguments),
+            "/v1/subscriptions/{subscription_id}"
+        );
+        dispatch_iroha_assets_get => (
+            "asset_id",
+            |arguments| extract_asset_id_argument(arguments),
+            "/v1/explorer/assets/{asset_id}"
+        );
+        dispatch_iroha_nfts_get => (
+            "nft_id",
+            |arguments| extract_nft_id_argument(arguments),
+            "/v1/explorer/nfts/{nft_id}"
+        );
+        dispatch_iroha_rwas_get => (
+            "rwa_id",
+            |arguments| extract_rwa_id_argument(arguments),
+            "/v1/explorer/rwas/{rwa_id}"
+        );
+        dispatch_iroha_transactions_get => (
+            "hash",
+            |arguments| extract_transaction_hash_argument(arguments),
+            "/v1/explorer/transactions/{hash}"
+        );
+        dispatch_iroha_blocks_get => (
+            "identifier",
+            |arguments| extract_block_identifier_argument(arguments),
+            "/v1/explorer/blocks/{identifier}"
+        );
     }
+    path_query_get {
+        dispatch_iroha_account_transactions => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/transactions"
+        );
+        dispatch_iroha_account_history => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/history"
+        );
+        dispatch_iroha_account_assets => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/assets"
+        );
+        dispatch_iroha_account_portfolio => (
+            "uaid",
+            |arguments| extract_uaid_argument(arguments),
+            "/v1/accounts/{uaid}/portfolio"
+        );
+        dispatch_iroha_asset_holders => (
+            "definition_id",
+            |arguments| extract_definition_id_argument(arguments),
+            "/v1/assets/{definition_id}/holders"
+        );
+    }
+}
+/// Fill a single-parameter route template with one extracted path value.
+fn single_path_route(template: &str, key: &str, value: String) -> Result<String, String> {
+    let mut path_args = Map::new();
+    path_args.insert(key.into(), Value::String(value));
+    fill_path_template(template, Some(&Value::Object(path_args)))
 }
 async fn dispatch_explorer_history_list(
     app: &SharedAppState,
@@ -5771,31 +5466,6 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
     )
     .await
 }
-async fn dispatch_iroha_da_manifests_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let ticket = extract_ticket_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("ticket".into(), Value::String(ticket));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/da/manifests/{ticket}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_runtime_upgrades_activate(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5833,8 +5503,7 @@ async fn dispatch_iroha_runtime_upgrades_action(
     path_args.insert("id".into(), Value::String(upgrade_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(route_template, Some(&path_value))?;
-    let body =
-        build_object_body_or_flat_shortcuts(arguments, &["body", "path", "headers", "accept"])?;
+    let body = build_required_object_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
@@ -5844,31 +5513,6 @@ async fn dispatch_iroha_runtime_upgrades_action(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_contract_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let contract_address = extract_contract_address_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("contract_address".into(), Value::String(contract_address));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/contracts/{contract_address}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -6124,112 +5768,12 @@ async fn dispatch_iroha_gov_parliament_transition_draft(
     )
     .await
 }
-async fn dispatch_iroha_gov_proposals_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let id = extract_governance_proposal_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("id".into(), Value::String(id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/proposals/{id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_locks_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let rid = extract_governance_selector_argument(arguments, "rid", "referendum id")?;
-    let mut path_args = Map::new();
-    path_args.insert("rid".into(), Value::String(rid));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/locks/{rid}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_referenda_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let id = extract_governance_selector_argument(arguments, "id", "referendum id")?;
-    let mut path_args = Map::new();
-    path_args.insert("id".into(), Value::String(id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/referenda/{id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_tally_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let id = extract_governance_selector_argument(arguments, "id", "tally id")?;
-    let mut path_args = Map::new();
-    path_args.insert("id".into(), Value::String(id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/tally/{id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_gov_ballots_zk_v1(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body = build_required_object_body(arguments)?;
     require_borrowed_governance_selector_body(&body, "election_id")?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
@@ -6252,7 +5796,7 @@ async fn dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body = build_required_object_body(arguments)?;
     require_borrowed_governance_selector_body(&body, "election_id")?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
@@ -6275,7 +5819,7 @@ async fn dispatch_iroha_gov_ballots_plain(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body = build_required_object_body(arguments)?;
     require_borrowed_governance_selector_body(&body, "referendum_id")?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
@@ -6286,56 +5830,6 @@ async fn dispatch_iroha_gov_ballots_plain(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_contracts_code_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let code_hash = extract_code_hash_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("code_hash".into(), Value::String(code_hash));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/contracts/code/{code_hash}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_contracts_code_bytes_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let code_hash = extract_code_hash_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("code_hash".into(), Value::String(code_hash));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/contracts/code-bytes/{code_hash}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -6422,7 +5916,7 @@ async fn dispatch_iroha_contracts_post(
     arguments: &Map,
     route: &str,
 ) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body = build_required_object_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
@@ -6432,56 +5926,6 @@ async fn dispatch_iroha_contracts_post(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_accounts_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_accounts_qr(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/accounts/{account_id}/qr", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -6599,66 +6043,6 @@ async fn dispatch_iroha_accounts_onboard_plan(
     )
     .await
 }
-async fn dispatch_iroha_account_transactions(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/transactions", Some(&path_value))?;
-    let route = append_query_arguments(
-        route,
-        arguments,
-        &["path", "account_id", "query", "headers", "accept"],
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_account_history(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/history", Some(&path_value))?;
-    let route = append_query_arguments(
-        route,
-        arguments,
-        &["path", "account_id", "query", "headers", "accept"],
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_account_transactions_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6725,36 +6109,6 @@ async fn dispatch_iroha_transactions_query_path(
     )
     .await
 }
-async fn dispatch_iroha_account_assets(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/assets", Some(&path_value))?;
-    let route = append_query_arguments(
-        route,
-        arguments,
-        &["path", "account_id", "query", "headers", "accept"],
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_account_assets_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6775,86 +6129,6 @@ async fn dispatch_iroha_account_assets_query(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_account_permissions(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/permissions", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_account_portfolio(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let uaid = extract_uaid_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("uaid".into(), Value::String(uaid));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{uaid}/portfolio", Some(&path_value))?;
-    let route = append_query_arguments(
-        route,
-        arguments,
-        &["path", "uaid", "query", "headers", "accept"],
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_domains_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let domain_id = extract_domain_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("domain_id".into(), Value::String(domain_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/domains/{domain_id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -6951,31 +6225,6 @@ async fn dispatch_iroha_subscriptions_create(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_subscriptions_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let subscription_id = extract_subscription_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("subscription_id".into(), Value::String(subscription_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/subscriptions/{subscription_id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -7131,36 +6380,6 @@ async fn dispatch_iroha_asset_definitions_get(
     )
     .await
 }
-async fn dispatch_iroha_asset_holders(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let definition_id = extract_definition_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("definition_id".into(), Value::String(definition_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/assets/{definition_id}/holders", Some(&path_value))?;
-    let route = append_query_arguments(
-        route,
-        arguments,
-        &["path", "definition_id", "query", "headers", "accept"],
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_asset_holders_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -7191,106 +6410,6 @@ async fn dispatch_iroha_asset_holders_query(
     )
     .await
 }
-async fn dispatch_iroha_assets_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let asset_id = extract_asset_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("asset_id".into(), Value::String(asset_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/assets/{asset_id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_nfts_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let nft_id = extract_nft_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("nft_id".into(), Value::String(nft_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/nfts/{nft_id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_rwas_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let rwa_id = extract_rwa_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("rwa_id".into(), Value::String(rwa_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/rwas/{rwa_id}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_transactions_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let hash = extract_transaction_hash_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("hash".into(), Value::String(hash));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/transactions/{hash}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_instructions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -7306,31 +6425,6 @@ async fn dispatch_iroha_instructions_get(
         "/v1/explorer/instructions/{hash}/{index}",
         Some(&path_value),
     )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_blocks_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let identifier = extract_block_identifier_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("identifier".into(), Value::String(identifier));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/blocks/{identifier}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -8124,46 +7218,10 @@ fn fixed_pipeline_status_is_applied(
         other => Err(format!("returned unsupported exact status kind `{other}`")),
     }
 }
-fn reject_retired_flat_path_arguments(
-    arguments: &Map,
-    canonical_field: &str,
-    retired_flat_fields: &[&str],
-    retired_path_fields: &[&str],
-) -> Result<(), String> {
-    if let Some(field) = retired_flat_fields
-        .iter()
-        .find(|field| arguments.contains_key(**field))
-    {
-        return Err(format!(
-            "`{field}` is retired; provide only `path.{canonical_field}`"
-        ));
-    }
-    let path = arguments
-        .get("path")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "`path` must be an object".to_owned())?;
-    if let Some(field) = retired_path_fields
-        .iter()
-        .find(|field| path.contains_key(**field))
-    {
-        return Err(format!(
-            "`path.{field}` is retired; provide only `path.{canonical_field}`"
-        ));
-    }
-    Ok(())
-}
 fn extract_canonical_path_string_argument(
     arguments: &Map,
     canonical_field: &str,
-    retired_flat_fields: &[&str],
-    retired_path_fields: &[&str],
 ) -> Result<String, String> {
-    reject_retired_flat_path_arguments(
-        arguments,
-        canonical_field,
-        retired_flat_fields,
-        retired_path_fields,
-    )?;
     arguments
         .get("path")
         .and_then(Value::as_object)
@@ -8175,15 +7233,7 @@ fn extract_canonical_path_string_argument(
 fn extract_canonical_path_value_argument(
     arguments: &Map,
     canonical_field: &str,
-    retired_flat_fields: &[&str],
-    retired_path_fields: &[&str],
 ) -> Result<String, String> {
-    reject_retired_flat_path_arguments(
-        arguments,
-        canonical_field,
-        retired_flat_fields,
-        retired_path_fields,
-    )?;
     arguments
         .get("path")
         .and_then(Value::as_object)
@@ -8192,21 +7242,16 @@ fn extract_canonical_path_value_argument(
         .ok_or_else(|| format!("scalar `path.{canonical_field}` is required"))
 }
 fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "account_id", &["account_id"], &[])
+    extract_canonical_path_string_argument(arguments, "account_id")
 }
 fn extract_uaid_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "uaid", &["uaid"], &[])
+    extract_canonical_path_string_argument(arguments, "uaid")
 }
 fn extract_domain_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "domain_id", &["domain_id", "domain"], &[])
+    extract_canonical_path_string_argument(arguments, "domain_id")
 }
 fn extract_subscription_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "subscription_id",
-        &["subscription_id", "id"],
-        &[],
-    )
+    extract_canonical_path_string_argument(arguments, "subscription_id")
 }
 fn extract_exact_subscription_id_argument(arguments: &Map) -> Result<String, String> {
     if arguments.contains_key("id") || arguments.contains_key("path") {
@@ -8223,20 +7268,10 @@ fn extract_exact_subscription_id_argument(arguments: &Map) -> Result<String, Str
         .ok_or_else(|| "non-empty `subscription_id` is required".to_owned())
 }
 fn extract_iso20022_message_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "msg_id",
-        &["msg_id", "message_id", "id"],
-        &[],
-    )
+    extract_canonical_path_string_argument(arguments, "msg_id")
 }
 fn extract_ticket_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "ticket",
-        &["ticket", "manifest_ticket", "id"],
-        &[],
-    )
+    extract_canonical_path_string_argument(arguments, "ticket")
 }
 fn require_governance_selector_v1(label: &str, value: &str) -> Result<(), String> {
     if !iroha_data_model::governance::is_valid_governance_selector_v1(value) {
@@ -8361,62 +7396,37 @@ fn validate_governance_openapi_dispatch(
     }
 }
 fn extract_runtime_upgrade_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "id", &["id", "upgrade_id"], &[])
+    extract_canonical_path_string_argument(arguments, "id")
 }
 fn extract_height_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_value_argument(arguments, "height", &["height", "block_height"], &[])
+    extract_canonical_path_value_argument(arguments, "height")
 }
 fn extract_definition_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "definition_id", &["definition_id"], &[])
+    extract_canonical_path_string_argument(arguments, "definition_id")
 }
 fn extract_asset_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "asset_id", &["asset_id", "id"], &[])
+    extract_canonical_path_string_argument(arguments, "asset_id")
 }
 fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "nft_id", &["nft_id", "id"], &[])
+    extract_canonical_path_string_argument(arguments, "nft_id")
 }
 fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "rwa_id", &["rwa_id", "id"], &[])
+    extract_canonical_path_string_argument(arguments, "rwa_id")
 }
 fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "hash",
-        &["hash", "transaction_hash"],
-        &["transaction_hash"],
-    )
+    extract_canonical_path_string_argument(arguments, "hash")
 }
 fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "code_hash", &["code_hash", "hash"], &[])
+    extract_canonical_path_string_argument(arguments, "code_hash")
 }
 fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(
-        arguments,
-        "contract_address",
-        &["contract_address"],
-        &[],
-    )
+    extract_canonical_path_string_argument(arguments, "contract_address")
 }
 fn extract_instruction_index_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_value_argument(
-        arguments,
-        "index",
-        &["index", "instruction_index"],
-        &["instruction_index"],
-    )
+    extract_canonical_path_value_argument(arguments, "index")
 }
 fn extract_block_identifier_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_value_argument(
-        arguments,
-        "identifier",
-        &[
-            "identifier",
-            "block_identifier",
-            "block_height",
-            "block_hash",
-        ],
-        &["block_identifier", "block_height", "block_hash"],
-    )
+    extract_canonical_path_value_argument(arguments, "identifier")
 }
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_route(
@@ -9949,8 +8959,7 @@ fn simple_manual_raw_body_post_tool(
         path_template.to_owned(),
         norito::json!({
             "type": "object",
-            "x-iroha-mcp-flat-body": true,
-            "additionalProperties": true,
+            "required": ["body"],
             "properties": {
                 "body": {
                     "type": "object",
@@ -10195,7 +9204,7 @@ fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
 fn iroha_da_ingest_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.ingest",
-        "Ingest DA payload (`/v1/da/ingest`); accepts raw `body` or flat top-level body shortcuts.",
+        "Ingest DA payload (`/v1/da/ingest`); the request payload is the required `body` object.",
         "/v1/da/ingest",
         "Raw DA ingest request payload.",
     )
@@ -10210,7 +9219,7 @@ fn iroha_da_proof_policies_tool() -> ToolSpec {
 fn iroha_da_commitments_list_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.commitments.list",
-        "List DA commitments (`/v1/da/commitments`); accepts raw `body` or flat top-level body shortcuts.",
+        "List DA commitments (`/v1/da/commitments`); the request payload is the required `body` object.",
         "/v1/da/commitments",
         "Raw DA commitment list request payload.",
     )
@@ -10218,7 +9227,7 @@ fn iroha_da_commitments_list_tool() -> ToolSpec {
 fn iroha_da_commitments_prove_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.commitments.prove",
-        "Compute a DA commitment Merkle proof (`/v1/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts.",
+        "Compute a DA commitment Merkle proof (`/v1/da/commitments/prove`); the request payload is the required `body` object.",
         "/v1/da/commitments/prove",
         "Raw DA commitment proof request payload.",
     )
@@ -10226,7 +9235,7 @@ fn iroha_da_commitments_prove_tool() -> ToolSpec {
 fn iroha_da_commitments_verify_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.commitments.verify",
-        "Verify DA commitment payload (`/v1/da/commitments/verify`); accepts raw `body` or flat top-level body shortcuts.",
+        "Verify DA commitment payload (`/v1/da/commitments/verify`); the request payload is the required `body` object.",
         "/v1/da/commitments/verify",
         "Raw DA commitment verification request payload.",
     )
@@ -10234,7 +9243,7 @@ fn iroha_da_commitments_verify_tool() -> ToolSpec {
 fn iroha_da_pin_intents_list_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.pin_intents.list",
-        "List DA pin intents (`/v1/da/pin-intents`); accepts raw `body` or flat top-level body shortcuts.",
+        "List DA pin intents (`/v1/da/pin-intents`); the request payload is the required `body` object.",
         "/v1/da/pin-intents",
         "Raw DA pin-intents listing request payload.",
     )
@@ -10242,7 +9251,7 @@ fn iroha_da_pin_intents_list_tool() -> ToolSpec {
 fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.pin_intents.prove",
-        "Build a DA pin-intent Merkle membership proof bound to the exact committed block bundle (`/v1/da/pin-intents/prove`); accepts raw `body` or flat top-level body shortcuts.",
+        "Build a DA pin-intent Merkle membership proof bound to the exact committed block bundle (`/v1/da/pin-intents/prove`); the request payload is the required `body` object.",
         "/v1/da/pin-intents/prove",
         "Raw DA pin-intents prove request payload.",
     )
@@ -10250,7 +9259,7 @@ fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
 fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.da.pin_intents.verify",
-        "Verify a DA pin-intent Merkle membership proof against its committed block header (`/v1/da/pin-intents/verify`); accepts raw `body` or flat top-level body shortcuts.",
+        "Verify a DA pin-intent Merkle membership proof against its committed block header (`/v1/da/pin-intents/verify`); the request payload is the required `body` object.",
         "/v1/da/pin-intents/verify",
         "Raw DA pin-intents verification request payload.",
     )
@@ -10286,7 +9295,7 @@ fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.runtime.upgrades.propose",
-        "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); accepts raw `body` or flat top-level body shortcuts.",
+        "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); the request payload is the required `body` object.",
         "/v1/runtime/upgrades/propose",
         "Raw runtime-upgrade proposal payload.",
     )
@@ -10294,7 +9303,7 @@ fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
 fn iroha_proofs_query_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.proofs.query",
-        "Query proof records (`/v1/proofs/query`); accepts raw `body` or flat top-level body shortcuts.",
+        "Query proof records (`/v1/proofs/query`); the request payload is the required `body` object.",
         "/v1/proofs/query",
         "Raw proof query payload.",
     )
@@ -10308,6 +9317,7 @@ fn governance_proposal_id_v1_schema(description: &str) -> Value {
         "description": description
     })
 }
+/// Build a governance POST tool whose `body` requires exactly the listed fields.
 fn iroha_gov_post_tool_with_fields(
     name: &str,
     description: &str,
@@ -10315,59 +9325,38 @@ fn iroha_gov_post_tool_with_fields(
     fields: &[(&str, Value)],
 ) -> ToolSpec {
     let mut body_properties = Map::new();
+    for (field, schema) in fields {
+        body_properties.insert((*field).to_owned(), schema.clone());
+    }
     let required_fields = fields
         .iter()
         .map(|(field, _)| Value::String((*field).to_owned()))
         .collect::<Vec<_>>();
-    for (field, schema) in fields {
-        body_properties.insert((*field).to_owned(), schema.clone());
-    }
     let mut tool = iroha_gov_post_tool(name, description, path_template);
-    let schema = tool
+    let body = tool
         .input_schema
         .as_object_mut()
-        .expect("governance MCP schema is an object");
-    let properties = schema
-        .get_mut("properties")
+        .and_then(|schema| schema.get_mut("properties"))
         .and_then(Value::as_object_mut)
-        .expect("governance MCP schema properties are an object");
-    properties
-        .get_mut("body")
+        .and_then(|properties| properties.get_mut("body"))
         .and_then(Value::as_object_mut)
-        .expect("governance MCP body schema is an object")
-        .insert("properties".to_owned(), Value::Object(body_properties));
-    for (field, field_schema) in fields {
-        properties.insert((*field).to_owned(), field_schema.clone());
-    }
+        .expect("governance MCP body schema is an object");
+    body.insert("properties".to_owned(), Value::Object(body_properties));
     if !required_fields.is_empty() {
-        schema.insert("if".to_owned(), norito::json!({ "required": ["body"] }));
-        schema.insert(
-            "then".to_owned(),
-            norito::json!({
-                "properties": {
-                    "body": {
-                        "required": (required_fields.clone())
-                    }
-                }
-            }),
-        );
-        schema.insert(
-            "else".to_owned(),
-            norito::json!({ "required": required_fields }),
-        );
+        body.insert("required".to_owned(), Value::Array(required_fields));
     }
     tool
 }
 fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     let input_schema = norito::json!({
         "type": "object",
-        "additionalProperties": true,
+        "required": ["body"],
         "properties": {
             "body": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {},
-                "description": "Raw governance request payload. If omitted, flat top-level fields are forwarded as the request body."
+                "description": "Raw governance request payload."
             },
             "headers": {
                 "type": "object",
@@ -10388,7 +9377,7 @@ fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> To
 fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.proposals.deploy_contract",
-        "Propose contract deployment (`/v1/gov/proposals/deploy-contract`); accepts raw `body` or flat top-level body shortcuts.",
+        "Propose contract deployment (`/v1/gov/proposals/deploy-contract`); the request payload is the required `body` object.",
         "/v1/gov/proposals/deploy-contract",
     )
 }
@@ -10782,7 +9771,7 @@ fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
 fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.protected_namespaces.update",
-        "Update protected governance namespaces (`/v1/gov/protected-namespaces`); accepts raw `body` or flat top-level body shortcuts.",
+        "Update protected governance namespaces (`/v1/gov/protected-namespaces`); the request payload is the required `body` object.",
         "/v1/gov/protected-namespaces",
     )
 }
@@ -10809,12 +9798,12 @@ fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str)
         path_template.to_owned(),
         norito::json!({
             "type": "object",
-            "additionalProperties": true,
+            "required": ["body"],
             "properties": {
                 "body": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Raw request payload. If omitted, flat top-level fields are forwarded as the request body."
+                    "description": "Raw request payload."
                 },
                 "headers": {
                     "type": "object",

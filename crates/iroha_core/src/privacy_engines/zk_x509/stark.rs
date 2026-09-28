@@ -22,6 +22,8 @@
 mod main_aggregate;
 #[cfg(test)]
 use super::der_stark::ZkX509DerStarkChallengesV1;
+#[cfg(test)]
+use super::fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::{ZkX509MainIoBaseMaterialV1, ZkX509MainTraceAssemblyV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -31,6 +33,8 @@ use super::p256_aggregate_adapter::{
     ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_SHA256_V1,
     ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_V1, absorb_p256_terminal_claims_v1,
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_residues_v1;
 use super::{
     accumulator_air::{
         ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1, ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1,
@@ -65,13 +69,9 @@ use super::{
         derive_zk_x509_der_stark_public_terminals_v1, evaluate_zk_x509_der_stark_residues_v1,
     },
     engine::construct_zk_x509_compiled_profile_v1,
-    fixed_algebraic::{
-        ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1, ZkX509FixedAlgebraicErrorV1,
-        ZkX509FixedAlgebraicOpeningsV1,
-    },
+    fixed_algebraic::{ZkX509FixedAlgebraicErrorV1, ZkX509FixedAlgebraicOpeningsV1},
     fixed_algebraic_p256::{
         ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1, ZkX509P256FixedAlgebraicErrorV1,
-        zk_x509_p256_fixed_algebraic_row_for_registration_v1,
         zk_x509_p256_fixed_algebraic_schedule_v1,
     },
     fixed_algebraic_sha::{
@@ -160,8 +160,7 @@ use super::{
         ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1, ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1,
         ZK_X509_RFC5280_STARK_TRACE_LOG2_V1, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
         ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1, ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1,
-        ZkX509P256TerminalClaimsV1, ZkX509Rfc5280OutputRoleV1, ZkX509Rfc5280StarkAuxRowV1,
-        ZkX509Rfc5280StarkBaseRowV1, ZkX509Rfc5280StarkFixedRowV1,
+        ZkX509P256TerminalClaimsV1, ZkX509Rfc5280OutputRoleV1, ZkX509Rfc5280StarkFixedRowV1,
         ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
         ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509ShaSegmentTerminalClaimsV1,
         compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
@@ -174,7 +173,7 @@ use super::{
         ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1, ZK_X509_SHA_BATCH_FIXED_WIDTH_V1,
         ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1, ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1,
         ZK_X509_SHA_SEGMENT_COUNT_V1, ZkX509ShaBatchFixedProviderV1, ZkX509ShaBatchRowV1,
-        ZkX509ShaCallPublicShapeV1, evaluate_zk_x509_sha_batch_residues_v1,
+        ZkX509ShaCallPublicShapeV1,
     },
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -232,6 +231,10 @@ use super::{
     rfc5280_stark::{ZkX509P256CertificateTerminalClaimsV1, ZkX509P256WalletTerminalClaimsV1},
     sha_call_bus_stark::ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1,
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use crate::privacy_engines::transparent_stark::GOLDILOCKS_GENERATOR_V1;
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::goldilocks_batch_invert_v1;
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::{
     PrivacyOuterMerkleTreeV1, masked_trace_lde_column_v1,
@@ -244,10 +247,9 @@ use crate::privacy_engines::transparent_stark::{
 use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
-        PolynomialAirFieldV1, PrivacyOuterDigestV1, TransparentStarkDigestContextV1,
-        TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1, append_u32_v1,
-        goldilocks_batch_invert_v1, goldilocks_primitive_root_v1, privacy_outer_digest_frame_v1,
+        GoldilocksFieldV1 as F, GoldilocksFp4V1 as E, PolynomialAirFieldV1, PrivacyOuterDigestV1,
+        TransparentStarkDigestContextV1, TransparentStarkErrorV1, TransparentTranscriptV1,
+        append_u16_v1, append_u32_v1, goldilocks_primitive_root_v1, privacy_outer_digest_frame_v1,
         verify_grinding_nonce_v1,
     },
 };
@@ -267,6 +269,7 @@ use main_aggregate::{
 pub(crate) use main_aggregate::{
     ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1,
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
 pub(crate) use main_aggregate::{
     verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1,
@@ -324,6 +327,7 @@ const _: () = assert!(
 );
 #[cfg(test)]
 const ACCUMULATOR_REGISTRATION_COUNT_V1: usize = 1;
+#[cfg(test)]
 const VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1: usize = QUERY_COUNT * 2;
 const P256_CERTIFICATE_REGISTRATION_COUNT_V1: usize = 8;
 const P256_WALLET_REGISTRATION_COUNT_V1: usize = 9;
@@ -1827,6 +1831,7 @@ impl TraceGroupLayoutV1 {
             aux_width: self.aux_width,
         }
     }
+    #[cfg(test)]
     fn next_stride(self, common_lde_log2: u8) -> Result<usize, ZkX509StarkErrorV1> {
         self.as_shared()
             .next_stride(common_lde_log2)
@@ -1991,6 +1996,7 @@ impl AggregateProofLayoutV1 {
         }
         Ok(registration)
     }
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn common_lde_size(&self) -> usize {
         1_usize << self.common_lde_log2
     }
@@ -2309,6 +2315,7 @@ pub(crate) fn validate_zk_x509_main_verifier_profile_v1(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Reject a full MAIN proof whose fixed opening schedule exceeds its X5S1 budget.
 ///
 /// Registration and fixed-polynomial diagnostics remain independently usable.
@@ -2329,6 +2336,7 @@ pub(crate) fn validate_zk_x509_main_proof_budget_v1() -> Result<(), ZkX509StarkE
     }
     Ok(())
 }
+#[cfg(test)]
 /// Verifier-derived fixed rows are evaluated only after MAIN grinding and
 /// query derivation. Construction is private so a caller cannot substitute a
 /// query set, schedule digest, or fixed row.
@@ -2337,12 +2345,14 @@ const MAIN_LOG19_QUERY_SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.main.log19-qu
 ///
 /// The canonical sorted-unique union is used by both algebraic evaluators,
 /// while the ordered pairs retain transcript order and current/next pairing.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MainLog19VerifierQueryScheduleV1 {
     pairs: [(usize, usize); QUERY_COUNT],
     indices: Vec<u64>,
     order_digest: PrivacyOuterDigestV1,
 }
+#[cfg(test)]
 fn main_log19_query_schedule_digest_v1(
     pairs: &[(usize, usize); QUERY_COUNT],
 ) -> Result<PrivacyOuterDigestV1, ZkX509StarkErrorV1> {
@@ -2373,6 +2383,7 @@ fn main_log19_query_schedule_digest_v1(
     )
     .map_err(map_transparent_error_v1)
 }
+#[cfg(test)]
 impl MainLog19VerifierQueryScheduleV1 {
     fn from_query_coordinates_v1(query_coordinates: &[usize]) -> Result<Self, ZkX509StarkErrorV1> {
         let query_coordinates: [usize; QUERY_COUNT] = query_coordinates
@@ -2430,22 +2441,14 @@ impl MainLog19VerifierQueryScheduleV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkX509MainVerifierDerivedFixedOpeningsV1 {
     query_schedule: MainLog19VerifierQueryScheduleV1,
     sha: ZkX509FixedAlgebraicOpeningsV1,
     p256_log19: ZkX509FixedAlgebraicOpeningsV1,
 }
-/// Evaluate both manifest-bound schedules against the post-grinding query
-/// union. No proof or service supplies fixed bytes.
-fn derive_zk_x509_main_fixed_openings_after_grinding_v1(
-    verifier_profile: ZkX509MainVerifierProfileV1,
-    sha_shape: ZkX509ShaCallPublicShapeV1,
-    query_coordinates: &[usize],
-) -> Result<ZkX509MainVerifierDerivedFixedOpeningsV1, ZkX509StarkErrorV1> {
-    validate_zk_x509_main_verifier_profile_v1(verifier_profile)?;
-    derive_zk_x509_main_fixed_openings_after_profile_validation_v1(sha_shape, query_coordinates)
-}
+#[cfg(test)]
 fn derive_zk_x509_main_fixed_openings_after_profile_validation_v1(
     sha_shape: ZkX509ShaCallPublicShapeV1,
     query_coordinates: &[usize],
@@ -3872,6 +3875,7 @@ fn fixed_lde_columns_v1(
         })
         .collect()
 }
+#[cfg(test)]
 fn sampled_verifier_generated_fixed_openings_v1<const WIDTH: usize>(
     segment: SegmentLayoutV1,
     common_lde_log2: u8,
@@ -5540,6 +5544,7 @@ fn quotient_value_v1(
         })
         .mul_base(inverse_vanishing))
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn accumulator_quotient_value_v1(
     layout: SegmentLayoutV1,
     x: F,
@@ -5904,6 +5909,7 @@ fn mix_fri_base_v1(
     }
     Ok(result)
 }
+#[cfg(test)]
 fn mix_opened_composition_chunks_v1(
     chunks: &[E],
     mix: &FriMixV1,
@@ -6919,6 +6925,7 @@ struct RegisteredOpenedRowsV1<'a, A = F> {
     aux_current: &'a [A],
     aux_next: &'a [A],
 }
+#[cfg(test)]
 fn registered_opened_rows_v1<'a>(
     aggregate_layout: &AggregateProofLayoutV1,
     registration: RegisteredSegmentLayoutV1,
@@ -7169,6 +7176,7 @@ fn canonical_p256_main_log5_bindings_v1(
     }
     Ok(log5)
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const P256_MAIN_LOG16_REGISTRATION_COUNT_V1: usize = 10;
 const P256_MAIN_LOG16_BASE_WIDTH_V1: usize =
     P256_SIGNATURE_COUNT_V1 * (P256_WINDOW_BASE_WIDTH_V1 + P256_BINDING_SINK_BASE_WIDTH_V1);
@@ -7185,6 +7193,7 @@ const _: () = assert!(
     P256_MAIN_LOG16_NEXT_STRIDE_V1
         == 1 << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - P256_WINDOW_AGGREGATE_TRACE_LOG2_V1)
 );
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// The sole native-log-sixteen P-256 registration order: all five vertical
 /// window batches followed by all five external-binding sinks.
 ///
@@ -7695,6 +7704,13 @@ impl<'a> MainP256Log5ProverConstraintSourceV1<'a> {
 ///
 /// One central verifier-fixed source is shared across all P-256 groups. This
 /// view owns only its bounded, registration-local opening caches.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "opened-row fields serve only the test and release-evidence prover checks"
+    )
+)]
 struct MainP256Log5VerifierConstraintSourceV1<'a> {
     bindings: Vec<MainP256RegistrationBindingV1>,
     common_lde_log2: u8,
@@ -7731,11 +7747,13 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
             fixed_openings,
         })
     }
+    #[cfg(test)]
     fn common_lde_size_v1(&self) -> Result<usize, ZkX509StarkErrorV1> {
         1_usize
             .checked_shl(u32::from(self.common_lde_log2))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
+    #[cfg(test)]
     fn binding_index_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -7752,6 +7770,7 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
         }
         Ok(index)
     }
+    #[cfg(test)]
     fn next_query_index_v1(
         &self,
         registration_index: usize,
@@ -7774,6 +7793,7 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
             % self.common_lde_size_v1()?)
     }
+    #[cfg(test)]
     fn ensure_fixed_openings_v1(
         &mut self,
         registration_index: usize,
@@ -7845,6 +7865,7 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
         cache.extend(sampled);
         Ok(())
     }
+    #[cfg(test)]
     fn constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -8124,6 +8145,7 @@ impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
         accumulator_quotient_value_v1(registration.segment, x, &residues, alphas)
     }
 }
+#[cfg(test)]
 /// Witness-free fixed sampler and opened-row evaluator for all ten canonical
 /// log-sixteen registrations.
 ///
@@ -8137,7 +8159,9 @@ struct MainP256Log16VerifierConstraintSourceV1<'a> {
     terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
     fixed_openings: Vec<BTreeMap<usize, Vec<F>>>,
 }
+#[cfg(test)]
 impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
+    #[cfg(test)]
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
         fixed: &'a P256MainVerifierFixedSourceV1,
@@ -8165,11 +8189,13 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
             fixed_openings,
         })
     }
+    #[cfg(test)]
     fn common_lde_size_v1(&self) -> Result<usize, ZkX509StarkErrorV1> {
         1_usize
             .checked_shl(u32::from(self.common_lde_log2))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
+    #[cfg(test)]
     fn binding_index_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -8186,6 +8212,7 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
         }
         Ok(index)
     }
+    #[cfg(test)]
     fn next_query_index_v1(
         &self,
         registration_index: usize,
@@ -8209,6 +8236,7 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
             % self.common_lde_size_v1()?)
     }
+    #[cfg(test)]
     fn ensure_fixed_openings_v1(
         &mut self,
         registration_index: usize,
@@ -8278,6 +8306,7 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
         cache.extend(sampled);
         Ok(())
     }
+    #[cfg(test)]
     fn constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -8562,6 +8591,10 @@ struct MainLog19BoundTraceGroupSourceV1<'a> {
     der: ZkX509DerStarkTraceV1,
     der_fixed: ZkX509DerStarkFixedScheduleV1,
     rfc: ZkX509Rfc5280StarkColumnProviderV1<'a>,
+    #[expect(
+        dead_code,
+        reason = "construction validates every SHA segment base source; trace streaming reads only the auxiliary sources"
+    )]
     sha_base: [ZkX509ShaBatchSegmentBaseSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
     sha_aux: [ZkX509ShaBatchSegmentAuxSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
     sha_fixed: ZkX509ShaBatchFixedProviderV1,
@@ -9033,17 +9066,13 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
         )
     }
 }
-/// Witness-free opened-row evaluation for the fifteen P-256 registrations in
+/// Verifier-side fixed-opening owner for the fifteen P-256 registrations in
 /// MAIN's mixed native-log19 group.
 ///
-/// The combined 404-column schedule is evaluated once at the verifier's
-/// post-grinding current/next union. All registrations then borrow their exact
-/// manifest-bound slice from that immutable result.
+/// Construction validates the manifest-bound log19 bindings, the post-base
+/// P-256 challenges and the terminal claims; the complete OODS evaluation then
+/// consumes the group through [`MainLog19VerifierConstraintSourceV1`].
 struct MainP256Log19VerifierConstraintSourceV1 {
-    bindings: Vec<MainP256RegistrationBindingV1>,
-    common_lde_log2: u8,
-    challenges: P256AggregateChallengesV1,
-    terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
     fixed_openings: Option<ZkX509FixedAlgebraicOpeningsV1>,
 }
 impl MainP256Log19VerifierConstraintSourceV1 {
@@ -9060,40 +9089,13 @@ impl MainP256Log19VerifierConstraintSourceV1 {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
+        p256_aggregate_challenges_from_post_base_v1(post_base)?;
+        main_p256_terminal_registrations_v1(&claims)?;
         Ok(Self {
-            bindings,
-            common_lde_log2: layout.common_lde_log2,
-            challenges: p256_aggregate_challenges_from_post_base_v1(post_base)?,
-            terminals: main_p256_terminal_registrations_v1(&claims)?,
             fixed_openings: None,
         })
     }
-    fn common_lde_size_v1(&self) -> Result<usize, ZkX509StarkErrorV1> {
-        1_usize
-            .checked_shl(u32::from(self.common_lde_log2))
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
-    }
-    fn binding_v1(
-        &self,
-        registration: RegisteredSegmentLayoutV1,
-    ) -> Result<MainP256RegistrationBindingV1, ZkX509StarkErrorV1> {
-        let mut matches = self
-            .bindings
-            .iter()
-            .copied()
-            .filter(|binding| binding.main == registration);
-        let binding = matches.next().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        if matches.next().is_some() {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
-        }
-        Ok(binding)
-    }
-    fn next_query_index_v1(&self, query_index: usize) -> Result<usize, ZkX509StarkErrorV1> {
-        Ok(query_index
-            .checked_add(P256_MAIN_LOG19_NEXT_STRIDE_V1)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
-            % self.common_lde_size_v1()?)
-    }
+    #[cfg(test)]
     fn install_verifier_derived_fixed_openings_v1(
         &mut self,
         openings: ZkX509FixedAlgebraicOpeningsV1,
@@ -9106,77 +9108,6 @@ impl MainP256Log19VerifierConstraintSourceV1 {
         self.fixed_openings = Some(openings);
         Ok(())
     }
-    fn constraint_residues_v1(
-        &mut self,
-        registration: RegisteredSegmentLayoutV1,
-        query_index: usize,
-        next_query_index: usize,
-        x: F,
-        opening: RegisteredOpenedRowsV1<'_>,
-    ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-        let binding = self.binding_v1(registration)?;
-        let common_lde_size = self.common_lde_size_v1()?;
-        if query_index >= common_lde_size
-            || next_query_index >= common_lde_size
-            || next_query_index != self.next_query_index_v1(query_index)?
-            || opening.base_current.len() != registration.segment.base_width
-            || opening.base_next.len() != registration.segment.base_width
-            || opening.aux_current.len() != registration.segment.aux_width
-            || opening.aux_next.len() != registration.segment.aux_width
-            || F::canonical(x.0).is_none()
-            || opening
-                .base_current
-                .iter()
-                .chain(opening.base_next)
-                .chain(opening.aux_current)
-                .chain(opening.aux_next)
-                .any(|value| F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        let root =
-            goldilocks_primitive_root_v1(self.common_lde_log2).map_err(map_transparent_error_v1)?;
-        let expected_x = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(query_index as u128));
-        if x != expected_x {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        let fixed = self
-            .fixed_openings
-            .as_ref()
-            .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
-        let current_combined = fixed
-            .row_for_query_v1(
-                u64::try_from(query_index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-            )
-            .map_err(map_fixed_algebraic_error_v1)?
-            .ok_or(ZkX509StarkErrorV1::TraceOpening)?;
-        let next_combined = fixed
-            .row_for_query_v1(
-                u64::try_from(next_query_index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-            )
-            .map_err(map_fixed_algebraic_error_v1)?
-            .ok_or(ZkX509StarkErrorV1::TraceOpening)?;
-        let current =
-            zk_x509_p256_fixed_algebraic_row_for_registration_v1(current_combined, binding.p256)
-                .map_err(map_p256_fixed_algebraic_error_v1)?;
-        let next =
-            zk_x509_p256_fixed_algebraic_row_for_registration_v1(next_combined, binding.p256)
-                .map_err(map_p256_fixed_algebraic_error_v1)?;
-        if current.len() != registration.segment.fixed_width
-            || next.len() != registration.segment.fixed_width
-        {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
-        }
-        p256_opened_residues_v1(
-            registration,
-            opening,
-            current,
-            self.challenges,
-            self.terminals
-                .get(binding.p256.signature_v1())
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-        )
-    }
     #[cfg(test)]
     fn cached_openings_v1(&self) -> usize {
         self.fixed_openings
@@ -9184,6 +9115,7 @@ impl MainP256Log19VerifierConstraintSourceV1 {
             .map_or(0, ZkX509FixedAlgebraicOpeningsV1::len_v1)
     }
 }
+#[cfg(test)]
 fn validate_verifier_derived_p256_log19_fixed_openings_v1(
     openings: &ZkX509FixedAlgebraicOpeningsV1,
     expected_indices: &[u64],
@@ -9406,6 +9338,7 @@ impl MainLog19PublicFixedAffineScheduleV1 {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn opened_all_v1(
         &self,
         query_schedule: &MainLog19VerifierQueryScheduleV1,
@@ -9686,6 +9619,7 @@ fn main_log19_der_fixed_opening_from_prefix_v1<A: PolynomialAirFieldV1 + Partial
     }
     Ok(fixed)
 }
+#[cfg(test)]
 fn main_log19_lagrange_weights_v1(query_index: usize) -> Result<Vec<F>, ZkX509StarkErrorV1> {
     let common_lde_size = 1_usize
         .checked_shl(u32::from(ZK_X509_MAIN_COMMON_LDE_LOG2_V1))
@@ -9757,6 +9691,7 @@ fn main_log19_generated_fixed_opening_v1<A: PolynomialAirFieldV1 + PartialEq>(
         sha_public,
     }
 }
+#[cfg(test)]
 fn validate_verifier_derived_sha_fixed_openings_v1(
     openings: &ZkX509FixedAlgebraicOpeningsV1,
     expected_indices: &[u64],
@@ -9794,10 +9729,15 @@ fn expand_main_log19_sha_fixed_opening_v1<A: PolynomialAirFieldV1 + PartialEq>(
     }
     Ok(rows)
 }
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "installed only by the test-only verifier-derived opening path"
+    )
+)]
 struct MainLog19InstalledFixedOpeningsV1 {
-    query_schedule: MainLog19VerifierQueryScheduleV1,
     generated: BTreeMap<usize, MainLog19VerifierGeneratedFixedOpeningV1>,
-    sha: BTreeMap<usize, [[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]; ZK_X509_SHA_SEGMENT_COUNT_V1]>,
 }
 /// Closed verifier owner for MAIN's complete mixed native-log19 group.
 ///
@@ -9807,7 +9747,6 @@ struct MainLog19InstalledFixedOpeningsV1 {
 /// for complete DEEP constraint evaluation. Scalar reference checks additionally
 /// install the verifier-derived opening token bound to all 136 transcript-order queries.
 struct MainLog19VerifierConstraintSourceV1 {
-    registrations: Vec<RegisteredSegmentLayoutV1>,
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
     claims: ZkX509MainTerminalClaimsV1,
     der_public: ZkX509DerStarkPublicTerminalsV1,
@@ -9825,7 +9764,7 @@ impl MainLog19VerifierConstraintSourceV1 {
         post_base: ZkX509CredentialMainPostBaseChallengesV1,
         claims: ZkX509MainTerminalClaimsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
-        let registrations = canonical_main_log19_registrations_v1(layout)?;
+        canonical_main_log19_registrations_v1(layout)?;
         validate_zk_x509_der_rfc_terminal_equalities_v1(claims.der, claims.rfc5280)
             .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
         if !zk_x509_main_rfc_sha_terminal_products_match_v1(claims.rfc5280, claims.sha) {
@@ -9853,7 +9792,6 @@ impl MainLog19VerifierConstraintSourceV1 {
         let p256 =
             MainP256Log19VerifierConstraintSourceV1::for_main_v1(layout, post_base, claims.p256)?;
         Ok(Self {
-            registrations,
             post_base,
             claims,
             der_public,
@@ -9877,31 +9815,7 @@ impl MainLog19VerifierConstraintSourceV1 {
         self.public_fixed = Some(fixed);
         Ok(())
     }
-    fn common_lde_size_v1(&self) -> usize {
-        1_usize << ZK_X509_MAIN_COMMON_LDE_LOG2_V1
-    }
-    fn next_query_index_v1(&self, query_index: usize) -> Result<usize, ZkX509StarkErrorV1> {
-        Ok(query_index
-            .checked_add(P256_MAIN_LOG19_NEXT_STRIDE_V1)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
-            % self.common_lde_size_v1())
-    }
-    fn registration_index_v1(
-        &self,
-        registration: RegisteredSegmentLayoutV1,
-    ) -> Result<usize, ZkX509StarkErrorV1> {
-        let mut matches = self
-            .registrations
-            .iter()
-            .enumerate()
-            .filter(|(_, candidate)| **candidate == registration)
-            .map(|(index, _)| index);
-        let index = matches.next().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        if matches.next().is_some() {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
-        }
-        Ok(index)
-    }
+    #[cfg(test)]
     fn install_verifier_derived_fixed_openings_v1(
         &mut self,
         derived: ZkX509MainVerifierDerivedFixedOpeningsV1,
@@ -9963,207 +9877,10 @@ impl MainLog19VerifierConstraintSourceV1 {
         // only fallible mutation point; the remaining moves are infallible.
         self.p256
             .install_verifier_derived_fixed_openings_v1(p256_log19, &query_schedule.indices)?;
-        let installed = MainLog19InstalledFixedOpeningsV1 {
-            query_schedule,
-            generated,
-            sha: expanded_sha,
-        };
+        let installed = MainLog19InstalledFixedOpeningsV1 { generated };
         self.public_fixed = Some(public_fixed);
         self.fixed_openings = Some(installed);
         Ok(())
-    }
-    fn validate_opening_request_v1(
-        &self,
-        registration: RegisteredSegmentLayoutV1,
-        query_index: usize,
-        next_query_index: usize,
-        x: F,
-        opening: RegisteredOpenedRowsV1<'_>,
-    ) -> Result<usize, ZkX509StarkErrorV1> {
-        let registration_index = self.registration_index_v1(registration)?;
-        let fixed = self
-            .fixed_openings
-            .as_ref()
-            .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
-        if !fixed
-            .query_schedule
-            .pairs
-            .contains(&(query_index, next_query_index))
-            || query_index >= self.common_lde_size_v1()
-            || next_query_index != self.next_query_index_v1(query_index)?
-            || opening.base_current.len() != registration.segment.base_width
-            || opening.base_next.len() != registration.segment.base_width
-            || opening.aux_current.len() != registration.segment.aux_width
-            || opening.aux_next.len() != registration.segment.aux_width
-            || F::canonical(x.0).is_none()
-            || opening
-                .base_current
-                .iter()
-                .chain(opening.base_next)
-                .chain(opening.aux_current)
-                .chain(opening.aux_next)
-                .any(|value| F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        let root = goldilocks_primitive_root_v1(ZK_X509_MAIN_COMMON_LDE_LOG2_V1)
-            .map_err(map_transparent_error_v1)?;
-        if x != F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(query_index as u128))
-            || fixed.generated.get(&query_index).is_none()
-            || fixed.generated.get(&next_query_index).is_none()
-            || fixed.sha.get(&query_index).is_none()
-            || fixed.sha.get(&next_query_index).is_none()
-        {
-            return Err(ZkX509StarkErrorV1::TraceOpening);
-        }
-        Ok(registration_index)
-    }
-    fn constraint_residues_v1(
-        &mut self,
-        registration: RegisteredSegmentLayoutV1,
-        query_index: usize,
-        next_query_index: usize,
-        x: F,
-        opening: RegisteredOpenedRowsV1<'_>,
-    ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-        let registration_index = self.validate_opening_request_v1(
-            registration,
-            query_index,
-            next_query_index,
-            x,
-            opening,
-        )?;
-        if registration_index >= MAIN_LOG19_NON_P256_REGISTRATION_COUNT_V1 {
-            return self.p256.constraint_residues_v1(
-                registration,
-                query_index,
-                next_query_index,
-                x,
-                opening,
-            );
-        }
-        let fixed = self
-            .fixed_openings
-            .as_ref()
-            .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
-        let current_fixed = fixed
-            .generated
-            .get(&query_index)
-            .ok_or(ZkX509StarkErrorV1::TraceOpening)?;
-        let next_fixed = fixed
-            .generated
-            .get(&next_query_index)
-            .ok_or(ZkX509StarkErrorV1::TraceOpening)?;
-        let residues = match registration.segment.adapter {
-            SegmentAdapterIdV1::StrictDer => {
-                let current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1] = opening
-                    .base_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                let next: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1] = opening
-                    .base_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                let current_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1] = opening
-                    .aux_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                let next_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1] = opening
-                    .aux_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                evaluate_zk_x509_der_stark_residues_v1(
-                    current,
-                    next,
-                    current_aux,
-                    next_aux,
-                    &current_fixed.der,
-                    &next_fixed.der,
-                    self.post_base.der(),
-                    self.der_public,
-                    self.claims.der,
-                )
-                .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?
-            }
-            SegmentAdapterIdV1::Rfc5280 => {
-                let current: &ZkX509Rfc5280StarkBaseRowV1 = opening
-                    .base_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                let next: &ZkX509Rfc5280StarkBaseRowV1 = opening
-                    .base_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                let current_aux: &ZkX509Rfc5280StarkAuxRowV1 = opening
-                    .aux_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                let next_aux: &ZkX509Rfc5280StarkAuxRowV1 = opening
-                    .aux_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                evaluate_zk_x509_rfc5280_stark_residues_v1(
-                    current,
-                    next,
-                    current_aux,
-                    next_aux,
-                    &current_fixed.rfc,
-                    self.post_base.der(),
-                    self.post_base.rfc5280(),
-                    self.claims.rfc5280,
-                )
-                .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?
-            }
-            SegmentAdapterIdV1::Sha256CallBus => {
-                let segment = usize::from(registration.segment.instance);
-                let current_sha_fixed = fixed
-                    .sha
-                    .get(&query_index)
-                    .and_then(|rows| rows.get(segment))
-                    .copied()
-                    .ok_or(ZkX509StarkErrorV1::TraceOpening)?;
-                let next_sha_fixed = fixed
-                    .sha
-                    .get(&next_query_index)
-                    .and_then(|rows| rows.get(segment))
-                    .copied()
-                    .ok_or(ZkX509StarkErrorV1::TraceOpening)?;
-                let current = ZkX509ShaBatchRowV1 {
-                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_current)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_current)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    fixed: current_sha_fixed,
-                };
-                let next = ZkX509ShaBatchRowV1 {
-                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_next)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_next)
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    fixed: next_sha_fixed,
-                };
-                evaluate_zk_x509_sha_batch_residues_v1(
-                    &current,
-                    &next,
-                    self.post_base.sha_word(),
-                    self.post_base.sha(),
-                    self.post_base.rfc5280(),
-                    *self
-                        .claims
-                        .sha
-                        .segments
-                        .get(segment)
-                        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
-                    &self.claims.sha.ca_calls,
-                )
-                .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?
-            }
-            _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
-        };
-        if residues.len() != registration.segment.constraint_count {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
-        }
-        Ok(residues)
     }
     #[cfg(test)]
     fn cached_openings_v1(&self) -> usize {
@@ -10246,6 +9963,7 @@ fn copied_matrix_column_v1(
     column.extend_from_slice(source);
     Ok(ZeroizingMainTraceColumnV1(column))
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_p256_scalar_registrations_v1(
     layout: &AggregateProofLayoutV1,
 ) -> Result<[MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1], ZkX509StarkErrorV1> {
@@ -10292,6 +10010,7 @@ fn main_p256_scalar_registrations_v1(
         .try_into()
         .map_err(|_: Vec<MainP256RegistrationBindingV1>| ZkX509StarkErrorV1::InternalInvariant)
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_p256_scalar_registration_v1(
     registrations: &[MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1],
     registration: RegisteredSegmentLayoutV1,
@@ -10557,6 +10276,7 @@ impl<'a> MainP256ScalarProverConstraintSourceV1<'a> {
         accumulator_quotient_value_v1(registration.segment, x, &residues, alphas)
     }
 }
+#[cfg(test)]
 /// Witness-free fixed sampler and opened-row evaluator for all five scalar
 /// buses in the production MAIN verifier.
 struct MainP256ScalarVerifierConstraintSourceV1<'a> {
@@ -10568,7 +10288,9 @@ struct MainP256ScalarVerifierConstraintSourceV1<'a> {
     fixed_openings:
         [BTreeMap<usize, [F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1]>; P256_SIGNATURE_COUNT_V1],
 }
+#[cfg(test)]
 impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
+    #[cfg(test)]
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
         fixed: &'a P256MainVerifierFixedSourceV1,
@@ -10595,11 +10317,13 @@ impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
             fixed_openings: core::array::from_fn(|_| BTreeMap::new()),
         })
     }
+    #[cfg(test)]
     fn common_lde_size_v1(&self) -> Result<usize, ZkX509StarkErrorV1> {
         1_usize
             .checked_shl(u32::from(self.common_lde_log2))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
+    #[cfg(test)]
     fn next_query_index_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
@@ -10617,6 +10341,7 @@ impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
             % self.common_lde_size_v1()?)
     }
+    #[cfg(test)]
     fn ensure_fixed_openings_v1(
         &mut self,
         matched: MainP256RegistrationBindingV1,
@@ -10677,6 +10402,7 @@ impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
         cache.extend(converted);
         Ok(())
     }
+    #[cfg(test)]
     fn constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -11087,6 +10813,13 @@ impl MainIoProverConstraintSourceV1 {
 /// Fixed rows come only from the typed public statement. The cache is bounded to the two
 /// coordinates needed for each canonical query, and all caller-controlled coordinates and opened
 /// values are checked before that cache can change.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "opened-row fields serve only the test and release-evidence prover checks"
+    )
+)]
 struct MainIoVerifierConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
     common_lde_log2: u8,
@@ -11120,11 +10853,13 @@ impl MainIoVerifierConstraintSourceV1 {
             fixed_openings: BTreeMap::new(),
         })
     }
+    #[cfg(test)]
     fn common_lde_size_v1(&self) -> Result<usize, ZkX509StarkErrorV1> {
         1_usize
             .checked_shl(u32::from(self.common_lde_log2))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
+    #[cfg(test)]
     fn next_query_index_v1(&self, query_index: usize) -> Result<usize, ZkX509StarkErrorV1> {
         let stride_log2 = self
             .common_lde_log2
@@ -11138,6 +10873,7 @@ impl MainIoVerifierConstraintSourceV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
             % self.common_lde_size_v1()?)
     }
+    #[cfg(test)]
     fn ensure_fixed_openings_v1(&mut self, indices: [usize; 2]) -> Result<(), ZkX509StarkErrorV1> {
         let mut missing = indices
             .into_iter()
@@ -11173,6 +10909,7 @@ impl MainIoVerifierConstraintSourceV1 {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -11427,6 +11164,13 @@ struct MainProjectionVerifierFixedOpeningV1 {
 /// The fixed trace is compiled exclusively from the public statement and sampled directly on MAIN's
 /// common coset. It never reads prover-native projection material. This source is verifier-only and
 /// bounded to the exact number of fixed openings required by the canonical query schedule.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "opened-row fields serve only the test and release-evidence prover checks"
+    )
+)]
 struct MainProjectionVerifierConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
     common_lde_log2: u8,
@@ -11458,11 +11202,13 @@ impl MainProjectionVerifierConstraintSourceV1 {
             fixed_openings: BTreeMap::new(),
         })
     }
+    #[cfg(test)]
     fn common_lde_size_v1(&self) -> Result<usize, ZkX509StarkErrorV1> {
         1_usize
             .checked_shl(u32::from(self.common_lde_log2))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
+    #[cfg(test)]
     fn next_query_index_v1(&self, query_index: usize) -> Result<usize, ZkX509StarkErrorV1> {
         let stride_log2 = self
             .common_lde_log2
@@ -11476,6 +11222,7 @@ impl MainProjectionVerifierConstraintSourceV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         Ok(next % self.common_lde_size_v1()?)
     }
+    #[cfg(test)]
     fn ensure_fixed_openings_v1(&mut self, indices: [usize; 2]) -> Result<(), ZkX509StarkErrorV1> {
         let mut missing = indices
             .into_iter()
@@ -11588,6 +11335,7 @@ impl MainProjectionVerifierConstraintSourceV1 {
             self.challenges,
         )
     }
+    #[cfg(test)]
     fn constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -11699,6 +11447,7 @@ impl MainTraceGroupProviderV1<'_> {
         }
     }
 }
+#[cfg(test)]
 /// Closed association between one verifier-safe opened-row implementation and
 /// one canonical MAIN native-log group.
 ///
@@ -11708,7 +11457,6 @@ impl MainTraceGroupProviderV1<'_> {
 enum MainOpenedGroupProviderV1<'a> {
     Log5(&'a mut MainP256Log5VerifierConstraintSourceV1<'a>),
     Log16(&'a mut MainP256Log16VerifierConstraintSourceV1<'a>),
-    Log19(&'a mut MainLog19VerifierConstraintSourceV1),
     Io(&'a mut MainIoVerifierConstraintSourceV1),
     Projection(&'a mut MainProjectionVerifierConstraintSourceV1),
     P256Scalar(&'a mut MainP256ScalarVerifierConstraintSourceV1<'a>),
@@ -11725,12 +11473,13 @@ enum MainOpenedGroupProviderV1<'a> {
     #[cfg(test)]
     TestLog19(&'a mut dyn MainOpenedConstraintTestSourceV1),
 }
+#[cfg(test)]
 impl MainOpenedGroupProviderV1<'_> {
+    #[cfg(test)]
     fn native_trace_log2_v1(&self) -> u8 {
         match self {
             Self::Log5(_) => 5,
             Self::Log16(_) => 16,
-            Self::Log19(_) => 19,
             Self::Io(_) => 18,
             Self::Projection(_) => 15,
             Self::P256Scalar(_) => 8,
@@ -11748,6 +11497,7 @@ impl MainOpenedGroupProviderV1<'_> {
             Self::TestLog19(_) => 19,
         }
     }
+    #[cfg(test)]
     fn constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -11765,13 +11515,6 @@ impl MainOpenedGroupProviderV1<'_> {
                 opening,
             ),
             Self::Log16(source) => source.constraint_residues_v1(
-                registration,
-                query_index,
-                next_query_index,
-                x,
-                opening,
-            ),
-            Self::Log19(source) => source.constraint_residues_v1(
                 registration,
                 query_index,
                 next_query_index,

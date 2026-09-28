@@ -1,5 +1,6 @@
 //! SN15-M0 operations pack for the SoraGlobal Gateway CDN. Emits observability, compliance, and
 //! security scaffolding so M0 PoPs rehearse the full evidence bundle before production.
+use crate::soranet_common::sanitize_label;
 use crate::soranet_gateway_chaos::{self, ChaosScenario, ScenarioPack, ScheduleEntry};
 use eyre::{Result, WrapErr, eyre};
 use norito::{
@@ -920,17 +921,6 @@ fn render_gameday_rotation_markdown(entries: &[GamedayRotationEntry]) -> String 
         ));
     }
     out
-}
-fn sanitize_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_string()
 }
 fn summarize_path(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)

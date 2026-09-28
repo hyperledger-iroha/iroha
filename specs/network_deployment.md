@@ -1384,7 +1384,7 @@ Line counts come from `wc -l` on this branch unless marked ~. Everything below i
 | `scripts/taira_release_transfer.py`, `taira_source_capture.py`, `taira_retained_release.py`, `taira_retained_source.py`, `taira_seed_observation.py`, `taira_disk_capacity.py`, `taira_nginx_logrotate.py` | 5,288 | Upload, GC, G0/G11, G1, logrotate | P8 |
 | `scripts/taira_validator_unit.py` (+ `include_str!` at `taira_public_reset_validator_units.rs:11-12`), `taira_constants.py`, `render_taira_edge_nginx_conf.py` | 209 + 64 + 1,143 | `render::{unit, edge}`, card | P8 |
 | Python tests for all of the above | 28,462 | Rust tests in `iroha_deploy` | P8 |
-| `scripts/deploy_localnet.sh`, `run_local_swarm.sh`, `custom_network_test.py`, `simulation.py` + tests | ~1,840 | `iroha network up` | P8 |
+| `scripts/deploy_localnet.sh`, `run_local_swarm.sh`, `custom_network_test.py` + tests | ~1,750 | `iroha network up` | P8 |
 | `defaults/docker-compose.local.yml`, `docker-compose.single.yml` | 446 | Generated `defaults/docker-compose.yml` (§6.3) | P8 |
 | kagami `--private-dataspace` presets + tests | ~1,000 | Dataspace definitions | P8 |
 | `scripts/nexus/lane_bootstrap.py`, `scripts/nexus_lane_bootstrap.sh` | 667 | `iroha dataspace apply` | P6 |
@@ -1394,7 +1394,7 @@ Line counts come from `wc -l` on this branch unless marked ~. Everything below i
 - Rust CLI ≈ 89k (≈9k moved);
 - irohad and core ≈ 2.5k;
 - kagami and xtask ≈ 20.7k (≈5k moved);
-- Python scripts ≈ 30.2k;
+- Python scripts ≈ 30.1k;
 - Python tests ≈ 28.5k;
 - shell ≈ 3.3k;
 - configs and docs ≈ 7.3k.

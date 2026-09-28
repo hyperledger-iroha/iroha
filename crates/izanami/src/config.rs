@@ -8,17 +8,18 @@ use iroha_config::{
         toml::{TomlSource, Writer as TomlWriter},
     },
     parameters::actual::{
-        Commit, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule, LaneValidatorMode,
-        Nexus as ActualNexus, Sumeragi as ActualSumeragi,
+        LaneRoutingRule, LaneValidatorMode, Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
+#[cfg(test)]
+use iroha_data_model::nexus::LaneCatalog;
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
     block::consensus_v2::{
         MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
     },
-    nexus::{DataSpaceCatalog, LaneCatalog},
+    nexus::DataSpaceCatalog,
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
@@ -626,15 +627,12 @@ impl IzanamiArgs {
 /// Nexus/Sora profile derived from `defaults/nexus/config.toml`.
 #[derive(Debug, Clone)]
 pub struct NexusProfile {
+    #[cfg(test)]
     pub lane_catalog: LaneCatalog,
     pub dataspace_catalog: DataSpaceCatalog,
     pub bootstrap_public_lanes: Vec<LaneId>,
     pub stake_asset_id: AssetDefinitionId,
     pub fee_asset_id: AssetDefinitionId,
-    pub routing_policy: LaneRoutingPolicy,
-    pub fusion: Fusion,
-    pub commit: Commit,
-    pub da: Da,
     pub config_layer: Table,
 }
 fn canonical_addr_literal(addr: &str) -> Result<String> {
@@ -862,15 +860,12 @@ impl NexusProfile {
         )?;
         let config_layer = build_nexus_layer(&nexus, &sumeragi, &stake_asset_id, &fee_asset_id);
         Ok(Self {
+            #[cfg(test)]
             lane_catalog: nexus.lane_catalog,
             dataspace_catalog: nexus.dataspace_catalog,
             bootstrap_public_lanes,
             stake_asset_id,
             fee_asset_id,
-            routing_policy: nexus.routing_policy,
-            fusion: nexus.fusion,
-            commit: nexus.commit,
-            da: nexus.da,
             config_layer,
         })
     }

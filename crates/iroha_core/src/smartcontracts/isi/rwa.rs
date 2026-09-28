@@ -1408,6 +1408,10 @@ pub mod isi {
 /// RWA-related query implementations.
 pub mod query {
     use super::*;
+    use crate::smartcontracts::isi::query::json_predicate::{
+        cached_predicate_json_value, parse_domain_predicate_value, predicate_value_at_path,
+        predicate_value_equals_str, predicate_values_contain_str,
+    };
     use crate::{
         smartcontracts::ValidQuery,
         state::{StateReadOnly, WorldReadOnly},
@@ -1559,29 +1563,6 @@ pub mod query {
             selected
         }
     }
-    fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
-        DomainId::parse_fully_qualified(raw)
-            .ok()
-            .or_else(|| DomainId::try_new(raw, "universal").ok())
-    }
-    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-        if path.is_empty() {
-            return None;
-        }
-        let mut current = value;
-        for segment in path.split('.') {
-            if segment.is_empty() {
-                return None;
-            }
-            match current {
-                Value::Object(map) => {
-                    current = map.get(segment)?;
-                }
-                _ => return None,
-            }
-        }
-        Some(current)
-    }
     fn rwa_alias_values(rwa: &Rwa, field: &str) -> Vec<String> {
         match field {
             "id" => vec![rwa.id().to_string()],
@@ -1599,14 +1580,6 @@ pub mod query {
             _ => Vec::new(),
         }
     }
-    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-        matches!(value, Value::String(raw) if raw == expected)
-    }
-    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-        values
-            .iter()
-            .any(|value| matches!(value, Value::String(raw) if raw == expected))
-    }
     fn predicate_value_matches_bool(value: &Value, expected: bool) -> bool {
         match value {
             Value::Bool(raw) => *raw == expected,
@@ -1620,12 +1593,6 @@ pub mod query {
             (Value::String(raw), Some(status)) => raw == &status.to_string(),
             _ => false,
         }
-    }
-    fn rwa_json_value<'a>(cache: &'a mut Option<Value>, rwa: &Rwa) -> Option<&'a Value> {
-        if cache.is_none() {
-            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(rwa);
-        }
-        cache.as_ref()
     }
     fn predicate_matches_rwa(predicate: &PredicateJson, rwa: &Rwa) -> bool {
         let mut rwa_json = None;
@@ -1652,7 +1619,7 @@ pub mod query {
                 }
                 continue;
             }
-            let Some(value) = rwa_json_value(&mut rwa_json, rwa) else {
+            let Some(value) = cached_predicate_json_value(&mut rwa_json, rwa) else {
                 continue;
             };
             let Some(actual) = predicate_value_at_path(value, &cond.field) else {
@@ -1693,7 +1660,7 @@ pub mod query {
                 }
                 continue;
             }
-            let Some(value) = rwa_json_value(&mut rwa_json, rwa) else {
+            let Some(value) = cached_predicate_json_value(&mut rwa_json, rwa) else {
                 continue;
             };
             let Some(actual) = predicate_value_at_path(value, &cond.field) else {
@@ -1713,7 +1680,7 @@ pub mod query {
             if !rwa_alias_values(rwa, field).is_empty() {
                 continue;
             }
-            let Some(value) = rwa_json_value(&mut rwa_json, rwa) else {
+            let Some(value) = cached_predicate_json_value(&mut rwa_json, rwa) else {
                 continue;
             };
             let Some(actual) = predicate_value_at_path(value, field) else {

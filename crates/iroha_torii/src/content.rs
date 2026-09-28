@@ -314,7 +314,7 @@ fn enforce_pow(
     hasher.update(path.as_bytes());
     hasher.update(&token_bytes);
     let digest = hasher.finalize();
-    if leading_zero_bits(digest.as_bytes()) < u32::from(pow.difficulty_bits) {
+    if crate::utils::leading_zero_bits(digest.as_bytes()) < u32::from(pow.difficulty_bits) {
         return Err(ContentError::Forbidden("pow token invalid".to_string()));
     }
     Ok(())
@@ -383,18 +383,6 @@ fn signed_account(
             ))
         }
     }
-}
-fn leading_zero_bits(bytes: &[u8]) -> u32 {
-    let mut total = 0u32;
-    for byte in bytes {
-        if *byte == 0 {
-            total += 8;
-            continue;
-        }
-        total += byte.leading_zeros();
-        break;
-    }
-    total
 }
 fn assemble_file_range(
     world: &impl WorldReadOnly,
@@ -620,24 +608,9 @@ fn mime_for_path(
     if let Some(mime) = manifest.mime_overrides.get(&entry.path) {
         return mime.clone();
     }
-    let default = "application/octet-stream".to_string();
-    let Some(ext) = entry.path.rsplit('.').next() else {
-        return default;
-    };
-    match ext.to_ascii_lowercase().as_str() {
-        "html" | "htm" => "text/html; charset=utf-8".to_string(),
-        "css" => "text/css; charset=utf-8".to_string(),
-        "js" => "application/javascript".to_string(),
-        "json" => "application/json".to_string(),
-        "png" => "image/png".to_string(),
-        "jpg" | "jpeg" => "image/jpeg".to_string(),
-        "svg" => "image/svg+xml".to_string(),
-        "txt" => "text/plain; charset=utf-8".to_string(),
-        "wasm" => "application/wasm".to_string(),
-        "ico" => "image/x-icon".to_string(),
-        "gif" => "image/gif".to_string(),
-        _ => default,
-    }
+    iroha_torii_shared::content_mime::media_type_for_path(&entry.path)
+        .unwrap_or("application/octet-stream")
+        .to_string()
 }
 #[derive(Debug, Clone)]
 struct ContentRepresentationHeaders {
@@ -757,7 +730,9 @@ mod tests {
     }
     fn app_auth_test_guard(config: crate::app_auth::CanonicalRequestAuthConfig) -> impl Drop {
         static TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        struct Guard(std::sync::MutexGuard<'static, ()>);
+        struct Guard {
+            _lock: std::sync::MutexGuard<'static, ()>,
+        }
         impl Drop for Guard {
             fn drop(&mut self) {
                 crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::default())
@@ -769,7 +744,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::app_auth::configure(config).expect("valid app-auth test config");
-        Guard(guard)
+        Guard { _lock: guard }
     }
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)

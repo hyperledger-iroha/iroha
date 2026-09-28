@@ -18,10 +18,8 @@
 //!   from evictable reports. Per-tenant live-reference shards retain that
 //!   receipt only while at least one matching attachment remains stored.
 use crate::{
-    NoritoQuery,
-    routing::MaybeTelemetry,
-    utils::NORITO_MIME_TYPE,
-    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
+    NoritoQuery, routing::MaybeTelemetry, utils::NORITO_MIME_TYPE,
+    zk1::parse_tags as parse_zk1_tags,
 };
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use flate2::read::GzDecoder;
@@ -55,12 +53,25 @@ use zstd::stream::read::Decoder as ZstdDecoder;
 
 mod sanitizer;
 
-use sanitizer::{
-    decode_sanitizer_response_bytes, normalize_mime, read_limited, read_sanitizer_stdout_limited,
-    sandboxed_sanitizer_command_for_search_path, sanitize_attachment, sanitize_attachment_sync,
-    sanitizer_executable_with_override, set_clean_sanitizer_environment,
-    spawn_sanitizer_stdout_reader, validate_sanitizer_executable,
-};
+#[cfg(test)]
+use crate::zk1::MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT;
+#[cfg(test)]
+use sanitizer::decode_sanitizer_response_bytes;
+#[cfg(test)]
+use sanitizer::read_limited;
+#[cfg(test)]
+use sanitizer::read_sanitizer_stdout_limited;
+#[cfg(test)]
+use sanitizer::sandboxed_sanitizer_command_for_search_path;
+#[cfg(test)]
+use sanitizer::sanitizer_executable_with_override;
+#[cfg(test)]
+use sanitizer::set_clean_sanitizer_environment;
+#[cfg(test)]
+use sanitizer::spawn_sanitizer_stdout_reader;
+#[cfg(test)]
+use sanitizer::validate_sanitizer_executable;
+use sanitizer::{normalize_mime, sanitize_attachment, sanitize_attachment_sync};
 pub(crate) use sanitizer::{
     validate_attachment_body_contract, validate_attachment_metadata_contract,
 };
@@ -68,8 +79,10 @@ pub(crate) use sanitizer::{
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
 const GC_INTERVAL_SECS: u64 = 60; // run every minute
-const ATTACHMENT_ID_HEX_LEN: usize = 64;
-const TENANT_KEY_HEX_LEN: usize = 64;
+/// Lowercase hex length of an attachment or report identifier.
+pub(crate) const ATTACHMENT_ID_HEX_LEN: usize = 64;
+/// Lowercase hex length of a tenant key.
+pub(crate) const TENANT_KEY_HEX_LEN: usize = 64;
 const ZK1_MIME_TYPE: &str = "application/x-zk1";
 const OCTET_STREAM_MIME_TYPE: &str = "application/octet-stream";
 const JSON_MIME_TYPE: &str = "application/json";
@@ -2669,12 +2682,6 @@ pub fn init_persistence() -> std::io::Result<()> {
     }
     Ok(())
 }
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
 fn try_list_all_ids(tenant: &AttachmentTenant) -> std::io::Result<Vec<String>> {
     let directory = attachments_dir(tenant);
     let Some((directory_handle, names)) =
@@ -3194,7 +3201,8 @@ fn hash_identity_hex(label: &str, value: &str) -> String {
     let digest: [u8; 32] = hash.into();
     hex::encode::<[u8; 32]>(digest)
 }
-fn sanitize_tenant_key(raw: &str) -> Option<String> {
+/// Canonicalise a tenant key to lowercase hex, rejecting any other shape.
+pub(crate) fn sanitize_tenant_key(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.len() != TENANT_KEY_HEX_LEN {
         return None;
@@ -3204,7 +3212,8 @@ fn sanitize_tenant_key(raw: &str) -> Option<String> {
     }
     Some(trimmed.to_ascii_lowercase())
 }
-fn sanitize_attachment_id(raw: &str) -> Option<String> {
+/// Canonicalise an attachment identifier to lowercase hex, rejecting any other shape.
+pub(crate) fn sanitize_attachment_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.len() != ATTACHMENT_ID_HEX_LEN {
         return None;
@@ -3825,7 +3834,7 @@ async fn handle_post_attachment_inner(
         id: id.clone(),
         content_type: sanitized_summary.sniffed_type.clone(),
         size: stored_size,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant.as_str().to_string()),
         provenance: Some(AttachmentProvenance {
             declared_type,
@@ -4393,6 +4402,7 @@ pub async fn handle_delete_attachment(
         StatusCode::NOT_FOUND.into_response()
     }
 }
+#[cfg(test)]
 async fn delete_attachment_if_expired_with_before_lock(
     tenant: &AttachmentTenant,
     id: &str,
@@ -4713,9 +4723,6 @@ fn max_bytes_u64_cfg() -> u64 {
 }
 fn ttl_secs_cfg() -> u64 {
     attach_cfg().read().ttl_secs
-}
-fn per_tenant_max_count_cfg() -> u64 {
-    attach_cfg().read().per_tenant_max_count
 }
 fn per_tenant_max_bytes_cfg() -> u64 {
     attach_cfg().read().per_tenant_max_bytes

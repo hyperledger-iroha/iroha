@@ -8,15 +8,22 @@
 //! implemented here.  Success is therefore deliberately non-authorizing and the
 //! composite boundary still reports the complete RNS/qPCS stage unavailable.
 
+use super::rns_native_qpcs_field_wire::RNS_NATIVE_QPCS_FQ2_BYTES_V1;
 #[cfg(test)]
 use super::rns_native_qpcs_leaf::RnsNativeLeafPayloadV1;
+#[cfg(test)]
 use super::rns_native_qpcs_leaf::{RnsNativeLeafCacheV1, RnsNativeOracleV1, oracle_node_hash_v1};
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1, ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+    },
+};
+#[cfg(test)]
+use super::{
+    rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1,
     },
     rns_native_qpcs_initial::{
         RnsNativeQpcsInitialStageV1, authenticate_rns_native_qpcs_initial_v1,
@@ -26,6 +33,7 @@ use super::{
         ZkAmsMkheRnsNativeQpcsRelationBindingV1, ZkAmsMkheRnsNativeQpcsRelationLineageV1,
     },
 };
+#[cfg(test)]
 use super::{
     rns_native_proof_hash::{
         RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
@@ -36,10 +44,12 @@ use super::{
         MAX_CHALLENGE_ATTEMPTS_V1, RnsNativeChallengeCoordinateV1,
         derive_fq2_challenge_v1 as sample_fq2_challenge_v1, sample_challenge_attempt_v1,
     },
-    rns_native_qpcs_field_wire::{RNS_NATIVE_QPCS_FQ2_BYTES_V1, decode_fq2_v1},
+    rns_native_qpcs_field_wire::decode_fq2_v1,
 };
 
+#[cfg(test)]
 const PREFIX_MAGIC_V1: [u8; 4] = *b"ZQPX";
+#[cfg(test)]
 const PREFIX_VERSION_V1: u8 = 1;
 const REPETITIONS_V1: usize = 5;
 const ROWS_PER_REPETITION_V1: usize = 2;
@@ -56,9 +66,12 @@ pub(super) const MAX_OPENED_LEAVES_V1: usize = 2 * QUERY_COUNT_V1;
 const MAX_AUTHENTICATION_HASHES_V1: usize = 3_392;
 const MAX_TREE_BYTES_V1: usize =
     MAX_OPENED_LEAVES_V1 * LEAF_BYTES_V1 + MAX_AUTHENTICATION_HASHES_V1 * DIGEST_BYTES_V1;
+#[cfg(test)]
 pub(super) const DOMAIN_SIZE_V1: usize = 1 << ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1;
+#[cfg(test)]
 pub(super) const FRI_ONE_SIZE_V1: usize = DOMAIN_SIZE_V1 / 2;
 const TREE_COUNT_V1: usize = 3;
+#[cfg(test)]
 const CHECKED_FOLD_COUNT_V1: u8 = 1;
 const TREE_DESCRIPTOR_BYTES_V1: usize = 2 + 2 + 4 + 4;
 pub(super) const PREFIX_HEADER_BYTES_V1: usize = 4
@@ -70,12 +83,16 @@ pub(super) const PREFIX_HEADER_BYTES_V1: usize = 4
     + 32
     + 12 * DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const SECTION_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.section-binding";
+#[cfg(test)]
 const RLWE_AGGREGATION_IDENTITY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.rlwe-aggregation-identity";
+#[cfg(test)]
 const EVALUATION_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.ordered-evaluations";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.unverified-residual";
 
@@ -94,6 +111,7 @@ const _: () = {
     assert!(PREFIX_HEADER_BYTES_V1 == 668);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeQpcsPrefixErrorV1 {
     InvalidInitial,
@@ -114,14 +132,17 @@ pub(super) enum RnsNativeQpcsPrefixErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeQpcsPrefixErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeQpcsPrefixErrorV1 {}
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct PrefixContextV1 {
     parameter_digest: [u8; 32],
@@ -141,6 +162,7 @@ struct PrefixContextV1 {
     limb_commitment_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
 }
 
+#[cfg(test)]
 impl PrefixContextV1 {
     fn from_transcript_v1(
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -230,6 +252,7 @@ impl PrefixContextV1 {
 /// points and returns the lineage-bearing owner through every later private
 /// stage; cross-field code must consume it rather than derive a parallel
 /// challenge schedule.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the qPCS/cross-field relation schedule must be threaded exactly once"
@@ -243,6 +266,7 @@ pub(super) struct RnsNativeQpcsRelationScheduleV1 {
     points: [u64; RELATION_COUNT_V1],
 }
 
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "some accessors are reserved for the undeclared typed qPCS/cross-field adapter"
@@ -440,6 +464,7 @@ impl RnsNativeQpcsRelationScheduleV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub(super) enum TreeRoleV1 {
@@ -447,6 +472,7 @@ pub(super) enum TreeRoleV1 {
     Fri = 2,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct TreeDescriptorV1 {
     pub(super) opened: usize,
@@ -455,12 +481,14 @@ pub(super) struct TreeDescriptorV1 {
     pub(super) authentication_bytes: usize,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct TreeViewV1<'a> {
     pub(super) values: &'a [u8],
     pub(super) authentication: &'a [u8],
 }
 
+#[cfg(test)]
 struct PrefixViewV1<'a> {
     evaluations: &'a [u8],
     quotient: TreeViewV1<'a>,
@@ -474,6 +502,7 @@ struct PrefixViewV1<'a> {
 /// This is only a sequencing token for the remaining private FRI verifier. It
 /// is not a proof receipt and grants no candidate, readiness, or release
 /// authority.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "qPCS substages must be consumed once and cannot be rewound"
@@ -493,6 +522,7 @@ pub(super) struct RnsNativeQpcsFoldZeroStageV1<'a> {
     residual: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> RnsNativeQpcsFoldZeroStageV1<'a> {
     pub(super) fn take_relation_schedule_v1(
         &mut self,
@@ -547,28 +577,33 @@ impl<'a> RnsNativeQpcsFoldZeroStageV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct IndexSetV1 {
     pub(super) values: [u32; MAX_OPENED_LEAVES_V1],
     pub(super) len: usize,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct FrontierNodeV1 {
     index: u32,
     digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 const EMPTY_FRONTIER_NODE_V1: FrontierNodeV1 = FrontierNodeV1 {
     index: 0,
     digest: ProofDigestV1::ZERO,
 };
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -619,12 +654,14 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Fq2V1 {
     pub(super) c0: u64,
     pub(super) c1: u64,
 }
 
+#[cfg(test)]
 impl Fq2V1 {
     pub(super) const ZERO: Self = Self { c0: 0, c1: 0 };
     pub(super) const ONE: Self = Self { c0: 1, c1: 0 };
@@ -634,6 +671,7 @@ impl Fq2V1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct Fq2ParametersV1 {
     pub(super) modulus: u64,
@@ -641,6 +679,7 @@ pub(super) struct Fq2ParametersV1 {
     pub(super) domain_root: Fq2V1,
 }
 
+#[cfg(test)]
 impl Fq2ParametersV1 {
     pub(super) fn derive(modulus: u64) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
         if modulus < 3
@@ -747,6 +786,7 @@ impl Fq2ParametersV1 {
 ///
 /// A successful return is intentionally only an internal substage result.  It
 /// never grants candidate, readiness, or release authority.
+#[cfg(test)]
 pub(super) fn authenticate_rns_native_qpcs_prefix_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     equation_commitment_digests: &[ProofDigestV1],
@@ -769,6 +809,7 @@ pub(super) fn authenticate_rns_native_qpcs_prefix_v1<'a>(
 }
 
 /// Verify the qPCS prefix with the exact schedule minted before terminal roots.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the typed qPCS/cross-field orchestration adapter is not declared yet"
@@ -793,6 +834,7 @@ pub(super) fn authenticate_rns_native_qpcs_prefix_with_schedule_v1<'a>(
     verify_prefix_with_initial_v1(context, relation_schedule, initial)
 }
 
+#[cfg(test)]
 fn verify_prefix_with_initial_v1<'a>(
     context: PrefixContextV1,
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
@@ -827,6 +869,7 @@ fn verify_prefix_parts_v1<'a>(
     )
 }
 
+#[cfg(test)]
 fn verify_prefix_parts_with_schedule_v1<'a>(
     context: PrefixContextV1,
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
@@ -925,6 +968,7 @@ fn verify_prefix_parts_with_schedule_v1<'a>(
     })
 }
 
+#[cfg(test)]
 fn preflight_prefix_v1(prefix: &[u8]) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
     if prefix.len() > ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1 as usize {
         return Err(RnsNativeQpcsPrefixErrorV1::ProofCapExceeded);
@@ -935,6 +979,7 @@ fn preflight_prefix_v1(prefix: &[u8]) -> Result<(), RnsNativeQpcsPrefixErrorV1> 
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn descriptor_for_indices_v1(
     indices: IndexSetV1,
     length: usize,
@@ -962,6 +1007,7 @@ pub(super) fn descriptor_for_indices_v1(
     })
 }
 
+#[cfg(test)]
 fn decode_prefix_exact_v1<'a>(
     prefix: &'a [u8],
     context: PrefixContextV1,
@@ -1077,6 +1123,7 @@ fn decode_prefix_exact_v1<'a>(
     })
 }
 
+#[cfg(test)]
 fn read_tree_view_v1<'a>(
     decoder: &mut DecoderV1<'a>,
     descriptor: TreeDescriptorV1,
@@ -1087,6 +1134,7 @@ fn read_tree_view_v1<'a>(
     })
 }
 
+#[cfg(test)]
 pub(super) fn query_pair_indices_v1(
     queries: &[u32; QUERY_COUNT_V1],
     length: usize,
@@ -1118,6 +1166,7 @@ pub(super) fn query_pair_indices_v1(
     Ok(IndexSetV1 { values, len })
 }
 
+#[cfg(test)]
 fn exact_authentication_count_v1(
     indices: IndexSetV1,
     mut length: usize,
@@ -1160,6 +1209,7 @@ fn exact_authentication_count_v1(
     Ok(authentication)
 }
 
+#[cfg(test)]
 pub(super) fn validate_leaf_values_v1(
     values: &[u8],
     opened: usize,
@@ -1179,6 +1229,7 @@ pub(super) fn validate_leaf_values_v1(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn authenticate_tree_v1(
     tree: TreeViewV1<'_>,
     indices: IndexSetV1,
@@ -1293,6 +1344,7 @@ fn verify_relations_openings_and_batch_v1(
     verify_relations_openings_and_batch_with_schedule_v1(context, &relation_schedule, openings)
 }
 
+#[cfg(test)]
 struct RelationOpeningsV1<'a> {
     initial_indices: &'a [u32],
     initial_values: &'a [u8],
@@ -1303,6 +1355,7 @@ struct RelationOpeningsV1<'a> {
     evaluations: &'a [u8],
 }
 
+#[cfg(test)]
 fn verify_relations_openings_and_batch_with_schedule_v1(
     context: PrefixContextV1,
     relation_schedule: &RnsNativeQpcsRelationScheduleV1,
@@ -1402,6 +1455,7 @@ fn verify_relations_openings_and_batch_with_schedule_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn verify_first_fold_v1(
     context: PrefixContextV1,
     queries: &[u32; QUERY_COUNT_V1],
@@ -1453,6 +1507,7 @@ fn derive_relation_points_v1(
     derive_relation_points_from_seed_v1(context.parameter_digest, context.relation_seed)
 }
 
+#[cfg(test)]
 fn derive_relation_points_from_seed_v1(
     parameter_digest: [u8; 32],
     relation_seed: ProofDigestV1,
@@ -1496,6 +1551,7 @@ fn derive_relation_points_from_seed_v1(
     Ok(points)
 }
 
+#[cfg(test)]
 fn derive_batch_challenge_v1(
     parameter_digest: [u8; 32],
     seed: ProofDigestV1,
@@ -1519,6 +1575,7 @@ fn derive_batch_challenge_v1(
     .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidChallenge)
 }
 
+#[cfg(test)]
 pub(super) fn derive_fold_challenge_v1(
     parameter_digest: [u8; 32],
     seed: ProofDigestV1,
@@ -1545,6 +1602,7 @@ pub(super) fn derive_fold_challenge_v1(
     .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidChallenge)
 }
 
+#[cfg(test)]
 pub(super) fn derive_fields_v1()
 -> Result<[Fq2ParametersV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1], RnsNativeQpcsPrefixErrorV1> {
     let first = Fq2ParametersV1::derive(ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[0])?;
@@ -1555,6 +1613,7 @@ pub(super) fn derive_fields_v1()
     Ok(fields)
 }
 
+#[cfg(test)]
 fn batch_value_v1(
     field: Fq2ParametersV1,
     x: Fq2V1,
@@ -1576,6 +1635,7 @@ fn batch_value_v1(
     )
 }
 
+#[cfg(test)]
 pub(super) fn fold_value_v1(
     field: Fq2ParametersV1,
     x: Fq2V1,
@@ -1595,6 +1655,7 @@ pub(super) fn fold_value_v1(
 /// Complete FRI verification derives both `x` and `x^-1` from the exact root
 /// schedule, avoiding a field inversion for every row while retaining the
 /// same equation as [`fold_value_v1`].
+#[cfg(test)]
 pub(super) fn fold_value_with_inverse_x_v1(
     field: Fq2ParametersV1,
     inverse_x: Fq2V1,
@@ -1609,6 +1670,7 @@ pub(super) fn fold_value_with_inverse_x_v1(
     field.add(even, field.mul(alpha, odd))
 }
 
+#[cfg(test)]
 pub(super) fn read_value_v1(
     indices: IndexSetV1,
     values: &[u8],
@@ -1618,6 +1680,7 @@ pub(super) fn read_value_v1(
     read_value_from_slice_v1(&indices.values[..indices.len], values, index, coordinate)
 }
 
+#[cfg(test)]
 fn read_value_from_slice_v1(
     indices: &[u32],
     values: &[u8],
@@ -1643,6 +1706,7 @@ fn read_value_from_slice_v1(
     .map_err(|_| RnsNativeQpcsPrefixErrorV1::NonCanonicalResidue)
 }
 
+#[cfg(test)]
 fn hash_context_v1(
     parameter_digest: [u8; 32],
 ) -> Result<RnsNativeProofHashContextV1, RnsNativeQpcsPrefixErrorV1> {
@@ -1654,6 +1718,7 @@ fn hash_context_v1(
     Ok(context)
 }
 
+#[cfg(test)]
 fn tree_hash_role_v1(
     role: TreeRoleV1,
     layer: u8,
@@ -1673,6 +1738,7 @@ fn tree_hash_role_v1(
     }
 }
 
+#[cfg(test)]
 fn leaf_oracle_v1(
     role: TreeRoleV1,
     layer: u8,
@@ -1700,6 +1766,7 @@ pub(super) fn tree_leaf_hash_v1(
         .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)
 }
 
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "every fixed oracle position is explicitly bound"
@@ -1726,6 +1793,7 @@ pub(super) fn tree_node_hash_v1(
         .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)
 }
 
+#[cfg(test)]
 fn binding_hash_v1(
     domain: &[u8],
     fields: &[&[u8]],
@@ -1761,6 +1829,7 @@ fn binding_hash_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn section_binding_digest_v1(
     transcript_digest: ProofDigestV1,
     equation_commitment_digests: &[ProofDigestV1],
@@ -1793,6 +1862,7 @@ fn section_binding_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn evaluation_binding_digest_v1(
     context: PrefixContextV1,
     evaluations: &[u8],
@@ -1835,6 +1905,7 @@ fn evaluation_binding_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn rlwe_aggregation_identity_v1(
     context: PrefixContextV1,
 ) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
@@ -1852,6 +1923,7 @@ fn rlwe_aggregation_identity_v1(
     )
 }
 
+#[cfg(test)]
 fn residual_digest_v1(
     context: PrefixContextV1,
     residual: &[u8],
@@ -1881,6 +1953,7 @@ fn residual_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn read_u64_v1(bytes: &[u8], offset: usize) -> Result<u64, RnsNativeQpcsPrefixErrorV1> {
     let end = offset
         .checked_add(8)
@@ -1894,6 +1967,7 @@ fn read_u64_v1(bytes: &[u8], offset: usize) -> Result<u64, RnsNativeQpcsPrefixEr
     ))
 }
 
+#[cfg(test)]
 const fn mod_add_v1(left: u64, right: u64, modulus: u64) -> u64 {
     let sum = left + right;
     let (reduced, borrow) = sum.overflowing_sub(modulus);
@@ -1901,15 +1975,18 @@ const fn mod_add_v1(left: u64, right: u64, modulus: u64) -> u64 {
     (reduced & !mask) | (sum & mask)
 }
 
+#[cfg(test)]
 const fn mod_sub_v1(left: u64, right: u64, modulus: u64) -> u64 {
     let (difference, borrow) = left.overflowing_sub(right);
     difference.wrapping_add(modulus & 0_u64.wrapping_sub(borrow as u64))
 }
 
+#[cfg(test)]
 fn mod_mul_v1(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
 
+#[cfg(test)]
 fn mod_pow_v1(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {

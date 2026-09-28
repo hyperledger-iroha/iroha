@@ -5,27 +5,32 @@
 //! commits exact encrypted leg material through the owner-only sidecar store,
 //! then signs the one body derived from those immutable bytes.
 
+#[cfg(test)]
+use super::sidecar_store::verify_private_settlement_availability_certificate_v1;
 use super::{
     protocol::validate_authority_cryptography_v1,
     sidecar_store::{
         PrivateSettlementFileSidecarStoreV1, PrivateSettlementSidecarStoreErrorV1,
         PrivateSettlementSidecarStoreOutcomeV1,
-        verify_private_settlement_availability_certificate_v1,
     },
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_BLS_BYTES_V1,
-    PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
     PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
     PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
     PrivateSettlementAuditorViewAttestationBodyV1, PrivateSettlementAuditorViewAttestationV1,
     PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitteeAuthorityV1,
     PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementSidecarAvailabilityBodyV1,
-    PrivateSettlementSidecarAvailabilityV1,
+};
+#[cfg(test)]
+use iroha_data_model::nexus::{
+    PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1, PrivateSettlementSidecarAvailabilityV1,
 };
 use iroha_model_base::peer::PeerId;
-use std::{collections::BTreeMap, fmt};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::fmt;
 use thiserror::Error;
 
 /// Redacted failure from provisional availability signing or aggregation.
@@ -369,6 +374,7 @@ pub fn verify_private_settlement_availability_share_v1(
         .map_err(|_| PrivateSettlementAvailabilityErrorV1::InvalidShare)
 }
 
+#[cfg(test)]
 /// Aggregate exactly three distinct valid shares in canonical roster order.
 ///
 /// Input order never affects the signer bitmap or aggregate signature.

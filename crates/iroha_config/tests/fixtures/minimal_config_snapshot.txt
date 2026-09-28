@@ -459,18 +459,18 @@ Root {
             allow_tool_prefixes: [],
             deny_tool_prefixes: [],
             rate_per_minute: Some(
-                1200,
+                600000,
             ),
             burst: Some(
-                512,
+                100000,
             ),
         },
         proof_api: ProofApi {
             rate_per_minute: Some(
-                120,
+                600000,
             ),
             burst: Some(
-                60,
+                100000,
             ),
             max_body_bytes: Bytes(
                 8388608,
@@ -478,10 +478,10 @@ Root {
             body_max_inflight: 8,
             body_read_timeout: 15s,
             egress_bytes_per_sec: Some(
-                8388608,
+                268435456,
             ),
             egress_burst_bytes: Some(
-                67108864,
+                1073741824,
             ),
             max_list_limit: 200,
             request_timeout: 1s,
@@ -1372,10 +1372,10 @@ Root {
         chunk_size_bytes: 65536,
         publish_allow_accounts: [],
         limits: ContentLimits {
-            max_requests_per_second: 200,
-            request_burst: 200,
-            max_egress_bytes_per_second: 16777216,
-            egress_burst_bytes: 8388608,
+            max_requests_per_second: 10000,
+            request_burst: 100000,
+            max_egress_bytes_per_second: 268435456,
+            egress_burst_bytes: 1073741824,
         },
         default_cache_max_age_secs: 300,
         max_cache_max_age_secs: 86400,

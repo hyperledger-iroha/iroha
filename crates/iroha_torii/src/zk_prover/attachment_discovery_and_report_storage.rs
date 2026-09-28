@@ -417,32 +417,13 @@ impl AttachmentDiscovery {
             .saturating_add(u64::from(!self.sweep_complete))
     }
 }
-fn sanitize_attachment_id(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != ATTACHMENT_ID_HEX_LEN {
-        return None;
-    }
-    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
-}
 fn sanitize_report_id(raw: &str) -> Option<String> {
     sanitize_attachment_id(raw)
-}
-fn sanitize_tenant_key(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != TENANT_KEY_HEX_LEN {
-        return None;
-    }
-    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
 }
 fn attachments_root_dir() -> PathBuf {
     super::zk_attachments::base_dir().join("zk_attachments")
 }
+#[cfg(test)]
 fn attachment_meta_path(tenant_key: &str, id: &str) -> PathBuf {
     attachments_root_dir()
         .join(tenant_key)

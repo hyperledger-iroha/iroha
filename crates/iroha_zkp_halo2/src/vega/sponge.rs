@@ -77,6 +77,7 @@ impl Keccak256 {
         self.pending[..remainder.len()].copy_from_slice(remainder);
         self.pending_len = remainder.len();
     }
+    #[cfg(test)]
     /// Fork the exact internal absorb state without exposing a general-purpose
     /// `Clone` capability. Both descendants retain independent zeroizing owners
     /// and produce the same digest until different suffixes are absorbed.

@@ -267,6 +267,7 @@ impl NodeHandle {
     /// Returns an error if storage or the runtime quarantine-key wrapper is unavailable or
     /// unqualified, the object is missing, old/new key operations fail, the replacement cannot be
     /// authenticated, or the atomic write fails.
+    #[cfg(test)]
     pub fn rewrap_moderation_quarantine_object_dek(
         &self,
         quarantine_id: [u8; 16],

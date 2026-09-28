@@ -182,17 +182,13 @@ use tokio::{sync::broadcast, task};
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
-fn startup_trace_enabled() -> bool {
-    env::var_os("IROHA_STARTUP_TRACE").is_some()
-}
+/// Emit a startup-stage timing at debug level; the configured logger level controls it.
 fn log_startup_trace(stage: &'static str, started_at: Instant) {
-    if startup_trace_enabled() {
-        iroha_logger::info!(
-            stage,
-            elapsed_ms = started_at.elapsed().as_millis(),
-            "startup trace"
-        );
-    }
+    iroha_logger::debug!(
+        stage,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "startup trace"
+    );
 }
 fn torii_receipt_signer_or_derived(
     receipt_signer: Option<KeyPair>,

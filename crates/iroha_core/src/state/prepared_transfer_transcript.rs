@@ -101,6 +101,7 @@ impl StateTransaction<'_, '_> {
         self.pending_transfer_transcripts.push(transcript);
     }
 
+    #[cfg(test)]
     /// Preserve immediate recording for existing single and batch transcript owners.
     pub(super) fn stage_transfer_transcripts_with_batch_hash(
         &mut self,

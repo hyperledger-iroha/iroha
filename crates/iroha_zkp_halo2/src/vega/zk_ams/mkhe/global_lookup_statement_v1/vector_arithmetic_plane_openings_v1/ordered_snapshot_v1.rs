@@ -14,35 +14,50 @@
 //! still need to share the same ledger in the future production integration.
 //! This does not extend the leaf's erasure, page-cache, fork, or RSS guarantees.
 
+#[cfg(test)]
 use std::path::Path;
 
 use iroha_crypto::confidential_spool::{
-    CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1,
-    ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
+    CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, ConfidentialSpoolChunkV1,
+};
+#[cfg(test)]
+use iroha_crypto::confidential_spool::{
+    ConfidentialSpoolErrorV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
+    ConfidentialSpoolWriterV1,
 };
 
+#[cfg(test)]
 use crate::vega::{
     VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     bulletproof_t256::ZeroizingT256ScalarCopyV1, sponge::Keccak256,
 };
 
+#[cfg(test)]
+use super::plane_mapping_digest_v1;
 use super::{
     PLANE_COUNT_V1, SNAPSHOT_SLOT_COUNT_V1, SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1,
     SNAPSHOT_SLOT_TAG_BYTES_V1, SNAPSHOT_SLOTS_PER_PLANE_V1, VALUE_SLOTS_PER_PLANE_V1,
-    plane_mapping_digest_v1,
 };
 
+#[cfg(test)]
 #[path = "ordered_snapshot_v1/resource_budget_v1.rs"]
 mod resource_budget_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use resource_budget_v1::OrderedStorageSessionBudgetV1;
+#[cfg(test)]
 use resource_budget_v1::{OrderedStorageReservationV1, StorageBudgetErrorV1};
 
+#[cfg(test)]
 const STORAGE_VERSION_V1: u64 = 1;
+#[cfg(test)]
 const SEGMENTS_V1: usize = 2;
 const FIRST_PLANES_V1: u64 = 7_075;
 const SECOND_PLANES_V1: u64 = 2_213;
+#[cfg(test)]
 const PLAN_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.global-plane.ordered-two-spool.plan\0";
+#[cfg(test)]
 const SEGMENT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.global-plane.ordered-two-spool.segment\0";
+#[cfg(test)]
 const SNAPSHOT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.global-plane.ordered-two-spool.snapshot\0";
 
 const _: () = {
@@ -60,6 +75,7 @@ const _: () = {
 };
 
 /// Coarse storage/shape rejection without paths, secret values, or leaf errors.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::vega::zk_ams::mkhe) enum OrderedSnapshotErrorV1 {
     Shape,
@@ -72,12 +88,14 @@ pub(in crate::vega::zk_ams::mkhe) enum OrderedSnapshotErrorV1 {
     Poisoned,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GeometryV1 {
     Canonical,
     #[cfg(test)]
     Tiny,
 }
+#[cfg(test)]
 impl GeometryV1 {
     const fn plane_counts(self) -> [u64; SEGMENTS_V1] {
         match self {
@@ -88,6 +106,7 @@ impl GeometryV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SegmentV1 {
     ordinal: u64,
@@ -97,6 +116,7 @@ struct SegmentV1 {
     slots: u64,
     file_bytes: u64,
 }
+#[cfg(test)]
 impl SegmentV1 {
     fn new_v1(ordinal: u64, first_plane: u64, planes: u64) -> Result<Self, OrderedSnapshotErrorV1> {
         if ordinal >= SEGMENTS_V1 as u64 || planes == 0 {
@@ -139,6 +159,7 @@ impl SegmentV1 {
 }
 
 /// Complete checked public layout plan; individual live spools never escape.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct OrderedPlaneSpoolPlanV1 {
     geometry: GeometryV1,
@@ -151,6 +172,7 @@ pub(super) struct OrderedPlaneSpoolPlanV1 {
     layouts: [ConfidentialSpoolLayoutV1; SEGMENTS_V1],
     digest: [u8; 32],
 }
+#[cfg(test)]
 impl OrderedPlaneSpoolPlanV1 {
     /// Check the sole full geometry before any I/O, entropy, or private buffer.
     pub(super) fn canonical_v1(plane_context: [u8; 32]) -> Result<Self, OrderedSnapshotErrorV1> {
@@ -272,6 +294,7 @@ impl OrderedPlaneSpoolPlanV1 {
     }
 }
 
+#[cfg(test)]
 fn context_prefix_v1(
     domain: &[u8],
     context: [u8; 32],
@@ -296,6 +319,7 @@ fn context_prefix_v1(
     }
     hash
 }
+#[cfg(test)]
 fn nonzero_v1(digest: [u8; 32]) -> Result<[u8; 32], OrderedSnapshotErrorV1> {
     if digest == [0; 32] {
         Err(OrderedSnapshotErrorV1::Context)
@@ -306,6 +330,7 @@ fn nonzero_v1(digest: [u8; 32]) -> Result<[u8; 32], OrderedSnapshotErrorV1> {
 
 // Canonical scalar parsing borrows the owned plaintext and wipes the scalar
 // owner immediately. No validation path returns a copied secret scalar.
+#[cfg(test)]
 fn validate_slot_v1(global_slot: u64, bytes: &[u8]) -> Result<(), OrderedSnapshotErrorV1> {
     if bytes.len() != SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 as usize {
         return Err(OrderedSnapshotErrorV1::Shape);
@@ -347,18 +372,21 @@ fn validate_slot_v1(global_slot: u64, bytes: &[u8]) -> Result<(), OrderedSnapsho
 // reservation. The crypto owner unlinks each file while empty before sizing;
 // no path/reopen/descriptor escape is available from this pair. This is not a
 // fork, kernel-cache or physical secure-deletion guarantee.
+#[cfg(test)]
 struct ReservedSpoolPairV1<T> {
     spools: [T; SEGMENTS_V1],
     reservation: OrderedStorageReservationV1,
 }
 
 /// Move-only writer for the complete logical snapshot, never one segment.
+#[cfg(test)]
 #[must_use = "dropping the pair closes both encrypted spools"]
 pub(in crate::vega::zk_ams::mkhe) struct OrderedPlaneSpoolWriterV1 {
     live: Option<ReservedSpoolPairV1<ConfidentialSpoolWriterV1>>,
     plan: OrderedPlaneSpoolPlanV1,
     next_slot: u64,
 }
+#[cfg(test)]
 impl OrderedPlaneSpoolWriterV1 {
     /// Construct both canonical files only after validating the full plan.
     pub(in crate::vega::zk_ams::mkhe) fn create_v1(
@@ -533,6 +561,7 @@ impl OrderedPlaneSpoolWriterV1 {
     }
 }
 
+#[cfg(test)]
 fn aggregate_digest_v1(
     plan: &OrderedPlaneSpoolPlanV1,
     leaf_digests: [[u8; 32]; SEGMENTS_V1],
@@ -562,6 +591,7 @@ fn aggregate_digest_v1(
 }
 
 /// One retained authenticated pair; its digest alone cannot authorize reads.
+#[cfg(test)]
 #[must_use = "dropping the snapshot closes both encrypted files"]
 pub(in crate::vega::zk_ams::mkhe) struct OrderedPlaneSpoolSnapshotV1 {
     live: Option<ReservedSpoolPairV1<ConfidentialSpoolSnapshotV1>>,
@@ -569,6 +599,7 @@ pub(in crate::vega::zk_ams::mkhe) struct OrderedPlaneSpoolSnapshotV1 {
     leaf_digests: [[u8; 32]; SEGMENTS_V1],
     digest: [u8; 32],
 }
+#[cfg(test)]
 impl OrderedPlaneSpoolSnapshotV1 {
     fn validate_live_v1(&self) -> Result<(), OrderedSnapshotErrorV1> {
         let live = self.live.as_ref().ok_or(OrderedSnapshotErrorV1::Poisoned)?;
@@ -657,7 +688,9 @@ mod resource_budget_storage_tests_v1;
 
 #[path = "ordered_snapshot_v1/q_mask_s_file_v1.rs"]
 mod q_mask_s_file_v1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use q_mask_s_file_v1::SealedQMaskSFileV1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use q_mask_s_file_v1::{
-    QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1, SealedQMaskSFileV1,
-    WrittenQMaskSBlockFileV1,
+    QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1, WrittenQMaskSBlockFileV1,
 };

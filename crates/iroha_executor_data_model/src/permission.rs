@@ -774,6 +774,10 @@ pub mod smart_contract {
     }
     permission! {
         /// Permission to invoke one exact entrypoint of one deployed contract instance.
+        ///
+        /// Its current account lifecycle owner may explicitly grant or revoke this token
+        /// without a global code-management capability. Ownership alone does not authorize
+        /// invocation; callers still need this exact address and selector token.
         pub struct CanInvokeContractEntrypoint {
             /// Immutable deployed contract address.
             pub contract: ContractAddress,
@@ -1587,6 +1591,46 @@ mod tests {
         };
         let json = norito::json::to_json(&stage_vote).expect("serialize to JSON");
         assert!(json.contains("PolicyJury"));
+    }
+    #[test]
+    fn account_domain_manifest_permission_json_uses_dot_fqn() {
+        use super::nexus::CanPublishSpaceDirectoryManifestForAccountDomain;
+        let token = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace: DataSpaceId::new(10),
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+        let payload = norito::json::to_json(&token).expect("serialize publisher permission");
+        assert_eq!(payload, r#"{"dataspace":10,"domain":"hbl.sbp"}"#);
+        assert_eq!(
+            norito::json::from_str::<CanPublishSpaceDirectoryManifestForAccountDomain>(&payload)
+                .expect("deserialize publisher permission"),
+            token,
+        );
+    }
+    #[test]
+    fn sponsor_program_permissions_json_use_exact_program_id() {
+        use super::nexus::CanEnrollFeeSponsorProgram;
+        use iroha_data_model::nexus::FeeSponsorProgramId;
+        let sponsor = AccountId::new(KeyPair::random().public_key().clone());
+        let token = CanEnrollFeeSponsorProgram {
+            program_id: FeeSponsorProgramId::new(
+                sponsor,
+                "retail".parse().expect("fee sponsor program name"),
+            ),
+        };
+        let payload = norito::json::to_json(&token).expect("serialize enrollment permission");
+        assert_eq!(
+            payload,
+            format!(
+                r#"{{"program_id":{{"sponsor":"{}","name":"{}"}}}}"#,
+                token.program_id.sponsor, token.program_id.name,
+            ),
+        );
+        assert_eq!(
+            norito::json::from_str::<CanEnrollFeeSponsorProgram>(&payload)
+                .expect("deserialize enrollment permission"),
+            token,
+        );
     }
 }
 

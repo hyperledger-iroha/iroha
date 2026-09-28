@@ -38,6 +38,7 @@ use iroha_torii::sorafs::gateway::AcmeConfig;
 use mv::storage::StorageReadOnly;
 use norito::{
     decode_from_bytes,
+    derive::JsonSerialize,
     json::{self, Map, Number, Value, to_string_pretty},
     to_bytes,
 };
@@ -46,8 +47,6 @@ use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
-use serde::Serialize;
-use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use sorafs_car::chunker_registry::{self, ChunkerProfileDescriptor};
 use sorafs_chunker::fixtures::{FixtureProfile, to_hex};
@@ -358,7 +357,7 @@ fn load_reserve_policy_from_paths(
                     path.display()
                 )
             })?;
-            let policy: ReservePolicyV1 = norito::json::from_str(&contents).map_err(|err| {
+            let policy: ReservePolicyV1 = json::from_str(&contents).map_err(|err| {
                 eyre!(
                     "failed to parse reserve policy JSON `{}`: {err}",
                     path.display()
@@ -397,7 +396,7 @@ fn build_matrix_entry_value(
 ) -> Result<json::Value, Box<dyn Error>> {
     let inputs_value =
         matrix_inputs_value(storage_class, tier, duration, capacity_gib, reserve_balance)?;
-    let quote_value = norito::json::to_value(quote)
+    let quote_value = json::to_value(quote)
         .map_err(|err| eyre!("failed to serialize reserve quote JSON: {err}"))?;
     let projection = quote.ledger_projection().map_err(|err| {
         eyre!(
@@ -408,7 +407,7 @@ fn build_matrix_entry_value(
             capacity_gib
         )
     })?;
-    let projection_value = norito::json::to_value(&projection)
+    let projection_value = json::to_value(&projection)
         .map_err(|err| eyre!("failed to serialize reserve ledger projection: {err}"))?;
     let mut entry = json::Map::new();
     entry.insert(
@@ -444,7 +443,7 @@ fn matrix_inputs_value(
         json::Value::from(reserve_duration_label(duration)),
     );
     inputs.insert("capacity_gib".into(), json::Value::from(capacity_gib));
-    let reserve_value = norito::json::to_value(reserve_balance)
+    let reserve_value = json::to_value(reserve_balance)
         .map_err(|err| eyre!("failed to serialize reserve balance: {err}"))?;
     inputs.insert("reserve_balance".into(), reserve_value);
     Ok(json::Value::Object(inputs))
@@ -573,7 +572,7 @@ pub struct GatewayRoutePlanOptions {
     pub include_hsts: bool,
     pub now: OffsetDateTime,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct GatewayRoutePlan {
     version: u32,
     generated_at: String,
@@ -589,7 +588,7 @@ struct GatewayRoutePlan {
     headers_path: Option<String>,
     rollback: Option<GatewayRouteRollback>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct GatewayRouteRollback {
     manifest_json: String,
     release_tag: Option<String>,
@@ -1057,7 +1056,7 @@ fn run_gateway_route_plan(options: GatewayRoutePlanOptions) -> Result<(), Box<dy
             .map(|path| path.display().to_string()),
         rollback,
     };
-    let payload = serde_json::to_string_pretty(&plan)?;
+    let payload = json::to_string_pretty(&plan)?;
     fs::write(&options.output_path, format!("{payload}\n"))
         .map_err(|err| format!("failed to write {}: {err}", options.output_path.display()))?;
     println!("wrote {}", options.output_path.display());
@@ -1085,7 +1084,7 @@ fn build_route_binding(
             context.manifest_json.display()
         )
     })?;
-    let manifest: JsonValue = serde_json::from_slice(&manifest_bytes).map_err(|err| {
+    let manifest: Value = json::from_slice(&manifest_bytes).map_err(|err| {
         format!(
             "failed to parse manifest JSON from `{}`: {err}",
             context.manifest_json.display()
@@ -1100,11 +1099,11 @@ fn build_route_binding(
     headers.insert("Sora-Content-CID".into(), content_cid.clone());
     if let Some(alias) = context.alias.as_deref() {
         headers.insert("Sora-Name".into(), alias.to_string());
-        let proof_payload = serde_json::json!({
+        let proof_payload = norito::json!({
             "alias": alias,
             "manifest": content_cid,
         });
-        let proof_bytes = serde_json::to_vec(&proof_payload)
+        let proof_bytes = json::to_vec(&proof_payload)
             .map_err(|err| format!("failed to encode proof payload: {err}"))?;
         headers.insert("Sora-Proof".into(), BASE64_STD.encode(proof_bytes));
         let status = context
@@ -1156,7 +1155,7 @@ fn build_route_binding(
         headers_template,
     })
 }
-fn manifest_root_bytes(manifest: &JsonValue) -> Result<Vec<u8>, Box<dyn Error>> {
+fn manifest_root_bytes(manifest: &Value) -> Result<Vec<u8>, Box<dyn Error>> {
     if let Some(array) = manifest.get("root_cid").and_then(|value| value.as_array()) {
         let mut bytes = Vec::with_capacity(array.len());
         for value in array {
@@ -1527,14 +1526,14 @@ fn normalize_tls_host(value: &str) -> Result<String, String> {
 fn load_tls_hosts_from_file(path: &Path) -> Result<Vec<String>, String> {
     let data = fs::read(path)
         .map_err(|err| format!("failed to read host fixture `{}`: {err}", path.display()))?;
-    let value: JsonValue = serde_json::from_slice(&data)
+    let value: Value = json::from_slice(&data)
         .map_err(|err| format!("failed to parse host fixture `{}`: {err}", path.display()))?;
     let hosts = if let Some(array) = value.as_array() {
         parse_host_array(path, array)?
     } else if let Some(object) = value.as_object() {
-        if let Some(array) = object.get("san_hosts").and_then(JsonValue::as_array) {
+        if let Some(array) = object.get("san_hosts").and_then(Value::as_array) {
             parse_host_array(path, array)?
-        } else if let Some(array) = object.get("hosts").and_then(JsonValue::as_array) {
+        } else if let Some(array) = object.get("hosts").and_then(Value::as_array) {
             parse_host_array(path, array)?
         } else {
             return Err(format!(
@@ -1550,7 +1549,7 @@ fn load_tls_hosts_from_file(path: &Path) -> Result<Vec<String>, String> {
     };
     Ok(hosts)
 }
-fn parse_host_array(path: &Path, array: &[JsonValue]) -> Result<Vec<String>, String> {
+fn parse_host_array(path: &Path, array: &[Value]) -> Result<Vec<String>, String> {
     let mut hosts = Vec::new();
     let mut seen = BTreeSet::new();
     for (index, entry) in array.iter().enumerate() {

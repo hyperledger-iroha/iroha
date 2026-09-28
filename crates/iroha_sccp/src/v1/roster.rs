@@ -8,7 +8,7 @@
 //!
 //! `n` is in 4..=31, `t = ⌊2n/3⌋ + 1`, `generation ≥ 1`, and the members are all zero members
 //! first, then nonzero members strictly ascending as 160-bit integers. Every verifier checks the
-//! `n` range, the `t` formula and the ordering while hashing; [`roster_digest_checked`] does the
+//! `n` range, the `t` formula and the ordering while hashing; `roster_digest_checked` does the
 //! same over the packed form a destination receives.
 //!
 //! [`RosterStateV1`] mirrors the destination roster light client: acceptance of an attestation's
@@ -244,6 +244,7 @@ impl RosterV1 {
 /// # Errors
 ///
 /// Returns [`RosterError`] exactly where a destination reverts with `BadRoster()`.
+#[cfg(test)]
 pub fn roster_digest_checked(
     taira_network_id: &[u8; 32],
     generation: u64,
@@ -379,7 +380,8 @@ impl RosterStateV1 {
         let next_digest = next
             .digest(taira_network_id)
             .map_err(|_| RotationError::BadNextRoster)?;
-        if attestation.next_roster_digest == [0; 32] || attestation.next_roster_digest != next_digest
+        if attestation.next_roster_digest == [0; 32]
+            || attestation.next_roster_digest != next_digest
         {
             return Err(RotationError::NextDigestMismatch);
         }
@@ -478,14 +480,7 @@ mod tests {
         assert_eq!(preimage[72..92], member(1));
         assert_eq!(roster.digest(&TAIRA).unwrap(), keccak256(&[&preimage]));
         assert_eq!(
-            roster_digest_checked(
-                &TAIRA,
-                7,
-                NOW,
-                NOW + 14 * DAY,
-                3,
-                &roster.packed_members()
-            ),
+            roster_digest_checked(&TAIRA, 7, NOW, NOW + 14 * DAY, 3, &roster.packed_members()),
             roster.digest(&TAIRA)
         );
     }
@@ -535,7 +530,10 @@ mod tests {
         low[19] = 0xff;
         let mut high = [0_u8; 20];
         high[0] = 0x01;
-        assert_eq!(check_member_order(&[low, high, member(2), member(3)]), Ok(()));
+        assert_eq!(
+            check_member_order(&[low, high, member(2), member(3)]),
+            Ok(())
+        );
     }
 
     #[test]
@@ -629,7 +627,11 @@ mod tests {
         assert!(state.is_frozen(NOW + 1));
     }
 
-    fn rotation_attestation(state: &RosterStateV1, next_digest: [u8; 32], ts: u64) -> AttestationFieldsV1 {
+    fn rotation_attestation(
+        state: &RosterStateV1,
+        next_digest: [u8; 32],
+        ts: u64,
+    ) -> AttestationFieldsV1 {
         AttestationFieldsV1 {
             height: 3_600,
             epoch: 1,

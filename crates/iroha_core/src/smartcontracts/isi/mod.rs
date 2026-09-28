@@ -13,6 +13,8 @@ pub mod domain;
 pub mod escrow;
 /// Generic game custody and proof settlement transitions.
 pub mod game;
+/// Authorization, signature and error-mapping helpers shared by ISI modules.
+pub(crate) mod helpers;
 pub mod identifier;
 /// Kagemusha reserve settlement instruction handlers.
 pub mod kagemusha;
@@ -48,8 +50,6 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
-/// Certified Parliament provider-admission effects.
-pub mod sorafs_provider_admission;
 pub mod sorafs_final_promotion_account_custody;
 /// Governed deployment custody and durable final-promotion signer-operation authority.
 pub mod sorafs_final_promotion_authority;
@@ -61,6 +61,8 @@ pub mod sorafs_orderbook;
 pub mod sorafs_pop_registry;
 /// Finalized chain-authoritative `SoraFS` PDP and PoTR outcome handlers.
 pub mod sorafs_proof_outcome;
+/// Certified Parliament provider-admission effects.
+pub mod sorafs_provider_admission;
 /// Closed role-13 release-manifest instruction and distinct deployment permissions.
 pub mod sorafs_release_manifest_authority;
 /// Authoritative native `SoraFS` reputation recorder policy and source journal.

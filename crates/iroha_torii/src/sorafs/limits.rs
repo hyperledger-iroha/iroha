@@ -261,6 +261,7 @@ impl SorafsQuotaEnforcer {
         }
     }
     /// Construct an enforcer with all quotas disabled (tests).
+    #[cfg(test)]
     #[must_use]
     pub fn unlimited() -> Self {
         Self::from_config(&SorafsQuotaConfig::unlimited())

@@ -22,17 +22,22 @@ pub use relation::{
     atomic_private_settlement_dummy_input_memo_digest_v1,
     atomic_private_settlement_output_memo_digests_v1, atomic_private_settlement_program_id_v1,
 };
+#[cfg(test)]
+pub use wallet::AtomicPrivateSettlementBootstrapPlanV1;
 pub use wallet::{
-    ATOMIC_PRIVATE_SETTLEMENT_WALLET_BUNDLE_MAX_BYTES_V1, AtomicPrivateSettlementBootstrapPlanV1,
-    AtomicPrivateSettlementInputSecretV1, AtomicPrivateSettlementPreparedLegV1,
-    AtomicPrivateSettlementPreparedProofV1, AtomicPrivateSettlementProvisionalBundleV1,
-    AtomicPrivateSettlementProvisionalLegInputV1, AtomicPrivateSettlementWalletErrorV1,
-    AtomicPrivateSettlementWalletInspectionV1, complete_atomic_private_settlement_prepared_leg_v1,
+    ATOMIC_PRIVATE_SETTLEMENT_WALLET_BUNDLE_MAX_BYTES_V1, AtomicPrivateSettlementInputSecretV1,
+    AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementPreparedProofV1,
+    AtomicPrivateSettlementProvisionalBundleV1, AtomicPrivateSettlementProvisionalLegInputV1,
+    AtomicPrivateSettlementWalletErrorV1, AtomicPrivateSettlementWalletInspectionV1,
+    complete_atomic_private_settlement_prepared_leg_v1,
     consume_atomic_private_settlement_wallet_bundle_v1,
+    inspect_atomic_private_settlement_wallet_bundle_v1,
+};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use wallet::{
     derive_atomic_private_settlement_input_nullifiers_v1,
     encode_atomic_private_settlement_wallet_bundle_v1,
     finalize_atomic_private_settlement_provisional_bundle_v1,
-    inspect_atomic_private_settlement_wallet_bundle_v1,
     plan_atomic_private_settlement_bootstrap_v1, prepare_atomic_private_settlement_funding_note_v1,
     prepare_atomic_private_settlement_input_openings_v1,
     prepare_atomic_private_settlement_outputs_v1,

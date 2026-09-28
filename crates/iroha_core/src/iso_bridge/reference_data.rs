@@ -943,36 +943,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-    /// Lookup an instrument record by ISIN when the dataset is loaded.
-    ///
-    /// # Errors
-    /// Returns [`ReferenceDataError`] if the dataset failed to load.
-    pub fn instrument_by_isin(
-        &self,
-        isin: &str,
-    ) -> Result<Option<&InstrumentRecord>, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.isin_cusip)?
-            .map_or_else(|| Ok(None), |records| Ok(records.by_isin(isin)))
-    }
-    /// Lookup an instrument record by CUSIP when the dataset is loaded.
-    ///
-    /// # Errors
-    /// Returns [`ReferenceDataError`] if the dataset failed to load.
-    pub fn instrument_by_cusip(
-        &self,
-        cusip: &str,
-    ) -> Result<Option<&InstrumentRecord>, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.isin_cusip)?
-            .map_or_else(|| Ok(None), |records| Ok(records.by_cusip(cusip)))
-    }
-    /// Lookup MIC record if the directory is loaded.
-    ///
-    /// # Errors
-    /// Returns [`ReferenceDataError`] if the dataset failed to load.
-    pub fn mic_record(&self, mic: &str) -> Result<Option<&MicRecord>, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.mic_directory)?
-            .map_or_else(|| Ok(None), |records| Ok(records.by_mic(mic)))
-    }
 }
 fn dataset_snapshot_value<T>(snapshot: &DatasetSnapshot<T>) -> Value {
     let mut map = json::Map::new();

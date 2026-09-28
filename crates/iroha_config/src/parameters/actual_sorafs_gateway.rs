@@ -136,6 +136,7 @@ impl_default!(SorafsGateway => {
 });
 impl SorafsGateway {
     /// Returns the effective anonymity policy, falling back to the rollout phase when unset.
+    #[cfg(test)]
     #[must_use]
     pub fn effective_anonymity_policy(&self) -> AnonymityPolicy {
         self.anonymity_policy
@@ -193,12 +194,12 @@ impl_default!(SorafsGatewayUntrustedHosting => {
             redirect_html_only: defaults::sorafs::gateway::REDIRECT_HTML_ONLY,
         }
 });
-/// Rolling-window rate limit applied to gateway clients.
+/// Constant-memory token budget applied to gateway clients.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsGatewayRateLimit {
-    /// Maximum requests permitted within the window.
+    /// Maximum burst and tokens replenished per window.
     pub max_requests: Option<NonZeroU32>,
-    /// Duration of the accounting window.
+    /// Time required to replenish the complete token budget.
     pub window: Duration,
     /// Optional temporary ban duration.
     pub ban: Option<Duration>,

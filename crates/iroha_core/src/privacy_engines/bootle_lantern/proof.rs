@@ -43,26 +43,31 @@ use super::{
         BlindIssuanceRequestTranscriptV1, PresentationTranscriptV1, ProofTranscriptCoreV1,
     },
 };
+#[cfg(test)]
 use core::{num::NonZeroU32, time::Duration};
+#[cfg(test)]
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
+use iroha_data_model::transaction::SignedTransaction;
+#[cfg(test)]
 use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
     prelude::NetworkId,
     privacy::{
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
-        PrivacyConsensusLimitsV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-        PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        IrohaBootleLanternAnoncredStatementV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
-        signed::TransactionSignatureError,
+        Executable, FeePaymentIntent, TransactionBuilder, signed::TransactionSignatureError,
     },
 };
+#[cfg(test)]
+use iroha_data_model::{privacy::BootleLanternIssuerPolicyV1, transaction::TransactionPayload};
+#[cfg(test)]
 use iroha_model_base::metadata::Metadata;
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 const PROJECTION_R_STAGE_V1: &[u8] = b"projection-r-v1";
@@ -1348,8 +1353,10 @@ pub enum PresentationProofErrorV1 {
     InternalInvariant,
 }
 // INTEGER_ONLY_PROOF_PRODUCTION_END
+#[cfg(test)]
 /// Sole privacy-action index in a canonical first-release Bootle/Lantern presentation transaction.
 pub const BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1: u32 = 0;
+#[cfg(test)]
 /// Exact signature-bound transaction fields for one direct Bootle/Lantern presentation.
 #[derive(Clone, Debug)]
 pub struct BootleLanternPresentationPrivacyActionTransactionContextV1 {
@@ -1375,6 +1382,7 @@ pub enum BootleLanternPresentationPrivacyActionEffectV1 {
     /// balance, nullifier, or credential-registry mutation.
     PresentationVerificationAndFinalityOnly,
 }
+#[cfg(test)]
 /// Pure Bootle/Lantern proving output ready for transaction signing.
 ///
 /// The final payload, canonical genesis binding, and exact governed issuer policy are private. This
@@ -1393,6 +1401,7 @@ pub struct BootleLanternPreparedPresentationPrivacyActionV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
+#[cfg(test)]
 impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1410,6 +1419,7 @@ impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(test)]
 impl BootleLanternPreparedPresentationPrivacyActionV1 {
     /// Exact state effect certified by the prepared presentation.
     #[must_use]
@@ -1549,6 +1559,7 @@ impl SignedBootleLanternPresentationPrivacyActionV1 {
         self.encoded_proof_envelope_bytes
     }
 }
+#[cfg(test)]
 /// Failure while constructing or validating a canonical Bootle/Lantern
 /// presentation transaction intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -1581,6 +1592,7 @@ pub enum BootleLanternPresentationPrivacyActionIntentErrorV1 {
     #[error("the locally produced Bootle/Lantern presentation payload failed intent validation")]
     FinalIntentBinding,
 }
+#[cfg(test)]
 /// Closed failure for the canonical prove-then-sign Bootle/Lantern presentation path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum BootleLanternPresentationPrivacyActionBuildErrorV1 {
@@ -1635,6 +1647,7 @@ pub enum BootleLanternPresentationPrivacyActionBuildErrorV1 {
     #[error("signed Bootle/Lantern presentation differs from the prepared action")]
     SignedIntentMismatch,
 }
+#[cfg(test)]
 fn validate_bootle_lantern_presentation_transaction_context_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
 ) -> Result<(), BootleLanternPresentationPrivacyActionIntentErrorV1> {
@@ -1665,6 +1678,7 @@ fn validate_bootle_lantern_presentation_transaction_context_v1(
         .map(|_| ())
         .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext)
 }
+#[cfg(test)]
 fn validate_bootle_lantern_active_issuer_policy_v1(
     policy: &BootleLanternIssuerPolicyV1,
 ) -> Result<(), BootleLanternPresentationPrivacyActionIntentErrorV1> {
@@ -1676,6 +1690,7 @@ fn validate_bootle_lantern_active_issuer_policy_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn bootle_lantern_presentation_statement_context_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
@@ -1692,6 +1707,7 @@ fn bootle_lantern_presentation_statement_context_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
     }
 }
+#[cfg(test)]
 fn bootle_lantern_presentation_statement_v1(
     context: PrivacyStatementContextV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -1708,6 +1724,7 @@ fn bootle_lantern_presentation_statement_v1(
         disclosures,
     }
 }
+#[cfg(test)]
 fn bootle_lantern_presentation_transaction_payload_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -1730,6 +1747,7 @@ fn bootle_lantern_presentation_transaction_payload_v1(
         .into_payload()
         .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext)
 }
+#[cfg(test)]
 fn bootle_lantern_presentation_envelope_v1(
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
     statement: IrohaBootleLanternAnoncredStatementV1,
@@ -1752,6 +1770,7 @@ fn bootle_lantern_presentation_envelope_v1(
         proof: PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
     }
 }
+#[cfg(test)]
 fn bootle_lantern_statement_matches_policy_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -1763,6 +1782,7 @@ fn bootle_lantern_statement_matches_policy_v1(
         && statement.issuer_parameter_id == policy.issuer_parameter_id
         && statement.issuer_parameter_digest == policy.issuer_parameter_digest
 }
+#[cfg(test)]
 /// Construct the canonical single-action Bootle/Lantern statement and derive
 /// its proof-independent transaction-intent digest.
 ///
@@ -1814,6 +1834,7 @@ pub fn prepare_bootle_lantern_presentation_transaction_intent_v1(
     }
     Ok(statement)
 }
+#[cfg(test)]
 /// Validate a prepared Bootle/Lantern statement against its exact direct
 /// transaction context and active governed issuer policy.
 ///
@@ -1862,6 +1883,7 @@ pub fn validate_bootle_lantern_presentation_transaction_intent_v1(
     }
     Ok(validated)
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct BootleLanternPresentationPrivacyActionIntegrityV1 {
     canonical_genesis_hash: [u8; 32],
@@ -1873,7 +1895,9 @@ struct BootleLanternPresentationPrivacyActionIntegrityV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
+#[cfg(test)]
 impl BootleLanternPreparedPresentationPrivacyActionV1 {
+    #[cfg(test)]
     const fn integrity(&self) -> BootleLanternPresentationPrivacyActionIntegrityV1 {
         BootleLanternPresentationPrivacyActionIntegrityV1 {
             canonical_genesis_hash: self.canonical_genesis_hash,
@@ -1887,6 +1911,7 @@ impl BootleLanternPreparedPresentationPrivacyActionV1 {
         }
     }
 }
+#[cfg(test)]
 fn bootle_lantern_issuer_policy_hash_v1(
     policy: &BootleLanternIssuerPolicyV1,
 ) -> Result<[u8; 32], BootleLanternPresentationPrivacyActionBuildErrorV1> {
@@ -1894,6 +1919,7 @@ fn bootle_lantern_issuer_policy_hash_v1(
         .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::IssuerPolicyEncoding)?;
     Ok(*Hash::new(&encoding).as_ref())
 }
+#[cfg(test)]
 fn validate_bootle_lantern_presentation_signing_authority_v1(
     authority: &AccountId,
     private_key: &PrivateKey,
@@ -1907,6 +1933,7 @@ fn validate_bootle_lantern_presentation_signing_authority_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_bootle_lantern_presentation_payload_integrity_v1(
     payload: &TransactionPayload,
     policy: &BootleLanternIssuerPolicyV1,
@@ -2009,6 +2036,7 @@ fn validate_bootle_lantern_presentation_payload_integrity_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     issuer_policy: BootleLanternIssuerPolicyV1,
@@ -2082,6 +2110,7 @@ fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
     .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::PreparedPayloadDrift)?;
     Ok(prepared)
 }
+#[cfg(test)]
 /// Prepare and prove one canonical Bootle/Lantern presentation with
 /// caller-provided cryptographically secure randomness.
 ///
@@ -2134,31 +2163,7 @@ where
         canonical_genesis_hash,
     )
 }
-/// Prepare and prove one canonical Bootle/Lantern presentation with operating system randomness.
-///
-/// # Errors
-///
-/// Returns the same closed failures as
-/// [`prepare_bootle_lantern_presentation_privacy_action_with_rng_v1`].
-pub fn prepare_bootle_lantern_presentation_privacy_action_v1(
-    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
-    issuer_policy: BootleLanternIssuerPolicyV1,
-    statement: IrohaBootleLanternAnoncredStatementV1,
-    witness: &BootleLanternPresentationWitnessV1,
-    canonical_genesis_hash: [u8; 32],
-) -> Result<
-    BootleLanternPreparedPresentationPrivacyActionV1,
-    BootleLanternPresentationPrivacyActionBuildErrorV1,
-> {
-    prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
-        context,
-        issuer_policy,
-        statement,
-        witness,
-        canonical_genesis_hash,
-        &mut OsRng,
-    )
-}
+#[cfg(test)]
 /// Consume and sign a payload returned by the canonical Bootle/Lantern presentation prover.
 ///
 /// The complete proof, statement, envelope, active issuer policy, genesis
@@ -2234,6 +2239,7 @@ pub fn sign_prepared_bootle_lantern_presentation_privacy_action_v1(
         encoded_proof_envelope_bytes: integrity.encoded_proof_envelope_bytes,
     })
 }
+#[cfg(test)]
 /// Build, prove, bind, and sign one canonical Bootle/Lantern presentation with
 /// caller-provided cryptographically secure randomness.
 ///
@@ -2267,34 +2273,6 @@ where
         rng,
     )?;
     sign_prepared_bootle_lantern_presentation_privacy_action_v1(prepared, private_key)
-}
-/// Build, prove, bind, and sign one canonical Bootle/Lantern presentation with
-/// operating-system randomness.
-///
-/// # Errors
-///
-/// Returns the same closed failures as
-/// [`build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1`].
-pub fn build_signed_bootle_lantern_presentation_privacy_action_v1(
-    context: BootleLanternPresentationPrivacyActionTransactionContextV1,
-    issuer_policy: BootleLanternIssuerPolicyV1,
-    statement: IrohaBootleLanternAnoncredStatementV1,
-    witness: &BootleLanternPresentationWitnessV1,
-    canonical_genesis_hash: [u8; 32],
-    private_key: &PrivateKey,
-) -> Result<
-    SignedBootleLanternPresentationPrivacyActionV1,
-    BootleLanternPresentationPrivacyActionBuildErrorV1,
-> {
-    build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1(
-        context,
-        issuer_policy,
-        statement,
-        witness,
-        canonical_genesis_hash,
-        private_key,
-        &mut OsRng,
-    )
 }
 #[cfg(test)]
 mod tests {

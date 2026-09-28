@@ -15,7 +15,6 @@ use iroha_data_model::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
         ThresholdKeyLifecycleCertificateV1,
     },
-    parameter::system::SumeragiNposParameters,
     sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
     transaction::TransactionEntrypoint,
 };
@@ -460,11 +459,11 @@ async fn ready(port: u16, expected: u16, deadline: Instant) -> Result<()> {
                 let mut line = String::new();
                 tokio::io::BufReader::new(stream).read_line(&mut line).await?;
                 if line.starts_with(&format!("HTTP/1.1 {expected} ")) { return Ok::<_, eyre::Report>(()); }
-                ensure!(!line.starts_with("HTTP/1.1 200 ") || expected == 200, "validator claimed ready without installed production custody");
+                ensure!(!line.starts_with("HTTP/1.1 200 ") || expected == 200, "validator readiness disagrees with the expected admission state");
             }
             sleep(Duration::from_millis(200)).await;
         }
-    }).await.wrap_err("native readiness did not match the authenticated custody stage")?
+    }).await.wrap_err("native admission readiness did not reach the expected state")?
 }
 
 async fn listeners_started(peers: &mut Peers, api: u16, deadline: Instant) -> Result<()> {
@@ -1305,15 +1304,10 @@ fn verify_pulse(
         })
         .collect();
     let parameters = manifest.effective_parameters()?;
-    let npos = parameters
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
-        .ok_or_else(|| eyre!("validated signed genesis omitted NPoS parameters"))?;
-    let epoch_length = npos.epoch_length_blocks().get();
+    let epoch_length = parameters.sumeragi().epoch_length_blocks.get();
     ensure!(
         epoch_length == epoch_retention::EPOCH_LENGTH,
-        "fixture must exercise the native catalog decision at mandatory height 10"
+        "fixture must exercise the native catalog decision at mandatory height 6"
     );
     let pulse_height = epoch_length
         .checked_sub(1)
@@ -1378,10 +1372,9 @@ fn verify_pulse(
                     .is_some_and(|entrypoint| entrypoint.hash() == catalog_entrypoint_hash),
             "mandatory pulse block is not the exact catalog transaction"
         );
-        let pulse = block.global_beacon_pulse()
-            .ok_or_else(|| {
-                eyre!("mandatory pulse is absent from signed-genesis height {pulse_height}")
-            })?;
+        let pulse = block.global_beacon_pulse().ok_or_else(|| {
+            eyre!("mandatory pulse is absent from signed-genesis height {pulse_height}")
+        })?;
         ensure!(
             pulse.height == pulse_height,
             "mandatory pulse height differs"
@@ -1693,6 +1686,7 @@ fn catalog_fixture(
         delegator: writer.to_builder().account,
         writer,
         genesis,
+        chain_id: manifest.chain_id().to_string(),
         baseline_dataspaces: first.configured_dataspace_catalog.clone(),
         baseline_lanes: lanes.lanes().to_vec(),
         previous_runtime: Some(runtime),
@@ -1932,7 +1926,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     let mut outcome: Result<()> = async {
         listeners_started(&mut peers, api, startup).await?;
         wait_for_exact_height(&clients, 1, startup).await?;
-        for offset in 0..4 { ready(api + offset, 503, startup).await?; }
+        for offset in 0..4 { ready(api + offset, 200, startup).await?; }
         eprintln!("beacon fixture initial startup complete: elapsed={:.3}s", startup_started.elapsed().as_secs_f64());
         let ceremony_deadline = Instant::now() + PHASE_BUDGET;
         let signed_genesis = native_genesis_bundle(&prepared)?;
@@ -2031,30 +2025,15 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         let instruction = &dkg.install_instruction_path;
         // Match the maintained controller: commit the certificate without a
         // local beacon provider, then activate custody on the same four ledgers.
-        // Installation and provider restart share one unchanged phase deadline.
+        // Installation has a finite phase deadline; pending-work recovery is bounded below.
         let restart = Instant::now() + PHASE_BUDGET;
         let install_height = submit_install(&clients[0], instruction, &certificate, restart).await?;
         wait_for_exact_height(&clients, install_height, restart).await?;
-        for offset in 0..4 { ready(api + offset, 503, restart).await?; }
-        peers.stop(restart).await?;
-        for broker in &mut brokers {
-            broker.stop(restart).await?;
-        }
-        brokers.clear();
-        let (active_brokers, peer_configs) = stage_provider_brokers(
-            directory,
-            &broker_binary,
-            &bundle,
-            &dkg,
-            &prepared.roster,
-        )
-        .await?;
-        brokers = active_brokers;
-        peers = spawn_peers(directory, &daemon, &prepared.roster, 2)?;
-        listeners_started(&mut peers, api, restart).await?;
-        wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 200, restart).await?; }
+        // Admission is available without beacon custody. The paid catalog operation below
+        // independently proves that a required pulse cannot be omitted.
         wait_for_exact_meshed_height(&clients, install_height, restart).await?;
+        let peer_configs = (0..4).map(|index| directory.join(format!("peer{index}.toml"))).collect::<Vec<_>>();
         let mut doctor = command(&cli, directory);
         doctor.args(["--machine", "taira", "doctor", "--scope", "basic", "--public-root", &format!("http://127.0.0.1:{api}"), "--json"]);
         let doctor_deadline = (Instant::now() + Duration::from_secs(60)).min(restart);
@@ -2069,13 +2048,28 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         // Deployment uses the generated genesis-authorized client. The fresh
         // public account remains the onboarding/faucet/canary actor and receives
         // no deployment administration permissions.
-        // The first genuine paid catalog transaction admits at 8, anchors at 9,
-        // and executes at the mandatory pulse height 10. Its native completion
-        // verifies the exact signed operation independently on all four peers.
+        // The first genuine paid catalog transaction executes at required pulse height 6.
+        // Its bounded initial observation must remain pending without providers; recovery
+        // resumes the same signed transaction and native dispatch claim.
         let catalog_entrypoint_hash = super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
             binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
             genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
+        }, || async {
+            let recovery = Instant::now() + PHASE_BUDGET;
+            peers.stop(recovery).await?;
+            for broker in &mut brokers { broker.stop(recovery).await?; }
+            brokers.clear();
+            let (active_brokers, active_configs) = stage_provider_brokers(
+                directory, &broker_binary, &bundle, &dkg, &prepared.roster,
+            ).await?;
+            ensure!(active_configs == peer_configs, "provider restart changed validator configuration paths");
+            brokers = active_brokers;
+            peers = spawn_peers(directory, &daemon, &prepared.roster, 2)?;
+            listeners_started(&mut peers, api, recovery).await?;
+            for offset in 0..4 { ready(api + offset, 200, recovery).await?; }
+            // The retained real catalog may now commit immediately; do not demand idle h5.
+            Ok(())
         }).await?;
         {
             let mut runtime = Runtime { directory, daemon: &daemon, roster: &prepared.roster,

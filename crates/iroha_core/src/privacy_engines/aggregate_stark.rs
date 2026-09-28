@@ -2359,7 +2359,7 @@ fn checked_domain_size_v1(log2: u8) -> Result<usize, AggregateStarkErrorV1> {
         .checked_shl(u32::from(log2))
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn validate_masked_trace_commitment_shape_v1(
     leaf_domain: &[u8],
     node_domain: &[u8],
@@ -2511,7 +2511,7 @@ where
 /// to replay the exact commitment, evaluate smaller quotient cosets, and
 /// construct DEEP openings without materializing anonymous common-domain
 /// scratch.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn commit_masked_trace_polynomial_columns_v1<R, S>(
     context: TransparentStarkDigestContextV1,
     leaf_domain: &[u8],
@@ -2586,7 +2586,7 @@ where
 /// No native witness source or mask RNG is needed: the exact committed
 /// polynomials, including canonical trailing zero coefficients, are owned by
 /// `polynomials`.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     context: TransparentStarkDigestContextV1,
     leaf_domain: &[u8],

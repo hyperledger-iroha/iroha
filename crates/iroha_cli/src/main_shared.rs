@@ -447,7 +447,7 @@ struct Args {
     ///
     /// Example usage:
     ///
-    /// `iroha -o asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
+    /// `iroha -o asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha tx stdin`
     #[arg(short, long)]
     output: bool,
     /// Output format for command responses.
@@ -472,7 +472,7 @@ enum Command {
     #[command(subcommand)]
     Account(account::Command),
     /// Typed transaction status and transaction helpers
-    #[command(subcommand, alias = "transaction")]
+    #[command(subcommand)]
     Tx(transaction::Command),
     /// Ledger data and transaction helpers
     #[command(subcommand)]
@@ -576,17 +576,8 @@ trait RunContext {
     /// # Errors
     ///
     /// Fails if submitting over network fails
-    #[allow(dead_code)]
     fn submit(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         self.submit_with_mode(instructions, true)
-    }
-    /// Submit instructions without waiting for confirmation.
-    ///
-    /// Useful when the transaction can legitimately restart the node (e.g., executor upgrade)
-    /// and break the event stream used for confirmations.
-    #[allow(dead_code)]
-    fn submit_without_confirmation(&mut self, instructions: impl Into<Executable>) -> Result<()> {
-        self.submit_with_mode(instructions, false)
     }
     fn submit_with_mode(
         &mut self,
@@ -623,17 +614,13 @@ trait RunContext {
             }
             Executable::Ivm(bytecode) => {
                 if self.input_instructions() || self.output_instructions() {
-                    eyre::bail!(
-                        "Incompatible `--input` `--output` flags with `iroha transaction ivm`"
-                    )
+                    eyre::bail!("Incompatible `--input` `--output` flags with `iroha tx ivm`")
                 }
                 Executable::Ivm(bytecode)
             }
             Executable::IvmProved(proved) => {
                 if self.input_instructions() || self.output_instructions() {
-                    eyre::bail!(
-                        "Incompatible `--input` `--output` flags with `iroha transaction ivm`"
-                    )
+                    eyre::bail!("Incompatible `--input` `--output` flags with `iroha tx ivm`")
                 }
                 Executable::IvmProved(proved)
             }
@@ -766,9 +753,6 @@ mod ledger {
         /// Read and write domains
         #[command(subcommand)]
         Domain(crate::domain::Command),
-        /// Read and write accounts
-        #[command(subcommand)]
-        Account(crate::account::Command),
         /// Read and write assets
         #[command(subcommand)]
         Asset(crate::asset::Command),
@@ -787,15 +771,9 @@ mod ledger {
         /// Read and write system parameters
         #[command(subcommand)]
         Parameter(crate::parameter::Command),
-        /// Read and write triggers
-        #[command(subcommand)]
-        Trigger(crate::trigger::Command),
         /// Read various data
         #[command(subcommand)]
         Query(crate::query::Command),
-        /// Read transactions and write various data
-        #[command(subcommand)]
-        Transaction(crate::transaction::Command),
         /// Read and write multi-signature accounts and transactions
         #[command(subcommand)]
         Multisig(crate::multisig::Command),
@@ -809,16 +787,13 @@ mod ledger {
             use self::Command::*;
             match self {
                 Domain(variant) => Run::run(variant, context),
-                Account(variant) => Run::run(variant, context),
                 Asset(variant) => Run::run(variant, context),
                 Nft(variant) => Run::run(variant, context),
                 Rwa(variant) => Run::run(variant, context),
                 Peer(variant) => Run::run(variant, context),
                 Role(variant) => Run::run(variant, context),
                 Parameter(variant) => Run::run(variant, context),
-                Trigger(variant) => Run::run(variant, context),
                 Query(variant) => Run::run(variant, context),
-                Transaction(variant) => Run::run(variant, context),
                 Multisig(variant) => Run::run(variant, context),
                 Events(variant) => Run::run(variant, context),
                 Blocks(variant) => Run::run(variant, context),
@@ -4916,31 +4891,6 @@ mod query {
         }
     }
     #[derive(clap::Args, Debug)]
-    pub struct ContinueArgs {
-        /// `ForwardCursor` encoded as base64 (preferred) or hex (0x...)
-        #[arg(long, value_name = "B64_OR_HEX")]
-        cursor: String,
-    }
-    impl Run for ContinueArgs {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            use iroha::data_model::query::QueryRequest;
-            let client = context.client_from_config()?;
-            let bytes = decode_base64_or_hex(
-                &self.cursor,
-                "invalid hex length for ForwardCursor",
-                "invalid cursor hex",
-            )?;
-            let cursor: iroha::data_model::query::parameters::ForwardCursor =
-                norito::decode_from_bytes(&bytes).wrap_err("decode ForwardCursor")?;
-            let request = QueryRequest::Continue(cursor);
-            let resp = client.execute_query_request(request)?;
-            match resp {
-                iroha::data_model::query::QueryResponse::Singular(out) => context.print_data(&out),
-                iroha::data_model::query::QueryResponse::Iterable(out) => context.print_data(&out),
-            }
-        }
-    }
-    #[derive(clap::Args, Debug)]
     pub struct StdinRaw;
     impl Run for StdinRaw {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -5182,7 +5132,7 @@ mod transaction {
             if count > 1 || parallel > 1 {
                 if context.input_instructions() || context.output_instructions() {
                     eyre::bail!(
-                        "Incompatible `--input` `--output` flags with batch `iroha transaction ping`"
+                        "Incompatible `--input` `--output` flags with batch `iroha tx ping`"
                     );
                 }
                 let ping_seed = if no_index && count > 1 {
@@ -8455,11 +8405,11 @@ fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, Strin
 fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
-        eyre::bail!("`ledger account register --id` must be a canonical I105 account id");
+        eyre::bail!("`account register --id` must be a canonical I105 account id");
     }
     if trimmed.contains('@') {
         eyre::bail!(
-            "`ledger account register --id` must not include '@domain'; accounts are global and aliases carry domains"
+            "`account register --id` must not include '@domain'; accounts are global and aliases carry domains"
         );
     }
     if trimmed
@@ -8467,11 +8417,11 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
         eyre::bail!(
-            "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
+            "`account register --id` must be canonical I105; canonical hex is not accepted"
         );
     }
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
-        eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
+        eyre!("`account register --id` must be a canonical I105 account id: {err}")
     })?;
     Ok(parsed)
 }

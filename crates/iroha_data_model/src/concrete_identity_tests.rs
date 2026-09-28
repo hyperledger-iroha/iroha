@@ -11,17 +11,16 @@ use crate::{
     account::AccountId,
     block::BlockHeader,
     events::{
-        EventBox,
         data::{
             DataEvent,
             game::GameSessionEventV1,
             prelude::{AccountEvent, MetadataChanged, PeerEvent},
         },
-        execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+        execute_trigger::ExecuteTriggerEventFilter,
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
     isi::{InstructionBox, Log},
-    smart_contract::payloads::{ExecutorContext, SmartContractContext, TriggerContext},
+    smart_contract::payloads::{ExecutorContext, SmartContractContext},
     trigger::{
         TriggerId,
         action::{Action, Repeats, TimeTriggerRetryPolicy},
@@ -268,19 +267,6 @@ fn assert_fixed_confidential_features(header: BlockHeader) {
     );
 }
 
-fn trigger_context() -> TriggerContext {
-    TriggerContext {
-        id: trigger_id(),
-        authority: account(),
-        curr_block: header(),
-        event: EventBox::ExecuteTrigger(ExecuteTriggerEvent {
-            trigger_id: trigger_id(),
-            authority: account(),
-            args: Json::new(norito::json!({"quantity": 9, "memo": "雪"})),
-        }),
-    }
-}
-
 #[cfg(feature = "http")]
 fn stream_block() -> crate::block::SignedBlock {
     use crate::{
@@ -391,7 +377,6 @@ fn concrete_identity_frames() -> Vec<Value> {
             },
         ),
     ];
-    rows.push(family("trigger-context", trigger_context()));
     #[cfg(feature = "governance")]
     rows.push(family(
         "data-governance-submitted",
@@ -426,7 +411,7 @@ fn concrete_identity_frames_match_capture() {
     let rows = concrete_identity_frames();
     assert_eq!(
         rows.len(),
-        9 + usize::from(cfg!(feature = "governance")) + 3 * usize::from(cfg!(feature = "http"))
+        8 + usize::from(cfg!(feature = "governance")) + 3 * usize::from(cfg!(feature = "http"))
     );
     let expected = fixture_values(include_str!(
         "../tests/fixtures/model_concrete_identity_frames.json"
@@ -447,7 +432,6 @@ fn concrete_identity_frames_match_capture() {
             "data-game-session",
             "smart-contract-context",
             "executor-context",
-            "trigger-context",
             "data-governance-submitted",
             "block-subscription-first",
             "block-subscription-later",

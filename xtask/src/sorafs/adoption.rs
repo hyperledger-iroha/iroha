@@ -1,6 +1,8 @@
 //! Multi-provider adoption evidence, scoreboard comparison and telemetry burn-in gates.
-use norito::json::{self, Value};
-use serde::Serialize;
+use norito::{
+    derive::JsonSerialize,
+    json::{self, Value},
+};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -22,7 +24,7 @@ pub struct AdoptionCheckOptions {
     pub require_direct_only: bool,
     pub require_telemetry_region: bool,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 pub struct AdoptionCheckReport {
     pub scoreboard_reports: Vec<ScoreboardReport>,
     pub total_evaluated: usize,
@@ -30,7 +32,7 @@ pub struct AdoptionCheckReport {
     pub single_source_override_used: bool,
     pub implicit_metadata_override_used: bool,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 pub struct ScoreboardReport {
     pub scoreboard_path: String,
     pub summary_path: String,
@@ -44,56 +46,56 @@ pub struct ScoreboardReport {
     pub summary_provider_mix: String,
     pub summary_transport_policy: String,
     pub summary_transport_policy_override: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub summary_transport_policy_override_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ScoreboardMetadata>,
 }
-#[derive(Debug, Serialize, Default)]
+#[derive(Debug, JsonSerialize, Default)]
 pub struct ScoreboardMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub orchestrator_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub use_scoreboard: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub allow_implicit_metadata: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub provider_count: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub gateway_provider_count: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub provider_mix: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub max_parallel: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub max_peers: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub retry_budget: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub provider_failure_threshold: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub assume_now: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub telemetry_source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub telemetry_region: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub gateway_manifest_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub gateway_manifest_cid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub gateway_manifest_provided: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub transport_policy: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub transport_policy_override: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub transport_policy_override_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub anonymity_policy: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub anonymity_policy_override: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub anonymity_policy_override_label: Option<String>,
 }
 #[derive(Clone)]
@@ -102,7 +104,7 @@ pub struct ScoreboardDiffOptions {
     pub current_scoreboard: PathBuf,
     pub threshold_percent: f64,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 pub struct ScoreboardDiffReport {
     pub previous_scoreboard: String,
     pub current_scoreboard: String,
@@ -110,7 +112,7 @@ pub struct ScoreboardDiffReport {
     pub total_providers: usize,
     pub changed_providers: Vec<ProviderWeightDelta>,
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct ProviderWeightDelta {
     pub provider_id: String,
     pub previous_weight: f64,
@@ -130,7 +132,7 @@ pub struct BurnInCheckOptions {
     pub max_brownout_ratio: f64,
     pub min_fetches: u64,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 pub struct BurnInSummary {
     pub sources: Vec<String>,
     pub coverage_days: f64,

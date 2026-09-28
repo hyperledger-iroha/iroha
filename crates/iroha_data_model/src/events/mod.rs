@@ -221,7 +221,6 @@ mod tests {
 mod model {
     use super::*;
     #[derive(Debug, Clone, PartialEq, Eq, FromVariant, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Top-level wrapper for all streamed event payloads.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::model::EventBox")]
@@ -257,10 +256,18 @@ mod model {
     /// Event filter.
     #[allow(variant_size_differences)]
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        FromVariant,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::model::EventFilterBox")]
     pub enum EventFilterBox {
         /// Listen to pipeline events with filter.

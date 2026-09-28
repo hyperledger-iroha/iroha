@@ -7198,12 +7198,6 @@ impl Metrics {
             .with_label_values(&[endpoint])
             .inc();
     }
-    /// Increment proof throttling counter for the provided endpoint label.
-    pub fn inc_torii_proof_throttled(&self, endpoint: &str) {
-        self.torii_proof_throttled_total
-            .with_label_values(&[endpoint])
-            .inc();
-    }
     /// Record alias cache observations emitted by the SoraFS gateway.
     pub fn record_sorafs_alias_cache(&self, result: &str, reason: &str, age_secs: f64) {
         self.torii_sorafs_alias_cache_refresh_total

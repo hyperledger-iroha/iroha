@@ -59,10 +59,10 @@ Use the CLI to upload the compiled `.to` artifact:
 
 ```bash
 # Submit to a running node
-iroha transaction ivm --file target/contract.to
+iroha tx ivm --file target/contract.to
 
 # Or pipe the bytecode in
-cat target/contract.to | iroha transaction ivm
+cat target/contract.to | iroha tx ivm
 ```
 
 The `.to` file can also be embedded into genesis or manifests depending on your

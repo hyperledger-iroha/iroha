@@ -104,14 +104,14 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
   canonical `AccountId` membership, so bind any human-readable aliases
   separately from this step:
   ```bash
-  iroha_cli ledger account role grant \
+  iroha_cli account role grant \
     --id <i105-account-id> \
     --role sorafs_moderation_operator \
     --config /etc/iroha/config.toml
   ```
 - Verify the roster before opening operator traffic:
   ```bash
-  iroha_cli ledger account role list \
+  iroha_cli account role list \
     --id <i105-account-id> \
     --config /etc/iroha/config.toml
   ```
@@ -119,7 +119,7 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
   quarantine review/release and object readback calls return `403 Forbidden`
   for the retired account:
   ```bash
-  iroha_cli ledger account role revoke \
+  iroha_cli account role revoke \
     --id <i105-account-id> \
     --role sorafs_moderation_operator \
     --config /etc/iroha/config.toml

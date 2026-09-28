@@ -486,8 +486,6 @@ pub trait LoadedActionTrait {
     fn mintable(&self) -> bool;
     /// Convert action to a boxed representation
     fn into_boxed(self) -> LoadedAction<EventFilterBox>;
-    /// Same as [`into_boxed()`](LoadedActionTrait::into_boxed) but clones `self`
-    fn clone_and_box(&self) -> LoadedAction<EventFilterBox>;
 }
 impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for LoadedAction<F> {
     fn executable(&self) -> &ExecutableRef {
@@ -530,9 +528,6 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
             retry_state,
             metadata,
         }
-    }
-    fn clone_and_box(&self) -> LoadedAction<EventFilterBox> {
-        self.clone().into_boxed()
     }
 }
 #[cfg(test)]

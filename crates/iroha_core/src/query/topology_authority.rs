@@ -4,17 +4,22 @@
 //! execution, complete replay, Kura/QC finality, signer use, or a successful Check. The role-16
 //! instruction remains closed until the native transaction owner and funded recovery are wired.
 
-use crate::state::{StateReadOnly, WorldReadOnly};
+#[cfg(test)]
+use crate::state::StateReadOnly;
+use crate::state::WorldReadOnly;
+#[cfg(test)]
+use iroha_data_model::sorafs::topology_authority::TopologyControlRecordV1;
 use iroha_data_model::sorafs::topology_authority::{
     TOPOLOGY_AUTHORITY_NAMESPACE_V1, TOPOLOGY_CONTROL_LIMIT_V1, TOPOLOGY_HISTORY_LIMIT_V1,
     TOPOLOGY_HISTORY_MAX_BYTES_V1, TOPOLOGY_OPERATION_LIMIT_V1, TOPOLOGY_RECORD_MAX_BYTES_V1,
-    TopologyControlRecordV1, TopologyHeadV1, TopologyHistoryEntryV1, TopologyOperationRecordV1,
-    TopologyOutcomeV1, TopologyRetainedStateV1,
+    TopologyHeadV1, TopologyHistoryEntryV1, TopologyOperationRecordV1, TopologyOutcomeV1,
+    TopologyRetainedStateV1,
 };
 use iroha_model_base::state_path::StatePath;
 use iroha_primitives::production_identity::is_production_identity_v1;
 use mv::storage::StorageReadOnly;
 use norito::core::{NoritoDeserialize, NoritoSerialize};
+#[cfg(test)]
 use sorafs_manifest::signer::{
     custody_control::{SIGNER_CUSTODY_CONTROL_MAX_BYTES_V1, SignerCustodyControlStateV1},
     protocol::{SignerPurposeBindingV1, SignerRoleV1},
@@ -133,6 +138,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
         Ok(Some(row))
     }
 
+    #[cfg(test)]
     /// Check gap-free revision keys and raw frame lengths without owning replay state.
     ///
     /// This scan borrows one World view and keeps constant additional memory. It rejects a
@@ -142,13 +148,6 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
     ///
     /// # Errors
     /// Rejects missing, extra or noncanonical revision keys and empty or oversized raw frames.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "funded cold replay is not connected to native admission"
-        )
-    )]
     pub(crate) fn validate_local_revision_prefixes(&self) -> Result<(), TopologyRowErrorV1> {
         // TODO: Fund and authenticate full reducer replay before this local check can feed authority.
         let root = self.retained()?;
@@ -169,6 +168,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
         )
     }
 
+    #[cfg(test)]
     fn validate_revision_prefix(
         &self,
         suffix: &str,
@@ -251,6 +251,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
         Ok(root)
     }
 
+    #[cfg(test)]
     /// Read the exact current control row by its independent retained head.
     ///
     /// # Errors
@@ -368,13 +369,7 @@ impl<'a, W: WorldReadOnly + ?Sized> TopologyRowsV1<'a, W> {
 /// or enrollment-head mismatch in the same borrowed State view.
 // TODO: Connect this reader to funded full replay and the native transaction owner before it
 // may participate in role-16 admission or signed approval.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "role-16 control reader is staged before native admission"
-    )
-)]
+#[cfg(test)]
 pub(crate) fn current_control_state_v1(
     snapshot: &impl StateReadOnly,
     deployment: &str,

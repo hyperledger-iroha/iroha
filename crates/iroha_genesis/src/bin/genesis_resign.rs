@@ -1,6 +1,6 @@
 //! Re-sign a Norito-framed genesis block with the configured genesis key.
 use eyre::{Result, eyre};
-use iroha_crypto::{Algorithm, KeyPair, MerkleTree, PrivateKey, SignatureOf};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::block::{BlockSignature, SignedBlock};
 use std::{
     env,
@@ -166,30 +166,15 @@ fn validate_resignable_genesis(block: &SignedBlock) -> Result<()> {
             "refusing to re-sign a resultless genesis proposal; materialize execution results first"
         ));
     }
-    let entrypoint_count = block.entrypoint_hashes().len();
-    let result_count = block.results().len();
-    if result_count != entrypoint_count {
-        return Err(eyre!(
-            "refusing to re-sign genesis with {result_count} results for {entrypoint_count} entrypoints"
-        ));
-    }
-    if block.results().any(|result| result.as_ref().is_err()) {
+    block
+        .validate_output_merkle_cache()
+        .map_err(|error| eyre!("invalid genesis execution outputs: {error}"))?;
+    if block.output_results().any(|result| result.is_err()) {
         return Err(eyre!(
             "refusing to re-sign genesis containing rejected execution results"
         ));
     }
-    block
-        .validate_entrypoint_merkle_cache()
-        .map_err(|error| eyre!("invalid genesis entrypoint Merkle cache: {error}"))?;
-    block
-        .validate_result_merkle_cache()
-        .map_err(|error| eyre!("invalid genesis result Merkle cache: {error}"))?;
-    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
-    if block.header().result_merkle_root() != expected_result_root {
-        return Err(eyre!(
-            "refusing to re-sign genesis with a non-canonical result Merkle root"
-        ));
-    }
+    let result_count = block.execution_outputs().len();
     let minimum_committed_fragments = u64::try_from(result_count)
         .map_err(|_| eyre!("genesis result count exceeds the canonical u64 range"))?;
     let actual_committed_fragments = block
@@ -221,10 +206,49 @@ mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
-        block::SignedBlock,
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        block::{
+            SignedBlock,
+            consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
+            execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+            output_budget::ExecutionOutputLimits,
+        },
+        transaction::{FeePaymentIntent, TransactionBuilder, TransactionResult},
         trigger::DataTriggerSequence,
     };
+    /// Sign a one-transaction genesis proposal with `key`.
+    fn genesis_proposal(key: &KeyPair) -> SignedBlock {
+        let authority = AccountId::new(key.public_key().clone());
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(key.private_key());
+        SignedBlock::genesis(vec![transaction], key.private_key(), None, None)
+    }
+    /// Attach one successful network output with `committed_fragment_count`.
+    fn attach_successful_output(block: &mut SignedBlock, committed_fragment_count: u64) {
+        block
+            .set_execution_outputs(
+                vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: TransactionResult::new(Ok(DataTriggerSequence::default())),
+                    completions: Vec::new(),
+                })],
+                committed_fragment_count,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &ExecutionOutputLimits {
+                    max_outputs: 16,
+                    max_output_bytes: 1024 * 1024,
+                    max_total_output_bytes: 4 * 1024 * 1024,
+                    max_executed_wire_bytes: MAX_EXECUTED_BLOCK_WIRE_BYTES,
+                },
+            )
+            .expect("attach executed genesis result");
+    }
     #[test]
     fn private_key_reader_rejects_first_byte_over_limit() {
         let directory = tempfile::tempdir().expect("create private-key reader directory");
@@ -239,23 +263,8 @@ mod tests {
     fn resign_preserves_the_exact_genesis_body() {
         let original_key = KeyPair::random();
         let replacement_key = KeyPair::random();
-        let authority = AccountId::new(original_key.public_key().clone());
-        let transaction = TransactionBuilder::new_genesis(
-            authority,
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(original_key.private_key());
-        let mut block =
-            SignedBlock::genesis(vec![transaction], original_key.private_key(), None, None);
-        let entrypoint_hashes = block.entrypoint_hashes().collect::<Vec<_>>();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &entrypoint_hashes,
-                vec![Ok(DataTriggerSequence::default())],
-            )
-            .expect("attach executed genesis result");
-        block.set_committed_fragment_count(3);
+        let mut block = genesis_proposal(&original_key);
+        attach_successful_output(&mut block, 3);
         assert!(block.has_results());
         let resigned = resign_block(&block, &replacement_key).expect("re-sign genesis");
         assert_eq!(resigned.payload(), block.payload());
@@ -272,14 +281,7 @@ mod tests {
     fn resign_rejects_resultless_genesis_proposal() {
         let original_key = KeyPair::random();
         let replacement_key = KeyPair::random();
-        let authority = AccountId::new(original_key.public_key().clone());
-        let transaction = TransactionBuilder::new_genesis(
-            authority,
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(original_key.private_key());
-        let proposal =
-            SignedBlock::genesis(vec![transaction], original_key.private_key(), None, None);
+        let proposal = genesis_proposal(&original_key);
         let error = resign_block(&proposal, &replacement_key)
             .expect_err("resultless genesis must not be blessed by re-signing");
         assert!(error.to_string().contains("resultless genesis proposal"));
@@ -288,23 +290,8 @@ mod tests {
     fn resign_rejects_committed_fragment_count_below_result_count() {
         let original_key = KeyPair::random();
         let replacement_key = KeyPair::random();
-        let authority = AccountId::new(original_key.public_key().clone());
-        let transaction = TransactionBuilder::new_genesis(
-            authority,
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(original_key.private_key());
-        let mut block =
-            SignedBlock::genesis(vec![transaction], original_key.private_key(), None, None);
-        let entrypoint_hashes = block.entrypoint_hashes().collect::<Vec<_>>();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &entrypoint_hashes,
-                vec![Ok(DataTriggerSequence::default())],
-            )
-            .expect("attach executed genesis result");
-        block.set_committed_fragment_count(0);
+        let mut block = genesis_proposal(&original_key);
+        attach_successful_output(&mut block, 0);
         let error = resign_block(&block, &replacement_key)
             .expect_err("too-small fragment count must not be re-signed");
         assert!(error.to_string().contains("minimum 1"));

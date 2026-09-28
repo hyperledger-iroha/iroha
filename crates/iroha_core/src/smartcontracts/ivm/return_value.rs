@@ -1324,6 +1324,7 @@ fn collect_entrypoint_return_record(
     };
     Ok(record)
 }
+#[cfg(test)]
 /// Validate all public return registers and build the canonical typed record.
 ///
 /// The full framed Norito length is validated even though this API returns the
@@ -1341,6 +1342,7 @@ pub fn encode_entrypoint_return_record(
     let _ = exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
     Ok(record)
 }
+#[cfg(test)]
 /// Validate public return registers and encode one bounded canonical record.
 ///
 /// # Errors
@@ -1834,6 +1836,7 @@ fn render_entrypoint_return_record_validated(
     }
     Ok(value)
 }
+#[cfg(test)]
 /// Render a canonical nested return record for a client-facing JSON boundary.
 ///
 /// # Errors

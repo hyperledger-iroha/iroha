@@ -168,6 +168,7 @@ const PREAUTH_NOFILE_RESERVE: u64 = 128;
 ///
 /// This matches the rate limiter's default identity budget and prevents both
 /// the live map and stale expiry records from growing without bound.
+#[cfg(test)]
 const DEFAULT_PREAUTH_BAN_CAPACITY: NonZeroUsize =
     NonZeroUsize::new(DEFAULT_MAX_BUCKETS).expect("default ban capacity is non-zero");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -729,6 +730,7 @@ impl RateLimiter {
     /// Duplicate keys are combined before admission and zero-count entries are ignored. If any
     /// combined count overflows, exceeds the configured burst, or lacks available tokens, every
     /// bucket remains unchanged.
+    #[cfg(test)]
     #[allow(clippy::unused_async)]
     pub async fn allow_many_repeated<I, K>(&self, charges: I) -> bool
     where
@@ -1280,6 +1282,7 @@ impl PreAuthGate {
             inner: Arc::new(inner),
         }
     }
+    #[cfg(test)]
     pub fn disabled() -> Self {
         Self::new(PreAuthConfig {
             max_total: None,
@@ -2661,6 +2664,7 @@ mod tests {
             .join()
             .expect("acquire worker must not panic");
     }
+    #[test]
     fn parse_cidrs_skips_invalid_entries() {
         let nets = parse_cidrs(&[
             "203.0.113.0/24".into(),

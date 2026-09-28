@@ -1,15 +1,21 @@
 //! Shared BN254 canonical-limb helpers for FASTPQ GPU backends.
+#[cfg(any(test, feature = "dev-tools"))]
 use core::convert::TryInto;
+#[cfg(any(test, feature = "dev-tools"))]
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
+#[cfg(any(test, feature = "dev-tools"))]
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 /// Canonical BN254 scalars are represented as four little-endian `u64` limbs.
 pub const BN254_LIMBS: usize = 4;
+#[cfg(any(test, feature = "dev-tools"))]
 /// Maximum canonical-limb bytes staged for a single BN254 FFT twiddle table.
 pub const MAX_STAGED_TWIDDLE_BYTES: u64 = 1 << 30;
+#[cfg(any(test, feature = "dev-tools"))]
 /// Return the supported 2-adicity of the BN254 scalar field.
 pub fn two_adicity() -> u32 {
     Bn254Fr::S
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Validate that a staged BN254 FFT/LDE log size is supported.
 pub fn validate_log(log_size: u32) -> Result<(), &'static str> {
     if log_size == 0 {
@@ -20,6 +26,7 @@ pub fn validate_log(log_size: u32) -> Result<(), &'static str> {
     }
     Ok(())
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Convert a BN254 scalar into canonical little-endian limbs.
 pub fn scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     let bytes = (*value).to_bytes();
@@ -31,6 +38,7 @@ pub fn scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     }
     limbs
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Decode canonical little-endian limbs into a BN254 scalar.
 pub fn scalar_from_canonical_limbs(
     limbs: &[u64; BN254_LIMBS],
@@ -42,6 +50,7 @@ pub fn scalar_from_canonical_limbs(
     Bn254Scalar::from_bytes(&bytes)
         .map_err(|_| "BN254 canonical limbs decode produced invalid field element")
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Validate a dense slice of canonical BN254 scalar limbs.
 pub fn validate_canonical_limbs(limbs: &[u64]) -> Result<(), &'static str> {
     if !limbs.len().is_multiple_of(BN254_LIMBS) {
@@ -64,7 +73,7 @@ pub fn limbs_slice_to_scalar(slice: &[u64]) -> Result<Bn254Scalar, &'static str>
     scalar_from_canonical_limbs(&limbs)
 }
 /// Compute the staged BN254 twiddle factors in scalar form for a radix-2 FFT.
-#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
+#[cfg(test)]
 pub fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, &'static str> {
     validate_staged_twiddle_resources(log_size)?;
     validate_log(log_size)?;
@@ -99,6 +108,7 @@ pub fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, &'stati
     }
     Ok(twiddles)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Compute the staged BN254 twiddle factors as canonical limbs.
 pub fn stage_twiddles_limbs(log_size: u32) -> Result<Vec<[u64; BN254_LIMBS]>, &'static str> {
     validate_staged_twiddle_resources(log_size)?;
@@ -129,6 +139,7 @@ pub fn stage_twiddles_limbs(log_size: u32) -> Result<Vec<[u64; BN254_LIMBS]>, &'
     validate_twiddles_shape(log_size, &twiddles)?;
     Ok(twiddles)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Validate that the staged twiddle table matches the requested FFT log size.
 pub fn validate_twiddles_shape(
     log_size: u32,
@@ -140,6 +151,7 @@ pub fn validate_twiddles_shape(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Return the number of packed staged BN254 twiddles required for an FFT of `2^log_size`.
 pub fn fft_twiddle_len(log_size: u32) -> Result<usize, &'static str> {
     validate_log(log_size)?;
@@ -147,6 +159,7 @@ pub fn fft_twiddle_len(log_size: u32) -> Result<usize, &'static str> {
     n.checked_sub(1)
         .ok_or("BN254 staged twiddle count exceeds platform limits")
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Return the canonical-limb byte size of the staged BN254 twiddle table.
 pub fn staged_twiddle_byte_len(log_size: u32) -> Result<u64, &'static str> {
     let bytes = fft_twiddle_len(log_size)?
@@ -154,6 +167,7 @@ pub fn staged_twiddle_byte_len(log_size: u32) -> Result<u64, &'static str> {
         .ok_or("BN254 staged twiddle byte length exceeds platform limits")?;
     u64::try_from(bytes).map_err(|_| "BN254 staged twiddle byte length exceeds 64-bit limits")
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Reject staged BN254 twiddle tables whose host construction could exhaust memory.
 pub fn validate_staged_twiddle_resources(log_size: u32) -> Result<(), &'static str> {
     if staged_twiddle_byte_len(log_size)? > MAX_STAGED_TWIDDLE_BYTES {

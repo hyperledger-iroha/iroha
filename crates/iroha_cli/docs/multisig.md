@@ -71,7 +71,7 @@ __Prerequisites:__
 __Example usage:__
 
 ```bash
-echo '"congratulations"' | iroha -o ledger account meta set \
+echo '"congratulations"' | iroha -o account meta set \
 --id <canonical-i105-multisig> \
 --key success_marker \
 | iroha ledger multisig propose \

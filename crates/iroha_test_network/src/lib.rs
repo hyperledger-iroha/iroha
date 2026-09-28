@@ -167,24 +167,6 @@ fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPa
     }
 }
 pub use crate::config::genesis as genesis_factory;
-/// Build the default minimal genesis with additional post-topology transactions.
-///
-/// This is useful for tests that need to execute instructions after peers/topology are registered,
-/// while still reusing the deterministic \"minimal\" genesis produced by this crate.
-pub fn genesis_factory_with_post_topology(
-    extra_transactions: Vec<Vec<InstructionBox>>,
-    post_topology_transactions: Vec<Vec<InstructionBox>>,
-    topology: UniqueVec<PeerId>,
-    topology_entries: Vec<GenesisTopologyEntry>,
-) -> GenesisBlock {
-    crate::config::genesis_with_keypair_and_post_topology(
-        extra_transactions,
-        post_topology_transactions,
-        topology,
-        topology_entries,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
-    )
-}
 
 /// Build a signed custom genesis with post-topology instructions and defer
 /// transaction execution to [`NetworkBuilder`].
@@ -7753,37 +7735,6 @@ impl NetworkBuilder {
         self.genesis_isi = vec![Vec::new()];
         self
     }
-    /// Override genesis using proof-bearing non-voting observer identities.
-    ///
-    /// The first two closure arguments are the exact signed global voting
-    /// topology and its PoP entries. The third contains the disjoint observer
-    /// identities and their PoPs in stable builder order. These observer entries
-    /// may be used with `RegisterCommitteePeerWithPop`, but must remain outside
-    /// the signed global topology.
-    pub fn with_genesis_block_and_observer_entries<F>(mut self, build: F) -> Self
-    where
-        F: Fn(
-                UniqueVec<PeerId>,
-                Vec<GenesisTopologyEntry>,
-                Vec<GenesisTopologyEntry>,
-            ) -> GenesisBlock
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.custom_genesis = Some(Arc::new(
-            move |topology,
-                  topology_entries,
-                  _committee_validators,
-                  _committee_validator_entries,
-                  _observers,
-                  observer_entries| {
-                build(topology, topology_entries, observer_entries)
-            },
-        ));
-        self.genesis_isi = vec![Vec::new()];
-        self
-    }
     /// Override genesis using proof-bearing supplementary committee validators.
     ///
     /// The first two closure arguments are the exact signed global voting
@@ -7840,23 +7791,6 @@ impl NetworkBuilder {
     pub fn build(self) -> Network {
         let permit = acquire_network_permit();
         self.build_with_permit(permit)
-    }
-    /// Build the [`Network`] using permit files rooted under `dir`.
-    ///
-    /// This is useful for tests that need an isolated permit namespace while unrelated
-    /// workspace tests are building other networks concurrently.
-    pub fn build_with_permit_dir(self, dir: impl AsRef<Path>) -> Network {
-        let dir = dir.as_ref();
-        let limit = network_parallelism_limit();
-        let file_permit = try_acquire_file_permit_in(dir, limit).unwrap_or_else(|| {
-            panic!(
-                "failed to acquire network permit in isolated dir {} (limit={limit})",
-                dir.display()
-            )
-        });
-        self.build_with_permit(NetworkPermit {
-            _file_permit: file_permit,
-        })
     }
     fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {

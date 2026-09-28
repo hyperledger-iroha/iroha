@@ -1171,6 +1171,7 @@ pub(crate) fn accumulator_node_digest_for_testing_v1(
     accumulator_node_invocation_v1(input, level, left, right).map(|invocation| invocation.digest)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn validate_statement_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), IvmPrivateNoteRelationErrorV1> {

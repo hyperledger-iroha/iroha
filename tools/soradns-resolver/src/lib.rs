@@ -22,7 +22,7 @@ use crate::{
         MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES, MAX_TLS_CERT_BYTES,
         MAX_TLS_KEY_BYTES, read_bounded_file, read_bounded_private_file, replace_retained_bytes,
     },
-    rad::{ResolverAttestation, rad_retained_bytes, validate_rad},
+    rad::{rad_retained_bytes, validate_rad},
     state::{ResolverState, ResolverStateMetrics},
 };
 use axum::{
@@ -37,6 +37,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use eyre::Result;
 use futures::StreamExt;
+use iroha_data_model::soradns::ResolverAttestationDocumentV1;
 pub use iroha_primitives::soradns::{
     GatewayHostBindings, GatewayHostError, canonical_gateway_suffix,
     canonical_gateway_wildcard_pattern, derive_gateway_hosts, pretty_gateway_suffix,
@@ -391,8 +392,8 @@ impl ResolverDaemon {
         }
         Ok(loaded)
     }
-    async fn fetch_rad_entries(&self) -> Result<HashMap<String, ResolverAttestation>> {
-        let mut adverts: HashMap<String, ResolverAttestation> = HashMap::new();
+    async fn fetch_rad_entries(&self) -> Result<HashMap<String, ResolverAttestationDocumentV1>> {
+        let mut adverts: HashMap<String, ResolverAttestationDocumentV1> = HashMap::new();
         let mut retained_bytes = 0usize;
         for source in self.config.rad_sources() {
             match source.fetch(&self.http_client).await {
@@ -412,25 +413,30 @@ impl ResolverDaemon {
                             .checked_add(resolver_key.capacity())
                             .and_then(|bytes| {
                                 bytes.checked_add(
-                                    std::mem::size_of::<(String, ResolverAttestation)>()
+                                    std::mem::size_of::<(String, ResolverAttestationDocumentV1)>()
                                         .saturating_mul(2),
                                 )
                             })
                             .ok_or_else(|| eyre::eyre!("RAD sync accounting overflow"))?;
-                        let prior_bytes = adverts
-                            .get(&resolver_key)
-                            .map(|prior| {
-                                rad_retained_bytes(prior).map(|bytes| {
-                                    bytes
-                                        .saturating_add(resolver_key.capacity())
-                                        .saturating_add(
-                                            std::mem::size_of::<(String, ResolverAttestation)>()
+                        let prior_bytes =
+                            adverts
+                                .get(&resolver_key)
+                                .map(|prior| {
+                                    rad_retained_bytes(prior).map(|bytes| {
+                                        bytes
+                                            .saturating_add(resolver_key.capacity())
+                                            .saturating_add(
+                                                std::mem::size_of::<(
+                                                    String,
+                                                    ResolverAttestationDocumentV1,
+                                                )>(
+                                                )
                                                 .saturating_mul(2),
-                                        )
+                                            )
+                                    })
                                 })
-                            })
-                            .transpose()?
-                            .unwrap_or(0);
+                                .transpose()?
+                                .unwrap_or(0);
                         let next_retained = replace_retained_bytes(
                             retained_bytes,
                             prior_bytes,

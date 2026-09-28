@@ -8947,10 +8947,6 @@ seiyaku Test {{
 pub fn encode_add(rd: u8, rs1: u8, rs2: u8) -> u32 {
     encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, rd, rs1, rs2)
 }
-/// Convenience wrapper for encoding `rd = rs1 - rs2` using the canonical wide layout.
-pub fn encode_sub(rd: u8, rs1: u8, rs2: u8) -> u32 {
-    encoding::wide::encode_rr(instruction::wide::arithmetic::SUB, rd, rs1, rs2)
-}
 /// Encode `rd = rs1 + imm` using the canonical wide register–immediate format.
 ///
 /// This helper is primarily used by the Kotodama code generator to materialize

@@ -183,27 +183,6 @@ impl VegaT256PointV1 {
         destination.copy_from_slice(self.0.to_bytes().as_ref());
         Ok(())
     }
-    /// Return this point's canonical big-endian affine coordinates.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VegaCurveError::IdentityPoint`] for the group identity.
-    pub fn coordinates_be(self) -> Result<([u8; 32], [u8; 32]), VegaCurveError> {
-        if bool::from(self.0.is_identity()) {
-            return Err(VegaCurveError::IdentityPoint);
-        }
-        let affine = self.0.to_affine();
-        let coordinates = Option::<Coordinates<T256Affine>>::from(affine.coordinates())
-            .ok_or(VegaCurveError::IdentityPoint)?;
-        let mut x: [u8; 32] = coordinates.x().to_repr().into();
-        let mut y: [u8; 32] = coordinates.y().to_repr().into();
-        // `PrimeField::Repr` is little-endian for both linked fields even
-        // though T256 point compression uses its base field's big-endian
-        // `EndianRepr`. Keep the public coordinate boundary explicitly BE.
-        x.reverse();
-        y.reverse();
-        Ok((x, y))
-    }
     /// Return the exact upstream transcript representation `x_LE || y_LE`.
     ///
     /// # Errors

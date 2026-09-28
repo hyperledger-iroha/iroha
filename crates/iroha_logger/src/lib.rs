@@ -3,7 +3,7 @@ pub mod actor;
 pub mod layer;
 pub mod telemetry;
 use actor::LoggerHandle;
-use color_eyre::{Report, Result, eyre::eyre};
+use color_eyre::{Result, eyre::eyre};
 pub use iroha_config::{
     logger::{Format, Level},
     parameters::actual::{DevTelemetry as DevTelemetryConfig, Logger as Config},
@@ -289,21 +289,6 @@ macro_rules! telemetry_future {
             $($k).+
         )
     );
-}
-/// Installs the panic hook with [`color_eyre::install`] if it isn't installed yet
-///
-/// # Errors
-/// Fails if [`color_eyre::install`] fails
-pub fn install_panic_hook() -> Result<(), Report> {
-    static INSTALLED: AtomicBool = AtomicBool::new(false);
-    if INSTALLED
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
-        color_eyre::install()
-    } else {
-        Ok(())
-    }
 }
 pub mod prelude {
     //! Module with most used items. Needs to be imported when using `log` macro to avoid `tracing` crate dependency

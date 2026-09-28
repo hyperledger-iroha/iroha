@@ -6,6 +6,7 @@
 //! The generator lets operators feed structured Norito JSON describing a PoP
 //! into `cargo xtask soranet-pop-template` and receive a deterministic FRR
 //! configuration with BFD/RPKI guards pre-wired.
+use crate::soranet_common::sanitize_label;
 use crate::workspace_root;
 use eyre::{Result, WrapErr, eyre};
 use hex::encode as hex_encode;
@@ -1287,17 +1288,6 @@ impl CommunityDefaults {
             blackhole: "no-advertise".to_string(),
         }
     }
-}
-fn sanitize_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_string()
 }
 fn render_bgp_alert_rules(pop: &PopDescriptor) -> String {
     let mut buf = String::new();

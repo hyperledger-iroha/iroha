@@ -321,7 +321,7 @@ class IrohaCli:
         """
         self._execute_pipe(
             ["cat", temp_file_path],
-            [self.BASE_PATH] + self.BASE_FLAGS + ["transaction", "stdin"],
+            [self.BASE_PATH] + self.BASE_FLAGS + ["tx", "stdin"],
         )
 
     def register_trigger(self, account):

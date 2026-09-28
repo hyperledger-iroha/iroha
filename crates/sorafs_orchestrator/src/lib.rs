@@ -2202,7 +2202,7 @@ impl LocalProxyRuntime {
             .clone()
             .unwrap_or_else(|| "proxy".to_string())
     }
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "local-quic-proxy"))]
     fn mode(&self) -> ProxyMode {
         self.config.proxy_mode.clone()
     }
@@ -3587,7 +3587,6 @@ impl PolicySummary {
             self.selected_classical() as f64 / self.selected_soranet_total as f64
         }
     }
-    #[allow(dead_code)]
     fn uses_classical(&self) -> bool {
         self.selected_classical() > 0
     }
@@ -3635,7 +3634,6 @@ impl PolicySummary {
     fn is_brownout(&self) -> bool {
         matches!(self.status, PolicyStatus::Brownout)
     }
-    #[allow(dead_code)]
     fn should_flag_brownout(&self) -> bool {
         self.is_brownout()
             || matches!(
@@ -4791,10 +4789,6 @@ impl PrivacyCollector {
         }
         Self::flush_inner(&aggregator, &metrics);
         metrics.set_soranet_privacy_collector_enabled(false);
-    }
-    #[allow(dead_code)]
-    fn flush(&self) {
-        Self::flush_inner(&self.aggregator, &self.metrics);
     }
     fn flush_inner(
         aggregator: &Arc<SoranetSecureAggregator>,

@@ -11,19 +11,17 @@
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
 //! - Keep responses stable and explicit; map input errors to 400.
 use crate::{
-    JsonBody, NoritoBody, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
+    JsonBody, NoritoBody, NoritoJson, NoritoJsonWithBytes,
     json_macros::{JsonDeserialize, JsonSerialize},
     routing::{MaybeTelemetry, parse_account_literal_with_state},
 };
 use base64::Engine as _;
-use core::str::FromStr;
 use iroha_core::{
     governance::{
         parliament::{ParliamentBallotStateV1, ParliamentDecisionModeV1},
         timed_ovn::TimedOvnLifecycleStateV1,
     },
     kura::Kura,
-    smartcontracts::Execute as _,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::{
@@ -69,7 +67,11 @@ const CONTEXT_GOV_BALLOT_PLAIN_OWNER: &str = "/v1/gov/ballots/plain#owner";
 const CONTEXT_GOV_PROTECTED_AUTHORITY: &str = "/v1/gov/protected-namespaces#authority";
 const CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY: &str =
     "/v1/ministry/agenda/proposals/draft#authority";
-use std::{collections::BTreeSet, sync::Arc};
+#[cfg(test)]
+use core::str::FromStr;
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::sync::Arc;
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::gov::MinistryAgendaProposalDraftDto")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -2563,21 +2565,6 @@ pub async fn handle_ministry_agenda_proposal_get(
 /// # Errors
 /// Returns `crate::Error::Query` when the ballot fields fail validation (direction, authority,
 /// owner, amount parsing, or exact network mismatch).
-pub async fn handle_gov_ballot_plain(
-    state: Arc<iroha_core::state::State>,
-    authenticated_account: &iroha_data_model::account::AccountId,
-    NoritoJson(body): NoritoJson<PlainBallotDto>,
-) -> Result<JsonBody<BallotDraftResponse>, crate::Error> {
-    handle_gov_ballot_plain_with_policy(
-        state,
-        authenticated_account,
-        NoritoJson(body),
-        MaybeTelemetry::disabled(),
-    )
-    .await
-}
-/// Variant of [`handle_gov_ballot_plain`] that allows callers to inject telemetry
-/// policy, enabling address parsing coverage across Torii and tests.
 pub async fn handle_gov_ballot_plain_with_policy(
     state: Arc<iroha_core::state::State>,
     authenticated_account: &iroha_data_model::account::AccountId,

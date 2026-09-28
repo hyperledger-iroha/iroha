@@ -10,7 +10,6 @@ use norito::{
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     error::Error,
@@ -577,38 +576,6 @@ fn decode_hex_array<const N: usize>(text: &str, label: &str) -> Result<[u8; N], 
         .map_err(|_| format!("{label} must contain {N} bytes (hex)"))?;
     Ok(array)
 }
-fn serde_value_to_norito(value: &serde_json::Value) -> Result<NoritoValue, Box<dyn Error>> {
-    Ok(match value {
-        serde_json::Value::Null => NoritoValue::Null,
-        serde_json::Value::Bool(b) => NoritoValue::Bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(u) = n.as_u64() {
-                NoritoValue::Number(NoritoNumber::from(u))
-            } else if let Some(i) = n.as_i64() {
-                NoritoValue::Number(NoritoNumber::from(i))
-            } else if let Some(f) = n.as_f64() {
-                let num = NoritoNumber::from_f64(f)
-                    .ok_or_else(|| "cannot represent NaN/Infinity in Norito JSON".to_string())?;
-                NoritoValue::Number(num)
-            } else {
-                return Err("unsupported numeric representation in serde value".into());
-            }
-        }
-        serde_json::Value::String(s) => NoritoValue::String(s.clone()),
-        serde_json::Value::Array(arr) => NoritoValue::Array(
-            arr.iter()
-                .map(serde_value_to_norito)
-                .collect::<Result<Vec<_>, _>>()?,
-        ),
-        serde_json::Value::Object(map) => {
-            let mut out = NoritoMap::new();
-            for (k, v) in map {
-                out.insert(k.clone(), serde_value_to_norito(v)?);
-            }
-            NoritoValue::Object(out)
-        }
-    })
-}
 fn write_artifact(
     signed: &SignedRansTablesV1,
     format: OutputFormat,
@@ -626,9 +593,8 @@ fn write_artifact(
         }
         OutputFormat::Toml => {
             let json_value = signed_tables_to_value(signed);
-            let mut serde_value = norito_value_to_serde(&json_value);
-            strip_nulls(&mut serde_value);
-            let toml_value = toml::Value::deserialize(serde_value)?;
+            let toml_value = norito_to_toml(&json_value)?
+                .ok_or("signed rANS tables must not serialize to null")?;
             let mut text = toml::to_string_pretty(&toml_value)?;
             text.push('\n');
             fs::write(path, text)?;
@@ -720,68 +686,76 @@ fn parse_signed(
         }
         OutputFormat::Toml => {
             let toml_value: toml::Value = toml::from_str(contents)?;
-            let serde_value: serde_json::Value = toml_value.try_into()?;
-            let norito_value = serde_value_to_norito(&serde_value)?;
-            signed_tables_from_value(&norito_value)
+            signed_tables_from_value(&toml_to_norito(&toml_value)?)
         }
         OutputFormat::Csv => Err("cannot parse CSV artefact into SignedRansTablesV1".into()),
     }
 }
-fn norito_value_to_serde(value: &NoritoValue) -> serde_json::Value {
-    match value {
-        NoritoValue::Null => serde_json::Value::Null,
-        NoritoValue::Bool(b) => serde_json::Value::Bool(*b),
+/// Convert a Norito JSON value to TOML, omitting `null` table entries (TOML has no null).
+fn norito_to_toml(value: &NoritoValue) -> Result<Option<toml::Value>, Box<dyn Error>> {
+    Ok(Some(match value {
+        NoritoValue::Null => return Ok(None),
+        NoritoValue::Bool(b) => toml::Value::Boolean(*b),
         NoritoValue::Number(num) => {
             if let Some(v) = num.as_i64() {
-                serde_json::Value::Number(v.into())
-            } else if let Some(v) = num.as_u64() {
-                serde_json::Value::Number(v.into())
+                toml::Value::Integer(v)
+            } else if num.as_u64().is_some() {
+                return Err("integer exceeds the TOML signed 64-bit range".into());
             } else if let Some(v) = num.as_f64() {
-                serde_json::Number::from_f64(v)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
+                toml::Value::Float(v)
             } else {
-                serde_json::Value::Null
+                return Err("unsupported numeric representation for TOML".into());
             }
         }
-        NoritoValue::String(s) => serde_json::Value::String(s.clone()),
-        NoritoValue::Array(arr) => {
-            let converted = arr.iter().map(norito_value_to_serde).collect();
-            serde_json::Value::Array(converted)
-        }
+        NoritoValue::String(s) => toml::Value::String(s.clone()),
+        NoritoValue::Array(items) => toml::Value::Array(
+            items
+                .iter()
+                .map(|item| {
+                    norito_to_toml(item)?.ok_or_else(|| "TOML arrays cannot hold null".into())
+                })
+                .collect::<Result<Vec<_>, Box<dyn Error>>>()?,
+        ),
         NoritoValue::Object(map) => {
-            let converted = map
-                .iter()
-                .map(|(k, v)| (k.clone(), norito_value_to_serde(v)))
-                .collect();
-            serde_json::Value::Object(converted)
+            let mut table = toml::map::Map::new();
+            for (key, entry) in map {
+                if let Some(converted) = norito_to_toml(entry)? {
+                    table.insert(key.clone(), converted);
+                }
+            }
+            toml::Value::Table(table)
         }
-    }
+    }))
 }
-fn strip_nulls(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Null => {}
-        serde_json::Value::Bool(_)
-        | serde_json::Value::Number(_)
-        | serde_json::Value::String(_) => {}
-        serde_json::Value::Array(items) => {
-            for item in items {
-                strip_nulls(item);
-            }
+/// Convert parsed TOML back into the Norito JSON value model used by the artefact decoder.
+fn toml_to_norito(value: &toml::Value) -> Result<NoritoValue, Box<dyn Error>> {
+    Ok(match value {
+        toml::Value::String(s) => NoritoValue::String(s.clone()),
+        toml::Value::Integer(v) => match u64::try_from(*v) {
+            Ok(unsigned) => NoritoValue::Number(NoritoNumber::from(unsigned)),
+            Err(_) => NoritoValue::Number(NoritoNumber::from(*v)),
+        },
+        toml::Value::Float(v) => NoritoValue::Number(
+            NoritoNumber::from_f64(*v).ok_or("cannot represent NaN/Infinity in Norito JSON")?,
+        ),
+        toml::Value::Boolean(b) => NoritoValue::Bool(*b),
+        toml::Value::Datetime(_) => {
+            return Err("TOML datetimes are not part of the rANS artefact schema".into());
         }
-        serde_json::Value::Object(map) => {
-            let null_keys: Vec<String> = map
+        toml::Value::Array(items) => NoritoValue::Array(
+            items
                 .iter()
-                .filter_map(|(key, v)| if v.is_null() { Some(key.clone()) } else { None })
-                .collect();
-            for key in null_keys {
-                map.remove(&key);
+                .map(toml_to_norito)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        toml::Value::Table(table) => {
+            let mut out = NoritoMap::new();
+            for (key, entry) in table {
+                out.insert(key.clone(), toml_to_norito(entry)?);
             }
-            for value in map.values_mut() {
-                strip_nulls(value);
-            }
+            NoritoValue::Object(out)
         }
-    }
+    })
 }
 fn current_commit() -> Result<String, Box<dyn Error>> {
     let output = std::process::Command::new("git")

@@ -803,6 +803,7 @@ impl Profile {
     }
 
     /// Inputs of [`Self::derive`].
+    #[cfg(test)]
     #[must_use]
     pub fn derive_inputs(&self) -> &DeriveInputs {
         &self.derive

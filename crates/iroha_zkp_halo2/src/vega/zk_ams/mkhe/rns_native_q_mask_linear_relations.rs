@@ -25,19 +25,23 @@
 //! its proof transcripts without a Keccak fixed-point cycle.  They are bound
 //! only after verification in the private output token.
 
+#[cfg(test)]
 use core::marker::PhantomData;
 
+#[cfg(test)]
 use super::{
     rns_native_cross_field_inventory::QMaskLinearCommitmentsV1,
     rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
-    rns_native_profile::{ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1},
+    rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
     rns_native_proof_hash::RnsNativeDigestIdentityV1 as DigestIdentityV1,
-    rns_native_small_sign_disjointness_product::{
-        RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1,
-        RnsNativeSmallSignDisjointnessPrerequisiteV1,
-    },
+    rns_native_small_sign_disjointness_product::RnsNativeSmallSignDisjointnessPrerequisiteV1,
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
 };
+use super::{
+    rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
+    rns_native_small_sign_disjointness_product::RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1,
+};
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
@@ -50,10 +54,15 @@ use crate::{
     },
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
+#[cfg(test)]
 const FLAGS_V1: u8 = 0;
+#[cfg(test)]
 const MAGIC_V1: [u8; 4] = *b"ZQ11";
+#[cfg(test)]
 const FIRST_STATEMENT_V1: u8 = 10;
+#[cfg(test)]
 const LAST_STATEMENT_V1: u8 = 11;
 const DIGEST_BYTES_V1: usize = 32;
 const POINT_BYTES_V1: usize = 33;
@@ -61,7 +70,9 @@ const SCALAR_BYTES_V1: usize = 32;
 const REPETITIONS_V1: usize = 5;
 const BLOCKS_PER_RELATION_V1: usize = 8;
 const RADIX_DIGITS_V1: usize = 4;
+#[cfg(test)]
 const RADIX_LOG2_V1: u8 = 15;
+#[cfg(test)]
 const RADIX_BASE_V1: u64 = 1 << RADIX_LOG2_V1;
 const RELATIONS_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITIONS_V1;
 const CORES_V1: usize = RELATIONS_V1;
@@ -74,6 +85,7 @@ const TOP_ZERO_CONSTRAINTS_PER_CORE_V1: usize = 1;
 const CONSTRAINTS_PER_CORE_V1: usize =
     COMPLEMENT_CONSTRAINTS_PER_CORE_V1 + TOP_ZERO_CONSTRAINTS_PER_CORE_V1;
 const COMMITMENTS_PER_CORE_V1: usize = BLOCKS_PER_RELATION_V1 + 1;
+#[cfg(test)]
 const TOP_COMMITMENT_V1: usize = BLOCKS_PER_RELATION_V1;
 const FIXED_CORE_POINTS_V1: usize = 2 * COMMITMENTS_PER_CORE_V1 + 7;
 const IPA_POINTS_V1: usize = 2 * LOG_PADDED_GATES_V1;
@@ -95,20 +107,32 @@ pub(super) const RNS_NATIVE_Q_MASK_LINEAR_RESIDUAL_MAX_BYTES_V1: usize =
         - RECORD_SET_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const CIRCUIT_LANGUAGE_V1: &[u8] = b"statements=10,11;relations=40*5;owner=((limb*5+repetition)*8+block);coordinates=16384;derived-R_b=sum_h(2^(15h)*(C_s_bh+C_sbar_bh));derived-T=sum_h(2^(15h)*C_s_block7_h);commitments=(R_0..R_7,T);constraints=(for-b=0..7,for-v=0..16383:R_b[v]-(q_l-1)=0;T[16383]=0);one-relation-core;linear-only;no-random-aggregate";
+#[cfg(test)]
 const FIELD_BOUNDARY_LANGUAGE_V1: &[u8] = b"T256-field-equalities-only;statement9-is-verifier-local-radix-definition;qPCS-S-same-opening-not-yet-verified;15-bit-digit-membership-not-yet-verified;therefore-no-integer-complement-or-canonical-q-mask-claim";
+#[cfg(test)]
 const REMAINING_BOUNDARY_V1: &[u8] = b"not-yet-verified:existing-D-and-slack-commitment-owners,digit-membership-and-inverses,D-minus-K-subtraction,radix-reconstruction,canonical-complement,small-source-membership-and-inverses,q-mask-digit-membership-and-inverses,qPCS-S-same-opening,source-and-packing-same-opening,global-lookup";
+#[cfg(test)]
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.transcript";
+#[cfg(test)]
 const TRANSCRIPT_SCHEMA_V1: &[u8] = b"ZQ11/direct-relation/transcript/v1";
+#[cfg(test)]
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.challenge";
+#[cfg(test)]
 const CIRCUIT_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.circuit-manifest";
+#[cfg(test)]
 const PROOF_SET_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.proof-set-root";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.residual";
+#[cfg(test)]
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.codec";
+#[cfg(test)]
 const VERIFIED_TRANSCRIPTS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.verified-transcripts";
+#[cfg(test)]
 const PREREQUISITE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-q-mask-linear.prerequisite";
 
 const Q_MASK_LINEAR_RELATIONS_VERIFIER_IMPLEMENTED_V1: bool = true;
@@ -150,6 +174,7 @@ const _: () = {
 };
 
 /// Failure while decoding or verifying q-mask linear statements 10 and 11.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeQMaskLinearRelationsErrorV1 {
     ProofCapExceeded,
@@ -163,20 +188,24 @@ pub(super) enum RnsNativeQMaskLinearRelationsErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeQMaskLinearRelationsErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeQMaskLinearRelationsErrorV1 {}
 
+#[cfg(test)]
 impl From<GeneralizedBulletproofErrorV1> for RnsNativeQMaskLinearRelationsErrorV1 {
     fn from(_: GeneralizedBulletproofErrorV1) -> Self {
         Self::Algebra
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct UpstreamBindingV1 {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
@@ -189,6 +218,7 @@ struct UpstreamBindingV1 {
     statement8_verified_transcript_root: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl UpstreamBindingV1 {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeSmallSignDisjointnessPrerequisiteV1<'_, '_, S>,
@@ -226,6 +256,7 @@ impl UpstreamBindingV1 {
     }
 }
 
+#[cfg(test)]
 fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     for (ordinal, digest) in digests.iter().enumerate() {
         if *digest == [0; DIGEST_BYTES_V1] || digests[..ordinal].contains(digest) {
@@ -235,6 +266,7 @@ fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     true
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct QMaskCoreCommitmentsV1 {
     raw: [QMaskLinearCommitmentsV1; BLOCKS_PER_RELATION_V1],
@@ -242,6 +274,7 @@ struct QMaskCoreCommitmentsV1 {
     modulus: u64,
 }
 
+#[cfg(test)]
 fn weighted_digits_v1(points: [Point; RADIX_DIGITS_V1]) -> Point {
     let mut result = Point::identity();
     let mut weight = Scalar::one();
@@ -253,6 +286,7 @@ fn weighted_digits_v1(points: [Point; RADIX_DIGITS_V1]) -> Point {
     result
 }
 
+#[cfg(test)]
 impl QMaskCoreCommitmentsV1 {
     fn new_v1(
         raw: [QMaskLinearCommitmentsV1; BLOCKS_PER_RELATION_V1],
@@ -290,6 +324,7 @@ impl QMaskCoreCommitmentsV1 {
     }
 }
 
+#[cfg(test)]
 fn core_commitments_v1<F>(
     relation: usize,
     commitment_at: &mut F,
@@ -320,11 +355,13 @@ where
     )
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -365,11 +402,13 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ExactCoreViewV1<'a> {
     bytes: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> ExactCoreViewV1<'a> {
     fn parse_v1(bytes: &'a [u8]) -> Result<Self, RnsNativeQMaskLinearRelationsErrorV1> {
         if bytes.len() != CORE_BYTES_V1 {
@@ -399,6 +438,7 @@ impl<'a> ExactCoreViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct QMaskLinearProofSetViewV1<'a> {
     records: &'a [u8],
@@ -408,6 +448,7 @@ struct QMaskLinearProofSetViewV1<'a> {
     codec_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> QMaskLinearProofSetViewV1<'a> {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeSmallSignDisjointnessPrerequisiteV1<'_, 'a, S>,
@@ -536,6 +577,7 @@ impl<'a> QMaskLinearProofSetViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn record_at_v1(
     records: &[u8],
     relation: usize,
@@ -568,6 +610,7 @@ fn record_at_v1(
     Ok(&record[RECORD_HEADER_BYTES_V1..])
 }
 
+#[cfg(test)]
 fn encode_point_v1(
     point: Point,
 ) -> Result<[u8; POINT_BYTES_V1], RnsNativeQMaskLinearRelationsErrorV1> {
@@ -578,12 +621,14 @@ fn encode_point_v1(
     Ok(encoded)
 }
 
+#[cfg(test)]
 fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     for digest in upstream.digests_v1() {
         hash.update(&digest);
     }
 }
 
+#[cfg(test)]
 fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CIRCUIT_MANIFEST_DOMAIN_V1);
@@ -619,6 +664,7 @@ fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn absorb_raw_owner_v1(
     hash: &mut Keccak256,
     owner: usize,
@@ -642,6 +688,7 @@ fn absorb_raw_owner_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn canonical_proof_set_root_v1<F>(
     upstream: UpstreamBindingV1,
     records: &[u8],
@@ -685,6 +732,7 @@ where
     Ok(digest)
 }
 
+#[cfg(test)]
 fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     proof_set_root: [u8; DIGEST_BYTES_V1],
@@ -711,6 +759,7 @@ fn canonical_residual_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
@@ -719,6 +768,7 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn q_mask_linear_constraints_v1(
     coordinates: usize,
     padded_gates: usize,
@@ -770,6 +820,7 @@ fn q_mask_linear_constraints_v1(
     Ok(constraints)
 }
 
+#[cfg(test)]
 fn build_q_mask_linear_statement_v1<S>(
     coordinates: usize,
     padded_gates: usize,
@@ -786,6 +837,7 @@ where
     )?)
 }
 
+#[cfg(test)]
 fn append_frame_v1(
     state: &mut Vec<u8>,
     value: &[u8],
@@ -799,6 +851,7 @@ fn append_frame_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn initial_transcript_state_v1(
     upstream: UpstreamBindingV1,
     relation: usize,
@@ -858,12 +911,14 @@ fn initial_transcript_state_v1(
     Ok(state)
 }
 
+#[cfg(test)]
 fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(bytes);
     hash.finalize()
 }
 
+#[cfg(test)]
 fn derive_challenge_v1(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -896,6 +951,7 @@ fn derive_challenge_v1(
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
 
+#[cfg(test)]
 struct QMaskLinearVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -907,6 +963,7 @@ where
     suite: PhantomData<S>,
 }
 
+#[cfg(test)]
 impl<'a, S> QMaskLinearVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -960,6 +1017,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<S> VerifierTranscript<S> for QMaskLinearVerifierTranscriptV1<'_, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -993,6 +1051,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeSmallSignDisjointnessPrerequisiteV1<'_, '_, S>,
     view: QMaskLinearProofSetViewV1<'_>,
@@ -1054,6 +1113,7 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 ///
 /// This is not evidence of q-mask digit membership, qPCS same-opening, global
 /// lookup validity, readiness, release, or authorization.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the statement-8 owner and unverified residual must advance exactly once"
@@ -1071,6 +1131,7 @@ pub(super) struct RnsNativeQMaskLinearRelationsPrerequisiteV1<
     _binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeQMaskLinearRelationsPrerequisiteV1<'source, 'proof, S>
 {
@@ -1117,6 +1178,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
 /// Consume statement 8 and verify all 200 bounded q-mask linear cores
 /// sequentially.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the private q-mask entry awaits digit membership, qPCS same-opening, and global-lookup consumers"

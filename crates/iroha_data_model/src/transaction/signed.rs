@@ -513,7 +513,6 @@ mod model {
     )]
     #[norito(deny_unknown_fields)]
     #[display("{}", self.hash())]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::signed::model::SignedTransaction")]
     pub struct SignedTransaction {
@@ -562,9 +561,8 @@ mod model {
         From,
         TryInto,
         IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionEntrypoint")]
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
@@ -579,7 +577,6 @@ mod model {
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::signed::model::TransactionResult")]
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TransactionResult(
         pub TransactionResultInner,
         /// Durable per-leg receipts emitted by an independently settled native transfer batch.
@@ -607,7 +604,6 @@ mod model {
         IntoSchema,
     )]
     #[display("ExecutionStep")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct ExecutionStep(pub ConstVec<InstructionBox>);
 }
 // Keep explicit slice decoders for hot ingress paths. The generic derived

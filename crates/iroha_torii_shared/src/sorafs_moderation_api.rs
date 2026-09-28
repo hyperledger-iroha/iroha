@@ -28,8 +28,6 @@ pub const SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1: usize =
 pub const SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1: usize = 1024;
 /// Maximum JSON bytes accepted by the dead-letter apply route.
 pub const SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1: usize = 8 * 1024;
-/// Maximum JSON bytes accepted from either successful dead-letter route response.
-pub const SORAFS_MODERATION_DEAD_LETTER_JSON_RESPONSE_MAX_BYTES_V1: usize = 8 * 1024;
 /// Closed dead-letter source selected for resolution.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize, norito::NoritoSchema,

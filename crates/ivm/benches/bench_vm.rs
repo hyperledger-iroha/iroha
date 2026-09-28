@@ -1,26 +1,6 @@
 //! Benchmarks for core IVM VM operations and Merkle utilities.
 use criterion::{BatchSize, Criterion};
-use ivm::{
-    ByteMerkleTree, IVM, ProgramMetadata, encoding, instruction,
-    parallel::{Block, State, StateAccessSet, Transaction},
-};
-fn loop_program() -> Vec<u8> {
-    let mut prog = ProgramMetadata::default().encode();
-    prog.extend_from_slice(
-        &encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 1).to_le_bytes(),
-    );
-    let branch = encoding::wide::encode_branch(instruction::wide::control::BLT, 1, 2, -1);
-    prog.extend_from_slice(&branch.to_le_bytes());
-    prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    prog
-}
-fn loop_transaction(code: &[u8]) -> Transaction {
-    Transaction {
-        code: code.to_vec(),
-        gas_limit: 0,
-        access: StateAccessSet::new(),
-    }
-}
+use ivm::{ByteMerkleTree, IVM, ProgramMetadata, encoding};
 #[inline]
 fn encode_addi_word(rd: u8, rs1: u8, imm: i16) -> u32 {
     ivm::kotodama::compiler::encode_addi(rd, rs1, imm).expect("encode addi")
@@ -41,20 +21,6 @@ fn straight_line_program(instructions: usize) -> Vec<u8> {
     }
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     bytes
-}
-fn bench_loop(c: &mut Criterion) {
-    let program = loop_program();
-    let tx = loop_transaction(&program);
-    let block = Block {
-        transactions: vec![tx; 100],
-    };
-    let cores = num_cpus::get_physical();
-    let mut ivm = IVM::new_with_options(Some(cores), State::new(), u64::MAX);
-    c.bench_function("parallel_loop_block_100", |b| {
-        b.iter(|| {
-            ivm.execute_block(block.clone());
-        })
-    });
 }
 fn bench_predecoded_runs(c: &mut Criterion) {
     let program = predecoded_program();
@@ -133,7 +99,6 @@ fn main() {
     // Silence ASCII banner and feature selection in benches.
     ivm::set_banner_enabled(false);
     let mut c = Criterion::default().configure_from_args();
-    bench_loop(&mut c);
     bench_predecoded_runs(&mut c);
     bench_straight_line_runs(&mut c);
     bench_merkle_build(&mut c);

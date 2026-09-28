@@ -171,7 +171,7 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
-iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "bridge", "governance"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance", "http"] }
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }
@@ -191,7 +191,7 @@ fastpq_isi = { path = "../fastpq_isi" }
 mv = { workspace = true }
 concread = { workspace = true, features = ["ebr", "maps", "foldhash"] }
 iroha_schema = { workspace = true }
-sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
+sorafs_manifest = { path = "../sorafs_manifest" }
 settlement_router = { path = "../settlement_router" }
 iroha_sccp = { path = "../iroha_sccp" }
 iroha_sumeragi = { workspace = true }
@@ -202,8 +202,6 @@ soranet_pq = { workspace = true }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core", "zeroize"] }
 rayon = { workspace = true }
 base64 = { workspace = true }
-rust_decimal = { workspace = true }
-regex = "1.11.0"
 http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
 ff = "0.13.1"
@@ -222,7 +220,6 @@ nonempty = "=0.11.0"
 
 dashmap = { workspace = true }
 eyre = { workspace = true }
-futures = { workspace = true, features = ["std", "async-await"] }
 rand = { workspace = true }
 rand_core_06 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "rt-multi-thread", "macros", "fs"] }
@@ -240,20 +237,19 @@ curve25519-dalek = "4.1.3"
 blake2 = { workspace = true }
 iroha_file_mmap = { path = "../iroha_file_mmap" }
 ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
-x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
 p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve", "expose-field"] }
-der-parser = "10.0.0"
-signature = { version = "2.2.0", default-features = false, features = ["std"] }
+# `bigint` exposes `der_parser::num_bigint` for the Pasta-cycle loaders.
+der-parser = { version = "10.0.0", features = ["bigint"] }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 once_cell = { workspace = true }
-yasna = "0.5.2"
 indexmap = "2.12.0"
-arc-swap = "1.7.1"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+futures = { workspace = true, features = ["std", "async-await"] }
+x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
 tokio = { workspace = true, features = ["test-util"] }
 criterion = { workspace = true }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
@@ -262,7 +258,6 @@ iroha_config_base = { workspace = true }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 hex = { workspace = true }
 expect-test = { workspace = true }
-rcgen = "0.14.5"
 rand_08 = { package = "rand", version = "=0.8.7" }
 # The simulator hosts the Sumeragi driver for its §13.5 conformance tests.
 iroha_sumeragi = { workspace = true, features = ["sim"] }

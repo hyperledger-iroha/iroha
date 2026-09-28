@@ -153,7 +153,9 @@ pub(super) struct StripedMerkle {
 pub(super) struct StreamedCommitment {
     pub(super) root: Digest,
     pub(super) siblings: Vec<Digest>,
+    #[cfg(test)]
     pub(super) leaf_hashes: usize,
+    #[cfg(test)]
     pub(super) parent_hashes: usize,
 }
 
@@ -255,7 +257,9 @@ impl StripedMerkle {
         Ok(StreamedCommitment {
             root,
             siblings,
+            #[cfg(test)]
             leaf_hashes: self.seen,
+            #[cfg(test)]
             parent_hashes: self.parents,
         })
     }

@@ -31,14 +31,10 @@ pub enum Error {
 pub const CLOSE_INVALID_PAYLOAD: u16 = 1007;
 /// RFC 6455 close code for a protocol policy violation.
 pub const CLOSE_POLICY_VIOLATION: u16 = 1008;
-/// RFC 6455 close code for a message which exceeds the protocol limit.
-pub const CLOSE_MESSAGE_TOO_BIG: u16 = 1009;
 /// RFC 6455 close code for an unexpected server failure.
 pub const CLOSE_INTERNAL_ERROR: u16 = 1011;
 /// RFC 6455 close code asking the client to retry later.
 pub const CLOSE_TRY_AGAIN_LATER: u16 = 1013;
-/// RFC 6455 close code used when server shutdown ends a live session.
-pub const CLOSE_GOING_AWAY: u16 = 1001;
 
 async fn send_message_until<S>(
     sink: &mut S,
@@ -174,15 +170,6 @@ impl WebSocketNorito {
         )
         .await
     }
-    /// Send a JSON string as a Text WebSocket frame (used for convenience event streams).
-    pub async fn send_json_text(&mut self, json: &str) -> Result<(), Error> {
-        send_message_with_timeout(
-            &mut self.ws,
-            self.timeout,
-            Message::Text(Utf8Bytes::from(json.to_owned())),
-        )
-        .await
-    }
     /// Send an empty WebSocket ping frame as a transport heartbeat.
     pub async fn ping(&mut self) -> Result<(), Error> {
         send_message_with_timeout(
@@ -203,19 +190,6 @@ impl WebSocketNorito {
         M: Send,
     {
         let deadline = tokio::time::Instant::now() + self.timeout;
-        recv_subscription_until(&mut self.ws, deadline).await
-    }
-    /// Receive one canonical request with a custom timeout.
-    ///
-    /// Returns [`Error::ReadTimeout`] when the absolute `dur` deadline expires. Ping and pong
-    /// control frames do not extend that deadline.
-    pub async fn recv_with_timeout<M>(&mut self, dur: Duration) -> Result<M, Error>
-    where
-        M: NoritoSerialize,
-        for<'a> M: NoritoDeserialize<'a>,
-        M: Send,
-    {
-        let deadline = tokio::time::Instant::now() + dur;
         recv_subscription_until(&mut self.ws, deadline).await
     }
     /// Wait for the peer to close while rejecting post-subscription data frames.

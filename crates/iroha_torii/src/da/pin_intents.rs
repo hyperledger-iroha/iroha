@@ -7,12 +7,9 @@ use super::commitments::list_snapshot_for_state;
 use crate::{Error, JsonBody, NoritoJson, SharedAppState};
 use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
-use iroha_core::{
-    da::{
-        ActiveLaneProofPolicyContext, build_da_pin_intent_proof, pin_store::DaPinStore,
-        verify_da_pin_intent_proof,
-    },
-    state::WorldStateSnapshot,
+use iroha_core::da::{
+    ActiveLaneProofPolicyContext, build_da_pin_intent_proof, pin_store::DaPinStore,
+    verify_da_pin_intent_proof,
 };
 use iroha_data_model::da::pin_intent::{DaPinIntentProof, DaPinIntentWithLocation};
 use iroha_torii_shared::da::{
@@ -20,8 +17,11 @@ use iroha_torii_shared::da::{
     DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaQueryValidationError,
 };
 use std::num::NonZeroUsize;
+#[cfg(test)]
 const ENDPOINT_DA_PIN_INTENTS: &str = "/v1/da/pin-intents";
+#[cfg(test)]
 const ENDPOINT_DA_PIN_INTENTS_PROVE: &str = "/v1/da/pin-intents/prove";
+#[cfg(test)]
 const ENDPOINT_DA_PIN_INTENTS_VERIFY: &str = "/v1/da/pin-intents/verify";
 /// HTTP handler for `/v1/da/pin-intents`.
 pub async fn handler_list_pin_intents(

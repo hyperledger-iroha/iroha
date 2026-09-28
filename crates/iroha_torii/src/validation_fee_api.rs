@@ -10,7 +10,7 @@ use axum::{
 use iroha_core::governance::parliament::{
     canonical_governance_attempt_ids_v1, validate_parliament_randomness_redraw_lineage_v1,
 };
-use iroha_core::state::{StateReadOnly as _, WorldReadOnly};
+use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
     account::AccountId,
     governance::types::{

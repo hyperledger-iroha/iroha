@@ -39,13 +39,6 @@ pub use norito_derive::{
 pub const DATA_MODEL_VERSION: u32 = 4;
 #[macro_use]
 mod id_macros;
-// NOTE: `iroha_ffi` is an optional dependency used only when the `ffi_export`
-// or `ffi_import` features are enabled. Many types in this crate previously
-// applied the `ffi_type` attribute unconditionally, which forced Cargo to build
-// the heavy `iroha_ffi` procedural macros even when FFI support was not
-// required. To avoid long build times and hangs, all usages of `ffi_type` are
-// now wrapped in `cfg_attr` so that the attribute is only expanded when one of
-// the FFI features is explicitly activated.
 pub mod account;
 /// Account domain model types and queries.
 pub mod alias;
@@ -58,7 +51,6 @@ pub use asset::{AssetDefinitionId, AssetId};
 pub mod block;
 /// Bridge-related data types.
 pub mod bridge;
-pub mod sccp;
 /// Application-owned upgraded racing replay and state types; no custody authority.
 pub mod classed_race_v1;
 /// Shared primitives reused across data model modules.
@@ -95,6 +87,7 @@ pub mod executor;
 pub mod fastpq;
 /// Fraud detection and risk scoring data types.
 pub mod fraud;
+pub mod sccp;
 // Certificate-bearing Parliament data must remain available to the always-on
 // validation-fee registry without enabling governance instructions or events.
 /// Application-independent game session records and signed gameplay messages.
@@ -222,12 +215,8 @@ pub mod zk;
 pub mod instruction_registry {
     pub use crate::isi::{InstructionRegistry, registry::default};
 }
-/// Build-time constants generated during the build process (e.g., keyword
-/// tables). Not part of the public API surface.
-mod build_consts {
-    include!(concat!(env!("OUT_DIR"), "/build_consts.rs"));
-}
-pub use build_consts::PRECOMPUTED_KEYWORDS;
+/// Reserved identifiers used for fast keyword lookups during schema generation.
+pub const PRECOMPUTED_KEYWORDS: &[&str] = &["account", "domain", "asset", "trigger"];
 /// Whether the internal mutable model API is enabled.
 pub const TRANSPARENT_API: bool = cfg!(feature = "transparent_api");
 pub use crate::account::{Account, AccountId, NewAccount};
@@ -310,31 +299,6 @@ pub trait IntoKeyValue {
     type Value;
     /// Method to split object into parts
     fn into_key_value(self) -> (Self::Key, Self::Value);
-}
-mod ffi {
-    //! Definitions and implementations of FFI related functionalities
-    #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
-    use super::*;
-    #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
-    // Metadata moved to the base owner at ID 3. Keep every retained ID explicit
-    // across that gap; shrinking the old sequential list would renumber these types.
-    iroha_ffi::handles! { 0, account::Account, asset::value::Asset, domain::Domain }
-    #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
-    iroha_ffi::handles! { 4, permission::Permission, role::Role }
-    #[cfg(feature = "ffi_import")]
-    iroha_ffi::decl_ffi_fns! { link_prefix="iroha_data_model" Drop, Clone, Eq, Ord }
-    #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
-    iroha_ffi::def_ffi_fns! { link_prefix="iroha_data_model"
-        Drop: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
-        Clone: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
-        Eq: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
-        Ord: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
-    }
-    // NOTE: Makes sure that only one `dealloc` is exported per generated dynamic library
-    #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
-    mod dylib {
-        iroha_ffi::def_ffi_fns! {dealloc}
-    }
 }
 #[allow(ambiguous_glob_reexports)]
 pub mod prelude {
@@ -426,6 +390,3 @@ mod manual_schema_identity;
 
 #[cfg(test)]
 mod registration_identity_tests;
-
-#[cfg(all(test, feature = "ffi_export", not(feature = "ffi_import")))]
-mod metadata_ffi_tests;

@@ -9,7 +9,6 @@ form the first-release Iroha 3 data model, as implemented in the
 - Purpose: Provide canonical types for domain objects (domains, accounts, assets, NFTs, roles, permissions, peers), state-changing instructions (ISI), queries, triggers, transactions, blocks, and parameters.
 - Serialization: Wire records use Norito codecs and schema contracts, with manual implementations for validated or bounded representations. Canonical protocol JSON is mandatory, including without default features.
 - IVM note: Certain deserialization-time validations are disabled when targeting the Iroha Virtual Machine (IVM), since the host performs validation before invoking contracts (see crate docs in `src/lib.rs`).
-- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export` to avoid overhead when FFI is not needed.
 
 ## Core Traits and Helpers
 
@@ -276,7 +275,7 @@ the first release does not decode superseded data-model layouts.
 
 ## Features and Determinism
 
-- The workspace requires `std`; protocol JSON is unconditional. The [crate manifest](../crates/iroha_data_model/Cargo.toml) owns the shipping application, cryptographic, HTTP, FFI and internal mutable-API feature selections. `ffi_import` is not a shipping feature.
+- The workspace requires `std`; protocol JSON is unconditional. The [crate manifest](../crates/iroha_data_model/Cargo.toml) owns the shipping application, cryptographic, HTTP and internal mutable-API feature selections. The crate exports no C ABI; native SDK bridges consume Norito payloads.
 - Determinism: All serialization uses Norito encoding to be portable across hardware. IVM bytecode is an opaque byte blob; execution must not introduce non-deterministic reductions. The host validates transactions and supplies inputs to IVM deterministically.
 
 ### Transparent API (`transparent_api`)

@@ -5,10 +5,11 @@ use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production
 use iroha_crypto::sorafs::proof_token::{
     ModerationAction as ProofTokenModerationAction, ProofToken,
 };
+#[cfg(test)]
+use iroha_data_model::sorafs::gar::{GarEnforcementActionV1, GarEnforcementReceiptV1};
 use iroha_data_model::{
     events::data::sorafs::SorafsReserveLedgerEventKind,
     sorafs::{
-        gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
         reserve::{ReserveFinalizedEventV1, ReserveLifecycleStage},
         transparency::{
             MODERATION_LEDGER_ENTRY_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
@@ -24,8 +25,12 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, MODERATION_PRIVACY_MAX_METRICS_V1,
     MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationPrivacyNoiseSourceV1,
-    ModerationPrivacyThresholdPrfCommitmentV1, SoraFsAppealFinanceReportV1,
-    SoraFsAppealFinanceSettlementReceiptV1, SoraFsModerationBallotGovernanceEventV1,
+    ModerationPrivacyThresholdPrfCommitmentV1,
+};
+#[cfg(test)]
+use sorafs_manifest::{
+    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
+    SoraFsModerationBallotGovernanceEventV1,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -211,6 +216,7 @@ pub enum TransparencySourceEntryAdapterError {
 ///
 /// Returns [`TransparencySourceEntryAdapterError`] when the receipt is
 /// malformed, canonical encoding fails, or the derived source entry is invalid.
+#[cfg(test)]
 pub fn gar_enforcement_receipt_source_entry(
     receipt: &GarEnforcementReceiptV1,
 ) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
@@ -263,6 +269,7 @@ pub fn gar_enforcement_receipt_source_entry(
 ///
 /// Returns [`TransparencySourceEntryAdapterError`] when validation, canonical
 /// encoding, or source-entry derivation fails.
+#[cfg(test)]
 pub fn moderation_ballot_governance_event_source_entry(
     event: &SoraFsModerationBallotGovernanceEventV1,
 ) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
@@ -327,6 +334,7 @@ pub fn moderation_ballot_governance_event_source_entry(
 ///
 /// Returns [`TransparencySourceEntryAdapterError`] when validation, canonical
 /// encoding, or source-entry derivation fails.
+#[cfg(test)]
 pub fn appeal_finance_report_source_entry(
     report: &SoraFsAppealFinanceReportV1,
 ) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
@@ -391,6 +399,7 @@ pub fn appeal_finance_report_source_entry(
 ///
 /// Returns [`TransparencySourceEntryAdapterError`] when validation, canonical
 /// encoding, or source-entry derivation fails.
+#[cfg(test)]
 pub fn appeal_finance_settlement_receipt_source_entry(
     receipt: &SoraFsAppealFinanceSettlementReceiptV1,
 ) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
@@ -5024,6 +5033,7 @@ fn proof_token_moderation_action_code(action: ProofTokenModerationAction) -> u8 
         ProofTokenModerationAction::Custom(code) => code,
     }
 }
+#[cfg(test)]
 fn validate_gar_enforcement_receipt(
     receipt: &GarEnforcementReceiptV1,
 ) -> Result<(), TransparencySourceEntryAdapterError> {
@@ -5192,6 +5202,7 @@ fn unix_ms_to_secs(unix_ms: u64) -> Result<u64, String> {
     }
     Ok(unix)
 }
+#[cfg(test)]
 fn gar_enforcement_action_label(action: &GarEnforcementActionV1) -> &'static str {
     match action {
         GarEnforcementActionV1::PurgeStaticZone => "purge_static_zone",

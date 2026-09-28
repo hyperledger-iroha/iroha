@@ -46,16 +46,10 @@ use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::NetworkId;
 use iroha_model_base::peer::PeerId;
-use rand::{
-    rand_core::{TryCryptoRng, TryRngCore},
-    rngs::OsRng,
-};
-use std::{
-    collections::HashSet,
-    fmt,
-    num::NonZeroUsize,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+#[cfg(test)]
+use std::num::NonZeroUsize;
+use std::{collections::HashSet, fmt, time::Duration};
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
@@ -401,14 +395,6 @@ impl OperatorSignatures {
         }
         self.allowed_public_keys.contains(public_key)
     }
-    fn now_unix_ms() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX)
-    }
     fn parse_required_header<'a>(
         headers: &'a HeaderMap,
         name: &'static str,
@@ -471,7 +457,7 @@ impl OperatorSignatures {
         timestamp_ms: u64,
         nonce: &str,
     ) -> Result<(), OperatorSignatureError> {
-        let now_ms = Self::now_unix_ms();
+        let now_ms = crate::utils::unix_now_ms();
         let delta_ms = now_ms.abs_diff(timestamp_ms);
         let max_skew_ms: u64 = self
             .max_clock_skew
@@ -752,7 +738,7 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
     body: &[u8],
     rng: &mut R,
 ) -> Result<HeaderMap, OperatorSignatureError> {
-    let timestamp_ms = OperatorSignatures::now_unix_ms();
+    let timestamp_ms = crate::utils::unix_now_ms();
     let nonce = operator_signature_nonce_with_rng(rng)?;
     let msg = OperatorSignatures::operator_request_message(
         network_id,
@@ -799,7 +785,7 @@ fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
     body: &[u8],
     rng: &mut R,
 ) -> Result<HeaderMap, OperatorSignatureError> {
-    let timestamp_ms = OperatorSignatures::now_unix_ms();
+    let timestamp_ms = crate::utils::unix_now_ms();
     let nonce = operator_signature_nonce_with_rng(rng)?;
     let message = OperatorSignatures::torii_proxy_request_message(
         network_id,
@@ -1400,7 +1386,7 @@ mod tests {
         .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration".parse().unwrap();
         let body = b"{}";
-        let ts = OperatorSignatures::now_unix_ms();
+        let ts = crate::utils::unix_now_ms();
         let nonce = "nonce-1";
         let msg = OperatorSignatures::operator_request_message(
             &test_network_id(),
@@ -1457,7 +1443,7 @@ mod tests {
         let auth = operator_signatures_with_capacity(&key_pair, 8);
         let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("proxy URI");
         let body = b"canonical-norito-request";
-        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let operator_message = OperatorSignatures::operator_request_message(
             &foreign_network_id(),
             &crate::Method::POST,
@@ -1529,7 +1515,7 @@ mod tests {
             &crate::Method::POST,
             &uri,
             body,
-            OperatorSignatures::now_unix_ms(),
+            crate::utils::unix_now_ms(),
             "unlisted-remote-peer",
         );
         let operator_error = auth
@@ -1548,7 +1534,7 @@ mod tests {
         let auth = operator_signatures_with_capacity(&operator, 8);
         let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
         let body = b"canonical-norito-request";
-        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let headers = signed_torii_proxy_headers_with_nonce(
             &remote_peer,
             &signed_target,
@@ -1592,7 +1578,7 @@ mod tests {
             .parse()
             .expect("tampered Torii proxy URI");
         let body = b"canonical-norito-request";
-        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let headers = signed_torii_proxy_headers_with_nonce(
             &remote_peer,
             &receiver,
@@ -1674,7 +1660,7 @@ mod tests {
         let auth = operator_signatures_with_capacity(&signer, 8);
         let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
         let body = b"canonical-norito-request";
-        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "partitioned-replay-claim";
         let generic_headers = signed_headers_with_nonce(
             &signer,
@@ -1898,7 +1884,7 @@ mod tests {
         let auth = operator_signatures_with_capacity(&key_pair, 1);
         let uri: crate::Uri = "/v1/configuration".parse().unwrap();
         let body = b"{}";
-        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "nonce-after-bad-signature";
         let valid_headers = signed_headers_with_nonce(
             &key_pair,
@@ -1937,7 +1923,7 @@ mod tests {
         let auth = operator_signatures_with_capacity(&key_pair, 2);
         let uri: crate::Uri = "/v1/configuration".parse().unwrap();
         let body = b"{}";
-        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let protected_headers: Vec<_> = ["protected-nonce-a", "protected-nonce-b"]
             .into_iter()
             .map(|nonce| {
@@ -1988,7 +1974,7 @@ mod tests {
         let auth = operator_signatures_with_capacity(&key_pair, 2);
         let uri: crate::Uri = "/v1/configuration".parse().expect("valid URI");
         let body = b"{}";
-        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let protected_headers = ["protected-a", "protected-b"].map(|nonce| {
             signed_headers_with_nonce(
                 &key_pair,
@@ -2035,7 +2021,7 @@ mod tests {
             &crate::Method::POST,
             &uri,
             body,
-            OperatorSignatures::now_unix_ms(),
+            crate::utils::unix_now_ms(),
             "concurrent-shared-nonce",
         );
         let barrier = Arc::new(Barrier::new(WORKERS));

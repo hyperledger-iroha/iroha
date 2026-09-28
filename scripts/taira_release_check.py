@@ -131,6 +131,7 @@ STAGES = (
     ("complete prepared canary transport lifecycle", (
         "tests::authorized_transaction_lifetime_uses_exact_creation_and_preserves_shorter_ttl",
         "tests::authorized_transaction_lifetime_rejects_empty_window_and_missing_ttl",
+        "taira::tests::prepared_final_canary_requires_signed_current_admission",
         "taira::tests::final_canary_expired_window_rejects_before_fee_quote_or_dispatch",
         "taira::tests::final_canary_submit_uses_original_deadline_after_initial_read_and_post",
         "taira::tests::final_canary_submit_verifies_exact_proof_without_replaying_post",
@@ -226,6 +227,7 @@ STAGES = (
     ("generated validator reset layout", (
         "taira_public_reset::validator_config::tests::materialization_binds_every_validator_state_path_and_preserves_other_fields",
         "taira_public_reset::validator_config::tests::materialization_projects_split_torii_bind_without_changing_p2p_or_signer_custody",
+        "taira_public_reset::validator_config::tests::materialization_replaces_localnet_admission_with_distinct_public_clients",
         "taira_public_reset::validator_config::tests::materialization_trusts_only_explicit_proxy_hosts_without_rate_bypass",
         "taira_public_reset::validator_config::tests::materialization_rejects_invalid_torii_listener_and_port_drift",
         "taira_public_reset::validator_config::tests::materialization_torii_bind_argument_requires_canonical_ip_and_nonzero_port",
@@ -404,21 +406,21 @@ if sys.platform == "linux":
 
 TORII_STAGES = (("routed onboarding and faucet contracts", (
     "accounts_faucet::accounts_faucet_prepares_alias_selector_config_but_needs_quorum",
-    "accounts_faucet::accounts_faucet_preserves_prefunded_balance_without_quorum",
-    "accounts_faucet::accounts_faucet_repeated_claims_do_not_spend_without_quorum",
+    "accounts_faucet::accounts_faucet_preserves_prefunded_balance_without_durable_admission",
+    "accounts_faucet::accounts_faucet_repeated_claims_do_not_spend_without_durable_admission",
     "accounts_faucet::accounts_faucet_puzzle_exposes_current_anchor",
     "accounts_faucet::accounts_faucet_puzzle_ignores_uncertified_claim",
     "accounts_faucet::accounts_faucet_prepares_registration_without_mutating_unfunded_account",
     "accounts_faucet::accounts_faucet_rejects_missing_pow_when_required",
-    "accounts_faucet::accounts_faucet_prepared_transfer_fails_closed_without_quorum",
+    "accounts_faucet::accounts_faucet_prepared_transfer_fails_closed_without_durable_admission",
     "accounts_faucet::faucet_account_fixture_uses_checked_ed25519_key_generation",
     "accounts_faucet::faucet_block_leader_fixture_uses_checked_bls_key_generation",
-    "accounts_faucet::faucet_prepared_envelope_aging_reaches_quorum_gate",
+    "accounts_faucet::faucet_prepared_envelope_aging_reaches_durable_admission_gate",
     "accounts_faucet::faucet_submit_rejects_old_tampered_and_uncertified_exact_retries",
     "accounts_onboard::expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed",
     "accounts_onboard::sponsored_onboarding_catalog_contains_plan_prepare_submit_and_readiness",
     "accounts_onboard::sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_but_needs_quorum",
-    "accounts_onboard::sponsored_onboarding_prepared_submit_fails_closed_without_quorum",
+    "accounts_onboard::sponsored_onboarding_prepared_submit_fails_closed_without_durable_admission",
     "accounts_onboard::sponsored_onboarding_receipt_binds_exact_network_and_active_signer",
     "accounts_onboard::sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys",
     "accounts_onboard::sponsored_onboarding_rejects_signed_expired_receipt_without_block_progress",
@@ -599,7 +601,8 @@ CLIENT_STAGES = (("public compatibility discovery before account bootstrap", (
 )), ("public contract SDK envelope", (
     "client::evidence_http_tests::post_contract_call_accepts_only_the_caller_trusted_draft_intent",
     "client::evidence_http_tests::post_contract_call_authenticates_bound_account_and_rejects_foreign_authority",
-    "client::evidence_http_tests::post_contract_call_rejects_ordinary_draft_before_signing_or_submission",
+    "client::evidence_http_tests::post_contract_call_rejects_retired_admission_draft_before_signing_or_submission",
+    "client::tests::prepared_account_verifiers_reject_signed_retired_admission",
     "client::evidence_http_tests::post_contract_call_rejects_substituted_operation_receipt",
     "client::evidence_http_tests::post_contract_call_rejects_omitted_operation_receipt_fields",
     "client::evidence_http_tests::post_contract_call_rejects_unsupported_response_root_fields",
@@ -709,13 +712,13 @@ TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact
     "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
     "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
 )), ("public contract retained payload and certified ingress", (
-    "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
+    "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_current_payload",
     "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
     "routing::multisig_selector_tests::contract_call_detached_submission_rejects_changed_or_noncanonical_payload",
-    "routing::multisig_selector_tests::contract_call_detached_handler_requires_certified_public_admission",
+    "routing::multisig_selector_tests::contract_call_detached_handler_requires_durable_public_admission",
     "routing::multisig_selector_tests::contract_call_detached_submission_requires_complete_retained_envelope",
     "routing::multisig_selector_tests::contract_call_prepare_serializes_complete_canonical_response",
-    "openapi::tests::public_contract_call_schema_matches_exact_queue_plan_handoff",
+    "openapi::tests::public_contract_call_schema_matches_exact_current_admission",
     "openapi::tests::checked_openapi_assets_match_package_authority",
 )),)
 
@@ -734,9 +737,15 @@ TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isol
     "tests_runtime_handlers::transaction_details_rejects_unsigned_and_broadened_queries",
 )),)
 
-TORII_UNIT_STAGES += (("prepared account submission requires certified admission", (
-    "routing::prepared_queue_plan_submit_response_requires_real_acceptance",
-    "tests_runtime_handlers::prepared_queue_plan_retry_recovers_durable_pending_after_fresh_expiry",
+TORII_UNIT_STAGES += (("current prepared and public transaction admission", (
+    "routing::prepared_transaction_submit_response_requires_real_acceptance",
+    "routing::prepared_transaction_signature_fixture_tests::prepared_transaction_signature_fixture_is_current",
+    "tests_runtime_handlers::prepared_current_admission_retains_exact_durable_pending_identity",
+    "tests_runtime_handlers::prepared_current_admission_rejects_actual_multiroute_payload_before_custody",
+    "tests_runtime_handlers::current_http_admission_rejects_unsupported_intent_before_any_durable_promise",
+    "tests_runtime_handlers::current_http_admission_rejects_actual_multiroute_before_journal_write",
+    "tests_runtime_handlers::current_peer_and_canonical_retry_reject_unsupported_admission_without_custody",
+    "kagemusha_commands::tests::unsupported_current_admission_precedes_monetary_reservation_signing_and_pending",
 )),)
 
 TORII_UNIT_STAGES += (("signed account permission query preservation", (
@@ -774,16 +783,16 @@ TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact rece
     "queue_plan_capacity_wait::tests::only_inactive_is_waited_and_terminal_change_is_immediate",
     "queue_plan_capacity_wait::tests::original_monotonic_and_wire_deadlines_are_not_renewed",
     "queue_plan_capacity_wait::tests::cancellation_drops_wait_without_detached_checks",
-    "tests_runtime_handlers::incoming_submit_queue_plan_synced_succeeds_with_installed_journal",
+    "tests_runtime_handlers::current_local_proxy_admission_rejects_unsupported_intent_with_journal",
     "tests_runtime_handlers::queue_plan_synced_attempt_window_is_parallel_bounded_and_released_at_quorum",
     "tests_runtime_handlers::queue_plan_synced_capacity_retry_requires_exact_bounded_rejection",
-    "tests_runtime_handlers::incoming_queue_plan_synced_future_context_defers_without_queue_ownership",
+    "tests_runtime_handlers::current_peer_admission_rejects_unsupported_future_context_without_waiting",
     "tests_runtime_handlers::queue_plan_quorum_is_not_publicly_accepted_before_registry_application",
-    "tests_runtime_handlers::incoming_queue_plan_synced_exact_retry_survives_height_advance",
+    "tests_runtime_handlers::current_peer_admission_keeps_unsupported_retry_rejected_after_height_advance",
     "tests_runtime_handlers::strict_proxy_finalization_keeps_w_through_canonical_admission_wait",
     "tests_runtime_handlers::queue_plan_synced_capacity_exhaustion_preserves_original_deadline_and_partial_claim",
     "tests_runtime_handlers::queue_plan_synced_capacity_recovery_retains_distinct_claim_and_physical_permit",
-    "tests_runtime_handlers::incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable",
+    "tests_runtime_handlers::current_peer_admission_rejects_unsupported_intent_without_journal",
     "tests_runtime_handlers::late_physical_admission_preserves_durability_and_reports_reconciliation",
     "tests_runtime_handlers::queue_plan_capacity_loss_after_quorum_remains_indeterminate",
     "tests_runtime_handlers::queue_plan_synced_future_authority_retries_same_request_until_quorum",
@@ -820,7 +829,7 @@ CORE_STAGES += (("native storage and workload Initial executor admission", (
 )),)
 
 TORII_STAGES += (("public contract HTTP preparation and strict admission", (
-    "contracts_call_integration::contracts_call_prepares_exact_payload_and_requires_certified_admission",
+    "contracts_call_integration::contracts_call_prepares_exact_payload_and_requires_durable_admission",
 )),)
 
 CORE_STAGES += (("authenticated admission and coherent State publication", (
@@ -1237,7 +1246,7 @@ CONFIG_STAGES = (("production configuration schema", (
 )),)
 
 CONFIG_FIXTURE_STAGES = (("application rate defaults through minimal configuration", (
-    "minimal_config_inherits_large_application_rate_budgets",
+    "fixtures::minimal_config_inherits_large_application_rate_budgets",
 )),)
 GENESIS_STAGES = (("one signed current epoch authority", (
     "tests::genesis_rejects_contradictory_signed_epoch_lengths",
@@ -1339,8 +1348,8 @@ BEACON_NETWORK_STAGES = (("fresh beacon custody, retained authority, paid deploy
 
 NETWORK_OBSERVATION_STAGES += (('authenticated epoch retention fixture admission', (
     'production_beacon_bootstrap::epoch_retention::production_epoch_retention_requires_exact_source_identity_before_setup',
-    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_binds_exact_generation_beacon_and_interval',
-    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_rejects_changed_generation_beacon_parent_and_schedule',
+    'production_beacon_bootstrap::epoch_retention::production_current_boundary_binds_exact_certified_committee_and_schedule',
+    'production_beacon_bootstrap::epoch_retention::production_current_boundary_rejects_changed_committee_or_schedule',
 )),)
 
 NETWORK_OBSERVATION_STAGES += (('retained native canary failure evidence', (
@@ -1544,7 +1553,7 @@ HARNESS_TARGETS = {
     "concread": ("native admitted B+ tree ownership", "concread", "lib", ["-p", "concread", "--lib"]),
     "wallet": ("native wallet resource bounds", "iroha_wallet", "lib", ["-p", "iroha_wallet", "--lib"]),
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
-    "config-fixtures": ("native configuration loading fixtures", "fixtures", "test", ["-p", "iroha_config", "--test", "fixtures"]),
+    "config-fixtures": ("native configuration loading fixtures", "iroha_config_integration", "test", ["-p", "iroha_config", "--test", "iroha_config_integration"]),
     "genesis": ("native signed genesis contracts", "iroha_genesis", "lib", ["-p", "iroha_genesis", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
@@ -1560,6 +1569,8 @@ HARNESS_TARGETS = {
     "torii-lifecycle": ("native Torii lifecycle endpoint", "torii_nexus_sorafs", "test", ["-p", "iroha_torii", "--test", "torii_nexus_sorafs"]),
     "client": ("native Rust SDK", "iroha", "lib", ["-p", "iroha", "--lib"]),
     "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
+    "executor": ("native default executor policy", "iroha_executor", "lib", ["-p", "iroha_executor", "--lib"]),
+    "schema": ("native public schema closure", "iroha_schema_gen", "lib", ["-p", "iroha_schema_gen", "--lib"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
     "sumeragi": ("native current consensus", "iroha_sumeragi", "lib", ["-p", "iroha_sumeragi", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
@@ -1639,7 +1650,7 @@ CURRENT_BEACON_CORE_STAGES = (("current authenticated threshold pulse production
     'sumeragi::beacon::tests::current_partials_require_exact_parent_instance_and_authenticated_seat',
     'sumeragi::beacon::tests::current_partials_from_four_validators_converge_without_idle_signing',
     'sumeragi::schedule::tests::schedule_rejects_conflicting_npos_epoch_authority',
-    'smartcontracts::isi::world::tests::set_parameter_rejects_consensus_epoch_that_conflicts_with_npos',
+    'smartcontracts::isi::world::isi::tests::set_parameter_rejects_consensus_epoch_that_conflicts_with_npos',
 )),)
 CORE_STARTUP_STAGES = CURRENT_BEACON_CORE_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CURRENT_BEACON_CORE_STAGES + CORE_ADMISSION_STARTUP_STAGES
@@ -1652,6 +1663,60 @@ CURRENT_FINALITY_CORE_STAGES = (("current embedded certificate proof and runtime
 CORE_STARTUP_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_ADMISSION_STARTUP_STAGES
 CORE_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_STAGES
+CURRENT_QUEUE_ADMISSION_STAGES = (("current executable queue and peer admission", (
+    'queue::tests::current_admission_rejects_unsupported_intent_across_direct_queue_boundaries',
+    'queue::tests::current_admission_rejects_actual_multiroute_before_queue_custody',
+    'queue::tests::current_admission_replay_rejects_unsupported_record_without_publishing_or_rewriting',
+    'gossiper::tests::current_gossip_rejects_certified_unsupported_intent_before_persistence_or_deferral',
+    'gossiper::tests::current_gossip_rejects_uncertified_unsupported_work_without_suppressing_ordinary',
+)),)
+CORE_STARTUP_STAGES = CURRENT_QUEUE_ADMISSION_STAGES + CORE_STARTUP_STAGES
+CORE_ADMISSION_STARTUP_STAGES = CURRENT_QUEUE_ADMISSION_STAGES + CORE_ADMISSION_STARTUP_STAGES
+CORE_STAGES = CURRENT_QUEUE_ADMISSION_STAGES + CORE_STAGES
+DATA_MODEL_STAGES += (("complete current status JSON and binary wire", (
+    'sumeragi::tests::status_json_round_trip',
+    'sumeragi::tests::status_codec_round_trip',
+)),)
+CURRENT_CATALOG_EXECUTION_STAGES = (("authenticated current ordinary catalog execution", (
+    'runtime_catalog_transition::native_execution::tests::current_catalog_proof_binds_real_ordinary_route_and_success',
+    'runtime_catalog_transition::native_execution::tests::current_catalog_proof_rejects_changed_transaction_route_or_output',
+    'runtime_catalog_transition::native_execution::tests::current_catalog_wire_requires_exact_authenticated_execution_and_complete_certificate',
+)),)
+NETWORK_OBSERVATION_STAGES += CURRENT_CATALOG_EXECUTION_STAGES
+BASIC_NETWORK_STAGES = NETWORK_OBSERVATION_STAGES + BEACON_NETWORK_STAGES
+NETWORK_STAGES = BASIC_NETWORK_STAGES
+
+CORE_CONTRACT_OWNER_STAGES = (("exact contract lifecycle owner delegation and invocation", (
+    'executor::tests::current_contract_owner_originates_and_revokes_exact_tokens_without_code_management',
+    'executor::tests::contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_authority',
+    'executor::tests::ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it',
+)),)
+CORE_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_STARTUP_STAGES
+CORE_ADMISSION_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_ADMISSION_STARTUP_STAGES
+CORE_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_STAGES
+EXECUTOR_STAGES = (("default executor delegates exact entrypoint authority to Core", (
+    'default::contract_deployment_permission_tests::exact_entrypoint_grant_and_revoke_reach_shared_core_authority_boundary',
+)),)
+SCHEMA_STAGES = (("current portable finality schema closure", (
+    'tests::current_finality_http_contracts_have_complete_schema_entries',
+    'tests::no_extra_or_missing_schemas',
+    'tests::no_schema_type_overlap',
+)),)
+
+TORII_UNIT_STAGES += (("large solo content and bounded gateway rate budgets", (
+    'tests_runtime_handlers::content_default_egress_serves_large_solo_bundle_bursts',
+    'sorafs::gateway::rate_limit::tests::rate_limiter_permits_within_budget',
+    'sorafs::gateway::rate_limit::tests::rate_limiter_bans_when_configured',
+    'sorafs::gateway::rate_limit::tests::rate_limiter_bounds_first_seen_client_state',
+    'sorafs::gateway::rate_limit::tests::rate_limiter_caps_idle_credit_and_keeps_clients_independent',
+    'sorafs::gateway::rate_limit::tests::rate_limiter_handles_zero_and_extreme_budgets_without_overflow',
+    'sorafs::gateway::rate_limit::tests::rate_limiter_default_admits_large_solo_burst_with_one_fixed_bucket',
+    'sorafs::gateway::rate_limit::tests::rate_limiter_reclaims_idle_buckets_but_retains_active_bans',
+)),)
+TORII_UNIT_STAGES += (("permanent current queue admission errors", (
+    'tests_queue_metadata::unsupported_current_queue_admission_has_permanent_canonical_error',
+)),)
+
 DATA_MODEL_STAGES += (("portable current certificate cryptography and attestation", (
     'block::proposal_wire_hash_tests::current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire',
     'sumeragi_finality::tests::current_proofs_roundtrip_and_verify_successful_exact_execution',
@@ -1661,9 +1726,9 @@ DATA_MODEL_STAGES += (("portable current certificate cryptography and attestatio
 )),)
 TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
     'tests_runtime_handlers::application_default_budgets_admit_ten_thousand_operations_before_refill',
-    'torii_routed_read_tests::app_routed_read_http_admission_tests::bodyless_read_waits_before_polling_and_releases_capacity_on_cancellation',
-    'torii_routed_read_tests::app_routed_read_http_admission_tests::solo_bodyless_burst_queues_under_one_unchanged_memory_working_set',
-    'torii_routed_read_tests::app_routed_read_http_admission_tests::bodyless_read_queue_keeps_finite_count_and_deadline',
+    'app_routed_read_http_admission_tests::bodyless_read_waits_before_polling_and_releases_capacity_on_cancellation',
+    'app_routed_read_http_admission_tests::solo_bodyless_burst_queues_under_one_unchanged_memory_working_set',
+    'app_routed_read_http_admission_tests::bodyless_read_queue_keeps_finite_count_and_deadline',
     'tests_runtime_handlers::global_asset_definition_and_own_balance_ignore_unrelated_restricted_routes',
     'routing::tests::finality_attestation_handler_tests::finality_attestation_handler_binds_current_node_success_and_actual_tip_race',
     'routing::tests::finality_attestation_handler_tests::finality_attestation_latest_signs_current_status_and_rejects_stopped_driver',
@@ -1738,7 +1803,7 @@ TORII_BEACON_STAGES = (('current consensus readiness leaves setup ingress open',
 STAGES += (("exact-height native lifecycle installation", (
     'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
     'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
-    'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
+    'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_current_canary_and_install',
 )), )
 TORII_BEACON_STAGES += (("authenticated exact-roster Ordinary lifecycle ingress", (
     'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
@@ -2806,7 +2871,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
-        "sumeragi": CURRENT_CONSENSUS_STAGES,
+        "sumeragi": CURRENT_CONSENSUS_STAGES, "executor": EXECUTOR_STAGES, "schema": SCHEMA_STAGES,
         "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES, "wallet": WALLET_STAGES,
         "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
         "torii-shared": TORII_SHARED_STAGES, "torii-lifecycle": TORII_LIFECYCLE_STAGES,
@@ -3034,7 +3099,9 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     so production code guarded by that feature cannot escape Core-only focus.
     --tests would broaden the selection to unrelated integration tests. Reuse
     the caller's coordinated target, toolchain, features and jobserver.
-    Build scripts and procedural macros can still require host code generation.
+    Continue independent metadata targets after an error to expose all blockers
+    in one pass; a nonzero Cargo exit still fails this preflight. Build scripts
+    and procedural macros can still require host code generation.
     """
     selection = native_harness_selection(harnesses)
     if normal_core_library_probe and "core" not in harnesses:
@@ -3043,7 +3110,7 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
                        if normal_core_library_probe else [])
     feature_selection = (["--features", CORE_NORMAL_LIBRARY_PROBE_FEATURE]
                          if normal_core_library_probe else [])
-    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check",
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check", "--keep-going",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *selection, *probe_selection, *feature_selection,
                "--profile", "test", "--message-format=json-render-diagnostics"]
@@ -3119,6 +3186,7 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
     Keep the caller's warm target, toolchain and locks. Cargo check compiles
     metadata only for the exact default-feature shipping binaries; it neither
     copies executables nor contributes evidence to the independent test pass.
+    Independent metadata targets continue after errors; any nonzero exit fails.
     """
     harnesses = shipping_harnesses(root)
     selection = native_harness_selection(harnesses)
@@ -3126,7 +3194,7 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
         raise CheckError("shipping metadata requires only authoritative binary targets")
     requested = {("bin", HARNESS_TARGETS[name][1]) for name in harnesses}
     fixture_features = {"iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures"}
-    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check",
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check", "--keep-going",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *selection, "--message-format=json-render-diagnostics"]
     progress = CargoBuildProgress("shipping metadata", requested, test_profile=False)
@@ -4283,7 +4351,7 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
             re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*\("),
             re.compile(r"\b(?:state_test|routing_test)!\s*[({]\s*"
                        r"(?:sync|async|consensus_stack)\s+([A-Za-z_]\w*)"),
-            re.compile(r"\b(?:source_contract_test|v2_apply_test|scenario_test)!\s*[({]\s*"
+            re.compile(r"\b(?:source_contract_test|v2_apply_test|scenario_test|world_test)!\s*[({]\s*"
                        r"([A-Za-z_]\w*)"),
         )
         missing = []
@@ -4293,6 +4361,21 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
             package_root = native_package_root(root, package)
             if not package_root.is_dir():
                 raise ValueError(f"native package source is absent: {package}")
+            manifest_path = package_root / "Cargo.toml"
+            if manifest_path.is_file():
+                manifest = tomllib.loads(manifest_path.read_text())
+                if manifest.get("package", {}).get("autotests") is False:
+                    for harness in sorted({harness for harness, _ in selections}):
+                        _, target, kind, arguments = HARNESS_TARGETS[harness]
+                        if kind != "test":
+                            continue
+                        rows = [row for row in manifest.get("test", []) if row.get("name") == target]
+                        if (arguments != ["-p", package, "--test", target] or len(rows) != 1):
+                            raise ValueError(f"{harness}: Cargo autotests=false requires exactly one explicit [[test]] target {target}")
+                        path = rows[0].get("path", f"tests/{target}.rs")
+                        if (not isinstance(path, str) or Path(path).is_absolute()
+                                or ".." in Path(path).parts or not (package_root / path).is_file()):
+                            raise ValueError(f"{harness}: explicit Cargo test target source is absent or unsafe: {target}")
             wanted = {name.rsplit("::", 1)[-1] for _, name in selections}
             found = set()
             for source in package_root.rglob("*.rs"):
@@ -4784,7 +4867,7 @@ PRIORITY_CLI_TESTS = (
 PRIORITY_TORII_STAGE_LABELS = (
     "released State snapshots and exact canonical outcome authority",
     "exact transaction visibility and restricted history isolation",
-    "prepared account submission requires certified admission",
+    "current prepared and public transaction admission",
 )
 
 

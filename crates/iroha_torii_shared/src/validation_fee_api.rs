@@ -27,12 +27,6 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 pub const VALIDATION_FEE_POLICY_PROOF_VERSION_V1: u16 = 1;
 /// Current Hijiri validation-fee quote request/response layout.
 pub const VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1: u16 = 1;
-/// Stable public Norito schema name for the proof request.
-pub const VALIDATION_FEE_POLICY_PROOF_REQUEST_SCHEMA_NAME: &str =
-    "iroha.torii.v1.validation_fee.current_policy_proof.request";
-/// Stable public Norito schema name for the proof response.
-pub const VALIDATION_FEE_POLICY_PROOF_RESPONSE_SCHEMA_NAME: &str =
-    "iroha.torii.v1.validation_fee.current_policy_proof.response";
 /// Stable public JSON schema name for a locally verified policy projection.
 pub const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME: &str =
     "iroha.validation_fee.verified_policy_projection.v1";

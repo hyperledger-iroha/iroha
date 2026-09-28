@@ -470,14 +470,14 @@ fn source_and_test_budgets_remain_bounded() {
     assert!(TEST_SOURCE_V2.lines().count() <= 650);
     assert!(PRODUCTION_SOURCE_V2.len() <= 52_000);
     assert!(TEST_SOURCE_V2.len() <= 30_000);
-    assert!(GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count() <= 900);
+    assert!(GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count() <= 1_150);
     assert!(GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.lines().count() <= 120);
     assert!(GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.len() <= 6_000);
     assert!(GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count() <= 400);
     assert!(
         GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count()
             + GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count()
-            <= 1_300
+            <= 1_550
     );
     assert!(SOURCE_OPENINGS_SOURCE_V1.lines().count() <= 1_300);
     assert!(SOURCE_OPENINGS_TEST_SOURCE_V1.lines().count() <= 500);

@@ -287,7 +287,6 @@ mod tests {
         isi::{Burn, Grant, Mint, RemoveKeyValue, SetKeyValue, Transfer},
         nft::{Nft, NftId},
         permission::Permission,
-        prelude::Numeric,
         role::RoleId,
     };
     use iroha_model_base::domain::DomainId;

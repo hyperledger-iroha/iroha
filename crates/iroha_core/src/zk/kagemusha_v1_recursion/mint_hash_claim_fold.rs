@@ -12,6 +12,7 @@
 //! terminal claim is valid only after the exact typed-plan stage and job totals have been reached
 //! and the ordered terminal-digest root equals the plan commitment.
 
+#[cfg(test)]
 #[path = "mint_hash_claim_global_inventory.rs"]
 mod global_inventory;
 
@@ -3048,56 +3049,6 @@ fn validate_claim_pair_witness_v1(
         return Err("mint hash successor is not the exact paired leaf transition".to_owned());
     }
     Ok(())
-}
-
-/// Build one mutually audited recursive claim step.
-///
-/// The returned circuits are not independently authoritative. Their ordinary proof openings and
-/// the returned carried histories must still be terminally decided by the mint-authority caller.
-#[allow(clippy::too_many_lines)]
-#[expect(
-    dead_code,
-    reason = "Retain paired construction for circuit qualification; production builds one parity at a time"
-)]
-pub(crate) fn build_kagemusha_mint_hash_claim_pair_v1(
-    eq_carrier_params: &ParamsIPA<EqAffine>,
-    ep_carrier_params: &ParamsIPA<EpAffine>,
-    eq_shard_params: &ParamsIPA<EqAffine>,
-    ep_shard_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaMintHashClaimPairWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaMintHashClaimEqCircuitV1,
-        KagemushaMintHashClaimEpCircuitV1,
-        DigestV1,
-        DigestV1,
-    ),
-    String,
-> {
-    let audits = derive_kagemusha_mint_hash_claim_deferred_audits_v1(
-        eq_carrier_params,
-        ep_carrier_params,
-        eq_shard_params,
-        ep_shard_params,
-        witness.clone(),
-    )?;
-    let (eq, _) = build_kagemusha_mint_hash_claim_eq_v1(
-        eq_carrier_params,
-        ep_carrier_params,
-        eq_shard_params,
-        ep_shard_params,
-        witness.clone(),
-        &audits,
-    )?;
-    let (ep, _) = build_kagemusha_mint_hash_claim_ep_v1(
-        eq_carrier_params,
-        ep_carrier_params,
-        eq_shard_params,
-        ep_shard_params,
-        witness,
-        &audits,
-    )?;
-    Ok((eq, ep, audits.eq_digest, audits.ep_digest))
 }
 
 /// Derive both native deferred-audit witnesses without retaining either scalar circuit graph.

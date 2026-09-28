@@ -26,35 +26,42 @@
     reason = "private source-only tail publication contract awaits the live V1/Phase-23 owner"
 )]
 
+#[cfg(test)]
 use core::cell::Cell;
+#[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+use super::super::super::rns_native_public_polynomial_reader::RnsNativePublicPolynomialReaderErrorV1;
+#[cfg(test)]
 use super::super::super::{
     ZkAmsMkheErrorV1,
     direct_object_transport::{
-        ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
         ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
-        ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
-        ZkAmsMkheDirectObjectPublicationTransactionV1, ZkAmsMkheDirectObjectReadAtProviderV1,
-        ZkAmsMkheDirectObjectReadReceiptV1,
+        ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationTransactionV1,
+        ZkAmsMkheDirectObjectReadAtProviderV1,
+    },
+    rns_native_public_polynomial_reader::{
+        RnsNativePublicPolynomialDescriptorV1, RnsNativePublicPolynomialEvaluationV1,
+        RnsNativePublicPolynomialManifestV1, RnsNativePublicPolynomialReadReceiptV1,
+        RnsNativePublicPolynomialReaderV1, RnsNativePublicPolynomialRoleV1,
+    },
+    rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
+};
+use super::super::super::{
+    direct_object_transport::{
+        ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
+        ZkAmsMkheDirectObjectPublicationReceiptV1, ZkAmsMkheDirectObjectReadReceiptV1,
     },
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_IO_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
         ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1,
     },
-    rns_native_public_polynomial_reader::{
-        RnsNativePublicPolynomialDescriptorV1, RnsNativePublicPolynomialEvaluationV1,
-        RnsNativePublicPolynomialManifestV1, RnsNativePublicPolynomialReadReceiptV1,
-        RnsNativePublicPolynomialReaderErrorV1, RnsNativePublicPolynomialReaderV1,
-        RnsNativePublicPolynomialRoleV1,
-    },
-    rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
 };
+#[cfg(test)]
 use super::{
-    MaskedRelaxedRandomSourceV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
-    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1, ZkAmsT256PackedPlaintextV1,
-    ZkAmsT256PackingLayoutV1,
+    MaskedRelaxedRandomSourceV1, ZkAmsT256PackingLayoutV1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1,
     incremental_source_rns_native_basis_extension_v2::{
         RnsNativeBasisExtensionErrorV2, RnsNativeCiphertextTailAggregateChecksumV2,
@@ -65,8 +72,15 @@ use super::{
         RnsNativeTailSourcePositionV2,
     },
 };
+#[cfg(test)]
+use super::{
+    ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    ZkAmsT256PackedPlaintextV1,
+};
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
 
+#[cfg(test)]
 const VERSION_V2: u8 = 2;
 const LEGACY_LIMBS_V2: usize = 38;
 const TARGET_LIMBS_V2: usize = 40;
@@ -106,10 +120,13 @@ const TAIL_PLUS_READER_IO_BYTES_V2: u64 =
     TAIL_AUTHENTICATED_TRANSFER_BYTES_V2 + EXISTING_READER_IO_BYTES_V2;
 const TAIL_PLUS_READER_WORK_UNITS_V2: u64 = TAIL_WORK_UNITS_V2 + EXISTING_READER_WORK_UNITS_V2;
 
+#[cfg(test)]
 const TAIL_LIFECYCLE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.mkhe.rns-native.tail-publication.lifecycle";
+#[cfg(test)]
 const COMPOSITE_PROVIDER_IDENTITY_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.mkhe.rns-native.tail-publication.composite-provider";
+#[cfg(test)]
 const COMPOSITE_SNAPSHOT_IDENTITY_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.mkhe.rns-native.tail-publication.composite-snapshot";
 
@@ -239,12 +256,14 @@ const _: () = {
     assert!(!RNS_NATIVE_TAIL_RELEASE_AUTHORIZED_V2);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativeTailPublicationBlockerV2 {
     pub(super) code: &'static str,
     pub(super) required_delta: &'static str,
 }
 
+#[cfg(test)]
 pub(super) const RNS_NATIVE_TAIL_PUBLICATION_BLOCKERS_V2: &[RnsNativeTailPublicationBlockerV2] = &[
     RnsNativeTailPublicationBlockerV2 {
         code: "LIVE_CPK_KEY_CAS_OWNER",
@@ -268,6 +287,7 @@ pub(super) const RNS_NATIVE_TAIL_PUBLICATION_BLOCKERS_V2: &[RnsNativeTailPublica
     },
 ];
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeTailPublicationErrorV2 {
     Basis,
@@ -291,6 +311,7 @@ pub(super) enum RnsNativeTailPublicationErrorV2 {
 /// Closed failure vocabulary for the compiled V1/tail coordinator. Callback
 /// failures retain their exact origin even though the parent encryption core
 /// uses the narrower public MKHE error vocabulary.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeV1TailCoordinatorErrorV2 {
     Encryption(ZkAmsMkheErrorV1),
@@ -300,6 +321,7 @@ pub(super) enum RnsNativeV1TailCoordinatorErrorV2 {
     Incomplete,
 }
 
+#[cfg(test)]
 fn reader_role_v2(position: RnsNativeTailSourcePositionV2) -> RnsNativePublicPolynomialRoleV1 {
     match position.role_v2() {
         RnsNativeTailObjectRoleV2::PublicA => RnsNativePublicPolynomialRoleV1::PublicA,
@@ -309,6 +331,7 @@ fn reader_role_v2(position: RnsNativeTailSourcePositionV2) -> RnsNativePublicPol
     }
 }
 
+#[cfg(test)]
 fn tail_position_v2(
     role: RnsNativePublicPolynomialRoleV1,
     record: Option<usize>,
@@ -333,6 +356,7 @@ fn tail_position_v2(
         .map_err(|_| RnsNativeTailPublicationErrorV2::InvalidPosition)
 }
 
+#[cfg(test)]
 pub(super) fn physical_tail_position_v2(
     physical_ordinal: usize,
 ) -> Result<RnsNativeTailSourcePositionV2, RnsNativeTailPublicationErrorV2> {
@@ -357,6 +381,7 @@ pub(super) fn physical_tail_position_v2(
 }
 
 /// One exact tail object, including the move-only transport receipt.
+#[cfg(test)]
 pub(super) struct RnsNativePublishedTailObjectV2 {
     position: RnsNativeTailSourcePositionV2,
     descriptor: RnsNativePublicPolynomialDescriptorV1,
@@ -364,6 +389,7 @@ pub(super) struct RnsNativePublishedTailObjectV2 {
     publication_receipt: ZkAmsMkheDirectObjectPublicationReceiptV1,
 }
 
+#[cfg(test)]
 impl RnsNativePublishedTailObjectV2 {
     fn validate_v2(&self) -> Result<(), RnsNativeTailPublicationErrorV2> {
         let pointer = self.publication_receipt.pointer();
@@ -424,6 +450,7 @@ impl RnsNativePublishedTailObjectV2 {
     }
 }
 
+#[cfg(test)]
 fn publish_tail_object_v2<P>(
     position: RnsNativeTailSourcePositionV2,
     coefficients: &[u64],
@@ -492,6 +519,7 @@ where
     Ok(published)
 }
 
+#[cfg(test)]
 struct RnsNativeTailCasVisitorV2<'publisher, P: ?Sized> {
     publisher: &'publisher mut P,
     expected: Box<[RnsNativeTailSourcePositionV2]>,
@@ -500,6 +528,7 @@ struct RnsNativeTailCasVisitorV2<'publisher, P: ?Sized> {
     poisoned: bool,
 }
 
+#[cfg(test)]
 impl<'publisher, P: ?Sized> RnsNativeTailCasVisitorV2<'publisher, P> {
     fn new_v2(
         publisher: &'publisher mut P,
@@ -531,6 +560,7 @@ impl<'publisher, P: ?Sized> RnsNativeTailCasVisitorV2<'publisher, P> {
     }
 }
 
+#[cfg(test)]
 impl<P> RnsNativeTailCoefficientVisitorV2 for RnsNativeTailCasVisitorV2<'_, P>
 where
     P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
@@ -564,6 +594,7 @@ where
     }
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativePublishedTailRecordV2 {
     record_ordinal: u8,
     sample_index: u64,
@@ -574,12 +605,14 @@ pub(super) struct RnsNativePublishedTailRecordV2 {
 /// All fallible record-local publication storage established before V1
 /// entropy. Moving this owner into the callback creates no collection and
 /// performs no reserve operation.
+#[cfg(test)]
 struct RnsNativePreparedTailRecordPublicationV2 {
     record_ordinal: u8,
     expected: Box<[RnsNativeTailSourcePositionV2]>,
     objects: Vec<RnsNativePublishedTailObjectV2>,
 }
 
+#[cfg(test)]
 impl RnsNativePreparedTailRecordPublicationV2 {
     fn new_before_entropy_v2(record_ordinal: u8) -> Result<Self, RnsNativeTailPublicationErrorV2> {
         if usize::from(record_ordinal) >= RECORDS_V2 {
@@ -613,6 +646,7 @@ impl RnsNativePreparedTailRecordPublicationV2 {
 
 /// Stateful 4+43*4 publication run. Any fallible transition poisons before
 /// entering caller/backend code and cannot be retried.
+#[cfg(test)]
 pub(super) struct RnsNativeTailPublicationLifecycleV2<K, P>
 where
     K: ZkAmsMkheDirectObjectCasPublicationV1,
@@ -628,6 +662,7 @@ where
     poisoned: bool,
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn publish_next_record_from_v1_callback_parts_v2<P>(
     key_tail: &RnsNativePublishedCollectiveKeyTailOwnerV2,
@@ -717,6 +752,7 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 impl<K, P> RnsNativeTailPublicationLifecycleV2<K, P>
 where
     K: ZkAmsMkheDirectObjectCasPublicationV1,
@@ -815,6 +851,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn validate_physical_tail_objects_v2(
     key_objects: &[RnsNativePublishedTailObjectV2],
     records: &[RnsNativePublishedTailRecordV2],
@@ -829,6 +866,7 @@ fn validate_physical_tail_objects_v2(
     )
 }
 
+#[cfg(test)]
 fn validate_physical_tail_object_iter_v2<'object>(
     objects: impl IntoIterator<Item = &'object RnsNativePublishedTailObjectV2>,
 ) -> Result<(), RnsNativeTailPublicationErrorV2> {
@@ -890,6 +928,7 @@ fn validate_physical_tail_object_iter_v2<'object>(
     Ok(())
 }
 
+#[cfg(test)]
 fn tail_lifecycle_digest_v2(
     key_integrity_digest: [u8; 32],
     aggregate: &RnsNativeCiphertextTailAggregateChecksumV2,
@@ -905,6 +944,7 @@ fn tail_lifecycle_digest_v2(
     )
 }
 
+#[cfg(test)]
 fn tail_lifecycle_digest_from_objects_v2<'object>(
     key_integrity_digest: [u8; 32],
     aggregate: &RnsNativeCiphertextTailAggregateChecksumV2,
@@ -952,6 +992,7 @@ fn tail_lifecycle_digest_from_objects_v2<'object>(
     Ok(digest)
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeTailPublicationReceiptOwnerV2 {
     key_tail: RnsNativePublishedCollectiveKeyTailOwnerV2,
     aggregate: RnsNativeCiphertextTailAggregateChecksumV2,
@@ -963,6 +1004,7 @@ pub(super) struct RnsNativeTailPublicationReceiptOwnerV2 {
     lifecycle_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl RnsNativeTailPublicationReceiptOwnerV2 {
     fn validate_v2(&self) -> Result<(), RnsNativeTailPublicationErrorV2> {
         validate_physical_tail_objects_v2(&self.key_objects, &self.records)?;
@@ -984,12 +1026,14 @@ impl RnsNativeTailPublicationReceiptOwnerV2 {
     }
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeCompletedTailPublicationV2<K, P> {
     receipts: RnsNativeTailPublicationReceiptOwnerV2,
     key_provider: K,
     ciphertext_provider: P,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RnsNativeV1TailCallbackFailureV2 {
     ConfidentialSink(ZkAmsMkheErrorV1),
@@ -1003,6 +1047,7 @@ enum RnsNativeV1TailCallbackFailureV2 {
 /// This owner does not make Phase-23 live. A future Phase-23 transition must
 /// supply its confidential sink through the pre-entropy factory and retain its
 /// own correspondence owner beside the resulting reader bridge.
+#[cfg(test)]
 #[must_use = "the V1/tail coordinator must finish into the existing-reader bridge"]
 pub(super) struct RnsNativeV1TailPublicationCoordinatorV2<K, P>
 where
@@ -1015,6 +1060,7 @@ where
     poisoned: bool,
 }
 
+#[cfg(test)]
 impl<K, P> RnsNativeV1TailPublicationCoordinatorV2<K, P>
 where
     K: ZkAmsMkheDirectObjectCasPublicationV1 + ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -1268,20 +1314,24 @@ where
 /// whole record manifest. Only the private coordinator above can construct
 /// this owner, so the absent Phase-23 bridge cannot be replaced by pointers,
 /// copied digests, or independently recreated receipts.
+#[cfg(test)]
 pub(super) struct RnsNativeWholeV1KeyPublicationOwnerV2 {
     key_authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeWholeV1RecordPublicationOwnerV2 {
     record_ordinal: u8,
     ciphertext: ZkAmsMkheStreamingCollectiveCiphertextV1,
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeWholeV1PublicationOwnersV2 {
     key: RnsNativeWholeV1KeyPublicationOwnerV2,
     records: Box<[RnsNativeWholeV1RecordPublicationOwnerV2]>,
 }
 
+#[cfg(test)]
 impl RnsNativeWholeV1PublicationOwnersV2 {
     fn validate_v1_owner_v2(&self) -> Result<(), RnsNativeTailPublicationErrorV2> {
         if self.key.key_authority.next_sample_index() != RECORDS_V2 as u64
@@ -1319,6 +1369,7 @@ impl RnsNativeWholeV1PublicationOwnersV2 {
 /// Sole manifest/reader owner for the finalized key: the complete V1
 /// authority, its non-replayable arithmetic tail owner, and the four actual
 /// `A[38], A[39], B[38], B[39]` publication receipts.
+#[cfg(test)]
 pub(super) struct RnsNativeWholeKeyAndTailPublicationOwnerV2 {
     key_authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     key_tail: RnsNativePublishedCollectiveKeyTailOwnerV2,
@@ -1327,6 +1378,7 @@ pub(super) struct RnsNativeWholeKeyAndTailPublicationOwnerV2 {
 
 /// Sole manifest/reader owner for one finalized record: the complete V1
 /// ciphertext and its exact `C0[38], C0[39], C1[38], C1[39]` receipt owner.
+#[cfg(test)]
 pub(super) struct RnsNativeWholeRecordAndTailPublicationOwnerV2 {
     record_ordinal: u8,
     ciphertext: ZkAmsMkheStreamingCollectiveCiphertextV1,
@@ -1335,6 +1387,7 @@ pub(super) struct RnsNativeWholeRecordAndTailPublicationOwnerV2 {
 
 /// All original arithmetic, V1, and publication authorities retained in the
 /// exact key-plus-43-record pairing. No digest projection can construct this.
+#[cfg(test)]
 pub(super) struct RnsNativeWholePublicationOwnersV2 {
     key: RnsNativeWholeKeyAndTailPublicationOwnerV2,
     aggregate: RnsNativeCiphertextTailAggregateChecksumV2,
@@ -1342,6 +1395,7 @@ pub(super) struct RnsNativeWholePublicationOwnersV2 {
     lifecycle_digest: [u8; 32],
 }
 
+#[cfg(test)]
 struct RnsNativePublicationUniquenessV2 {
     pointers: BTreeSet<[u8; 32]>,
     stages: BTreeSet<([u8; 32], [u8; 32])>,
@@ -1350,6 +1404,7 @@ struct RnsNativePublicationUniquenessV2 {
     read_receipts: BTreeSet<[u8; 32]>,
 }
 
+#[cfg(test)]
 impl RnsNativePublicationUniquenessV2 {
     fn new_v2() -> Self {
         Self {
@@ -1434,6 +1489,7 @@ impl RnsNativePublicationUniquenessV2 {
     }
 }
 
+#[cfg(test)]
 impl RnsNativeWholePublicationOwnersV2 {
     fn validate_v2(&self) -> Result<(), RnsNativeTailPublicationErrorV2> {
         if self.key.key_authority.next_sample_index() != RECORDS_V2 as u64
@@ -1601,6 +1657,7 @@ impl RnsNativeWholePublicationOwnersV2 {
     }
 }
 
+#[cfg(test)]
 fn pair_whole_publication_owners_v2(
     v1: RnsNativeWholeV1PublicationOwnersV2,
     tails: RnsNativeTailPublicationReceiptOwnerV2,
@@ -1650,12 +1707,14 @@ fn pair_whole_publication_owners_v2(
     Ok(owners)
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RnsNativeCompositeRouteV2 {
     Key,
     Ciphertext,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct RnsNativeAllowlistedPointerV2 {
     pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -1663,6 +1722,7 @@ struct RnsNativeAllowlistedPointerV2 {
 }
 
 /// Move-only routed provider over the full typed 3,520-pointer inventory.
+#[cfg(test)]
 pub(super) struct RnsNativeTailCompositeProviderV2<K, P> {
     key_provider: K,
     ciphertext_provider: P,
@@ -1675,6 +1735,7 @@ pub(super) struct RnsNativeTailCompositeProviderV2<K, P> {
     composite_snapshot_identity: [u8; 32],
 }
 
+#[cfg(test)]
 impl<K, P> RnsNativeTailCompositeProviderV2<K, P>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -1837,6 +1898,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn expected_full_manifest_kind_v2(ordinal: usize) -> Option<ZkAmsMkheDirectObjectKindV1> {
     if ordinal < TARGET_LIMBS_V2 {
         Some(ZkAmsMkheDirectObjectKindV1::CollectivePublicA)
@@ -1851,6 +1913,7 @@ fn expected_full_manifest_kind_v2(ordinal: usize) -> Option<ZkAmsMkheDirectObjec
     }
 }
 
+#[cfg(test)]
 fn composite_axes_digest_v2(
     domain: &'static [u8],
     key_axis: [u8; 32],
@@ -1873,6 +1936,7 @@ fn composite_axes_digest_v2(
     hash.finalize()
 }
 
+#[cfg(test)]
 impl<K, P> ZkAmsMkheDirectObjectReadAtProviderV1 for RnsNativeTailCompositeProviderV2<K, P>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -1941,6 +2005,7 @@ where
     }
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeExistingReaderBridgeV2<K, P>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -1950,6 +2015,7 @@ where
     owners: RnsNativeWholePublicationOwnersV2,
 }
 
+#[cfg(test)]
 impl<K, P> RnsNativeCompletedTailPublicationV2<K, P>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -1974,6 +2040,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn descriptor_v2(
     owners: &RnsNativeWholePublicationOwnersV2,
     role: RnsNativePublicPolynomialRoleV1,
@@ -1999,6 +2066,7 @@ fn descriptor_v2(
     Ok(object.descriptor_v2())
 }
 
+#[cfg(test)]
 fn build_existing_manifest_v2(
     owners: &RnsNativeWholePublicationOwnersV2,
 ) -> Result<
@@ -2075,6 +2143,7 @@ fn build_existing_manifest_v2(
 }
 
 /// One owned relation schedule threaded through exactly 40*5 reader outputs.
+#[cfg(test)]
 pub(super) struct RnsNativeSingleQpcsScheduleBatchV2<K, P>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -2087,6 +2156,7 @@ where
     poisoned: bool,
 }
 
+#[cfg(test)]
 impl<K, P> RnsNativeSingleQpcsScheduleBatchV2<K, P>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
@@ -2167,6 +2237,7 @@ where
 
 /// Exact complete public read plus all 200 ordered values, the same move-only
 /// qPCS schedule, and every underlying V1/tail authority owner.
+#[cfg(test)]
 pub(super) struct RnsNativeCompletedQpcsSourceReadV2 {
     owners: RnsNativeWholePublicationOwnersV2,
     schedule: RnsNativeQpcsRelationScheduleV1,
@@ -2174,6 +2245,7 @@ pub(super) struct RnsNativeCompletedQpcsSourceReadV2 {
     read_receipt: RnsNativePublicPolynomialReadReceiptV1,
 }
 
+#[cfg(test)]
 impl RnsNativeCompletedQpcsSourceReadV2 {
     pub(super) const fn schedule_v2(&self) -> &RnsNativeQpcsRelationScheduleV1 {
         &self.schedule
@@ -2190,10 +2262,12 @@ impl RnsNativeCompletedQpcsSourceReadV2 {
 
 /// Existing-reader failures are intentionally collapsed at this bridge; the
 /// consumed authority owners and providers are destroyed together.
+#[cfg(test)]
 fn _reader_error_is_closed_v2(_: RnsNativePublicPolynomialReaderErrorV1) {}
 
 #[path = "incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2.rs"]
 mod pretranscript_public_statement_v2;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use pretranscript_public_statement_v2::{
     RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,
 };

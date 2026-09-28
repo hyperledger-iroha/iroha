@@ -914,8 +914,10 @@ impl PreparedV1 {
         self.fee_quote
             .validate_for_signed_payload(transaction.payload())
             .map_err(|error| eyre!(error))?;
-        require(transaction.admission_intent() == iroha_data_model::transaction::signed::TransactionAdmissionIntent::QueuePlanSynced,
-            "deployment transaction is not QueuePlan-synchronized")?;
+        require(
+            transaction.admission_intent() == TransactionAdmissionIntent::Ordinary,
+            "deployment transaction must use ordinary current-consensus admission",
+        )?;
         require(
             transaction.metadata().is_empty(),
             "retained deployment carries unbound metadata",
@@ -1833,7 +1835,7 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 Executable::from(instructions.clone()),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-                TransactionAdmissionIntent::QueuePlanSynced,
+                TransactionAdmissionIntent::Ordinary,
             )
             .wrap_err_with(|| {
                 format!("deployment phase {phase}: quote and sign exact transaction")
@@ -3366,6 +3368,10 @@ mod tests {
         }
     }
     fn prepared(plan: &PlanV1) -> PreparedV1 {
+        prepared_with_admission(plan, TransactionAdmissionIntent::Ordinary)
+    }
+
+    fn prepared_with_admission(plan: &PlanV1, admission: TransactionAdmissionIntent) -> PreparedV1 {
         let instructions: Vec<InstructionBox> = vec![
             SetParameter::new(Parameter::Custom(
                 plan.catalog_transition
@@ -3389,7 +3395,7 @@ mod tests {
             intent.clone(),
         )
         .with_instructions(instructions.clone())
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .with_admission_intent(admission)
         .try_sign(key().private_key())
         .unwrap();
         let quote = FeeQuoteResponse {
@@ -3555,6 +3561,22 @@ mod tests {
         );
         assert!(value.verify(&wrong, "catalog").is_err());
         assert!(value.verify(&plan, "bootstrap").is_err());
+    }
+    #[test]
+    fn retained_phase_requires_executable_current_admission() {
+        let plan = fixture_plan();
+        let current = prepared(&plan).verify(&plan, "catalog").unwrap();
+        assert_eq!(
+            current.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
+        let retired = prepared_with_admission(&plan, TransactionAdmissionIntent::QueuePlanSynced);
+        let error = retired.verify(&plan, "catalog").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("ordinary current-consensus admission")
+        );
     }
     #[test]
     fn namespace_plan_requires_two_bounded_paid_creates() {

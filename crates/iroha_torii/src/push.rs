@@ -123,7 +123,7 @@ impl Platform {
         }
     }
 }
-/// Request payload for `POST /v1/notify/devices`.
+/// Request payload for `POST /v1/notify/devices` and `DELETE /v1/notify/devices`.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::push::RegisterDeviceRequest")]
 #[derive(
@@ -141,14 +141,10 @@ pub struct RegisterDeviceRequest {
     pub token: String,
     pub topics: Option<Vec<String>>,
 }
-/// Request payload for `DELETE /v1/notify/devices`.
-pub type UnregisterDeviceRequest = RegisterDeviceRequest;
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct RegisteredDevice {
     pub account_id: String,
-    pub platform: Platform,
-    pub topics: Vec<String>,
-    pub token_fingerprint: String,
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::push::PushActivityPayload")]
@@ -212,6 +208,7 @@ pub enum ProviderCredentials {
 /// Single provider delivery attempt.
 #[derive(Clone, Debug)]
 pub struct PushDelivery {
+    #[cfg(test)]
     pub platform: Platform,
     pub token: String,
     pub payload: PushActivityPayload,
@@ -476,7 +473,7 @@ impl PushBridge {
         self.devices.insert(token_fingerprint, record);
         Ok(())
     }
-    pub fn unregister_device(&self, request: UnregisterDeviceRequest) -> Result<(), PushError> {
+    pub fn unregister_device(&self, request: RegisterDeviceRequest) -> Result<(), PushError> {
         if !self.config.enabled {
             return Err(PushError::Disabled);
         }
@@ -500,6 +497,7 @@ impl PushBridge {
             remove_file_if_exists_with_state,
         )
     }
+    #[cfg(test)]
     pub(crate) fn enqueue_activity(
         &self,
         account: &AccountId,
@@ -522,6 +520,7 @@ impl PushBridge {
             role,
         )
     }
+    #[cfg(test)]
     fn enqueue_activity_locked(
         &self,
         account: &AccountId,
@@ -964,6 +963,7 @@ impl PushBridge {
             }
         };
         let delivery = PushDelivery {
+            #[cfg(test)]
             platform,
             token: device.token,
             payload: job.payload.clone(),
@@ -1393,12 +1393,10 @@ struct DeliveryJob {
     created_at_ms: u64,
     updated_at_ms: u64,
 }
+#[cfg(test)]
 fn registered_device_from_record(record: &DeviceRecord) -> RegisteredDevice {
     RegisteredDevice {
         account_id: record.account_id.clone(),
-        platform: Platform::from_stored(&record.platform).unwrap_or(Platform::Fcm),
-        topics: record.topics.clone(),
-        token_fingerprint: record.token_fingerprint.clone(),
     }
 }
 fn canonical_account(account_id: &str) -> Result<AccountId, PushError> {
@@ -2427,7 +2425,6 @@ fn classify_apns_status_body(status: HttpStatusCode, body: &str) -> DispatchOutc
 mod tests {
     use super::*;
     use crate::data_dir::OverrideGuard;
-    use base64::Engine as _;
     use tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},
         net::TcpListener,

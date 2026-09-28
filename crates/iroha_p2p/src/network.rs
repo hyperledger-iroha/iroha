@@ -106,18 +106,6 @@ const HANDSHAKE_UPDATE_CHANNEL_CAPACITY: usize = 1;
 fn control_update_channel<T>() -> (ControlUpdateSender<T>, ControlUpdateReceiver<T>) {
     watch::channel(None)
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ReconnectGeneration(u64);
-impl ReconnectGeneration {
-    fn advance(&mut self) {
-        self.0 = self.0.wrapping_add(1);
-    }
-}
-#[derive(Clone, Debug)]
-struct ConsensusCapsSnapshot {
-    caps: crate::ConsensusHandshakeCaps,
-    reconnect_generation: ReconnectGeneration,
-}
 /// Latest source-authority control snapshots awaiting one atomic actor commit.
 #[derive(Clone, Debug, Default)]
 struct PendingReplySourceAuthority {
@@ -125,7 +113,6 @@ struct PendingReplySourceAuthority {
     validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
     trusted: Option<UpdateTrustedPeers>,
     acl: Option<ValidatedAclUpdate>,
-    consensus_caps: Option<ConsensusCapsSnapshot>,
 }
 impl PendingReplySourceAuthority {
     fn is_empty(&self) -> bool {
@@ -133,7 +120,6 @@ impl PendingReplySourceAuthority {
             && self.validator_dial_roster.is_none()
             && self.trusted.is_none()
             && self.acl.is_none()
-            && self.consensus_caps.is_none()
     }
 }
 /// Retained validator-dial authority updates.
@@ -274,54 +260,6 @@ impl ValidatorDialScheduler {
             }
         }
     }
-}
-impl ConsensusCapsSnapshot {
-    fn take_reconnect_request(&self, applied_generation: &mut ReconnectGeneration) -> bool {
-        if self.reconnect_generation == *applied_generation {
-            return false;
-        }
-        *applied_generation = self.reconnect_generation;
-        true
-    }
-}
-#[derive(Clone, Debug)]
-struct ConsensusCapsUpdateSender {
-    sender: ControlUpdateSender<ConsensusCapsSnapshot>,
-    reconnect_generation: Arc<Mutex<ReconnectGeneration>>,
-}
-impl ConsensusCapsUpdateSender {
-    fn send(&self, caps: crate::ConsensusHandshakeCaps, reconnect: bool) {
-        // Serialize generation assignment with publication so a later caps-only
-        // snapshot cannot erase an unobserved reconnect request.
-        let mut generation = self
-            .reconnect_generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if reconnect {
-            generation.advance();
-        }
-        send_control_update(
-            &self.sender,
-            "consensus caps",
-            ConsensusCapsSnapshot {
-                caps,
-                reconnect_generation: *generation,
-            },
-        );
-    }
-}
-fn consensus_caps_update_channel() -> (
-    ConsensusCapsUpdateSender,
-    ControlUpdateReceiver<ConsensusCapsSnapshot>,
-) {
-    let (sender, receiver) = control_update_channel();
-    (
-        ConsensusCapsUpdateSender {
-            sender,
-            reconnect_generation: Arc::new(Mutex::new(ReconnectGeneration::default())),
-        },
-        receiver,
-    )
 }
 #[cfg(test)]
 fn bind_reusable_tcp_listener(addrs: &[std::net::SocketAddr]) -> io::Result<TcpListener> {
@@ -512,14 +450,6 @@ static CAP_VIOL_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_HEALTH: AtomicU64 = AtomicU64::new(0);
 static CAP_VIOL_OTHER: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_CONSENSUS: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_CONTROL: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_BLOCK_SYNC: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_TX_GOSSIP: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_PEER_GOSSIP: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_HEALTH: AtomicU64 = AtomicU64::new(0);
-static POST_OVERFLOWS_OTHER: AtomicU64 = AtomicU64::new(0);
 // Per-priority breakdown (High/Low) per topic
 static POST_OVERFLOWS_HI_CONSENSUS: AtomicU64 = AtomicU64::new(0);
 static POST_OVERFLOWS_HI_CONSENSUS_SAFETY: AtomicU64 = AtomicU64::new(0);
@@ -669,10 +599,6 @@ impl<T: Encode> RelayMessage<T> {
         let mut forwarded = self.clone();
         forwarded.ttl = ttl;
         forwarded
-    }
-    #[allow(dead_code)]
-    fn decremented_ttl(&self) -> Option<u8> {
-        self.ttl.checked_sub(1)
     }
 }
 fn ensure_relay_node_identity(origin: &PeerId) -> Result<(), iroha_crypto::error::Error> {
@@ -2846,10 +2772,6 @@ impl NetworkReplyRoutes {
         prefix.extend_from_slice(&source_capacity);
         prefix.extend_from_slice(&semantic_target);
         prefix.into()
-    }
-    /// Consume the set into independent source attempts in stable local order.
-    pub fn into_routes(self) -> impl Iterator<Item = NetworkReplyRoute> {
-        self.attempts.into_values()
     }
     /// Drop connection tenures which are retired in one bounded snapshot.
     ///
@@ -5693,30 +5615,6 @@ fn inc_trust_gossip_skipped(direction: &'static str, reason: &'static str) {
     TRUST_GOSSIP_SKIPPED_CAP_OFF.fetch_add(1, Relaxed);
     iroha_logger::trace!(direction, reason, "trust gossip message skipped");
 }
-fn inc_post_overflow_for(topic: message::Topic) {
-    match topic {
-        message::Topic::ConsensusSafety => {
-            POST_OVERFLOWS_CONSENSUS_SAFETY.fetch_add(1, Ordering::Relaxed)
-        }
-        message::Topic::Consensus | message::Topic::ConsensusPayload => {
-            POST_OVERFLOWS_CONSENSUS.fetch_add(1, Ordering::Relaxed)
-        }
-        message::Topic::ConsensusChunk | message::Topic::BlockSync => {
-            POST_OVERFLOWS_BLOCK_SYNC.fetch_add(1, Ordering::Relaxed)
-        }
-        message::Topic::Control => POST_OVERFLOWS_CONTROL.fetch_add(1, Ordering::Relaxed),
-        message::Topic::TxGossip | message::Topic::TxGossipRestricted => {
-            POST_OVERFLOWS_TX_GOSSIP.fetch_add(1, Ordering::Relaxed)
-        }
-        message::Topic::PeerGossip | message::Topic::TrustGossip => {
-            POST_OVERFLOWS_PEER_GOSSIP.fetch_add(1, Ordering::Relaxed)
-        }
-        message::Topic::Health => POST_OVERFLOWS_HEALTH.fetch_add(1, Ordering::Relaxed),
-        message::Topic::Connect | message::Topic::Other => {
-            POST_OVERFLOWS_OTHER.fetch_add(1, Ordering::Relaxed)
-        }
-    };
-}
 fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
     match (high, topic) {
         (true, message::Topic::ConsensusSafety) => {
@@ -5765,37 +5663,11 @@ fn inc_post_overflow_for_prio(topic: message::Topic, high: bool) {
         }
     };
 }
-/// Count of post channel overflows for topic Consensus.
-pub fn post_overflow_consensus_count() -> u64 {
-    POST_OVERFLOWS_CONSENSUS.load(Ordering::Relaxed)
-}
-/// Count of post channel overflows for authoritative consensus safety traffic.
-pub fn post_overflow_consensus_safety_count() -> u64 {
-    POST_OVERFLOWS_CONSENSUS_SAFETY.load(Ordering::Relaxed)
-}
-/// Count of post channel overflows for topic Control.
-pub fn post_overflow_control_count() -> u64 {
-    POST_OVERFLOWS_CONTROL.load(Ordering::Relaxed)
-}
-/// Count of post channel overflows for topic `BlockSync`.
-pub fn post_overflow_block_sync_count() -> u64 {
-    POST_OVERFLOWS_BLOCK_SYNC.load(Ordering::Relaxed)
-}
-/// Count of post channel overflows for topic `TxGossip`.
+/// Count of post channel overflows for topic `TxGossip` across both priorities.
 pub fn post_overflow_tx_gossip_count() -> u64 {
-    POST_OVERFLOWS_TX_GOSSIP.load(Ordering::Relaxed)
-}
-/// Count of post channel overflows for topic `PeerGossip`.
-pub fn post_overflow_peer_gossip_count() -> u64 {
-    POST_OVERFLOWS_PEER_GOSSIP.load(Ordering::Relaxed)
-}
-/// Count of post channel overflows for topic Health.
-pub fn post_overflow_health_count() -> u64 {
-    POST_OVERFLOWS_HEALTH.load(Ordering::Relaxed)
-}
-/// Count of post channel overflows for topic Other.
-pub fn post_overflow_other_count() -> u64 {
-    POST_OVERFLOWS_OTHER.load(Ordering::Relaxed)
+    POST_OVERFLOWS_HI_TX_GOSSIP
+        .load(Ordering::Relaxed)
+        .saturating_add(POST_OVERFLOWS_LO_TX_GOSSIP.load(Ordering::Relaxed))
 }
 pub(crate) fn record_inbound_cap_violation(topic: message::Topic) {
     match topic {
@@ -5923,7 +5795,6 @@ pub fn inc_post_overflow_for_test(priority_high: bool, topic: message::Topic, n:
     use std::sync::atomic::Ordering::Relaxed;
     POST_OVERFLOWS.fetch_add(n, Relaxed);
     for _ in 0..n {
-        inc_post_overflow_for(topic);
         inc_post_overflow_for_prio(topic, priority_high);
     }
 }
@@ -6334,8 +6205,6 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     update_acl_sender: ControlUpdateSender<message::UpdateAcl>,
     /// Exact [`UpdateHandshake`] request sender.
     update_handshake_sender: mpsc::Sender<message::UpdateHandshake>,
-    /// Latest consensus-capabilities snapshot sender.
-    update_consensus_caps_sender: ConsensusCapsUpdateSender,
     /// Sender of high priority messages
     network_message_high_sender: net_channel::Sender<AdmittedNetworkMessage<T>>,
     /// Sender of authoritative-consensus safety messages.
@@ -6388,7 +6257,6 @@ impl<T: Pload, E: Enc> Clone for NetworkBaseHandle<T, E> {
             update_trusted_peers_sender: self.update_trusted_peers_sender.clone(),
             update_acl_sender: self.update_acl_sender.clone(),
             update_handshake_sender: self.update_handshake_sender.clone(),
-            update_consensus_caps_sender: self.update_consensus_caps_sender.clone(),
             network_message_high_sender: self.network_message_high_sender.clone(),
             network_message_safety_sender: self.network_message_safety_sender.clone(),
             network_message_progress_sender: self.network_message_progress_sender.clone(),
@@ -6911,7 +6779,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) =
             mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_safety_sender, _network_message_safety_rx) =
@@ -6934,7 +6801,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         drop(update_trusted_rx);
         drop(update_acl_rx);
         drop(update_handshake_rx);
-        drop(update_consensus_caps_rx);
         Self {
             subscribe_to_peers_messages_sender: subscribe_tx,
             online_peers_receiver,
@@ -6951,7 +6817,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             update_trusted_peers_sender: update_trusted_tx,
             update_acl_sender: update_acl_tx,
             update_handshake_sender: update_handshake_tx,
-            update_consensus_caps_sender: update_consensus_caps_tx,
             network_message_high_sender,
             network_message_safety_sender,
             network_message_progress_sender,
@@ -7560,8 +7425,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         let (update_acl_sender, update_acl_receiver) = control_update_channel();
         let (update_handshake_sender, update_handshake_receiver) =
             mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
-        let (update_consensus_caps_sender, update_consensus_caps_receiver) =
-            consensus_caps_update_channel();
         // Bounded queue capacities are supplied from node configuration so the
         // default build enforces backpressure without relying on feature flags.
         let (network_message_high_sender, network_message_high_receiver) =
@@ -7755,7 +7618,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             update_trusted_peers_receiver,
             update_acl_receiver,
             update_handshake_receiver,
-            update_consensus_caps_receiver,
             network_message_high_receiver,
             network_message_safety_receiver,
             network_message_progress_receiver,
@@ -7783,7 +7645,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             connect_startup_delay_until,
             network_id,
             consensus_caps,
-            consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps,
             crypto_caps,
             peer_capabilities: HashMap::new(),
@@ -7892,7 +7753,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 update_trusted_peers_sender,
                 update_acl_sender,
                 update_handshake_sender,
-                update_consensus_caps_sender,
                 // Use the pre-cloned sender since the original was moved into the actor state
                 network_message_high_sender,
                 network_message_safety_sender,
@@ -8983,18 +8843,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 "network actor closed before acknowledging SoraNet handshake update".to_owned(),
             )
         })?
-    }
-    /// Update consensus handshake capabilities at runtime and optionally reconnect peers.
-    ///
-    /// A reconnect request remains pending across newer caps-only snapshots until
-    /// the network actor observes it.
-    pub fn update_consensus_caps(
-        &self,
-        caps: crate::ConsensusHandshakeCaps,
-        drop_existing_peers: bool,
-    ) {
-        self.update_consensus_caps_sender
-            .send(caps, drop_existing_peers);
     }
     /// Receive latest update of [`OnlinePeers`]
     pub fn online_peers<P>(&self, f: impl FnOnce(&OnlinePeers) -> P) -> P {
@@ -10943,9 +10791,7 @@ mod accept_stream_tests {
         let base_lo_cons = super::post_overflow_consensus_low_count();
         // Simulate two overflows: one High/Consensus, one Low/Consensus
         super::POST_OVERFLOWS.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
-        super::inc_post_overflow_for(Consensus);
         super::inc_post_overflow_for_prio(Consensus, true);
-        super::inc_post_overflow_for(Consensus);
         super::inc_post_overflow_for_prio(Consensus, false);
         assert!(
             super::post_overflow_count() >= base_total + 2,
@@ -10958,6 +10804,17 @@ mod accept_stream_tests {
         assert!(
             super::post_overflow_consensus_low_count() >= base_lo_cons + 1,
             "low-priority consensus overflow counter should reflect this test's increment"
+        );
+    }
+    #[test]
+    fn tx_gossip_overflow_count_sums_both_priorities() {
+        use super::message::Topic::*;
+        let base = super::post_overflow_tx_gossip_count();
+        super::inc_post_overflow_for_prio(TxGossip, true);
+        super::inc_post_overflow_for_prio(TxGossipRestricted, false);
+        assert!(
+            super::post_overflow_tx_gossip_count() >= base + 2,
+            "tx-gossip overflow total must include high and low priority overflows"
         );
     }
     #[test]
@@ -10999,11 +10856,9 @@ mod accept_stream_tests {
         for &t in &topics {
             // High increment
             super::POST_OVERFLOWS.fetch_add(1, Relaxed);
-            super::inc_post_overflow_for(t);
             super::inc_post_overflow_for_prio(t, true);
             // Low increment
             super::POST_OVERFLOWS.fetch_add(1, Relaxed);
-            super::inc_post_overflow_for(t);
             super::inc_post_overflow_for_prio(t, false);
         }
         // Assert total grew by at least 16 (allowing for concurrent increments in other tests)
@@ -11973,8 +11828,6 @@ struct NetworkBase<T: Pload, E: Enc> {
     update_acl_receiver: ControlUpdateReceiver<message::UpdateAcl>,
     /// Exact handshake update request receiver.
     update_handshake_receiver: mpsc::Receiver<message::UpdateHandshake>,
-    /// Latest consensus-handshake-capabilities snapshot receiver.
-    update_consensus_caps_receiver: ControlUpdateReceiver<ConsensusCapsSnapshot>,
     /// Current available connection id
     current_conn_id: ConnectionId,
     /// Last accepted logical topology before relay-route projection.
@@ -11996,8 +11849,6 @@ struct NetworkBase<T: Pload, E: Enc> {
     network_id: NetworkId,
     /// Optional consensus handshake capabilities for gating connections.
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
-    /// Most recently applied reconnect request generation.
-    consensus_reconnect_generation: ReconnectGeneration,
     /// Optional confidential handshake capabilities for gating connections.
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     /// Optional crypto handshake capabilities for gating connections.
@@ -12834,11 +12685,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 Some(handshake) = self.update_handshake_receiver.recv() => {
                     self.handle_soranet_handshake_update(handshake);
                 }
-                Some(consensus_caps) = receive_control_update(
-                    &mut self.update_consensus_caps_receiver,
-                ) => {
-                    self.set_reply_source_consensus_caps(consensus_caps);
-                }
                 // Frequency of update is relatively low, so it won't block other tasks from execution
                 _ = update_topology_interval.tick() => {
                     if self.retry_pending_reply_source_authority() {
@@ -13174,9 +13020,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if let Some(acl) = pending.acl {
             self.apply_reply_source_acl(acl);
         }
-        if let Some(consensus_caps) = pending.consensus_caps {
-            self.apply_reply_source_consensus_caps(consensus_caps);
-        }
         if let Some(trusted) = pending.trusted {
             self.apply_reply_source_trusted(trusted);
         }
@@ -13209,11 +13052,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let prior = self.pending_reply_source_authority.clone();
         self.pending_reply_source_authority.acl = Some(acl);
         self.accept_staged_reply_source_authority(prior, "ACL update")
-    }
-    fn set_reply_source_consensus_caps(&mut self, consensus_caps: ConsensusCapsSnapshot) {
-        let prior = self.pending_reply_source_authority.clone();
-        self.pending_reply_source_authority.consensus_caps = Some(consensus_caps);
-        self.accept_staged_reply_source_authority(prior, "consensus capability update");
     }
     fn set_reply_source_trusted(&mut self, trusted: UpdateTrustedPeers) {
         let prior = self.pending_reply_source_authority.clone();
@@ -13296,22 +13134,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .is_some_and(|peer_id| !self.relay_trusted_peers.contains(peer_id))
         {
             self.relay_hub_peer = None;
-        }
-    }
-    fn apply_reply_source_consensus_caps(&mut self, consensus_caps: ConsensusCapsSnapshot) {
-        let reconnect =
-            consensus_caps.take_reconnect_request(&mut self.consensus_reconnect_generation);
-        iroha_logger::info!(
-            mode_tag = consensus_caps.caps.mode.tag(),
-            drop_existing = reconnect,
-            "Updating consensus handshake capabilities at runtime"
-        );
-        self.consensus_caps = Some(consensus_caps.caps);
-        if reconnect {
-            let peers: Vec<_> = self.peers.keys().cloned().collect();
-            for peer_id in peers {
-                self.disconnect_peer(&peer_id);
-            }
         }
     }
     fn apply_reply_source_trusted(&mut self, UpdateTrustedPeers(trusted): UpdateTrustedPeers) {
@@ -14099,7 +13921,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 let closed = matches!(&error, RecoverPostError::Closed(_));
                 if !closed {
                     POST_OVERFLOWS.fetch_add(1, Ordering::Relaxed);
-                    inc_post_overflow_for(topic);
                     inc_post_overflow_for_prio(topic, is_high);
                 }
                 drop(error.into_message());
@@ -14269,7 +14090,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             }
             Err(RecoverPostError::Full(frame)) => {
                 POST_OVERFLOWS.fetch_add(1, Ordering::Relaxed);
-                inc_post_overflow_for(topic);
                 inc_post_overflow_for_prio(topic, is_high);
                 if self.disconnect_on_post_overflow {
                     let peer = Peer::new(p2p_addr.clone(), peer_id.clone());
@@ -19451,8 +19271,6 @@ mod tests {
         let (_update_acl_tx, update_acl_rx) = control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) =
             mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
-        let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (peer_message_safety_sender, peer_message_safety_receiver) =
@@ -19538,7 +19356,6 @@ mod tests {
                 update_trusted_peers_receiver,
                 update_acl_receiver: update_acl_rx,
                 update_handshake_receiver: update_handshake_rx,
-                update_consensus_caps_receiver,
                 network_message_high_receiver: network_message_high_rx,
                 network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
                 network_message_progress_receiver: super::net_channel::channel_with_capacity(1).1,
@@ -19568,7 +19385,6 @@ mod tests {
                 current_peers_addresses: Vec::new(),
                 network_id,
                 consensus_caps: None,
-                consensus_reconnect_generation: ReconnectGeneration::default(),
                 confidential_caps: None,
                 crypto_caps: None,
                 peer_capabilities: HashMap::new(),
@@ -27590,14 +27406,6 @@ pub mod message {
         /// Exact response for this proposed runtime update.
         pub(crate) respond_to: oneshot::Sender<Result<(), Error>>,
     }
-    /// Update consensus handshake capabilities and optionally reconnect peers.
-    #[derive(Clone, Copy, Debug)]
-    pub struct UpdateConsensusCaps {
-        /// New consensus handshake capabilities to advertise and require.
-        pub caps: crate::ConsensusHandshakeCaps,
-        /// Whether currently connected peers should be dropped and reconnected.
-        pub drop_existing_peers: bool,
-    }
     /// The message to be sent to the other [`Peer`].
     #[derive(Clone, Debug)]
     pub struct Post<T> {
@@ -27627,7 +27435,6 @@ struct RefPeer<T: Pload> {
     handle: PeerHandle<T>,
     conn_id: ConnectionId,
     p2p_addr: SocketAddr,
-    #[allow(dead_code)]
     relay_role: RelayRole,
     trust_gossip: bool,
 }
@@ -27664,7 +27471,6 @@ struct PeerReputationBook {
     inner: HashMap<PeerId, PeerReputation>,
 }
 impl PeerReputationBook {
-    #[allow(dead_code)]
     fn trusted_peers(&self) -> Vec<PeerId> {
         self.inner
             .iter()
@@ -27712,7 +27518,7 @@ impl PeerReputationBook {
     fn score(&self, peer: &PeerId) -> i32 {
         self.inner.get(peer).map_or(0, |rep| rep.score)
     }
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn snapshot(&self) -> HashMap<PeerId, PeerReputation> {
         self.inner.clone()
     }

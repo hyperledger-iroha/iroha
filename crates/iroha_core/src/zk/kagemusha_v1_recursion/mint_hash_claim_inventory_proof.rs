@@ -33,13 +33,6 @@ where
 /// semantic commitment reconstruction. Dropping this result or deciding only its IPA opening
 /// cannot substantiate the inventory's curve equations or its cross-parity carrier equality.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "inventory root is not yet selected by the release"
-    )
-)]
 pub(super) struct KagemushaClaimInventoryDeferredProofV1<'chip, C>
 where
     C: CurveAffineExt,
@@ -64,13 +57,6 @@ where
 ///
 /// TODO: Join both verified inventories, discharge the complete reciprocal equation graph and
 /// the returned IPA openings, and authenticate every slice/join before selecting a release.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "inventory root is not yet selected by the release"
-    )
-)]
 pub(super) fn verify_kagemusha_claim_inventory_proof_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     pins: &KagemushaClaimInventoryVerifierPinsV1<'_, C>,

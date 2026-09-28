@@ -27,7 +27,6 @@ mod model {
         Getters,
         crate :: DeriveJsonSerialize,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[display("{name}({payload})")]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::permission::model::Permission")]

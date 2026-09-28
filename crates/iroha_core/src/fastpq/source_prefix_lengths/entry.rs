@@ -180,5 +180,8 @@ where
     Ok(sizer.usage())
 }
 
+// This file is loaded through `#[path]`, so a bare `mod tests;` would resolve to
+// the parent's `source_prefix_lengths/tests.rs` instead of `entry/tests.rs`.
 #[cfg(test)]
+#[path = "entry/tests.rs"]
 mod tests;

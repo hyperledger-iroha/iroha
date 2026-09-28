@@ -19,24 +19,18 @@
 //! 32 MiB ceilings. Reconstruction authenticates the manifest and every statement axis before
 //! hashing or decoding either large object. A private tiny-profile codec exists only for exhaustive
 //! algebra tests and is not part of the public transport.
+#[cfg(test)]
+use super::cpk_relation::prepare_active_collective_public_a_v1;
+#[cfg(test)]
 use super::{
-    ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
-    MaskedRelaxedRandomSourceV1, PlaintextModulus, RnsPolynomial, WideUint, ZkAmsMkheErrorV1,
-    ZkAmsMkhePartyIdV1,
+    ArtifactAuthentication, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
+    MaskedRelaxedRandomSourceV1, PlaintextModulus, RnsPolynomial, WideUint, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
-    checked_rns_polynomial_bytes,
-    cpk_relation::prepare_active_collective_public_a_v1,
-    manifest::{
-        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
-        release_profile_v1, zk_ams_mkhe_noise_certificate_v1, zk_ams_mkhe_release_manifest_v1,
-    },
+    manifest::zk_ams_mkhe_release_manifest_v1,
     modulus_product,
     persistent_decryption_equality::PersistentDecryptionProofBindingV1,
     sample_below,
-    wire::{
-        ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZkAmsMkheAuthenticationWireV1,
-        ZkAmsMkheGovernedRosterWireV1, derive_wire_length_certificate_v1, governed_roster_digest,
-    },
+    wire::{ZkAmsMkheAuthenticationWireV1, ZkAmsMkheGovernedRosterWireV1, governed_roster_digest},
     zk_ams_mkhe_security_certificate_v1,
 };
 #[cfg(test)]
@@ -47,22 +41,33 @@ use super::{
     ZkAmsMkhePersistentDecryptionPartyUseV1, ZkAmsMkhePersistentDecryptionVerificationContextV1,
     checked_coefficient_work, checked_ring_multiplication_work,
 };
+use super::{
+    BgvProfile, ZkAmsMkheErrorV1, checked_rns_polynomial_bytes,
+    manifest::{
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
+        release_profile_v1, zk_ams_mkhe_noise_certificate_v1,
+    },
+    wire::{ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, derive_wire_length_certificate_v1},
+};
 #[cfg(test)]
 use super::{
     collective::COLLECTIVE_CIPHERTEXT_DOMAIN_V1,
     wire::{ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheRnsPolynomialWireV1},
 };
+use crate::vega::sponge::keccak256;
 #[cfg(test)]
 use crate::vega::sponge::shake256;
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::try_exact_capacity_vec_v1,
-    vega::sponge::{Keccak256, Shake256Reader, keccak256},
+    vega::sponge::{Keccak256, Shake256Reader},
 };
 use core::{cmp::Ordering, mem::size_of};
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
+#[cfg(test)]
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";
 // This private codec exists solely to exercise the complete tiny-profile path
 // without allowing its variable dimensions to be confused with the production
@@ -81,6 +86,7 @@ const DECRYPTION_SPLIT_MANIFEST_AUTH_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.authenticated-decryption-split-manifest";
 const DECRYPTION_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.decryption-share-set";
 const DECRYPTION_RESOURCE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.decryption-resource-evidence";
+#[cfg(test)]
 const DECRYPTION_KEY_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.decryption-key-context";
 const DECRYPTION_RELEASE_CHALLENGE_WEIGHT_V1: usize = 20;
 pub(super) const WIDE_RELATION_MASK_SLACK_LOG2_V1: u32 = 24;
@@ -475,18 +481,21 @@ fn decryption_resource_evidence_digest(
     frame.extend_from_slice(&(DECRYPTION_MAX_WIDE_BITS_V1 as u32).to_be_bytes());
     keccak256(&frame)
 }
+#[cfg(test)]
 fn clear_secret_bytes_v1(bytes: &mut [u8]) {
     let bytes = core::hint::black_box(bytes);
     bytes.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *bytes);
 }
+#[cfg(test)]
 fn clear_secret_i64_slice_v1(values: &mut [i64]) {
     let values = core::hint::black_box(values);
     values.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *values);
 }
+#[cfg(test)]
 fn clear_secret_u64_slice_v1(values: &mut [u64]) {
     let values = core::hint::black_box(values);
     values.fill(0);
@@ -515,7 +524,9 @@ pub(super) fn decryption_transient_zeroized_drop_count_v1() -> usize {
     DECRYPTION_TRANSIENT_ZEROIZED_DROP_COUNT_V1.with(std::cell::Cell::get)
 }
 /// Fixed random bytes erased on success, error, or unwind.
+#[cfg(test)]
 struct ZeroizingFixedBytesV1<const N: usize>([u8; N]);
+#[cfg(test)]
 impl<const N: usize> ZeroizingFixedBytesV1<N> {
     const fn zeroed() -> Self {
         Self([0; N])
@@ -527,6 +538,7 @@ impl<const N: usize> ZeroizingFixedBytesV1<N> {
         &mut self.0
     }
 }
+#[cfg(test)]
 impl<const N: usize> Drop for ZeroizingFixedBytesV1<N> {
     fn drop(&mut self) {
         clear_secret_bytes_v1(&mut self.0);
@@ -535,7 +547,9 @@ impl<const N: usize> Drop for ZeroizingFixedBytesV1<N> {
     }
 }
 /// Fallibly allocated random bytes erased on success, error, or unwind.
+#[cfg(test)]
 struct ZeroizingByteVectorV1(Vec<u8>);
+#[cfg(test)]
 impl ZeroizingByteVectorV1 {
     fn zeroed(len: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut bytes = try_exact_capacity_vec_v1(len)
@@ -550,6 +564,7 @@ impl ZeroizingByteVectorV1 {
         &mut self.0
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingByteVectorV1 {
     fn drop(&mut self) {
         clear_secret_bytes_v1(&mut self.0);
@@ -558,7 +573,9 @@ impl Drop for ZeroizingByteVectorV1 {
     }
 }
 /// Signed small-mask coefficients erased on every exit path.
+#[cfg(test)]
 struct ZeroizingI64VectorV1(Vec<i64>);
+#[cfg(test)]
 impl ZeroizingI64VectorV1 {
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let values = try_exact_capacity_vec_v1(capacity)
@@ -580,6 +597,7 @@ impl ZeroizingI64VectorV1 {
         self.0.iter()
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingI64VectorV1 {
     fn drop(&mut self) {
         clear_secret_i64_slice_v1(&mut self.0);
@@ -634,6 +652,7 @@ impl WideMagnitudeV1 {
         }
         Ok(value)
     }
+    #[cfg(test)]
     pub(super) fn is_zero(&self) -> bool {
         self.limbs.iter().all(|limb| *limb == 0)
     }
@@ -645,6 +664,7 @@ impl WideMagnitudeV1 {
                 index * 64 + (64 - self.limbs[index].leading_zeros() as usize)
             })
     }
+    #[cfg(test)]
     pub(super) fn checked_add(&self, rhs: &Self) -> Option<Self> {
         let mut output = Self::zero();
         let mut carry = 0_u128;
@@ -676,11 +696,13 @@ impl WideMagnitudeV1 {
         }
         (carry == 0).then_some(output)
     }
+    #[cfg(test)]
     pub(super) fn mod_u64(&self, modulus: u64) -> u64 {
         self.limbs.iter().rev().fold(0_u64, |remainder, limb| {
             ((u128::from(remainder) << 64 | u128::from(*limb)) % u128::from(modulus)) as u64
         })
     }
+    #[cfg(test)]
     pub(super) fn from_fixed_be(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
         if bytes.is_empty() || bytes.len() > DECRYPTION_MAX_WIDE_LIMBS_V1 * 8 {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -720,7 +742,9 @@ impl core::fmt::Debug for WideMagnitudeV1 {
 }
 /// One rejection-sampler candidate whose limbs are erased unless ownership is
 /// transferred into a zeroizing signed-wide value.
+#[cfg(test)]
 struct ZeroizingWideMagnitudeCandidateV1(WideMagnitudeV1);
+#[cfg(test)]
 impl ZeroizingWideMagnitudeCandidateV1 {
     fn new(value: WideMagnitudeV1) -> Self {
         Self(value)
@@ -732,6 +756,7 @@ impl ZeroizingWideMagnitudeCandidateV1 {
         core::mem::replace(&mut self.0, WideMagnitudeV1::zero())
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingWideMagnitudeCandidateV1 {
     fn drop(&mut self) {
         clear_secret_u64_slice_v1(&mut self.0.limbs);
@@ -739,11 +764,13 @@ impl Drop for ZeroizingWideMagnitudeCandidateV1 {
         record_decryption_transient_zeroized_drop_v1(self.0.limbs.iter().all(|value| *value == 0));
     }
 }
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SignedWideV1 {
     pub(super) negative: bool,
     pub(super) magnitude: WideMagnitudeV1,
 }
+#[cfg(test)]
 impl SignedWideV1 {
     pub(super) const fn zero() -> Self {
         Self {
@@ -876,18 +903,22 @@ impl SignedWideV1 {
         clear_secret_u64_slice_v1(&mut self.magnitude.limbs);
     }
 }
+#[cfg(test)]
 impl Drop for SignedWideV1 {
     fn drop(&mut self) {
         self.clear_secret_v1();
     }
 }
+#[cfg(test)]
 impl core::fmt::Debug for SignedWideV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("SignedWideV1([REDACTED])")
     }
 }
 /// Signed wide-mask coefficients erased on success, error, or unwind.
+#[cfg(test)]
 struct ZeroizingSignedWideVectorV1(Vec<SignedWideV1>);
+#[cfg(test)]
 impl ZeroizingSignedWideVectorV1 {
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let values = try_exact_capacity_vec_v1(capacity)
@@ -909,6 +940,7 @@ impl ZeroizingSignedWideVectorV1 {
         self.0.iter()
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingSignedWideVectorV1 {
     fn drop(&mut self) {
         self.0.clear();
@@ -946,6 +978,7 @@ pub(super) fn wide_response_parameters(
     }
     Ok((mask_bound, response_limit, response_bytes))
 }
+#[cfg(test)]
 pub(super) fn small_response_parameters(
     witness_bound: i64,
     challenge_weight: usize,
@@ -986,6 +1019,7 @@ pub(super) fn wide_relation_challenge_weight(
     }
     Ok(DECRYPTION_RELEASE_CHALLENGE_WEIGHT_V1.min((ring_degree / 2).max(1)))
 }
+#[cfg(test)]
 pub(super) fn sample_signed_small<R: MaskedRelaxedRandomSourceV1>(
     bound: i64,
     random: &mut R,
@@ -1000,6 +1034,7 @@ pub(super) fn sample_signed_small<R: MaskedRelaxedRandomSourceV1>(
         .checked_sub(bound)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 pub(super) fn validate_wide_relation_random_health<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1021,6 +1056,7 @@ pub(super) fn validate_wide_relation_random_health<R: MaskedRelaxedRandomSourceV
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
+#[cfg(test)]
 fn sample_wide_magnitude_below_or_equal<R: MaskedRelaxedRandomSourceV1>(
     bound: &WideMagnitudeV1,
     random: &mut R,
@@ -1050,6 +1086,7 @@ fn sample_wide_magnitude_below_or_equal<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
+#[cfg(test)]
 pub(super) fn sample_signed_wide<R: MaskedRelaxedRandomSourceV1>(
     magnitude_bound: &WideMagnitudeV1,
     random: &mut R,
@@ -1166,6 +1203,7 @@ pub(super) fn sparse_negacyclic_mul_wide(
     }
     Ok(output)
 }
+#[cfg(test)]
 fn derive_sparse_challenge(
     ring_degree: usize,
     challenge_seed: [u8; 32],
@@ -1219,6 +1257,7 @@ fn derive_sparse_challenge(
     }
     Err(ZkAmsMkheErrorV1::InvalidShareProof)
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DecryptionBindingV1 {
     profile_digest: [u8; 32],
@@ -1234,6 +1273,7 @@ struct DecryptionBindingV1 {
     party: ZkAmsMkhePartyIdV1,
     level: u8,
 }
+#[cfg(test)]
 impl DecryptionBindingV1 {
     fn validate(
         &self,
@@ -1273,6 +1313,7 @@ impl DecryptionBindingV1 {
     }
 }
 /// Ordered content kind carried by the canonical split decryption transport.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ZkAmsMkheDecryptionTransportComponentKindV1 {
@@ -1281,6 +1322,7 @@ pub enum ZkAmsMkheDecryptionTransportComponentKindV1 {
     /// Exact canonical native `ZADP` proof envelope.
     ProofEnvelope = 2,
 }
+#[cfg(test)]
 impl TryFrom<u8> for ZkAmsMkheDecryptionTransportComponentKindV1 {
     type Error = ZkAmsMkheErrorV1;
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -1292,12 +1334,14 @@ impl TryFrom<u8> for ZkAmsMkheDecryptionTransportComponentKindV1 {
     }
 }
 /// Exact BLAKE3 content address of one ordered decryption transport object.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDecryptionTransportPointerV1 {
     kind: ZkAmsMkheDecryptionTransportComponentKindV1,
     payload_bytes: u64,
     payload_blake3: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkheDecryptionTransportPointerV1 {
     #[cfg(test)]
     fn from_payload(
@@ -1355,6 +1399,7 @@ impl ZkAmsMkheDecryptionTransportPointerV1 {
     }
 }
 /// Small authenticated header for the two-object canonical decryption transport.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDecryptionTransportManifestV1 {
     binding: DecryptionBindingV1,
@@ -1363,6 +1408,7 @@ pub struct ZkAmsMkheDecryptionTransportManifestV1 {
     manifest_digest: [u8; 32],
     authentication: ArtifactAuthentication,
 }
+#[cfg(test)]
 impl ZkAmsMkheDecryptionTransportManifestV1 {
     fn new(
         binding: DecryptionBindingV1,
@@ -1550,6 +1596,7 @@ impl ZkAmsMkheDecryptionTransportManifestV1 {
         )
     }
 }
+#[cfg(test)]
 fn write_decryption_transport_pointer(
     bytes: &mut Vec<u8>,
     ordinal: u8,
@@ -1560,6 +1607,7 @@ fn write_decryption_transport_pointer(
     bytes.extend_from_slice(&pointer.payload_bytes.to_be_bytes());
     bytes.extend_from_slice(&pointer.payload_blake3);
 }
+#[cfg(test)]
 fn read_decryption_transport_pointer(
     bytes: &[u8],
     cursor: &mut usize,
@@ -1580,6 +1628,7 @@ fn read_decryption_transport_pointer(
     value.validate_shape()?;
     Ok(value)
 }
+#[cfg(test)]
 fn decryption_split_manifest_digest(
     binding: &DecryptionBindingV1,
     polynomial: ZkAmsMkheDecryptionTransportPointerV1,
@@ -1716,6 +1765,7 @@ pub(super) fn decryption_wire_ciphertext_digest_v1(
 /// Compact validated ciphertext axes shared by the persistent binding and the source-backed
 /// decryption corridor. The record index is an explicit release record identifier; it is
 /// intentionally independent of any packed-plaintext chunk or encryption sample index.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DecryptionCiphertextAxesV1 {
     profile_digest: [u8; 32],
@@ -1727,6 +1777,7 @@ pub(super) struct DecryptionCiphertextAxesV1 {
     sample_index: u64,
     level: u8,
 }
+#[cfg(test)]
 impl DecryptionCiphertextAxesV1 {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new_v1(
@@ -2038,6 +2089,7 @@ impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
 /// The callback must stream each complete canonical count-prefixed party-`b`
 /// object into the supplied hash. Its call order is fixed to the governed
 /// roster, and the common `a` polynomial is derived one release limb at a time.
+#[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn decryption_key_context_digest_from_bounded_cpk_v1<F>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2101,6 +2153,7 @@ where
     Ok(digest)
 }
 /// Exact non-polynomial statement binding shared by native and compact paths.
+#[cfg(test)]
 pub(super) fn decryption_statement_binding_digest_from_axes_v1(
     roster: &ZkAmsMkheGovernedRosterWireV1,
     ciphertext: DecryptionCiphertextAxesV1,
@@ -2145,6 +2198,7 @@ fn decryption_binding_from_statement(
         level: ciphertext.level(),
     })
 }
+#[cfg(test)]
 fn decryption_binding_from_compact_axes_v1(
     roster: &ZkAmsMkheGovernedRosterWireV1,
     ciphertext: DecryptionCiphertextAxesV1,
@@ -2863,6 +2917,7 @@ fn expect_bytes(bytes: &[u8], cursor: &mut usize, expected: &[u8]) -> Result<(),
     *cursor = end;
     Ok(())
 }
+#[cfg(test)]
 fn read_array<const N: usize>(
     bytes: &[u8],
     cursor: &mut usize,
@@ -2878,21 +2933,26 @@ fn read_array<const N: usize>(
     *cursor = end;
     Ok(value)
 }
+#[cfg(test)]
 fn read_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, ZkAmsMkheErrorV1> {
     Ok(read_array::<1>(bytes, cursor)?[0])
 }
+#[cfg(test)]
 fn expect_u8(bytes: &[u8], cursor: &mut usize, expected: u8) -> Result<(), ZkAmsMkheErrorV1> {
     if read_u8(bytes, cursor)? != expected {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
     Ok(())
 }
+#[cfg(test)]
 fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, ZkAmsMkheErrorV1> {
     Ok(u16::from_be_bytes(read_array::<2>(bytes, cursor)?))
 }
+#[cfg(test)]
 fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, ZkAmsMkheErrorV1> {
     Ok(u32::from_be_bytes(read_array::<4>(bytes, cursor)?))
 }
+#[cfg(test)]
 fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, ZkAmsMkheErrorV1> {
     Ok(u64::from_be_bytes(read_array::<8>(bytes, cursor)?))
 }
@@ -2947,6 +3007,7 @@ fn validate_party_witness(
     }
     Ok(())
 }
+#[cfg(test)]
 fn initialize_decryption_challenge_transcript(
     profile: &BgvProfile,
     smudge_bits: usize,
@@ -3616,6 +3677,7 @@ pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
     )
 }
 /// Deterministic reason attached to the first rejected governed roster slot.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ZkAmsMkheDecryptionAbortReasonV1 {
@@ -3634,8 +3696,10 @@ pub enum ZkAmsMkheDecryptionAbortReasonV1 {
     /// The centered aggregate exceeded the certified correctness bound.
     CorrectnessBoundExceeded = 7,
 }
+#[cfg(test)]
 type DecryptionAbortReasonV1 = ZkAmsMkheDecryptionAbortReasonV1;
 /// Auditable first-offender evidence returned instead of a threshold fallback.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheIdentifiableDecryptionAbortV1 {
     /// Canonical governed roster slot of the first offender.
@@ -3647,7 +3711,9 @@ pub struct ZkAmsMkheIdentifiableDecryptionAbortV1 {
     /// Domain-separated evidence digest for audit logging.
     pub evidence_digest: [u8; 32],
 }
+#[cfg(test)]
 type IdentifiableDecryptionAbortV1 = ZkAmsMkheIdentifiableDecryptionAbortV1;
+#[cfg(test)]
 fn identifiable_abort(
     parties: &super::PartySet,
     party_index: usize,
@@ -3671,6 +3737,7 @@ fn identifiable_abort(
     }
 }
 /// Canonical plaintext recovered after CRT centering and final modulus reduction.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZkAmsMkheDecryptedPlaintextV1 {
     /// Tiny-profile residues used only by exhaustive native arithmetic tests.
@@ -3679,8 +3746,10 @@ pub enum ZkAmsMkheDecryptedPlaintextV1 {
     /// Canonical T256 scalar bytes, one per ring coefficient.
     T256(Vec<[u8; 32]>),
 }
+#[cfg(test)]
 type DecryptedPlaintextV1 = ZkAmsMkheDecryptedPlaintextV1;
 /// Result of verifying and combining the sole exact ordered all-eight share set.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheFullRosterDecryptionResultV1 {
     /// Canonically recovered plaintext coefficients.
@@ -4165,11 +4234,13 @@ fn aggregate_and_decrypt_full_roster_release_reference(
         ordered_share_set_digest: set_hash.finalize(),
     })
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SignedCrtV1 {
     negative: bool,
     magnitude: WideUint,
 }
+#[cfg(test)]
 impl SignedCrtV1 {
     fn normalized(negative: bool, magnitude: WideUint) -> Self {
         Self {
@@ -4199,6 +4270,7 @@ impl SignedCrtV1 {
         }
     }
 }
+#[cfg(test)]
 fn wide_checked_add(left: WideUint, right: WideUint) -> Result<WideUint, ZkAmsMkheErrorV1> {
     let mut output = WideUint::zero();
     let mut carry = 0_u128;
@@ -4212,6 +4284,7 @@ fn wide_checked_add(left: WideUint, right: WideUint) -> Result<WideUint, ZkAmsMk
     }
     Ok(output)
 }
+#[cfg(test)]
 fn centered_crt(
     residues: &[u64],
     moduli: &[u64],
@@ -4229,6 +4302,7 @@ fn centered_crt(
         Ok(SignedCrtV1::normalized(false, reconstructed))
     }
 }
+#[cfg(test)]
 fn wide_from_be(bytes: &[u8]) -> Result<WideUint, ZkAmsMkheErrorV1> {
     if bytes.len() > super::WIDE_LIMBS * 8 {
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
@@ -4245,6 +4319,7 @@ fn wide_from_u64(value: u64) -> WideUint {
     output.limbs[0] = value;
     output
 }
+#[cfg(test)]
 fn reduce_wide_mod_t256(value: WideUint) -> [u8; 32] {
     let mut modulus = [0_u64; 4];
     for (index, chunk) in super::VEGA_T256_SCALAR_MODULUS_BE_V1
@@ -4279,6 +4354,7 @@ fn reduce_wide_mod_t256(value: WideUint) -> [u8; 32] {
     }
     output
 }
+#[cfg(test)]
 fn compare_u256(left: &[u64; 4], right: &[u64; 4]) -> Ordering {
     for index in (0..4).rev() {
         match left[index].cmp(&right[index]) {
@@ -4288,6 +4364,7 @@ fn compare_u256(left: &[u64; 4], right: &[u64; 4]) -> Ordering {
     }
     Ordering::Equal
 }
+#[cfg(test)]
 fn subtract_u256(left: &mut [u64; 4], right: &[u64; 4]) -> bool {
     let mut borrow = false;
     for index in 0..4 {
@@ -4298,6 +4375,7 @@ fn subtract_u256(left: &mut [u64; 4], right: &[u64; 4]) -> bool {
     }
     borrow
 }
+#[cfg(test)]
 fn t256_subtract_modulus(value: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut output = [0_u8; 32];
     let mut borrow = false;
@@ -4313,6 +4391,7 @@ fn t256_subtract_modulus(value: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> 
     }
     Ok(output)
 }
+#[cfg(test)]
 fn decode_centered_plaintext(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -4407,8 +4486,10 @@ fn decode_centered_plaintext(
         }
     }
 }
+#[cfg(test)]
 #[path = "decryption_streaming.rs"]
 mod streaming;
+#[cfg(test)]
 pub use streaming::{
     ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
     ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionStreamingBlockerV1,

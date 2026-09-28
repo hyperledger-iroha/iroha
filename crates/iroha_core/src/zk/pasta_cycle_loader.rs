@@ -720,7 +720,21 @@ where
     C: CurveAffineExt,
     Outer<C>: BigPrimeField,
 {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read only by the test-gated deferred-source byte assertions"
+        )
+    )]
     source_values: Vec<C>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read only by the test-gated deferred-source byte assertions"
+        )
+    )]
     pub(super) poseidon_elements: Vec<[Integer<C>; 2]>,
 }
 impl<C> AssignedDeferredSourceEncodingsV1<C>
@@ -729,14 +743,8 @@ where
     Outer<C>: BigPrimeField,
     Inner<C>: BigPrimeField,
 {
+    #[cfg(test)]
     /// Select exact cached point chunks by a strictly increasing source map.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Reciprocal source-map inspection is only used by circuit regression tests"
-        )
-    )]
     pub(super) fn mapped_poseidon_elements_v1(
         &self,
         points: &[C],

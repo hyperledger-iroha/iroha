@@ -1,5 +1,5 @@
 error: Function must have at least one argument of type `StateTransaction` or `StateReadOnly`.
- --> tests/ui_fail/no_args.rs:4:1
+ --> tests/ui_fail/no_args.rs:3:1
   |
-4 | fn execute() -> Result<(), ()> {
+3 | fn execute() -> Result<(), ()> {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

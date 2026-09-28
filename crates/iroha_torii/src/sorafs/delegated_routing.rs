@@ -17,7 +17,7 @@ use axum::{
     },
     response::Response,
 };
-use iroha_core::state::{StateReadOnly, StateView, WorldReadOnly};
+use iroha_core::state::{StateView, WorldReadOnly};
 use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_logger::{debug, warn};
 use mv::storage::StorageReadOnly;

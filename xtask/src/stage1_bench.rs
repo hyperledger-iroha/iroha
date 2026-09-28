@@ -1,9 +1,7 @@
 use norito::{
     derive::JsonSerialize,
-    json as serde_json,
-    json::{build_struct_index, build_struct_index_scalar_bench},
+    json::{self, build_struct_index, build_struct_index_scalar_bench},
 };
-use serde::Serialize;
 use std::{
     error::Error,
     fmt::Write as _,
@@ -20,7 +18,7 @@ pub struct Stage1BenchOptions {
     pub markdown_out: Option<PathBuf>,
     pub allow_overwrite: bool,
 }
-#[derive(Clone, Debug, Serialize, JsonSerialize)]
+#[derive(Clone, Debug, JsonSerialize)]
 pub struct Stage1BenchSample {
     pub size_bytes: usize,
     pub iterations: u32,
@@ -28,14 +26,14 @@ pub struct Stage1BenchSample {
     pub scalar_ms_per_iter: f64,
     pub speedup_vs_scalar: f64,
 }
-#[derive(Clone, Debug, Serialize, JsonSerialize)]
+#[derive(Clone, Debug, JsonSerialize)]
 pub struct Stage1BenchReport {
     pub timestamp: String,
     pub environment: BenchEnvironment,
     pub samples: Vec<Stage1BenchSample>,
     pub recommended_threshold_bytes: usize,
 }
-#[derive(Clone, Debug, Serialize, JsonSerialize)]
+#[derive(Clone, Debug, JsonSerialize)]
 pub struct BenchEnvironment {
     pub target: String,
     pub arch: String,
@@ -111,7 +109,7 @@ fn write_json(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let data = serde_json::to_vec_pretty(report)?;
+    let data = json::to_vec_pretty(report)?;
     fs::write(path, data)?;
     Ok(())
 }

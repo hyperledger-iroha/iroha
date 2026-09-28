@@ -534,7 +534,6 @@ fn records_torii_proof_metrics() {
     let metrics = Metrics::default();
     metrics.record_torii_proof_request("v1/zk/proof", "ok", 128, Duration::from_millis(5));
     metrics.inc_torii_proof_cache_hit("v1/zk/proof");
-    metrics.inc_torii_proof_throttled("v1/zk/proof");
     assert_eq!(
         metrics
             .torii_proof_requests_total
@@ -566,14 +565,6 @@ fn records_torii_proof_metrics() {
             .get(),
         1,
         "proof cache hits counter increments"
-    );
-    assert_eq!(
-        metrics
-            .torii_proof_throttled_total
-            .with_label_values(&["v1/zk/proof"])
-            .get(),
-        1,
-        "proof throttle counter increments"
     );
 }
 #[test]

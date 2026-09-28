@@ -255,7 +255,7 @@ fn derive_public_beacon_inputs_from_slots(
     validators: &[BeaconValidatorSlot<'_>],
     clients: &[reset::ValidatorClientV1],
 ) -> Result<PreparedBeaconInputsV1> {
-    use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiNposParameters};
+    use iroha_data_model::parameter::system::SumeragiConsensusMode;
     reset::validate_nonce(nonce)?;
     if genesis.block().header().height().get() != 1
         || genesis.consensus_metadata().mode != SumeragiConsensusMode::Npos
@@ -268,19 +268,18 @@ fn derive_public_beacon_inputs_from_slots(
     }
     let parameters = manifest.effective_parameters()?;
     let first_pulse = parameters
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
-        .and_then(|npos| npos.epoch_length_blocks().get().checked_sub(1))
-        .ok_or_else(|| {
-            eyre!("beacon preparation requires explicit signed NPoS epoch parameters")
-        })?;
-    // Onboarding/faucet apply at 2/3; the QueuePlanSynced final canary uses
-    // admission/proposal/merge carriers 4/5/6. Ordinary installation can then
-    // execute at 7 and activate at 8. Actual observations remain authoritative.
-    if first_pulse <= 7 {
+        .sumeragi()
+        .epoch_length_blocks
+        .get()
+        .checked_sub(1)
+        .ok_or_else(|| eyre!("signed Sumeragi epoch has no pre-boundary pulse height"))?;
+    // Onboarding, funding and the final canary each supply a real Ordinary
+    // transaction. Starting at genesis, installation can first execute at 5
+    // and activate at 6. This is a minimum window, never an observed height;
+    // the challenged committed-height capture remains authoritative.
+    if first_pulse <= 5 {
         return Err(eyre!(
-            "required operations and installation must precede the first mandatory beacon pulse after height 7"
+            "required operations and installation must precede the first mandatory beacon pulse after height 5"
         ));
     }
     let roster = iroha_core::sumeragi::startup::genesis_committee_peers(genesis.block())?;

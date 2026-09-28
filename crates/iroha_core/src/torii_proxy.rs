@@ -406,6 +406,7 @@ pub fn validate_queue_plan_admission_certificate_for_network_digest_v1(
         durability_threshold,
     })
 }
+#[cfg(test)]
 /// Decode canonical bounded certificate bytes and require an exact durability quorum.
 ///
 /// This is the validation boundary used by merge-sidecar admission and WSV staging. Partial

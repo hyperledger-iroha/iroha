@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 iroha = { workspace = true }
-iroha_crypto = { workspace = true, features = ["json"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["json"] }
 iroha_executor_data_model = { workspace = true }
 iroha_model_base = { workspace = true }
 iroha_primitives = { workspace = true }
@@ -20,7 +20,7 @@ iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 ivm_abi = { workspace = true }
 ivm_artifact_admission = { path = "../ivm_artifact_admission" }
-norito = { workspace = true, features = ["json"] }
+norito = { workspace = true, default-features = false, features = ["json"] }
 eyre = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }

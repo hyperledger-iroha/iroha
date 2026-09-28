@@ -13,39 +13,53 @@
     reason = "move-only transcript stages deliberately transfer fixed-capacity owners by value"
 )]
 
+#[cfg(test)]
+use super::rns_native_global_lookup_z_commitment_view::rns_native_global_inverse_product_sumcheck::RnsNativeGlobalLookupVerifiedCoreRootV2;
+use super::rns_native_profile::ZkAmsMkheRnsNativeFamilyV1;
 use super::rns_native_proof_hash::{
     RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+};
+#[cfg(test)]
+use super::rns_native_proof_hash::{
     RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1,
     RnsNativeProofHashRoleV1,
 };
+#[cfg(test)]
 use super::{
     rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
-    rns_native_global_lookup_z_commitment_view::rns_native_global_inverse_product_sumcheck::RnsNativeGlobalLookupVerifiedCoreRootV2,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
-        ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
+        zk_ams_mkhe_rns_native_profile_manifest_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
     },
     rns_native_source::{ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1},
 };
 
+#[cfg(test)]
 const TRANSCRIPT_INITIAL_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-transcript.initial";
+#[cfg(test)]
 const TRANSCRIPT_ABSORB_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-transcript.absorb";
+#[cfg(test)]
 const TRANSCRIPT_OPENING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-transcript.opening";
+#[cfg(test)]
 const TRANSCRIPT_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-transcript.challenge";
+#[cfg(test)]
 const TRANSCRIPT_RATCHET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-transcript.ratchet";
+#[cfg(test)]
 const PRE_GLOBAL_CAPABILITY_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-transcript.pre-global-capability";
 
 const OPENING_COUNT_V1: usize = 43;
 const FRI_ROOT_COUNT_V1: usize = 18;
+#[cfg(test)]
 const CHALLENGE_COUNT_U16_V1: u16 = 27;
 const INPUT_DIGEST_COUNT_V1: usize = 12 + 2 * OPENING_COUNT_V1 + 3 + 2 + 1 + FRI_ROOT_COUNT_V1 + 2;
 const MAX_REGISTERED_DIGESTS_V1: usize =
     INPUT_DIGEST_COUNT_V1 + ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1;
 
 /// Transcript schema version.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_VERSION_V1: u8 = 1;
 /// Exact qPCS root count: initial, quotient, then eighteen ordered FRI roots.
 pub const ZK_AMS_MKHE_RNS_NATIVE_QPCS_ROOT_COUNT_V1: usize = 2 + FRI_ROOT_COUNT_V1;
@@ -105,12 +119,14 @@ impl core::fmt::Display for ZkAmsMkheRnsNativeTranscriptErrorV1 {
 impl std::error::Error for ZkAmsMkheRnsNativeTranscriptErrorV1 {}
 
 /// Governed public inputs not already carried by the typed source layout.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativePublicContextV1 {
     governed_roster_digest: [u8; 32],
     public_ciphertext_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativePublicContextV1 {
     /// Construct the exact governed-roster and public-ciphertext binding.
     ///
@@ -158,6 +174,7 @@ struct TranscriptContextIdentitiesV1 {
 }
 
 impl TranscriptContextIdentitiesV1 {
+    #[cfg(test)]
     const fn ordered(self) -> [[u8; 32]; 12] {
         [
             self.profile_manifest_digest,
@@ -192,6 +209,7 @@ impl ZkAmsMkheRnsNativeOpeningCommitmentV1 {
     ///
     /// Rejects an out-of-range family index, zero digest, or equal source and
     /// Hyrax digests.
+    #[cfg(test)]
     pub fn new(
         family: ZkAmsMkheRnsNativeFamilyV1,
         family_index: u8,
@@ -211,24 +229,28 @@ impl ZkAmsMkheRnsNativeOpeningCommitmentV1 {
     }
 
     /// Return the canonical family.
+    #[cfg(test)]
     #[must_use]
     pub const fn family(self) -> ZkAmsMkheRnsNativeFamilyV1 {
         self.family
     }
 
     /// Return the family-local record index.
+    #[cfg(test)]
     #[must_use]
     pub const fn family_index(self) -> u8 {
         self.family_index
     }
 
     /// Return the source-commitment digest.
+    #[cfg(test)]
     #[must_use]
     pub const fn source_commitment_digest(self) -> [u8; 32] {
         self.source_commitment_digest
     }
 
     /// Return the matching Hyrax-commitment digest.
+    #[cfg(test)]
     #[must_use]
     pub const fn hyrax_commitment_digest(self) -> [u8; 32] {
         self.hyrax_commitment_digest
@@ -236,6 +258,7 @@ impl ZkAmsMkheRnsNativeOpeningCommitmentV1 {
 }
 
 /// Move-only owner of all 43 canonically ordered commitment pairs.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the ordered commitment owner is consumed by its sole transcript stage"
@@ -245,6 +268,7 @@ pub struct ZkAmsMkheRnsNativeOpeningCommitmentsV1 {
     records: [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPENING_COUNT_V1],
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeOpeningCommitmentsV1 {
     /// Validate and bind the exact `X1/U16/E16/rE1/W8/rW1` record sequence.
     ///
@@ -284,6 +308,7 @@ impl ZkAmsMkheRnsNativeOpeningCommitmentsV1 {
 }
 
 /// Mapping and terminal Hyrax/cross-basis commitment roots.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeTerminalBridgeV1 {
     prior_transcript_binding: ProofDigestV1,
@@ -292,6 +317,7 @@ pub struct ZkAmsMkheRnsNativeTerminalBridgeV1 {
     cross_basis_bridge_root: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeTerminalBridgeV1 {
     /// Construct a terminal bridge tagged for one exact commitment transcript.
     ///
@@ -350,6 +376,7 @@ impl ZkAmsMkheRnsNativeQpcsFriRootV1 {
     /// # Errors
     ///
     /// Rejects a layer outside `0..18` or a zero root.
+    #[cfg(test)]
     pub fn new(
         layer: u8,
         root: ProofDigestV1,
@@ -364,12 +391,14 @@ impl ZkAmsMkheRnsNativeQpcsFriRootV1 {
     }
 
     /// Return the zero-based FRI layer.
+    #[cfg(test)]
     #[must_use]
     pub const fn layer(self) -> u8 {
         self.layer
     }
 
     /// Return the root at this layer.
+    #[cfg(test)]
     #[must_use]
     pub const fn root(self) -> ProofDigestV1 {
         self.root
@@ -377,6 +406,7 @@ impl ZkAmsMkheRnsNativeQpcsFriRootV1 {
 }
 
 /// Exact qPCS schedule: initial root, q-mask `S` root, quotient root, then FRI roots.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the qPCS root schedule is consumed by its sole transcript stage"
@@ -389,6 +419,7 @@ pub struct ZkAmsMkheRnsNativeQpcsRootsV1 {
     fri_roots: [ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1],
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeQpcsRootsV1 {
     /// Construct the fixed-width qPCS and pre-relation q-mask root schedule.
     ///
@@ -497,6 +528,7 @@ impl ZkAmsMkheRnsNativeTerminalRootsV1 {
     /// Split the encoded terminal roots into a move-only cross-field claim and
     /// the global root that follows it.  The claim remains tagged for the exact
     /// qPCS-bound transcript and never exposes its digest through an accessor.
+    #[cfg(test)]
     pub(super) const fn into_cross_field_claim_v1(
         self,
     ) -> (
@@ -520,6 +552,7 @@ impl ZkAmsMkheRnsNativeTerminalRootsV1 {
 /// This is a transcript claim, not verification evidence.  Verification must
 /// later consume the accompanying equality obligation against an independently
 /// recomputed opaque direct root.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "a claimed terminal root must be consumed once"
@@ -530,6 +563,7 @@ pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootClaimV1 {
 }
 
 /// Move-only remainder after the cross-field terminal claim is separated.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -566,6 +600,7 @@ pub(super) struct ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
 /// Opaque chronology tag attached to the independently recomputed clean
 /// global-lookup root. It binds that root to the exact post-cross transcript
 /// and the sole pre-global capability without exposing either value.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -577,6 +612,7 @@ pub(super) struct ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2 {
     pre_global_capability_digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2 {
     pub(super) fn matches_exact_chronology_v2(
         &self,
@@ -593,6 +629,7 @@ impl ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2 {
 impl ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
     /// Return only a domain-separated commitment to the exact post-cross
     /// binding and global seed. Consumers never receive either raw value.
+    #[cfg(test)]
     pub(super) fn sole_z_binding_digest_v1(
         &self,
     ) -> Result<ProofDigestV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
@@ -614,6 +651,7 @@ impl ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
 
     /// Mint the private equality tag from this exact move-only capability.
     /// The capability itself remains owned by the successor chronology.
+    #[cfg(test)]
     pub(super) fn global_lookup_chronology_tag_v2(
         &self,
     ) -> Result<ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2, ZkAmsMkheRnsNativeTranscriptErrorV1>
@@ -665,6 +703,7 @@ pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
 impl ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
     /// Consume the obligation against the concrete opaque root owned and
     /// constructed only by the direct verifier.
+    #[cfg(test)]
     pub(super) fn discharge_v1(
         self,
         recomputed_root: RnsNativeCrossFieldRlweVerifiedCoreRootV1,
@@ -699,6 +738,7 @@ pub(super) struct ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1 {
 impl ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1 {
     /// Check the concrete verified root and independently replay the final
     /// suffix from this obligation's retained post-cross chronology.
+    #[cfg(test)]
     fn discharge_v2(
         self,
         verified_root: RnsNativeGlobalLookupVerifiedCoreRootV2,
@@ -727,6 +767,7 @@ impl ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1 {
 /// Move-only owner awaiting concrete global-root equality discharge. It cannot
 /// accept a raw or generic global root and grants no verification, readiness,
 /// composite, or release authority.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -739,6 +780,7 @@ pub(super) struct ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1 {
     final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1 {
     /// Borrow only the opaque pre-global snapshot needed by the successor
     /// challenge chain. No raw post-cross transcript state or seed escapes.
@@ -787,6 +829,7 @@ impl ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1 {
 ///
 /// This fact exposes no roots, transcript tags, parts, composite verification,
 /// readiness, or release authority.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -797,6 +840,7 @@ pub(super) struct ZkAmsMkheRnsNativeAllTerminalRootsEqualV1 {
     final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeAllTerminalRootsEqualV1 {
     /// Consume the all-roots-equal fact into the exact final transcript owner.
     ///
@@ -830,12 +874,14 @@ pub(super) struct ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
 impl ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
     /// Borrow the final seeds solely so qPCS can authenticate under the
     /// already-established transcript domains.
+    #[cfg(test)]
     pub(super) const fn final_challenge_seeds_v1(&self) -> &ZkAmsMkheRnsNativeChallengeSeedsV1 {
         &self.final_challenge_seeds
     }
 
     /// Compare an authenticated qPCS output with the exact pre-cross-field
     /// state retained by this chronology without exposing that state.
+    #[cfg(test)]
     pub(super) fn matches_qpcs_bound_transcript_state_v1(
         &self,
         qpcs_bound_transcript_state: ProofDigestV1,
@@ -846,6 +892,7 @@ impl ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
     /// Atomically move the direct cross-root obligation into the direct
     /// schedule while retaining the global obligation, pre-global
     /// capability, and final seeds in one opaque successor chronology.
+    #[cfg(test)]
     pub(super) fn into_cross_field_obligation_and_global_pending_v1(
         self,
     ) -> (
@@ -870,6 +917,7 @@ impl ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
 }
 
 /// Move-only transcript after canonical context/source validation.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "a transcript stage must not be copied or rewound"
@@ -880,6 +928,7 @@ pub struct ZkAmsMkheRnsNativeTranscriptV1 {
     context_identities: TranscriptContextIdentitiesV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeTranscriptV1 {
     /// Start the sole transcript from canonical profile and typed source bindings.
     ///
@@ -1034,6 +1083,7 @@ impl ZkAmsMkheRnsNativeTranscriptV1 {
 }
 
 /// Move-only transcript after all source and Hyrax commitments are bound.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "a transcript stage must not be copied or rewound"
@@ -1046,6 +1096,7 @@ pub struct ZkAmsMkheRnsNativeCommitmentsBoundTranscriptV1 {
     mapping_challenge_seed: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeCommitmentsBoundTranscriptV1 {
     /// Return the binding required by the mapping/cross-basis terminal bridge.
     #[must_use]
@@ -1115,6 +1166,7 @@ impl ZkAmsMkheRnsNativeCommitmentsBoundTranscriptV1 {
 }
 
 /// Move-only transcript after the mapping and cross-basis bridge are bound.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "a transcript stage must not be copied or rewound"
@@ -1132,6 +1184,7 @@ pub struct ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
     rns_aggregation_challenge_seed: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
     /// Return the binding required by the exact qPCS root schedule.
     #[must_use]
@@ -1195,6 +1248,7 @@ impl ZkAmsMkheRnsNativeTerminalBoundTranscriptV1 {
 }
 
 /// Move-only transcript after the initial qPCS root and before the q-mask root.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the state-after-initial capability must not be copied or rewound"
@@ -1213,6 +1267,7 @@ pub(super) struct ZkAmsMkheRnsNativeQpcsInitialBoundTranscriptV1 {
     rns_aggregation_challenge_seed: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeQpcsInitialBoundTranscriptV1 {
     /// State after the initial qPCS root, used by the acyclic q-mask root hash.
     #[allow(
@@ -1272,6 +1327,7 @@ impl ZkAmsMkheRnsNativeQpcsInitialBoundTranscriptV1 {
 }
 
 /// One-shot transcript binding consumed by the exact qPCS relation schedule.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "a relation binding can mint exactly one move-only point schedule"
@@ -1283,6 +1339,7 @@ pub(super) struct ZkAmsMkheRnsNativeQpcsRelationBindingV1 {
     lineage: ZkAmsMkheRnsNativeQpcsRelationLineageV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeQpcsRelationBindingV1 {
     pub(super) const fn q_mask_s_root(&self) -> ProofDigestV1 {
         self.q_mask_s_root
@@ -1309,6 +1366,7 @@ impl ZkAmsMkheRnsNativeQpcsRelationBindingV1 {
 /// challenge.  It is not a wire digest and is never exposed as bytes.  A
 /// verifier may deterministically replay the same transcript, but it cannot
 /// attach a schedule reconstructed from final public seeds to this lineage.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the sole qPCS relation lineage must move with its schedule"
@@ -1319,6 +1377,7 @@ pub(super) struct ZkAmsMkheRnsNativeQpcsRelationLineageV1 {
 
 /// Move-only transcript after the q-mask root and relation challenge but
 /// before the quotient root exists.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the pre-relation transcript and its one-shot issuance flag must move together"
@@ -1341,6 +1400,7 @@ pub(super) struct ZkAmsMkheRnsNativeQpcsPreRelationTranscriptV1 {
     relation_binding_issued: bool,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeQpcsPreRelationTranscriptV1 {
     /// Issue the sole relation binding. A second call fails closed.
     pub(super) fn take_qpcs_relation_binding(
@@ -1407,6 +1467,7 @@ impl ZkAmsMkheRnsNativeQpcsPreRelationTranscriptV1 {
 
 /// Runtime-ordered qPCS FRI transcript. Each call consumes the prior stage and
 /// accepts exactly the next layer root before exposing that layer's fold seed.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "FRI roots and fold challenges must advance without rewind"
@@ -1434,6 +1495,7 @@ pub(super) struct ZkAmsMkheRnsNativeQpcsFriTranscriptV1 {
     qpcs_fri_fold_challenge_seeds: [ProofDigestV1; FRI_ROOT_COUNT_V1],
 }
 
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "producer-side accessors are reserved for the undeclared qPCS prover adapter"
@@ -1533,6 +1595,7 @@ impl ZkAmsMkheRnsNativeQpcsFriTranscriptV1 {
 }
 
 /// Move-only transcript after all qPCS roots and challenges are bound.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "a transcript stage must not be copied or rewound"
@@ -1561,6 +1624,7 @@ pub struct ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
     cross_field_challenge_seed: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
     /// Return the binding required by the three terminal roots.
     #[must_use]
@@ -1742,6 +1806,7 @@ impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
 
 /// Move-only transcript after the cross-field root and global-lookup
 /// challenge are bound, but before the global-lookup root exists.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the pre-global-lookup capability must not be copied or rewound"
@@ -1772,6 +1837,7 @@ pub(super) struct ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1 {
     global_lookup_challenge_seed: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1 {
     /// Binding available to the exact global-lookup root producer.
     #[allow(
@@ -1900,78 +1966,91 @@ pub struct ZkAmsMkheRnsNativeChallengeSeedsV1 {
 
 impl ZkAmsMkheRnsNativeChallengeSeedsV1 {
     /// Canonical replacement profile-manifest identity absorbed first.
+    #[cfg(test)]
     #[must_use]
     pub const fn profile_manifest_digest(&self) -> [u8; 32] {
         self.context_identities.profile_manifest_digest
     }
 
     /// Canonical replacement profile identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn profile_digest(&self) -> [u8; 32] {
         self.context_identities.profile_digest
     }
 
     /// Canonical replacement proof-topology identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn topology_digest(&self) -> [u8; 32] {
         self.context_identities.topology_digest
     }
 
     /// Non-authorizing release-candidate identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn release_candidate_digest(&self) -> [u8; 32] {
         self.context_identities.release_candidate_digest
     }
 
     /// Exact proved-statement identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.context_identities.statement_digest
     }
 
     /// Exact operational and replay-context identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn operational_context_digest(&self) -> [u8; 32] {
         self.context_identities.operational_context_digest
     }
 
     /// Exact confidential-source layout identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn source_binding_digest(&self) -> [u8; 32] {
         self.context_identities.source_binding_digest
     }
 
     /// Authenticated main source-snapshot identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn main_snapshot_digest(&self) -> [u8; 32] {
         self.context_identities.main_snapshot_digest
     }
 
     /// Authenticated nonce source-snapshot identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn nonce_snapshot_digest(&self) -> [u8; 32] {
         self.context_identities.nonce_snapshot_digest
     }
 
     /// Structural source-receipt identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn source_receipt_digest(&self) -> [u8; 32] {
         self.context_identities.source_receipt_digest
     }
 
     /// Governed verifier-roster identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn governed_roster_digest(&self) -> [u8; 32] {
         self.context_identities.governed_roster_digest
     }
 
     /// Public ciphertext/statement-material identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn public_ciphertext_digest(&self) -> [u8; 32] {
         self.context_identities.public_ciphertext_digest
     }
 
     /// Borrow the exact 43 opening commitment pairs in transcript order.
+    #[cfg(test)]
     #[must_use]
     pub const fn opening_commitments(
         &self,
@@ -1980,137 +2059,160 @@ impl ZkAmsMkheRnsNativeChallengeSeedsV1 {
     }
 
     /// Root of the source-to-Hyrax mapping proof.
+    #[cfg(test)]
     #[must_use]
     pub const fn mapping_root(&self) -> ProofDigestV1 {
         self.mapping_root
     }
 
     /// Root of the terminal Hyrax proof.
+    #[cfg(test)]
     #[must_use]
     pub const fn terminal_hyrax_root(&self) -> ProofDigestV1 {
         self.terminal_hyrax_root
     }
 
     /// Root of the terminal cross-basis bridge.
+    #[cfg(test)]
     #[must_use]
     pub const fn cross_basis_bridge_root(&self) -> ProofDigestV1 {
         self.cross_basis_bridge_root
     }
 
     /// Initial qPCS committed-codeword root.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_initial_root(&self) -> ProofDigestV1 {
         self.qpcs_initial_root
     }
 
     /// Root of the 6,400 authenticated q-mask `S` commitments.
+    #[cfg(test)]
     #[must_use]
     pub const fn q_mask_s_root(&self) -> ProofDigestV1 {
         self.q_mask_s_root
     }
 
     /// Transcript state after the initial qPCS root and before the q-mask root.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_pre_relation_transcript_digest(&self) -> ProofDigestV1 {
         self.qpcs_pre_relation_transcript_digest
     }
 
     /// Exact private qPCS-bound state immediately before the cross-field root.
+    #[cfg(test)]
     pub(super) const fn qpcs_bound_transcript_state_v1(&self) -> ProofDigestV1 {
         self.qpcs_bound_transcript_state
     }
 
     /// qPCS quotient-opening root.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_quotient_root(&self) -> ProofDigestV1 {
         self.qpcs_quotient_root
     }
 
     /// Borrow the eighteen qPCS FRI roots in transcript order.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_fri_roots(&self) -> &[ZkAmsMkheRnsNativeQpcsFriRootV1; FRI_ROOT_COUNT_V1] {
         &self.qpcs_fri_roots
     }
 
     /// Root of the cross-field proof.
+    #[cfg(test)]
     #[must_use]
     pub const fn cross_field_root(&self) -> ProofDigestV1 {
         self.cross_field_root
     }
 
     /// Root of the committed global lookup.
+    #[cfg(test)]
     #[must_use]
     pub const fn global_lookup_root(&self) -> ProofDigestV1 {
         self.global_lookup_root
     }
 
     /// Challenge for the source-to-Hyrax mapping.
+    #[cfg(test)]
     #[must_use]
     pub const fn mapping_challenge_seed(&self) -> ProofDigestV1 {
         self.mapping_challenge_seed
     }
 
     /// Challenge for the terminal cross-basis bridge.
+    #[cfg(test)]
     #[must_use]
     pub const fn cross_basis_challenge_seed(&self) -> ProofDigestV1 {
         self.cross_basis_challenge_seed
     }
 
     /// Challenge aggregating the two RNS equations.
+    #[cfg(test)]
     #[must_use]
     pub const fn rns_aggregation_challenge_seed(&self) -> ProofDigestV1 {
         self.rns_aggregation_challenge_seed
     }
 
     /// qPCS relation/evaluation challenge.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_relation_challenge_seed(&self) -> ProofDigestV1 {
         self.qpcs_relation_challenge_seed
     }
 
     /// qPCS row-batching challenge.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_batching_challenge_seed(&self) -> ProofDigestV1 {
         self.qpcs_batching_challenge_seed
     }
 
     /// Borrow the eighteen FRI-fold challenges in layer order.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_fri_fold_challenge_seeds(&self) -> &[ProofDigestV1; FRI_ROOT_COUNT_V1] {
         &self.qpcs_fri_fold_challenge_seeds
     }
 
     /// qPCS common-query challenge.
+    #[cfg(test)]
     #[must_use]
     pub const fn qpcs_query_challenge_seed(&self) -> ProofDigestV1 {
         self.qpcs_query_challenge_seed
     }
 
     /// Cross-field challenge after the complete qPCS schedule.
+    #[cfg(test)]
     #[must_use]
     pub const fn cross_field_challenge_seed(&self) -> ProofDigestV1 {
         self.cross_field_challenge_seed
     }
 
     /// Committed global-lookup challenge.
+    #[cfg(test)]
     #[must_use]
     pub const fn global_lookup_challenge_seed(&self) -> ProofDigestV1 {
         self.global_lookup_challenge_seed
     }
 
     /// Final composite-binding challenge after every root.
+    #[cfg(test)]
     #[must_use]
     pub const fn composite_binding_challenge_seed(&self) -> ProofDigestV1 {
         self.composite_binding_challenge_seed
     }
 
     /// Digest of the fully ratcheted transcript.
+    #[cfg(test)]
     #[must_use]
     pub const fn transcript_digest(&self) -> ProofDigestV1 {
         self.transcript_digest
     }
 
     /// Return all challenge seeds in their sole canonical derivation order.
+    #[cfg(test)]
     #[must_use]
     pub fn ordered_challenge_seeds(
         &self,
@@ -2131,6 +2233,7 @@ impl ZkAmsMkheRnsNativeChallengeSeedsV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum AbsorbKindV1 {
@@ -2145,6 +2248,7 @@ enum AbsorbKindV1 {
     GlobalLookup = 8,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum ChallengePurposeV1 {
@@ -2204,6 +2308,7 @@ fn validate_distinct_digests_v1<T: Copy + Into<DigestIdentityV1>>(
     Ok(())
 }
 
+#[cfg(test)]
 fn opening_role_v1(ordinal: usize) -> Option<(ZkAmsMkheRnsNativeFamilyV1, u8)> {
     match ordinal {
         0 => Some((ZkAmsMkheRnsNativeFamilyV1::X, 0)),
@@ -2225,6 +2330,7 @@ fn opening_role_v1(ordinal: usize) -> Option<(ZkAmsMkheRnsNativeFamilyV1, u8)> {
     }
 }
 
+#[cfg(test)]
 fn transcript_hash_v1(
     phase: RnsNativeProofHashPhaseV1,
     ordinal: u64,
@@ -2246,6 +2352,7 @@ fn transcript_hash_v1(
         .map_err(|_| ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidChallenge)
 }
 
+#[cfg(test)]
 fn initial_state_v1() -> Result<ProofDigestV1, ZkAmsMkheRnsNativeTranscriptErrorV1> {
     transcript_hash_v1(
         RnsNativeProofHashPhaseV1::Initial,
@@ -2260,6 +2367,7 @@ fn initial_state_v1() -> Result<ProofDigestV1, ZkAmsMkheRnsNativeTranscriptError
     )
 }
 
+#[cfg(test)]
 fn absorb_digest_v1(
     state: ProofDigestV1,
     kind: AbsorbKindV1,
@@ -2280,6 +2388,7 @@ fn absorb_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn absorb_opening_v1(
     state: ProofDigestV1,
     ordinal: u8,
@@ -2299,6 +2408,7 @@ fn absorb_opening_v1(
     )
 }
 
+#[cfg(test)]
 fn derive_registered_challenge_v1(
     state: ProofDigestV1,
     digests: &mut DigestRegistryV1,
@@ -2312,6 +2422,7 @@ fn derive_registered_challenge_v1(
     Ok((next_state, challenge))
 }
 
+#[cfg(test)]
 fn replay_global_lookup_terminal_suffix_v1(
     post_cross_field_binding_digest: ProofDigestV1,
     claimed_global_lookup_root: ProofDigestV1,
@@ -2343,6 +2454,7 @@ fn replay_global_lookup_terminal_suffix_v1(
     Ok((final_transcript_tag, composite_binding_challenge_seed))
 }
 
+#[cfg(test)]
 fn derive_challenge_digest_v1(
     state: ProofDigestV1,
     ordinal: u8,
@@ -2369,6 +2481,7 @@ fn derive_challenge_digest_v1(
     Ok(challenge)
 }
 
+#[cfg(test)]
 fn ratchet_challenge_state_v1(
     state: ProofDigestV1,
     ordinal: u8,

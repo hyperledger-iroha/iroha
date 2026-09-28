@@ -38,8 +38,6 @@ mod op_semantics_rv;
 mod opcode_validation;
 #[path = "../oversize_program.rs"]
 mod oversize_program;
-#[path = "../parallel.rs"]
-mod parallel;
 #[path = "../pointer_abi_tests.rs"]
 mod pointer_abi_tests;
 #[path = "../pointer_tlv.rs"]

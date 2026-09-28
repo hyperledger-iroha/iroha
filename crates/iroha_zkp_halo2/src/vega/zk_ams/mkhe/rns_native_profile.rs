@@ -14,6 +14,7 @@ use super::{
 };
 use crate::vega::sponge::Keccak256;
 
+#[cfg(test)]
 const RNS_NATIVE_PROFILE_MANIFEST_TAG_V1: [u8; 4] = *b"ZAMN";
 
 /// Number of RNS limbs in the corrected replacement profile.
@@ -27,6 +28,7 @@ pub const ZK_AMS_MKHE_RNS_NATIVE_RESIDUAL_BITS_V1: u16 = 2_287;
 /// Strict residual headroom under the centered capacity.
 pub const ZK_AMS_MKHE_RNS_NATIVE_HEADROOM_BITS_V1: u16 = 112;
 /// Canonical minimal signed response bytes for the corrected residual width.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RNS_NATIVE_WIDE_RESPONSE_BYTES_V1: u16 = 258;
 /// Hard complete composite-proof ceiling.
 pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1: u64 = 40 * 1024 * 1024;
@@ -41,6 +43,7 @@ pub const ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1: u64 = 128_000_000_000;
 /// Required classical security strength of the replacement estimator result.
 pub const ZK_AMS_MKHE_RNS_NATIVE_TARGET_SECURITY_BITS_V1: u16 = 128;
 /// Exact canonical bytes in one replacement-profile manifest.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RNS_NATIVE_PROFILE_MANIFEST_BYTES_V1: usize = 244;
 
 /// Canonical number of committed opening families.
@@ -549,6 +552,7 @@ pub fn zk_ams_mkhe_rns_native_profile_v1() -> Result<ZkAmsMkheRnsNativeProfileV1
 /// proof shape.  The certified-security and external-evidence pins are frozen
 /// to zero in this schema, so a syntactically valid record cannot authorize a
 /// production runtime.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeProfileManifestV1 {
     /// Manifest schema version.
@@ -585,6 +589,7 @@ pub struct ZkAmsMkheRnsNativeProfileManifestV1 {
     pub manifest_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeProfileManifestV1 {
     /// Validate the sole fixed, deliberately non-authorizing manifest.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -718,6 +723,7 @@ impl ZkAmsMkheRnsNativeProfileManifestV1 {
 ///
 /// Returns an error if the replacement profile, topology, resource fields, or
 /// manifest digest fail validation.
+#[cfg(test)]
 pub fn zk_ams_mkhe_rns_native_profile_manifest_v1()
 -> Result<ZkAmsMkheRnsNativeProfileManifestV1, ZkAmsMkheErrorV1> {
     let profile = zk_ams_mkhe_rns_native_profile_v1()?;
@@ -754,6 +760,7 @@ pub fn zk_ams_mkhe_rns_native_profile_manifest_v1()
 /// # Errors
 ///
 /// Returns an error when the replacement profile manifest is not canonical.
+#[cfg(test)]
 pub(super) fn zk_ams_mkhe_rns_native_release_candidate_digest_v1()
 -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()?;
@@ -771,6 +778,7 @@ pub(super) fn zk_ams_mkhe_rns_native_release_candidate_digest_v1()
     Ok(digest)
 }
 
+#[cfg(test)]
 fn profile_manifest_digest_v1(manifest: ZkAmsMkheRnsNativeProfileManifestV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-profile-manifest");
@@ -796,6 +804,7 @@ fn profile_manifest_digest_v1(manifest: ZkAmsMkheRnsNativeProfileManifestV1) -> 
     hash.finalize()
 }
 
+#[cfg(test)]
 fn write_profile_manifest<const N: usize>(
     destination: &mut [u8; N],
     cursor: &mut usize,
@@ -812,11 +821,13 @@ fn write_profile_manifest<const N: usize>(
     Ok(())
 }
 
+#[cfg(test)]
 struct ProfileManifestDecoder<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> ProfileManifestDecoder<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }

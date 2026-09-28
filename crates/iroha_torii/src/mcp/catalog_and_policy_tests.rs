@@ -5,7 +5,6 @@ use crate::tests_runtime_handlers::{
     app_auth_test_guard, checked_torii_test_ed25519_keypair, mk_app_state_for_tests,
     mk_app_state_for_tests_with_world, signed_app_headers, world_with_account,
 };
-use base64::Engine as _;
 use iroha_config::parameters::actual::ToriiMcpProfile;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
@@ -2407,7 +2406,7 @@ fn unreviewed_manual_tool_names_fail_closed_to_write() {
 }
 
 #[test]
-fn raw_body_tool_accepts_advertised_flat_shortcuts() {
+fn raw_body_tool_requires_the_body_object() {
     let tool = simple_manual_raw_body_post_tool(
         "iroha.test.raw",
         "test raw body",
@@ -2419,20 +2418,22 @@ fn raw_body_tool_accepts_advertised_flat_shortcuts() {
         advertised
             .get("additionalProperties")
             .and_then(Value::as_bool),
-        Some(true)
+        Some(false)
     );
-    assert!(advertised.get(MCP_FLAT_BODY_SCHEMA_EXTENSION).is_none());
-    let arguments = norito::json!({
+    assert_eq!(advertised.get("required"), Some(&norito::json!(["body"])));
+    let payload = norito::json!({
         "manifest": { "payload_hash": "ABC" },
         "chunk": [1, 2, 3]
     });
+    validate_tool_arguments(&tool, payload.as_object().expect("object"))
+        .expect_err("top-level payload fields are not a request body");
+    let arguments = norito::json!({ "body": (payload.clone()) });
     let arguments = arguments.as_object().expect("object");
-    validate_tool_arguments(&tool, arguments).expect("flat fields match advertised schema");
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])
-        .expect("flat fields build a request body");
-    let encoded = encode_mcp_json_body(&body, "test flat body").expect("encode flat body");
-    let decoded: Value = json::from_slice(&encoded).expect("decode flat body");
-    assert_eq!(decoded, Value::Object(arguments.clone()));
+    validate_tool_arguments(&tool, arguments).expect("body matches advertised schema");
+    let body = build_required_object_body(arguments).expect("body is an object");
+    let encoded = encode_mcp_json_body(&body, "test body").expect("encode body");
+    let decoded: Value = json::from_slice(&encoded).expect("decode body");
+    assert_eq!(decoded, payload);
 }
 #[test]
 fn descriptor_publishes_canonical_connect_sid_schema() {

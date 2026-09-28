@@ -922,6 +922,7 @@ enum CursorSnapshotRelation {
 }
 impl ReplayCursorStore {
     /// Load the replay cursor store from disk, returning an empty store when no snapshot exists.
+    #[cfg(test)]
     pub fn open(path: PathBuf) -> eyre::Result<Self> {
         Self::open_with_max_lane_epochs(
             path,
@@ -1025,6 +1026,7 @@ impl ReplayCursorStore {
         Ok(store)
     }
     /// Create an empty store backed by the provided directory (creating it if missing).
+    #[cfg(test)]
     pub fn empty(path: PathBuf) -> eyre::Result<Self> {
         Self::empty_with_max_lane_epochs(
             path,
@@ -1033,6 +1035,7 @@ impl ReplayCursorStore {
         )
     }
     /// Create an empty persistent store with an explicit global `(lane, epoch)` bound.
+    #[cfg(test)]
     pub fn empty_with_max_lane_epochs(
         path: PathBuf,
         max_lane_epochs: NonZeroUsize,
@@ -1059,6 +1062,7 @@ impl ReplayCursorStore {
         Ok(Self::with_state(path, max_lane_epochs, state))
     }
     /// Create an in-memory store (persistence disabled).
+    #[cfg(test)]
     pub fn in_memory() -> Self {
         Self::in_memory_with_max_lane_epochs(
             NonZeroUsize::new(iroha_core::da::ReplayCacheConfig::DEFAULT_LANE_EPOCH_CAPACITY)
@@ -1838,16 +1842,13 @@ fn promote_replay_cursor_temp(tmp_path: &Path, file_path: &Path) -> eyre::Result
     Ok(())
 }
 /// Receipt entry captured in the durable receipt log.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct DaReceiptLogEntry {
-    /// Lane/epoch this receipt belongs to.
-    pub lane_epoch: LaneEpoch,
     /// Sequence number scoped to the lane/epoch.
     pub sequence: u64,
     /// Manifest hash referenced by the receipt.
     pub manifest_hash: BlobDigest,
-    /// Full DA ingest receipt payload.
-    pub receipt: DaIngestReceipt,
 }
 #[derive(
     Clone,
@@ -2561,10 +2562,8 @@ impl DaReceiptLog {
                     && stored.receipt.epoch == lane_epoch.epoch
             })
             .map(|stored| DaReceiptLogEntry {
-                lane_epoch,
                 sequence: stored.sequence,
                 manifest_hash: stored.receipt.manifest_hash,
-                receipt: stored.receipt,
             })
             .collect()
     }
@@ -2686,9 +2685,6 @@ impl DaReceiptLog {
             Ok(None) => Ok(PathBuf::new()),
             Err(err) => Err(err.into()),
         }
-    }
-    fn decode_receipt(path: &Path) -> eyre::Result<StoredDaReceipt> {
-        Self::decode_receipt_with_key(path).map(|(_, stored)| stored)
     }
     fn decode_receipt_with_key(path: &Path) -> eyre::Result<(ReceiptFileKey, StoredDaReceipt)> {
         let data = read_regular_spool_artifact(
@@ -3905,6 +3901,7 @@ mod temp_artifact_tests {
         assert_eq!(index.get(&lane_epoch).map(|head| head.sequence), Some(1));
     }
 }
+#[cfg(test)]
 pub(super) fn persist_da_receipt(
     spool_dir: &Path,
     receipt: &DaIngestReceipt,
@@ -4179,6 +4176,7 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
     });
     Ok(receipts)
 }
+#[cfg(test)]
 pub(super) fn load_manifest_from_spool(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -4221,6 +4219,7 @@ pub(super) fn load_manifest_artifact_from_spool(
         storage_ticket: manifest.storage_ticket,
     })
 }
+#[cfg(test)]
 pub(super) fn load_pdp_commitment_from_spool(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -4489,6 +4488,7 @@ fn decode_manifest_spool_body(bytes: &[u8]) -> std::io::Result<(DaManifestV1, Re
     }
     Ok((manifest, fingerprint))
 }
+#[cfg(test)]
 fn validate_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<()> {
     decode_pdp_commitment_spool_body(bytes).map(|_| ())
 }

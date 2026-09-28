@@ -1,9 +1,7 @@
 //! Native SoraNet VPN lease escrow instruction handlers.
 use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
-use crate::{
-    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
+use crate::smartcontracts::isi::helpers::ensure_custody_account;
+use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly};
 use eyre::Result;
 use iroha_crypto::{
     Algorithm, derive_non_signing_ed25519_public_key,
@@ -16,9 +14,10 @@ use iroha_data_model::soranet::vpn::{
     VpnSessionReceiptV1, VpnUsageVoucherBodyV1, vpn_account_hash_v1 as account_hash,
     vpn_tariff_meter_hash_v1,
 };
+#[cfg(test)]
+use iroha_data_model::{IntoKeyValue, account::Account};
 use iroha_data_model::{
-    IntoKeyValue,
-    account::{Account, AccountId},
+    account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     prelude::*,
@@ -31,7 +30,6 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
@@ -537,29 +535,6 @@ pub fn vpn_lease_custody_account_id(
         &[network_id.as_bytes(), lease_id, asset_definition.as_bytes()],
     );
     Ok(AccountId::new(public_key))
-}
-fn ensure_custody_account(
-    custody: &AccountId,
-    state_transaction: &mut StateTransaction<'_, '_>,
-) -> Result<bool, Error> {
-    ensure_controller_capabilities(
-        custody.controller(),
-        &state_transaction.crypto.allowed_signing,
-        &state_transaction.crypto.allowed_curve_ids,
-    )?;
-    if state_transaction.world.account(custody).is_ok() {
-        return Ok(false);
-    }
-    let account = Account {
-        id: custody.clone(),
-        metadata: Metadata::default(),
-        label: None,
-        uaid: None,
-        opaque_ids: Vec::new(),
-    };
-    let (id, value) = account.into_key_value();
-    state_transaction.world.accounts.insert(id, value);
-    Ok(true)
 }
 fn transfer_numeric_asset_for_vpn(
     state_transaction: &mut StateTransaction<'_, '_>,

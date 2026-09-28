@@ -30,7 +30,7 @@ policy, ledger traits and `IdBox` composition remain in the aggregate.
 
 Peer identity owns the public-key wrapper, canonical binary/JSON decoding and
 JSON object keys. Supported cryptographic algorithms remain owned by
-`iroha_crypto`; the base requests its JSON surface and forwards FFI exports.
+`iroha_crypto`; the base requests its JSON surface.
 The ledger `Peer` entity and its address/identity composition remain in the aggregate.
 
 Metadata retains its canonical sequence-of-tuples binary layout, duplicate-key
@@ -40,10 +40,8 @@ include a separate allocation-tracking executable.
 JSON object-key and `norito::json::JsonKeyCodec` implementations live with the
 owned types. The production model depends on the codec, not the MV storage
 engine; real storage round trips retain MV only as a development dependency.
-The `ffi_export` and `transparent_api` features forward the existing opaque FFI
-and model-macro behavior. Metadata's shared opaque-handle operations use the
-`iroha_model_base` symbol prefix; the aggregate composition point owns the single
-global FFI deallocator. The crate has no aggregate-model dependency.
+The `transparent_api` feature forwards the model-macro mutable API selection.
+The crate has no aggregate-model dependency.
 
 Owner tests enable the cryptographic algorithm variants present in the captured
 schema. Check the minimal production dependency separately with

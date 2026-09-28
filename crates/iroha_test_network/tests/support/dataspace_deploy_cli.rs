@@ -108,7 +108,7 @@ fn fixture_trust(
     owner: &iroha::config::Config,
     build: BuildIdentity,
 ) -> Result<(Trust, LaneCatalog, BTreeMap<PeerId, AccountId>)> {
-    let (_, metadata) = iroha_core::release_identity::genesis_identity(
+    let _ = iroha_core::release_identity::genesis_identity(
         fixture.genesis_wire,
         fixture.genesis_public_key,
     )?;
@@ -161,16 +161,17 @@ fn fixture_trust(
                 && selected.insert(id.clone()),
             "fixture must bind each distinct signed-genesis validator to its native endpoint"
         );
-        let shared = config.sumeragi.v2_config(
-            Duration::from_millis(metadata.block_cadence_ms.get()),
-            metadata.mode.into(),
-        )?;
         peers.push(TrustPeer {
             torii_origin: context.torii_url.to_string(),
             node_fingerprint: Hash::new(id.encode()),
             peer_id: id,
             build_fingerprint: build.build_fingerprint(),
-            config_fingerprint: shared.fingerprint(),
+            config_fingerprint: iroha_core::sumeragi::node::configuration_fingerprint(
+                genesis_peers.len(),
+                &config.sumeragi.local,
+                &iroha_core::sumeragi::driver::DriverConfig::default(),
+                &config.sumeragi.retired_keys,
+            ),
         });
     }
     let authorities = genesis_validator_authorities(
@@ -662,9 +663,14 @@ fn assert_completed(report: &Value, operation: &Path, trust: &Trust) -> Result<(
     Ok(())
 }
 
-pub(super) async fn run_paid_deployment(
+pub(super) async fn run_paid_deployment<F, Fut>(
     fixture: PaidDeploymentFixture<'_>,
-) -> Result<HashOf<TransactionEntrypoint>> {
+    activate_providers: F,
+) -> Result<HashOf<TransactionEntrypoint>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     use std::os::unix::fs::PermissionsExt as _;
     init_instruction_registry();
     ensure!(
@@ -760,8 +766,107 @@ pub(super) async fn run_paid_deployment(
         "init/plan submitted a transaction"
     );
     let operation = journal.join(OPERATION);
-    // Native apply owns phase observation and typed finality-progress waits.
-    // A failed proof or other verification error must not trigger a new child.
+    // A real catalog operation reaches the first mandatory pulse while the installed
+    // session has no local provider. Only this deliberate observation deadline is resumed;
+    // malformed proof, rejection, or any other native error remains a test failure.
+    ensure!(
+        idle_before.iter().all(|(height, _, _)| *height == 5),
+        "missing-provider test must start at certified install height 5"
+    );
+    let mut pending = tokio::process::Command::new(&cli.binary);
+    pending
+        .env_clear()
+        .args(["--machine", "--config"])
+        .arg(&cli.config)
+        .arg("--operator-private-key-file")
+        .arg(&cli.operator)
+        .args(["taira", "dataspace-deploy", "apply", "--journal-dir"])
+        .arg(&journal)
+        .args(["--operation-id", OPERATION, "--timeout-ms", "15000"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let output = timeout_at(
+        (Instant::now() + Duration::from_secs(30)).min(deadline),
+        pending.output(),
+    )
+    .await??;
+    write_private(&root.join("provider-unavailable.stdout"), &output.stdout)?;
+    write_private(&root.join("provider-unavailable.stderr"), &output.stderr)?;
+    ensure!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr)
+                .contains("dataspace deployment deadline elapsed during phase catalog observation"),
+        "provider-unavailable catalog must fail only its bounded pending observation; see retained native stderr"
+    );
+    let before_recovery = cli
+        .run(
+            &[
+                "status",
+                "--journal-dir",
+                journal.to_str().unwrap(),
+                "--operation-id",
+                OPERATION,
+            ],
+            deadline,
+        )
+        .await?;
+    ensure!(
+        text_field(&before_recovery, "state")? == "pending",
+        "missing provider cannot complete or reject useful catalog work"
+    );
+    let transactions = field(field(&before_recovery, "verification")?, "transactions")?
+        .as_array()
+        .ok_or_else(|| eyre!("pending catalog observation missing"))?;
+    ensure!(
+        transactions.len() == 1
+            && text_field(&transactions[0], "phase")? == "catalog"
+            && text_field(&transactions[0], "state")? == "pending",
+        "exact catalog transaction must remain pending"
+    );
+    let statuses = try_join_all(
+        fixture
+            .clients
+            .iter()
+            .map(|client| validator_status_until(client, deadline)),
+    )
+    .await?;
+    ensure!(
+        statuses
+            .iter()
+            .zip(&idle_before)
+            .all(
+                |(status, (height, approved, rejected))| status.blocks == *height
+                    && status.txs_approved == *approved
+                    && status.txs_rejected == *rejected
+            ),
+        "missing threshold providers advanced the chain, emitted an empty block, or rejected valid work"
+    );
+    let retained_catalog = fs::read(operation.join("catalog.prepared.json"))?;
+    let retained_dispatch = fs::read(operation.join("catalog.submitted.json"))?;
+    let prepared: Value = json::from_slice(&retained_catalog)?;
+    ensure!(
+        field(&transactions[0], "transaction_hash")? == field(&prepared, "transaction_hash")?,
+        "pending observation changed retained catalog identity"
+    );
+    let submitted: Value =
+        json::from_slice(&fs::read(operation.join("catalog.submission-result.json"))?)?;
+    ensure!(
+        field(&submitted, "accepted")?.as_bool() == Some(true)
+            && field(&submitted, "transaction_hash")? == field(&prepared, "transaction_hash")?,
+        "missing-provider assertion requires successful native admission of this exact catalog transaction"
+    );
+    let peer_status = field(&transactions[0], "peer_status")?;
+    ensure!(
+        field(peer_status, "hash")? == field(&prepared, "transaction_hash")?
+            && text_field(peer_status, "scope")? == "local"
+            && matches!(
+                text_field(field(peer_status, "status")?, "kind")?,
+                "Queued" | "Approved"
+            ),
+        "missing-provider assertion requires the exact admitted transaction to remain locally pending"
+    );
+    activate_providers().await?;
     let report = cli
         .run(
             &[
@@ -776,6 +881,11 @@ pub(super) async fn run_paid_deployment(
         .await
         .wrap_err("single bounded native apply failed")?;
     assert_completed(&report, &operation, &trust)?;
+    ensure!(
+        fs::read(operation.join("catalog.prepared.json"))? == retained_catalog
+            && fs::read(operation.join("catalog.submitted.json"))? == retained_dispatch,
+        "provider recovery replaced the exact signed catalog transaction or its durable dispatch claim"
+    );
     let retained = retained_transactions(&operation, &owner, &plan)?;
     let idle_after = drained(fixture.clients, deadline).await?;
     for command in ["apply", "status", "apply", "status"] {

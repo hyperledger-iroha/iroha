@@ -29,6 +29,7 @@ pub struct FastpqSourceOpeningBuildLimits {
     pub manifest_decode: norito::DecodeLimits,
 }
 
+#[cfg(test)]
 /// Complete local source archive with one shared ordinary-write path.
 ///
 /// The leaves remain borrowed from the caller's exact archive. Neither this local
@@ -44,6 +45,7 @@ pub(crate) struct FastpqOrdinarySourceArchive<'leaves> {
     pub(crate) ordinary_root: Hash,
 }
 
+#[cfg(test)]
 /// Bounded manifest and complete-leaf validation before ordinary tree allocation.
 ///
 /// Separating preparation from [`Self::build`] lets a leaf-opening caller reject
@@ -56,6 +58,7 @@ pub(crate) struct PreparedFastpqOrdinarySourceArchive<'witness, 'leaves> {
     limits: FastpqSourceOpeningBuildLimits,
 }
 
+#[cfg(test)]
 /// Validate the exact fixed manifest and complete borrowed source leaf archive.
 ///
 /// The caller must supply the independently obtained complete execution-entry inventory,
@@ -140,6 +143,7 @@ pub(crate) fn prepare_fastpq_ordinary_source_archive_v1<'witness, 'leaves>(
     })
 }
 
+#[cfg(test)]
 impl<'leaves> PreparedFastpqOrdinarySourceArchive<'_, 'leaves> {
     /// Construct the one shared ordinary-write path from the bounded witness.
     ///
@@ -188,6 +192,7 @@ impl<'leaves> PreparedFastpqOrdinarySourceArchive<'_, 'leaves> {
     }
 }
 
+#[cfg(test)]
 /// Construct a bounded complete transport archive with one shared manifest path.
 ///
 /// The existing preparation validates raw write/count/byte limits, the canonical
@@ -257,6 +262,7 @@ pub fn fastpq_ordinary_source_statement_archive_v1(
     ))
 }
 
+#[cfg(test)]
 /// Construct one bounded opening from an exact local witness and complete leaf archive.
 ///
 /// The reserved FASTPQ key family must contain exactly one canonical fixed-key

@@ -59,26 +59,11 @@ pub fn mqpoly_div_small(logn: u32, f: &[i8], g: &[i8], h: &mut [u16], tmp: &mut 
     mqpoly_NTT_to_int(logn, h);
     mqpoly_int_to_ext(logn, h);
 }
-/// Maximum squared norm for "small" vectors (floor(beta^2)).
-pub const SQBETA: [u32; 11] = [
-    0, // unused
-    101498, 208714, 428865, 892039, 1852696, 3842630, 7959734, 16468416, 34034726, 70265242,
-];
 const Q: u32 = 12289;
 // -1/q mod 2^32
 const Q1I: u32 = 4143984639;
 // 2^64 mod q
 const R2: u32 = 5664;
-/// Convert a polynomial with signed coefficients into a polynomial modulo q
-/// (external representation).
-///
-/// The source values are assumed to be in the `[-q/2,+q/2]` range.
-pub fn mqpoly_signed_to_ext(logn: u32, v: &[i16], d: &mut [u16]) {
-    for i in 0..(1usize << logn) {
-        let x = (v[i] as i32) as u32;
-        d[i] = x.wrapping_add((x >> 16) & Q) as u16;
-    }
-}
 // Addition modulo q (internal representation).
 #[inline(always)]
 fn mq_add(x: u32, y: u32) -> u32 {
@@ -159,33 +144,6 @@ pub fn mqpoly_small_to_int(logn: u32, f: &[i8], d: &mut [u16]) {
         d[i] = (Q - x.wrapping_add((x >> 16) & Q)) as u16;
     }
 }
-/// Given a polynomial in internal representation, convert it to small coefficients.
-///
-/// Converted polynomial is written into `f`. If all coefficients, when converted to minimal signed
-/// representation, are in `[-127,+127]`, then the function succeeds and returns `true`. Otherwise,
-/// the function fails and returns `false`; values obtained for out-of-range coefficients are
-/// unspecified.
-pub fn mqpoly_int_to_small(logn: u32, d: &[u16], f: &mut [i8]) -> bool {
-    // Internal representation is in [1,q]. If the value is in the
-    // correct range, then adding 128 will yield a value in the [1,255]
-    // range; otherwise, we get a value in [256, q].
-    let mut ov = 0;
-    for i in 0..(1usize << logn) {
-        let x = mq_add(d[i] as u32, 128);
-        ov |= x >> 8;
-        f[i] = x.wrapping_sub(128) as i8;
-    }
-    ov == 0
-}
-/// Given a polynomial in external representation, convert it to internal representation (in-place).
-pub fn mqpoly_ext_to_int(logn: u32, a: &mut [u16]) {
-    for i in 0..(1usize << logn) {
-        // Internal representation is the same as external, except that
-        // zero is represented by q instead of 0.
-        let x = a[i] as u32;
-        a[i] = (x + (Q & (x.wrapping_sub(1) >> 16))) as u16;
-    }
-}
 /// Given a polynomial in internal representation, convert it to external representation (in-place).
 pub fn mqpoly_int_to_ext(logn: u32, a: &mut [u16]) {
     for i in 0..(1usize << logn) {
@@ -244,62 +202,6 @@ pub fn mqpoly_NTT_to_int(logn: u32, a: &mut [u16]) {
         }
         t = dt;
     }
-}
-/// Multiply polynomial `a` by polynomial `b`; both must be in NTT representation.
-pub fn mqpoly_mul_ntt(logn: u32, a: &mut [u16], b: &[u16]) {
-    for i in 0..(1usize << logn) {
-        a[i] = mq_mmul(mq_mmul(a[i] as u32, b[i] as u32), R2) as u16;
-    }
-}
-/// Divide polynomial `a` by polynomial `b`; both must be in NTT representation.
-///
-/// If `b` is invertible (none of its NTT coefficients are zero), then
-/// this returns `true`; otherwise, this returns false and the impacted
-/// result coefficients are set to the internal representation of zero.
-pub fn mqpoly_div_ntt(logn: u32, a: &mut [u16], b: &[u16]) -> bool {
-    let mut r = 0xFFFFFFFF;
-    for i in 0..(1usize << logn) {
-        let x = b[i] as u32;
-        r &= x.wrapping_sub(Q);
-        a[i] = mq_div(a[i] as u32, x) as u16;
-    }
-    (r >> 16) != 0
-}
-/// Subtract polynomial `b` from polynomial `a`; both must be in internal
-/// representation, or both must be in NTT representation.
-pub fn mqpoly_sub_int(logn: u32, a: &mut [u16], b: &[u16]) {
-    for i in 0..(1usize << logn) {
-        a[i] = mq_sub(a[i] as u32, b[i] as u32) as u16;
-    }
-}
-/// Get the squared norm of a polynomial modulo q (assuming normalization
-/// of coefficients in `[-q/2,+q/2]`).
-///
-/// The polynomial must be in external representation. If the squared norm
-/// exceeds `2^31-1` then `2^32-1` is returned.
-pub fn mqpoly_sqnorm(logn: u32, a: &[u16]) -> u32 {
-    let mut s = 0u32;
-    let mut sat = 0;
-    for i in 0..(1usize << logn) {
-        let x = a[i] as u32;
-        let m = ((Q - 1) >> 1).wrapping_sub(x) >> 16;
-        let y = x.wrapping_sub(m & Q) as i32;
-        s = s.wrapping_add((y * y) as u32);
-        sat |= s;
-    }
-    s | (sat >> 31).wrapping_neg()
-}
-/// Get the square norm of a polynomial with signed integer coefficients.
-///
-/// This function assumes that the squared norm fits on 32 bits (this is
-/// guaranteed if `logn <= 10` and all coefficients are in `[-2047,+2047]`).
-pub fn signed_poly_sqnorm(logn: u32, a: &[i16]) -> u32 {
-    let mut s = 0;
-    for i in 0..(1usize << logn) {
-        let x = a[i] as i32;
-        s += (x * x) as u32;
-    }
-    s
 }
 // NTT factors: if rev10() is the bit-reversal function over 10 bits,
 // then:

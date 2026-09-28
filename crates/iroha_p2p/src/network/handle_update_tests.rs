@@ -928,7 +928,6 @@ mod handle_update_tests {
         trusted_peers: ControlUpdateReceiver<message::UpdateTrustedPeers>,
         acl: ControlUpdateReceiver<message::UpdateAcl>,
         handshake: mpsc::Receiver<message::UpdateHandshake>,
-        consensus_caps: ControlUpdateReceiver<ConsensusCapsSnapshot>,
     }
     fn handle_with_control_update_receivers() -> (
         NetworkBaseHandle<Dummy, ChaCha20Poly1305>,
@@ -944,7 +943,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) =
             mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_safety_sender, _network_message_safety_rx) =
@@ -975,7 +973,6 @@ mod handle_update_tests {
                 update_trusted_peers_sender: update_trusted_tx,
                 update_acl_sender: update_acl_tx,
                 update_handshake_sender: update_handshake_tx,
-                update_consensus_caps_sender: update_consensus_caps_tx,
                 network_message_high_sender,
                 network_message_safety_sender,
                 network_message_progress_sender,
@@ -1000,7 +997,6 @@ mod handle_update_tests {
                 trusted_peers: update_trusted_rx,
                 acl: update_acl_rx,
                 handshake: update_handshake_rx,
-                consensus_caps: update_consensus_caps_rx,
             },
         )
     }
@@ -1008,23 +1004,6 @@ mod handle_update_tests {
         let (handle, receivers) = handle_with_control_update_receivers();
         drop(receivers);
         handle
-    }
-    fn test_consensus_caps(marker: u8) -> crate::ConsensusHandshakeCaps {
-        crate::ConsensusHandshakeCaps {
-            mode: if marker & 1 == 0 {
-                crate::ConsensusMode::Permissioned
-            } else {
-                crate::ConsensusMode::Npos
-            },
-            proto_version: u32::from(marker),
-            consensus_fingerprint: [marker; 32],
-            config: crate::ConsensusConfigCaps {
-                execution_policy_hash: [marker; 32],
-                nexus_policy_digest: [marker; 32],
-                v2_config_fingerprint: [marker; 32],
-                ivm_gas_schedule_hash: [marker; 32],
-            },
-        }
     }
     pub(super) fn handle_with_network_receivers<T: Pload>() -> (
         NetworkBaseHandle<T, ChaCha20Poly1305>,
@@ -1043,7 +1022,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) =
             mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_safety_sender, network_message_safety_rx) =
@@ -1062,7 +1040,6 @@ mod handle_update_tests {
         drop(update_trusted_rx);
         drop(update_acl_rx);
         drop(update_handshake_rx);
-        drop(update_consensus_caps_rx);
         let handle = NetworkBaseHandle {
             subscribe_to_peers_messages_sender: subscribe_tx,
             online_peers_receiver,
@@ -1079,7 +1056,6 @@ mod handle_update_tests {
             update_trusted_peers_sender: update_trusted_tx,
             update_acl_sender: update_acl_tx,
             update_handshake_sender: update_handshake_tx,
-            update_consensus_caps_sender: update_consensus_caps_tx,
             network_message_high_sender,
             network_message_safety_sender,
             network_message_progress_sender,
@@ -1128,7 +1104,6 @@ mod handle_update_tests {
         let (update_acl_tx, update_acl_rx) = control_update_channel();
         let (update_handshake_tx, update_handshake_rx) =
             mpsc::channel(HANDSHAKE_UPDATE_CHANNEL_CAPACITY);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (network_message_high_sender, _network_message_high_rx) =
             net_channel::channel_with_capacity(1);
         let (network_message_low_sender, _network_message_low_rx) =
@@ -1143,7 +1118,6 @@ mod handle_update_tests {
         drop(update_trusted_rx);
         drop(update_acl_rx);
         drop(update_handshake_rx);
-        drop(update_consensus_caps_rx);
         (
             NetworkBaseHandle {
                 subscribe_to_peers_messages_sender: subscribe_tx,
@@ -1163,7 +1137,6 @@ mod handle_update_tests {
                 update_trusted_peers_sender: update_trusted_tx,
                 update_acl_sender: update_acl_tx,
                 update_handshake_sender: update_handshake_tx,
-                update_consensus_caps_sender: update_consensus_caps_tx,
                 network_message_high_sender,
                 network_message_safety_sender: net_channel::channel_with_capacity(1).0,
                 network_message_progress_sender: net_channel::channel_with_capacity(1).0,
@@ -1443,7 +1416,6 @@ mod handle_update_tests {
             allow_cidrs: vec!["10.0.0.0/8".to_owned()],
             deny_cidrs: Vec::new(),
         });
-        handle.update_consensus_caps(test_consensus_caps(1), true);
         newest_handle.update_topology(message::UpdateTopology(HashSet::from(
             [newest_peer.clone()],
         )));
@@ -1470,8 +1442,6 @@ mod handle_update_tests {
             allow_cidrs: vec!["192.0.2.0/24".to_owned()],
             deny_cidrs: vec!["198.51.100.0/24".to_owned()],
         });
-        let newest_caps = test_consensus_caps(2);
-        newest_handle.update_consensus_caps(newest_caps.clone(), false);
         assert!(receivers.topology.has_changed().expect("topology open"));
         assert!(receivers.peers.has_changed().expect("peers open"));
         assert!(
@@ -1493,12 +1463,6 @@ mod handle_update_tests {
                 .expect("trusted peers open")
         );
         assert!(receivers.acl.has_changed().expect("ACL open"));
-        assert!(
-            receivers
-                .consensus_caps
-                .has_changed()
-                .expect("consensus caps open")
-        );
         let message::UpdateTopology(topology) = receive_control_update(&mut receivers.topology)
             .await
             .expect("topology update");
@@ -1541,13 +1505,6 @@ mod handle_update_tests {
         assert_eq!(acl.allow_keys, vec![newest_peer.public_key().clone()]);
         assert_eq!(acl.allow_cidrs, vec!["192.0.2.0/24"]);
         assert_eq!(acl.deny_cidrs, vec!["198.51.100.0/24"]);
-        let consensus = receive_control_update(&mut receivers.consensus_caps)
-            .await
-            .expect("consensus-capabilities update");
-        assert_eq!(consensus.caps, newest_caps);
-        let mut applied_generation = ReconnectGeneration::default();
-        assert!(consensus.take_reconnect_request(&mut applied_generation));
-        assert!(!consensus.take_reconnect_request(&mut applied_generation));
     }
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_update_returns_the_exact_actor_result() {
@@ -1594,72 +1551,6 @@ mod handle_update_tests {
             .expect("rejected update task")
             .expect_err("actor rejection must reach the caller");
         assert!(matches!(error, Error::HandshakeSoranet(message) if message == "restart required"));
-    }
-    #[tokio::test(flavor = "current_thread")]
-    async fn consensus_reconnect_request_survives_newer_caps_only_snapshot() {
-        let (sender, mut receiver) = consensus_caps_update_channel();
-        sender.send(test_consensus_caps(1), true);
-        let newest_caps = test_consensus_caps(2);
-        sender.send(newest_caps.clone(), false);
-        let snapshot = receive_control_update(&mut receiver)
-            .await
-            .expect("latest consensus snapshot");
-        assert_eq!(snapshot.caps, newest_caps);
-        let mut applied_generation = ReconnectGeneration::default();
-        assert!(snapshot.take_reconnect_request(&mut applied_generation));
-        sender.send(test_consensus_caps(3), false);
-        let caps_only = receive_control_update(&mut receiver)
-            .await
-            .expect("caps-only snapshot");
-        assert!(!caps_only.take_reconnect_request(&mut applied_generation));
-        sender.send(test_consensus_caps(4), true);
-        let reconnect = receive_control_update(&mut receiver)
-            .await
-            .expect("new reconnect snapshot");
-        assert!(reconnect.take_reconnect_request(&mut applied_generation));
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn concurrent_consensus_updates_preserve_every_reconnect_generation() {
-        const WRITERS: u8 = 8;
-        const UPDATES_PER_WRITER: u8 = 96;
-        const RECONNECT_EVERY: u8 = 3;
-        let (sender, mut receiver) = consensus_caps_update_channel();
-        let mut writers = Vec::new();
-        for writer in 0..WRITERS {
-            let sender = sender.clone();
-            writers.push(tokio::spawn(async move {
-                for sequence in 0..UPDATES_PER_WRITER {
-                    let reconnect = sequence % RECONNECT_EVERY == 0;
-                    sender.send(
-                        test_consensus_caps(writer.wrapping_add(sequence)),
-                        reconnect,
-                    );
-                    tokio::task::yield_now().await;
-                }
-            }));
-        }
-        for writer in writers {
-            writer
-                .await
-                .expect("consensus update writer must not panic");
-        }
-        let snapshot = tokio::time::timeout(
-            Duration::from_secs(1),
-            receive_control_update(&mut receiver),
-        )
-        .await
-        .expect("a concurrent consensus update must reach the retained slot")
-        .expect("consensus update sender remains open");
-        let reconnects_per_writer = u64::from(UPDATES_PER_WRITER.div_ceil(RECONNECT_EVERY));
-        let expected_generation = u64::from(WRITERS) * reconnects_per_writer;
-        assert_eq!(
-            snapshot.reconnect_generation,
-            ReconnectGeneration(expected_generation),
-            "caps-only publications must not erase concurrent reconnect requests"
-        );
-        let mut applied_generation = ReconnectGeneration::default();
-        assert!(snapshot.take_reconnect_request(&mut applied_generation));
-        assert!(!snapshot.take_reconnect_request(&mut applied_generation));
     }
     #[test]
     fn subscriber_registration_queue_is_bounded() {
@@ -2598,7 +2489,6 @@ mod handle_update_tests {
             .update_soranet_handshake(ActualSoranetHandshake::default())
             .await
             .expect_err("closed actor must reject an acknowledged handshake update");
-        handle.update_consensus_caps(test_consensus_caps(0), false);
     }
     #[test]
     fn closed_handle_reports_subscriber_queue_cap() {

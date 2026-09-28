@@ -28,7 +28,6 @@ mod model {
         Getters,
     )]
     #[display("{id}@{address}")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::peer::model::Peer")]
     pub struct Peer {

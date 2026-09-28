@@ -100,6 +100,7 @@ pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
 pub mod jurisdiction;
 /// Qualified-provider encryption for Kagemusha V1 credit openings.
+#[cfg(test)]
 pub mod kagemusha_v1_crypto;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
@@ -210,7 +211,6 @@ pub fn validate_genesis_block(
 ) -> Result<(), block::InvalidGenesisError> {
     block::check_genesis_block(block, genesis_account)
 }
-use core::time::Duration;
 use gossiper::TransactionGossip;
 use iroha_data_model::{events::EventBox, prelude::*};
 use iroha_primitives::unique_vec::UniqueVec;
@@ -231,8 +231,6 @@ use crate::{
 use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
 use iroha_torii_shared::connect as connect_proto;
 use tokio::sync::broadcast;
-/// The interval at which sumeragi checks if there are tx in the `queue`.
-pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
 /// Maximum encoded P2P frame size accepted for one lane-drain vote.
 ///
 /// The cap covers the largest valid embedded lane committee and is enforced by
@@ -1403,7 +1401,7 @@ pub mod prelude {
     //! Re-exports important traits and types. Meant to be glob imported when using `Iroha`.
     #[doc(inline)]
     pub use crate::{
-        oracle::{ObservationAdmission, OracleAggregator, aggregate, validate_connector_request},
+        oracle::{ObservationAdmission, OracleAggregator, aggregate},
         smartcontracts::ValidSingularQuery,
         state::{StateReadOnly, StateView, World, WorldReadOnly},
         tx::AcceptedTransaction,
@@ -2285,10 +2283,7 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(request_payload.as_ref());
         assert_eq!(request_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(
-            &request_message,
-            iroha_p2p::TransportAdmissionClass::Lane,
-        );
+        assert_network_admission(&request_message, iroha_p2p::TransportAdmissionClass::Lane);
         assert_eq!(raw_network_tag(&request_message), 4);
         assert_eq!(raw_network_topic(&request_message), NetworkTopic::Consensus);
         let request_hash = HashOf::new(&request_message);
@@ -2319,10 +2314,7 @@ mod tests {
             CertifiedMergeSidecarMessage::Close(close.clone()),
         ));
         assert_eq!(close_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(
-            &close_message,
-            iroha_p2p::TransportAdmissionClass::Lane,
-        );
+        assert_network_admission(&close_message, iroha_p2p::TransportAdmissionClass::Lane);
         assert_eq!(raw_network_topic(&close_message), NetworkTopic::Consensus);
         let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
         let decoded =
@@ -2349,10 +2341,7 @@ mod tests {
             CertifiedMergeSidecarMessage::CloseAck(close_ack.clone()),
         ));
         assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(
-            &close_ack_message,
-            iroha_p2p::TransportAdmissionClass::Lane,
-        );
+        assert_network_admission(&close_ack_message, iroha_p2p::TransportAdmissionClass::Lane);
         assert_eq!(
             raw_network_topic(&close_ack_message),
             NetworkTopic::Consensus
@@ -2447,10 +2436,7 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(chunk_payload.as_ref());
         assert_eq!(chunk_message.topic(), NetworkTopic::ConsensusChunk);
-        assert_network_admission(
-            &chunk_message,
-            iroha_p2p::TransportAdmissionClass::Payload,
-        );
+        assert_network_admission(&chunk_message, iroha_p2p::TransportAdmissionClass::Payload);
         assert_eq!(
             raw_network_topic(&chunk_message),
             NetworkTopic::ConsensusChunk

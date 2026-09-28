@@ -1944,12 +1944,15 @@ fn main_fri_bases_from_polynomials_v1(
         })
         .collect()
 }
+#[cfg(test)]
 /// Exact six-provider registry used only for verifier-safe opened-row evaluation.
 pub(super) struct MainOpenedProviderSetV1<'a> {
     layout: AggregateProofLayoutV1,
     groups: Vec<MainOpenedGroupProviderV1<'a>>,
 }
+#[cfg(test)]
 impl<'a> MainOpenedProviderSetV1<'a> {
+    #[cfg(test)]
     pub(super) fn new_v1(
         layout: &AggregateProofLayoutV1,
         groups: Vec<MainOpenedGroupProviderV1<'a>>,
@@ -1969,6 +1972,7 @@ impl<'a> MainOpenedProviderSetV1<'a> {
             groups,
         })
     }
+    #[cfg(test)]
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
         if self.groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
@@ -1983,6 +1987,7 @@ impl<'a> MainOpenedProviderSetV1<'a> {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn registered_constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -2029,6 +2034,7 @@ impl<'a> MainOpenedProviderSetV1<'a> {
         provider.constraint_residues_v1(registration, query_index, next_query_index, x, opening)
     }
 }
+#[cfg(test)]
 fn validate_main_opened_evaluation_shape_v1(
     providers: &MainOpenedProviderSetV1<'_>,
     query_index: usize,
@@ -2072,6 +2078,7 @@ fn validate_main_opened_evaluation_shape_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn main_opened_composition_value_v1(
     providers: &mut MainOpenedProviderSetV1<'_>,
     query_index: usize,
@@ -2119,6 +2126,7 @@ pub(super) fn main_opened_composition_value_v1(
     }
     Ok(composition)
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn validate_main_fri_mixes_v1(
     layout: &AggregateProofLayoutV1,
     mixes: &[Vec<FriMixV1>],
@@ -2152,6 +2160,7 @@ pub(super) fn validate_main_fri_mixes_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Full MAIN verifier opened-row evaluator.
 ///
 /// This path is intentionally separate from prover fixed-polynomial streaming:
@@ -2162,6 +2171,7 @@ pub(super) struct MainOpenedRowEvaluatorV1<'a, 'providers> {
     pub(super) alphas: &'a [Vec<Vec<E>>],
     pub(super) mixes: &'a [Vec<FriMixV1>],
 }
+#[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for MainOpenedRowEvaluatorV1<'_, '_> {
     fn evaluate_opened_row_v1(
         &mut self,
@@ -2493,6 +2503,7 @@ fn p256_binding_sink_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
     }
     Ok(residues)
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn p256_scalar_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,
@@ -3246,6 +3257,7 @@ impl ShaMainFp4AirEvaluatorV1 {
         Ok(residues)
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn p256_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,

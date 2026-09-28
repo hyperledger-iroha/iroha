@@ -7,6 +7,7 @@
 mod settlement_atomic;
 mod settlement_pair;
 
+use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
     tx::AcceptedTransaction,
@@ -57,10 +58,7 @@ use iroha_data_model::{
         },
     },
     musubi::MusubiPackageIdV1,
-    nexus::{
-        AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, LaneCatalog,
-    },
+    nexus::{DataSpaceCatalog, LaneCatalog},
     permission::Permission,
     smart_contract::ContractAddress,
     transaction::{Executable, ExecutableBatchItem, signed::TransactionPayload},
@@ -7417,12 +7415,6 @@ fn is_canonical_dataspace_lane(
     dataspace_id: DataSpaceId,
 ) -> bool {
     lane.dataspace_id == dataspace_id && !lane_uses_reserved_autoscale_metadata(lane)
-}
-fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
-    lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
-        || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
-        || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
-        || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
 }
 fn reject_autoscale_owned_rule_lane(
     rule: &LaneRoutingRule,

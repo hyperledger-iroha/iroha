@@ -628,7 +628,7 @@ impl PendingCompactionTemp {
         }
         let metadata = secure_file_metadata::from_file(&self.file)?;
         if journal_file_identity(&metadata) != self.file_identity
-            || !journal_file_is_single_link(&metadata)
+            || !secure_file_metadata::is_single_link(&metadata)
             || metadata.len() != self.snapshot_len
         {
             return Err(invalid_data(
@@ -657,7 +657,7 @@ impl QueuePlanJournalReplay {
         }
         let metadata = secure_file_metadata::from_file(&self.file)?;
         if journal_file_identity(&metadata) != self.file_identity
-            || !journal_file_is_single_link(&metadata)
+            || !secure_file_metadata::is_single_link(&metadata)
             || metadata.len() != self.snapshot_len
         {
             return Err(invalid_data(
@@ -800,7 +800,7 @@ impl QueuePlanJournal {
                 Ok(canonical)
                     if !journal_file_is_indirect(&canonical)
                         && canonical.is_file()
-                        && journal_file_is_single_link(&canonical)
+                        && secure_file_metadata::is_single_link(&canonical)
                         && canonical.len() != 0 => {}
                 Ok(_) => {
                     return Err(invalid_data(
@@ -1916,7 +1916,7 @@ impl QueuePlanJournal {
         }
         let metadata = secure_file_metadata::from_file(&self.file)?;
         if journal_file_identity(&metadata) != self.file_identity
-            || !journal_file_is_single_link(&metadata)
+            || !secure_file_metadata::is_single_link(&metadata)
             || metadata.len() != expected_len
         {
             return Err(invalid_data(
@@ -3080,22 +3080,6 @@ const fn journal_file_identity_available(identity: JournalFileIdentity) -> bool 
 const fn journal_file_identity_available(_identity: JournalFileIdentity) -> bool {
     false
 }
-fn journal_file_is_single_link(metadata: &SecureMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
-}
 #[cfg(windows)]
 fn journal_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -3288,7 +3272,7 @@ fn open_recoverable_bootstrap_temp(path: &Path, expected: &[u8]) -> io::Result<O
     };
     if journal_file_is_indirect(&metadata)
         || !metadata.is_file()
-        || !journal_file_is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&metadata)
         || usize::try_from(metadata.len()).unwrap_or(usize::MAX) > expected.len()
     {
         return Err(invalid_data(
@@ -3388,7 +3372,7 @@ fn open_pending_compaction_temp(
     };
     if journal_file_is_indirect(&metadata)
         || !metadata.is_file()
-        || !journal_file_is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&metadata)
     {
         return Err(invalid_data(
             "queue plan journal compaction temp must be a direct single-link regular file",
@@ -3662,7 +3646,7 @@ fn verify_bound_compaction_canonical(
     }
     let metadata = secure_file_metadata::from_file(file)?;
     if journal_file_identity(&metadata) != file_identity
-        || !journal_file_is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&metadata)
         || metadata.len() != snapshot_len
     {
         return Err(invalid_data(
@@ -3915,7 +3899,7 @@ fn validate_regular_path(path: &Path) -> io::Result<()> {
             "queue plan journal path must be a direct regular file with a stable filesystem identity",
         ));
     }
-    if !journal_file_is_single_link(&metadata) {
+    if !secure_file_metadata::is_single_link(&metadata) {
         return Err(invalid_data(
             "queue plan journal must have exactly one filesystem link",
         ));
@@ -3938,7 +3922,9 @@ fn verify_open_regular_path(path: &Path, file: &File) -> io::Result<JournalFileI
             "opened queue plan journal and its path must be direct regular files with stable filesystem identities",
         ));
     }
-    if !journal_file_is_single_link(&path_metadata) || !journal_file_is_single_link(&opened) {
+    if !secure_file_metadata::is_single_link(&path_metadata)
+        || !secure_file_metadata::is_single_link(&opened)
+    {
         return Err(invalid_data(
             "queue plan journal must have exactly one filesystem link",
         ));

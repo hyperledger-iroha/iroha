@@ -59,19 +59,17 @@ iroha_sccp_wallet = { path = "crates/iroha_sccp_wallet" }
 iroha_sumeragi = { path = "crates/iroha_sumeragi" }
 norito = { path = "crates/norito", default-features = false }
 norito_derive = { path = "crates/norito_derive" }
-iroha_ffi = { path = "crates/iroha_ffi" }
 iroha_version = { path = "crates/iroha_version" }
 connect_norito_bridge = { path = "crates/connect_norito_bridge" }
 fastpq_prover = { path = "crates/fastpq_prover" }
 iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
+iroha_zkp_poseidon = { path = "crates/iroha_zkp_poseidon" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 
 iroha_smart_contract = { path = "crates/iroha_smart_contract" }
 iroha_smart_contract_utils = { path = "crates/iroha_smart_contract_utils" }
 iroha_executor = { path = "crates/iroha_executor" }
 iroha_smart_contract_codec = { path = "crates/iroha_smart_contract_codec" }
-iroha_trigger = { path = "crates/iroha_trigger" }
-iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 
 # Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
 # request them locally so focused builds do not compile the broadest model.
@@ -129,7 +127,6 @@ bech32 = "0.11.0"
 hex = { version = "0.4.3", default-features = false }
 http-body-util = "0.1.3"
 http = "1.3.1"
-httpmock = "0.8.2"
 nonzero_ext = { version = "0.3.0", default-features = false }
 rust_decimal = { version = "1.39", default-features = false }
 
@@ -141,7 +138,6 @@ clap = "4.5.51"
 owo-colors = "4.2.3"
 supports-color = "3.0.2"
 humantime = "2.3.0"
-crossterm = "0.29"
 criterion = "0.8.0"
 expect-test = "1.5.1"
 assertables = "9.8.2"
@@ -152,13 +148,11 @@ thiserror = { version = "2.0.17", default-features = false }
 displaydoc = { version = "0.2.5", default-features = false }
 error-stack = "0.8.0"
 
-# Removed cfg-if dependency as we now use explicit cfg attributes
 derive_more = { version = "2.0.1", default-features = false }
 async-trait = "0.1.89"
 strum = { version = "0.28.0", default-features = false }
 getset = "0.1.6"
 hex-literal = "1.1.0"
-derive-where = "1.6.0"
 
 rand = { version = "0.9.3", default-features = false, features = ["alloc", "os_rng", "small_rng", "std", "std_rng", "thread_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6.4", default-features = false, features = ["std"] }
@@ -174,7 +168,6 @@ rayon = "1.11.0"
 dashmap = { version = "6.1.0" }
 rustc-hash = "2.1.1"
 
-json5 = "1.0.0"
 toml = "0.9.8"
 zstd = "0.13.3"
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
@@ -187,8 +180,8 @@ halo2curves = { version = "0.9" }
 mv = { path = "crates/mv" }
 concread = { version = "=0.5.10", default-features = false }
 
-# [patch.crates-io] was temporarily disabled; keep the local overrides we still
-# rely on for Halo2 helpers and the CUDA helper.
+# Reviewed local overrides of upstream crates. Every entry must stay in the
+# resolved graph; unused mirrors are removed from `vendor/`.
 [patch.crates-io]
 # Allocation custody must follow actual epoch reclamation in the locked EBR owner.
 concread = { path = "vendor/concread" }
@@ -198,7 +191,6 @@ halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
 wayland-scanner = { path = "vendor/wayland-scanner-0.31.10" }
-#streebog = { path = "vendor/streebog" }
 
 # The pinned 0.5.3 release does not adapt Pasta fields to halo2-base's local
 # ScalarField trait. Keep this source-scoped so no crates.io package can be
@@ -241,7 +233,6 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("crc-key-hash"))',
     'cfg(feature, values("cuda-stage1"))',
     'cfg(feature, values("derive"))',
-    'cfg(feature, values("ffi_import"))',
     'cfg(feature, values("gpu-compression"))',
     'cfg(feature, values("iroha_schema"))',
     'cfg(feature, values("iroha-core-tests"))',
@@ -333,7 +324,6 @@ members = [
     "crates/*",
     "crates/norito/accelerators/jsonstage1_cuda",
     "crates/norito/accelerators/jsonstage1_metal",
-    "crates/iroha_ffi/proc_macro",
     "vendor/concread",
     "vendor/find_cuda_helper",
     "mochi/*",

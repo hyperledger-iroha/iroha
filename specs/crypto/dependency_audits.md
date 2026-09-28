@@ -2,10 +2,11 @@
 
 ## Streebog (`streebog` crate)
 
-- **Version in tree:** `0.11.0-rc.2` vendored under `vendor/streebog` (used when the `gost` feature is enabled).
+- **Version in tree:** `0.11.0` from crates.io, pinned by checksum in `Cargo.lock` (used when the
+  `gost` feature is enabled). The workspace carries no vendored mirror or `[patch]` override.
 - **Consumer:** `crates/iroha_crypto::signature::gost` (HMAC-Streebog DRBG + message hashing).
-- **Status:** Release-candidate only. No non-RC crate currently offers the required API surface,
-  so we mirror the crate in-tree for auditability while we track upstream for a final release.
+- **Status:** Stable upstream release. The former in-tree `0.11.0-rc.2` mirror was removed once
+  the stable `0.11.0` release shipped the required API surface.
 - **Review checkpoints:**
   - Verified hash output against the Wycheproof suite and TC26 fixtures via
     `cargo test -p iroha_crypto --features gost` (see `crates/iroha_crypto/tests/gost_wycheproof.rs`).
@@ -18,6 +19,5 @@
     See `specs/crypto/gost_performance.md` for the end-to-end workflow.
 - **Mitigations:** `streebog` is only ever invoked through deterministic wrappers that zeroise keys;
   the signer hedges nonces with OS entropy to avoid catastrophic RNG failure.
-- **Next actions:** Follow RustCrypto’s streebog `0.11.x` release; once the tag lands, treat the
-  upgrade as a standard dependency bump (verify checksum, review the diff, record provenance, and
-  drop the vendored mirror).
+- **Next actions:** Treat later `0.11.x` releases as standard dependency bumps: verify the
+  checksum, review the upstream diff, and record provenance.

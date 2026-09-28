@@ -2724,6 +2724,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                         if register.object.id == domain
                 )
         });
+        let chain_discriminant = manifest.chain_discriminant();
+        let consensus_mode = manifest.consensus_mode();
         let mut builder = manifest.into_builder().next_transaction();
         if !domain_registered {
             builder = builder.append_instruction(Register::domain(Domain::new(domain)));
@@ -2753,11 +2755,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         builder
             .build_raw()
             .expect("explicit isolated fixture allocations")
+            .with_chain_discriminant(chain_discriminant)
+            .with_consensus_mode(consensus_mode)
             .with_consensus_meta()
     }
     fn with_test_authority_for_topology(path: PathBuf, topology: &[PeerId]) -> PathBuf {
         let manifest =
             RawGenesisTransaction::from_path(&path).expect("parse test genesis manifest");
+        let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
         let consensus_mode = manifest.consensus_mode();
         let chain_discriminant = manifest.chain_discriminant();
         let manifest = super::super::complete_test_genesis_builder_for_peers(

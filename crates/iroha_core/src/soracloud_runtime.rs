@@ -5,6 +5,10 @@ use crate::{
 use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_data_model::nexus::staking::PublicLaneValidatorStatus;
+#[cfg(test)]
+use iroha_data_model::soracloud::{
+    SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraUploadedModelBundleV1,
+};
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
@@ -12,13 +16,12 @@ use iroha_data_model::{
         SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
         SoraConfigExportV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraInrouGuestIsaV1,
         SoraInrouReplicaHostAvailabilityV1, SoraInrouReplicaPlacementV1,
-        SoraInrouServicePlacementRecordV1, SoraLeaseVolumeKindV1, SoraModelProvenanceKindV1,
-        SoraModelProvenanceRefV1, SoraOrderedMailboxResultV1,
+        SoraInrouServicePlacementRecordV1, SoraLeaseVolumeKindV1, SoraOrderedMailboxResultV1,
         SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1,
         SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
         SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBundleV1,
+        SoraStateMutationOperationV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -50,6 +53,7 @@ pub fn authoritative_soracloud_sequence(world: &impl WorldReadOnly) -> u64 {
     latest_soracloud_sequence(world).saturating_add(1)
 }
 
+#[cfg(test)]
 /// Validate the exact writer-produced finalization projections for an uploaded-model bundle.
 ///
 /// A registered bundle is final only once one unambiguous `UserUpload` weight projection
@@ -178,6 +182,7 @@ pub fn validate_finalized_soracloud_uploaded_model_release(
     Ok(())
 }
 
+#[cfg(test)]
 /// Return whether an account has an exact validator tenure active at one consensus height.
 ///
 /// Soracloud adverts are only eligibility claims; validator lifecycle state remains the
@@ -1384,8 +1389,6 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
         None
     }
 }
-/// Shared Soracloud runtime handle type used across crate boundaries.
-pub type SharedSoracloudRuntimeHandle = Arc<dyn SoracloudRuntimeReadHandle>;
 /// Coarse execution failure category for embedded Soracloud runtime requests.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::soracloud_runtime::SoracloudRuntimeExecutionErrorKind")]
@@ -1699,13 +1702,7 @@ fn soracloud_runtime_conflict_has_stable_label() {
         "conflict"
     );
 }
-impl SoracloudDeterministicStateMutation {
-    /// Return `true` when this mutation writes payload bytes into authoritative service state.
-    #[must_use]
-    pub fn is_upsert(&self) -> bool {
-        matches!(self.operation, SoraStateMutationOperationV1::Upsert)
-    }
-}
+impl SoracloudDeterministicStateMutation {}
 impl From<SoracloudLocalReadKind> for SoraServiceHandlerClassV1 {
     fn from(value: SoracloudLocalReadKind) -> Self {
         value.handler_class()

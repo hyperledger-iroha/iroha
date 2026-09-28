@@ -1159,7 +1159,7 @@ the Nexus cut-over. All metrics back the Grafana board stored in
 
 #### Routed-trace audit outcomes
 
-- `telemetry` log `nexus.audit.outcome` — emitted via `Telemetry::record_audit_outcome` whenever a routed-trace checkpoint completes. The Norito payload includes `trace_id`, `slot_height`, `reviewer`, `status` (for example `pass`, `fail`, `mitigated`), and an optional `mitigation_url`.
+- `telemetry` log `nexus.audit.outcome` — produced by `Telemetry::record_audit_outcome`. The Norito payload includes `trace_id`, `slot_height`, `reviewer`, `status` (for example `pass`, `fail`, `mitigated`), and an optional `mitigation_url`. No node path calls the emitter yet, so it is compiled only for `iroha_core` unit tests until the routed-trace checkpoint wiring lands.
 - Prometheus surfaces `nexus_audit_outcome_total{trace_id,status}` and `nexus_audit_outcome_last_timestamp_seconds{trace_id}` so dashboards and alert rules can track routed-trace health.
 
 Operator workflow:

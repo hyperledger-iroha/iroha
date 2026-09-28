@@ -24,23 +24,27 @@
 //! This stage proves no radix equation, range, inverse, product, lookup,
 //! readiness, release, or authorization claim.
 
+use super::rns_native_q_mask_linear_relations::RNS_NATIVE_Q_MASK_LINEAR_RESIDUAL_MAX_BYTES_V1;
+#[cfg(test)]
 use super::{
     rns_native_cross_field_rlwe_direct::{
         RnsNativeCrossFieldRlweAtomicVerifiedV2, RnsNativeCrossFieldRlweDirectErrorV1,
         RnsNativeCrossFieldRlweSafeCoreProjectionV1,
     },
-    rns_native_q_mask_linear_relations::{
-        RNS_NATIVE_Q_MASK_LINEAR_RESIDUAL_MAX_BYTES_V1, RnsNativeQMaskLinearRelationsPrerequisiteV1,
-    },
+    rns_native_q_mask_linear_relations::RnsNativeQMaskLinearRelationsPrerequisiteV1,
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
 };
+#[cfg(test)]
 use crate::vega::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1 as Point,
     bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, sponge::Keccak256,
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
+#[cfg(test)]
 const FLAGS_V1: u8 = 0;
+#[cfg(test)]
 const MAGIC_V1: [u8; 4] = *b"ZER1";
 const DIGEST_BYTES_V1: usize = 32;
 const POINT_BYTES_V1: usize = 33;
@@ -64,18 +68,27 @@ pub(super) const RNS_NATIVE_EXISTING_RADIX_RESIDUAL_MAX_BYTES_V1: usize =
         - INVENTORY_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const ROLE_DIFFERENCE_LOW_V1: u8 = 1;
+#[cfg(test)]
 const ROLE_SLACK_LOW_V1: u8 = 2;
+#[cfg(test)]
 const PRE_Z_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-existing-radix.pre-z-manifest";
+#[cfg(test)]
 const PRE_Z_CANDIDATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-existing-radix.pre-z-candidate-root";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-existing-radix.residual";
+#[cfg(test)]
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-existing-radix.codec";
+#[cfg(test)]
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-existing-radix.prerequisite";
+#[cfg(test)]
 const POINT_ORDER_LANGUAGE_V1: &[u8] =
     b"ordinal=((group*2+role-index)*17+column);group=0..343;role-index=(0:D-low/tag1,1:S-low/tag2);column=0..16;top-commitments-are-aliased-from-original-inventory-and-never-encoded-here";
+#[cfg(test)]
 const SOLE_Z_SEPARATION_LANGUAGE_V1: &[u8] =
     b"pre-z-candidate-root=fixed-manifest||role-group-column-points-only;exclude-full-added-inventory-root,S3/S5/S8/S10-11-roots,residuals,bindings,codec,and-all-inverse-roots;transport-header-binds-predecessors;post-verification-token-binds-predecessor-residual-and-binding";
 
@@ -113,6 +126,7 @@ const _: () = {
 };
 
 /// Failure while authenticating the exact existing-radix commitment view.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeExistingRadixCommitmentViewErrorV1 {
     ProofCapExceeded,
@@ -124,14 +138,17 @@ pub(super) enum RnsNativeExistingRadixCommitmentViewErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeExistingRadixCommitmentViewErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeExistingRadixCommitmentViewErrorV1 {}
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct UpstreamBindingV1 {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
@@ -146,6 +163,7 @@ struct UpstreamBindingV1 {
     q_mask_verified_transcript_root: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl UpstreamBindingV1 {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeQMaskLinearRelationsPrerequisiteV1<'_, '_, S>,
@@ -188,6 +206,7 @@ impl UpstreamBindingV1 {
     }
 }
 
+#[cfg(test)]
 fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     for (ordinal, digest) in digests.iter().enumerate() {
         if *digest == [0; DIGEST_BYTES_V1] || digests[..ordinal].contains(digest) {
@@ -197,6 +216,7 @@ fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     true
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExistingRadixCoordinateV1 {
     ordinal: usize,
@@ -205,6 +225,7 @@ struct ExistingRadixCoordinateV1 {
     column: usize,
 }
 
+#[cfg(test)]
 fn coordinate_v1(
     ordinal: usize,
 ) -> Result<ExistingRadixCoordinateV1, RnsNativeExistingRadixCommitmentViewErrorV1> {
@@ -226,6 +247,7 @@ fn coordinate_v1(
     })
 }
 
+#[cfg(test)]
 fn pre_z_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(PRE_Z_MANIFEST_DOMAIN_V1);
@@ -249,6 +271,7 @@ fn pre_z_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn canonical_pre_z_candidate_root_v1(
     inventory: &[u8],
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeExistingRadixCommitmentViewErrorV1> {
@@ -292,12 +315,14 @@ fn canonical_pre_z_candidate_root_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     for digest in upstream.digests_v1() {
         hash.update(&digest);
     }
 }
 
+#[cfg(test)]
 fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     pre_z_candidate_root: [u8; DIGEST_BYTES_V1],
@@ -327,6 +352,7 @@ fn canonical_residual_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
@@ -335,11 +361,13 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -385,6 +413,7 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ExistingRadixProofViewV1<'a> {
     inventory: &'a [u8],
@@ -394,6 +423,7 @@ struct ExistingRadixProofViewV1<'a> {
     codec_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> ExistingRadixProofViewV1<'a> {
     #[cfg(test)]
     fn from_components_v1(
@@ -536,6 +566,7 @@ impl<'a> ExistingRadixProofViewV1<'a> {
 ///
 /// The low vectors come from this stage.  `difference_top` and `slack_top`
 /// alias the original cross-field inventory and have no second wire owner.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct ExistingRadixCommitmentsV1 {
     pub(super) difference_low: [Point; LOW_DIGITS_V1],
@@ -544,6 +575,7 @@ pub(super) struct ExistingRadixCommitmentsV1 {
     pub(super) slack_top: Point,
 }
 
+#[cfg(test)]
 fn exact_subslice_range_v1(base: &[u8], child: &[u8]) -> Option<(usize, usize)> {
     let base_start = base.as_ptr() as usize;
     let base_end = base_start.checked_add(base.len())?;
@@ -555,15 +587,18 @@ fn exact_subslice_range_v1(base: &[u8], child: &[u8]) -> Option<(usize, usize)> 
     Some((child_start.checked_sub(base_start)?, child.len()))
 }
 
+#[cfg(test)]
 fn exact_slice_at_v1(base: &[u8], offset: usize, len: usize) -> Option<&[u8]> {
     let end = offset.checked_add(len)?;
     base.get(offset..end)
 }
 
+#[cfg(test)]
 fn same_slice_identity_v1(left: &[u8], right: &[u8]) -> bool {
     left.len() == right.len() && core::ptr::eq(left.as_ptr(), right.as_ptr())
 }
 
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     dead_code,
@@ -573,6 +608,7 @@ pub(super) struct RnsNativeExistingRadixCandidateAxisV1 {
     origin: RnsNativeExistingRadixCandidateAxisOriginV1,
 }
 
+#[cfg(test)]
 enum RnsNativeExistingRadixCandidateAxisOriginV1 {
     Preflight {
         root: [u8; DIGEST_BYTES_V1],
@@ -587,6 +623,7 @@ enum RnsNativeExistingRadixCandidateAxisOriginV1 {
     RawFixture { root: [u8; DIGEST_BYTES_V1] },
 }
 
+#[cfg(test)]
 impl RnsNativeExistingRadixCandidateAxisV1 {
     pub(super) fn is_valid_with_fixed_axes_v1(&self, other_axes: &[[u8; DIGEST_BYTES_V1]]) -> bool {
         let root = match &self.origin {
@@ -722,6 +759,7 @@ impl RnsNativeExistingRadixCandidateAxisV1 {
     }
 }
 
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     dead_code,
@@ -745,6 +783,7 @@ pub(super) struct RnsNativeExistingRadixValidationPermitV1 {
 /// Opaque one-shot pair minted by the sole schedule-free recursive preflight.
 /// The direct module may split it only while retaining both children beside
 /// the exact inventory owner.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     dead_code,
@@ -755,6 +794,7 @@ pub(super) struct RnsNativeExistingRadixPreDirectSplitV1 {
     pub(super) permit: RnsNativeExistingRadixValidationPermitV1,
 }
 
+#[cfg(test)]
 struct RnsNativeExistingRadixAuthenticatedOriginV1 {
     root: [u8; DIGEST_BYTES_V1],
     base_address: usize,
@@ -767,6 +807,7 @@ struct RnsNativeExistingRadixAuthenticatedOriginV1 {
 
 /// Perform the sole 11,696-point validation/root pass over the exact existing-
 /// radix child of an already exact-decoded cross-inventory continuation.
+#[cfg(test)]
 pub(super) fn preflight_rns_native_existing_radix_candidate_v1(
     base: &[u8],
     existing_wire: &[u8],
@@ -820,6 +861,7 @@ pub(super) fn preflight_rns_native_existing_radix_candidate_v1(
     })
 }
 
+#[cfg(test)]
 impl RnsNativeExistingRadixValidationPermitV1 {
     fn bind_verified_predecessor_v1<'proof, S>(
         self,
@@ -906,6 +948,7 @@ impl RnsNativeExistingRadixValidationPermitV1 {
 /// 385,968-byte point inventory, copies only its candidate root and binding
 /// digest, exposes no raw byte slice, and cannot be built from detached
 /// points. `D`-top remains under the original cross-field inventory owner.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     dead_code,
@@ -918,6 +961,7 @@ pub(super) struct RnsNativeExistingRadixDirectAliasV1<'proof> {
     origin: RnsNativeExistingRadixAuthenticatedOriginV1,
 }
 
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the constructor-less verifier point adapter is preparatory and non-authorizing"
@@ -938,6 +982,7 @@ impl RnsNativeExistingRadixDirectAliasV1<'_> {
     }
 }
 
+#[cfg(test)]
 fn existing_radix_commitments_v1<F>(
     view: ExistingRadixProofViewV1<'_>,
     group: usize,
@@ -969,6 +1014,7 @@ where
     })
 }
 
+#[cfg(test)]
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeQMaskLinearRelationsPrerequisiteV1<'_, '_, S>,
     view: ExistingRadixProofViewV1<'_>,
@@ -1003,6 +1049,7 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 ///
 /// This is not range, inverse, product, lookup, readiness, release, or
 /// authorization evidence.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the q-mask owner and unverified downstream residual must advance exactly once"
@@ -1021,6 +1068,7 @@ pub(super) struct RnsNativeExistingRadixCommitmentPrerequisiteV1<
     authenticated_origin: RnsNativeExistingRadixAuthenticatedOriginV1,
 }
 
+#[cfg(test)]
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeExistingRadixCommitmentPrerequisiteV1<'source, 'proof, S>
 {
@@ -1098,6 +1146,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 }
 
 /// Consume the statement-10/11 owner into the exact existing-radix view.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the private transport entry awaits its radix algebra consumer"

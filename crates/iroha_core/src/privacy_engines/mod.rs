@@ -28,9 +28,8 @@ pub mod zk_ace;
 pub(crate) mod zk_ace_stark;
 pub mod zk_ams;
 // The native prover and its RFC 5280 reference machinery are consumed by the
-// internal test harness and the opt-in release-evidence runner. Normal node
-// builds retain the verifier but cannot observe those crate-private roots.
-#[cfg_attr(not(any(test, feature = "privacy-release-evidence")), allow(dead_code))]
+// internal test harness and the opt-in release-evidence runner; their roots are
+// gated to those builds so normal node builds compile only the verifier.
 pub(crate) mod zk_x509;
 use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};
 use self::proof_managed_accumulator::{

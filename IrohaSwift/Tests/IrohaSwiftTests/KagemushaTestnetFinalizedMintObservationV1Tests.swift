@@ -58,8 +58,8 @@ final class KagemushaTestnetFinalizedMintObservationV1Tests: XCTestCase {
   func testMissingOwnerAndNativeRejectionAreDistinct() throws {
     let anchor = try self.anchor
     for (status, expected) in [
-      (-312, KagemushaTestnetFinalizedMintObservationErrorV1.ownerUnavailable),
-      (-311, KagemushaTestnetFinalizedMintObservationErrorV1.nativeRejected(-311)),
+      (Int32(-312), KagemushaTestnetFinalizedMintObservationErrorV1.ownerUnavailable),
+      (Int32(-311), KagemushaTestnetFinalizedMintObservationErrorV1.nativeRejected(-311)),
     ] {
       let endpoint = Endpoint(status: status, archive: archive())
       XCTAssertThrowsError(try KagemushaTestnetFinalizedMintObservationBridgeV1.observe(

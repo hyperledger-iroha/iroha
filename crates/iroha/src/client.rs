@@ -81,7 +81,6 @@ use iroha_data_model::{
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
     block::consensus::SumeragiDiagnosticsStatus,
-    sumeragi::SumeragiStatus,
     block::consensus_v2::SumeragiV2QcResponse,
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
@@ -94,6 +93,7 @@ use iroha_data_model::{
     privacy::PrivacyExact12CapabilityManifestV1,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::pin_registry::PinStatusKindV1,
+    sumeragi::SumeragiStatus,
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
@@ -325,7 +325,6 @@ const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
-const CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1: usize = 64;
 const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1: usize = 64 * 1024;
 const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1: usize = 32;
 const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: usize = 64 * 1024;
@@ -5638,9 +5637,9 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+    if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
         return Err(eyre!(
-            "prepared onboarding transaction requires QueuePlanSynced admission"
+            "prepared onboarding transaction requires Ordinary admission"
         ));
     }
     validate_public_prepared_transaction_lifetime(&transaction, binding)?;
@@ -5731,9 +5730,9 @@ pub fn verify_account_faucet_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+    if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
         return Err(eyre!(
-            "prepared faucet transaction requires QueuePlanSynced admission"
+            "prepared faucet transaction requires Ordinary admission"
         ));
     }
     validate_public_prepared_transaction_lifetime(&transaction, binding)?;
@@ -11560,7 +11559,7 @@ mod evidence_http_tests {
         );
         builder.set_creation_time(Duration::from_millis(123));
         let builder = builder
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
             .with_metadata(intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 intent.invocation.clone(),
@@ -12167,7 +12166,7 @@ mod evidence_http_tests {
         if submitted {
             assert_eq!(
                 expected_signed.admission_intent(),
-                TransactionAdmissionIntent::QueuePlanSynced
+                TransactionAdmissionIntent::Ordinary
             );
             assert!(
                 response.get("pipeline_status").is_some_and(Value::is_null),
@@ -12205,7 +12204,7 @@ mod evidence_http_tests {
             TransactionBuilder::new(client.network_id, authority.clone(), fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(123));
         let builder = builder
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 intent.invocation.clone(),
             ));
@@ -12402,11 +12401,11 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_contract_call_rejects_ordinary_draft_before_signing_or_submission() {
+    fn post_contract_call_rejects_retired_admission_draft_before_signing_or_submission() {
         let client = client_with_base_url(base_url());
         let (address, intent, fee_payment, builder) = contract_call_fixture(&client);
-        let ordinary = builder.with_admission_intent(TransactionAdmissionIntent::Ordinary);
-        let response_value = prepared_contract_call_response(&intent, &ordinary);
+        let retired = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        let response_value = prepared_contract_call_response(&intent, &retired);
         let response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&response_value).expect("response"),
@@ -12435,9 +12434,9 @@ mod evidence_http_tests {
                 },
             );
             let error =
-                result.expect_err("Ordinary public draft must fail before signing or dispatch");
+                result.expect_err("retired public draft must fail before signing or dispatch");
             assert!(
-                format!("{error:#}").contains("must use QueuePlanSynced admission"),
+                format!("{error:#}").contains("must use Ordinary admission"),
                 "{error:#}"
             );
             let requests = snapshots.lock().expect("captured requests");
@@ -22376,10 +22375,10 @@ impl AccountClient {
             fee_payment,
         )?;
         if builder.payload().admission_intent()
-            != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+            != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
         {
             return Err(eyre!(
-                "contract call transaction payload must use QueuePlanSynced admission"
+                "contract call transaction payload must use Ordinary admission"
             ));
         }
         let mut expected_builder =
@@ -22389,7 +22388,7 @@ impl AccountClient {
             expected_builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
         }
         let expected_builder = expected_builder
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
             .with_metadata(draft_intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 draft_intent.invocation.clone(),
@@ -25708,10 +25707,8 @@ mod tests {
                 SumeragiPipelineExecutionStatus,
             },
             consensus_v2::{
-                BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-                GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION,
-                QuorumCertificateRef, SumeragiV2BodyState, SumeragiV2HeightContextStatus,
-                SumeragiV2LivenessStatus, SumeragiV2Status, SumeragiV2StatusPhase,
+                BlockSubject, ConsensusRound, ExecutionCommitment, GlobalPhase, HeightContext,
+                HeightContextId, QuorumCertificateRef,
             },
         },
         da::{
@@ -28660,7 +28657,7 @@ mod tests {
         );
     }
     #[test]
-    fn prepared_account_verifiers_reject_signed_ordinary_admission() {
+    fn prepared_account_verifiers_reject_signed_retired_admission() {
         let mut client = client_with_base_url(base_url());
         let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
         let onboarding_request = onboarding.receipt.body.request.clone();
@@ -28672,17 +28669,17 @@ mod tests {
                 &onboarding.binding,
                 &onboarding.fee_payment,
             )
-            .expect("canonical prepared onboarding uses QueuePlanSynced");
+            .expect("canonical prepared onboarding uses Ordinary");
         let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
             .expect("onboarding fixture signer");
-        let ordinary_onboarding =
+        let retired_onboarding =
             TransactionBuilder::from_payload(onboarding_signed.payload().clone())
                 .expect("rebuild onboarding payload")
-                .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
                 .sign(onboarding_signer.private_key());
         replace_onboarding_prepared_transaction(
             &mut onboarding,
-            &ordinary_onboarding,
+            &retired_onboarding,
             &onboarding_signer,
         );
         let onboarding_error = client
@@ -28693,12 +28690,8 @@ mod tests {
                 &onboarding.binding,
                 &onboarding.fee_payment,
             )
-            .expect_err("signed Ordinary onboarding must fail verification");
-        assert!(
-            onboarding_error
-                .to_string()
-                .contains("QueuePlanSynced admission")
-        );
+            .expect_err("signed retired onboarding must fail verification");
+        assert!(onboarding_error.to_string().contains("Ordinary admission"));
 
         let mut faucet = faucet_prepared_signature_fixture(&mut client);
         let policy = faucet_policy_fixture();
@@ -28710,14 +28703,14 @@ mod tests {
                 &faucet.fee_payment,
                 &policy,
             )
-            .expect("canonical prepared faucet uses QueuePlanSynced");
+            .expect("canonical prepared faucet uses Ordinary");
         let faucet_signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
             .expect("faucet fixture signer");
-        let ordinary_faucet = TransactionBuilder::from_payload(faucet_signed.payload().clone())
+        let retired_faucet = TransactionBuilder::from_payload(faucet_signed.payload().clone())
             .expect("rebuild faucet payload")
-            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .sign(faucet_signer.private_key());
-        replace_faucet_prepared_transaction(&mut faucet, &ordinary_faucet, &faucet_signer);
+        replace_faucet_prepared_transaction(&mut faucet, &retired_faucet, &faucet_signer);
         let faucet_error = client
             .verify_account_faucet_prepared_transaction(
                 &faucet,
@@ -28726,12 +28719,8 @@ mod tests {
                 &faucet.fee_payment,
                 &policy,
             )
-            .expect_err("signed Ordinary faucet payout must fail verification");
-        assert!(
-            faucet_error
-                .to_string()
-                .contains("QueuePlanSynced admission")
-        );
+            .expect_err("signed retired faucet payout must fail verification");
+        assert!(faucet_error.to_string().contains("Ordinary admission"));
     }
     #[test]
     fn prepared_transaction_verifiers_reject_an_independent_fee_substitution() {
@@ -31125,43 +31114,6 @@ mod tests {
             )
             .expect("transaction preparation should not read RNG when nonce is disabled");
         assert_eq!(transaction.nonce, None);
-    }
-    fn sample_sumeragi_v2_status(height: u64, view: u64, leader: u32) -> SumeragiV2Status {
-        SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"client-status-node"),
-            build_fingerprint: Hash::new(b"client-status-build"),
-            config_fingerprint: Hash::new(b"client-status-config"),
-            restart_required: false,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"client-status-height-context",
-            ))),
-            height,
-            view,
-            phase: SumeragiV2StatusPhase::AwaitingProposal,
-            leader,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Missing,
-            pending_persistence_id: None,
-            last_committed_height: height.saturating_sub(1),
-            last_committed_subject: None,
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: 1,
-                epoch_end_height: height.saturating_add(100),
-                mode: ConsensusMode::Permissioned,
-                epoch_seed: [0xA5; 32],
-                validator_count: 4,
-                quorum: DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: None,
-            liveness: SumeragiV2LivenessStatus::default(),
-            beacon_horizon: None,
-        }
     }
     fn sample_sumeragi_status_with_relay() -> (SumeragiDiagnosticsStatus, LaneRelayEnvelope) {
         let settlement = LaneBlockCommitment {

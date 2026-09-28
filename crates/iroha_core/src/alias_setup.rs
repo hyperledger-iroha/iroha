@@ -1,12 +1,13 @@
 //! Read-only classification and validation for declarative alias setup intents.
 use crate::{sns::SNS_DATASPACE_ID_METADATA_KEY, state::WorldReadOnly};
+#[cfg(test)]
+use iroha_data_model::alias_setup::ResolvedAccountAliasV1;
 use iroha_data_model::{
     HasMetadata,
     account::{AccountAddress, AccountId},
     alias_setup::{
         AccountAliasRoleV1, AccountProvisionV1, AliasAutoRenewConfigV1, AliasIntentV1,
         AliasLifecyclePlanDispositionV1, AliasPlanDispositionV1, AliasQuoteGuardV1, AliasTargetV1,
-        ResolvedAccountAliasV1,
     },
     asset::{AssetDefinitionId, AssetId},
     isi::alias_setup::{ConfigureAliasAutoRenew, RenewAliasLease},
@@ -978,6 +979,7 @@ pub fn classify_alias_intent_with_endorsement_policy(
         default_domain_endorsement_required,
     )
 }
+#[cfg(test)]
 /// Classify an ordered intent while accepting exact parent dataspaces planned earlier.
 ///
 /// `planned_dataspaces` must contain only canonical text/ID pairs from preceding dataspace intents
@@ -1004,6 +1006,7 @@ pub fn classify_alias_intent_with_planned_dataspaces(
         now_ms,
     )
 }
+#[cfg(test)]
 /// Classify an ordered intent while accepting exact parent resources planned earlier.
 ///
 /// The planner supplies only successfully classified preceding dataspace and domain resources.
@@ -1158,14 +1161,6 @@ pub fn validate_configured_alias_payment_asset(
         configured_fee_asset_selector,
     )
     .map_err(|error| AliasSetupError::new("alias.quote.payment_asset_mismatch", error.to_string()))
-}
-/// Borrow a resolved account alias from an intent when applicable.
-#[must_use]
-pub fn account_alias_intent_target(intent: &AliasIntentV1) -> Option<&ResolvedAccountAliasV1> {
-    match intent {
-        AliasIntentV1::AccountAlias(value) => Some(&value.alias),
-        AliasIntentV1::Dataspace(_) | AliasIntentV1::Domain(_) => None,
-    }
 }
 #[cfg(test)]
 mod tests {

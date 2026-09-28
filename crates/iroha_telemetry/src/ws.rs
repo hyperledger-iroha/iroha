@@ -1,7 +1,6 @@
 //! Telemetry sent to a server.
 use crate::integrity::ChainState;
 use crate::retry_period::RetryPeriod;
-use chrono::Utc;
 use eyre::{Result, eyre};
 use futures::{Sink, SinkExt, StreamExt, stream::SplitSink};
 use iroha_config::parameters::actual::{Telemetry as Config, TelemetryIntegrity};
@@ -379,9 +378,8 @@ fn build_message_map(telemetry: Telemetry) -> Map {
         .into_iter()
         .map(|(field, value)| (field.to_owned(), value))
         .collect();
-    let now = Utc::now();
     let mut map = Map::new();
-    map.insert("ts".into(), now.to_rfc3339().into());
+    map.insert("ts".into(), crate::timestamp::rfc3339_utc_now().into());
     map.insert("target".into(), target.into());
     map.insert("payload".into(), Value::Object(payload));
     map

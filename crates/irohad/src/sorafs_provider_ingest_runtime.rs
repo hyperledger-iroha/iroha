@@ -31,14 +31,16 @@ use iroha_core::{
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
+use iroha_data_model::musubi::{
+    MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleVerificationAttestationV1,
+    MusubiProviderBundleVerificationPayloadV1,
+};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     isi::sorafs::CompleteReplicationOrder,
-    musubi::{
-        MusubiArchiveCommitmentV1, MusubiProviderBundleAttestationKeyV1,
-        MusubiProviderBundleVerificationAttestationV1, MusubiProviderBundleVerificationPayloadV1,
-    },
+    musubi::MusubiArchiveCommitmentV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -74,35 +76,37 @@ use sorafs_node::provider_ingest_runtime::{
 };
 use sorafs_node::{
     AdmittedPayloadReadLeaseErrorV1, FinalizedProviderIngestAuthorizationV1,
-    MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationInventoryErrorV1,
-    MusubiProviderAttestationInventoryItemV1, MusubiProviderAttestationInventoryQualificationV1,
-    MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
-    MusubiProviderAttestationInventoryRuntimeErrorV1, MusubiProviderAttestationInventoryRuntimeV1,
-    MusubiProviderAttestationInventoryScopeV1, MusubiProviderAttestationInventorySinkV1,
-    MusubiProviderAttestationInventoryV1, MusubiProviderAttestationJournalPolicyV1,
-    MusubiProviderAttestationJournalRuntimeV1, MusubiProviderAttestationSignerErrorV1,
-    MusubiProviderAttestationSignerQualificationV1, MusubiProviderAttestationSignerV1, NodeHandle,
-    NodeStorageError, ProviderIngestAuthenticatedSourceFetchV1,
-    ProviderIngestCheckpointExternalErrorV1, ProviderIngestCheckpointProviderQualificationV1,
-    ProviderIngestCheckpointRuntimeV1, ProviderIngestClaimOwnerV1,
-    ProviderIngestCompletedMusubiAttestationDriverV1,
-    ProviderIngestCompletedMusubiCaptureCoordinatorV1, ProviderIngestCompletionPayloadBuilderV1,
-    ProviderIngestCompletionPayloadErrorV1, ProviderIngestCompletionPayloadRequestV1,
-    ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerPolicyV1,
-    ProviderIngestCompletionSignerResolutionContextV1,
+    MusubiProviderAttestationJournalPolicyV1, NodeHandle, NodeStorageError,
+    ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestCheckpointExternalErrorV1,
+    ProviderIngestCheckpointProviderQualificationV1, ProviderIngestCheckpointRuntimeV1,
+    ProviderIngestClaimOwnerV1, ProviderIngestCompletedMusubiCaptureCoordinatorV1,
+    ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
+    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
+    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
     ProviderIngestFinalizedClaimFactoryV1, ProviderIngestFinalizedCursorV1,
     ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1,
     ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFutureV1,
     ProviderIngestIngressDispositionV1, ProviderIngestIngressPrepareErrorV1,
-    ProviderIngestLocalStorageErrorV1, ProviderIngestLocalStorageV1,
-    ProviderIngestMusubiAttestationApprovalRequestV1, ProviderIngestRuntimeErrorV1,
+    ProviderIngestLocalStorageErrorV1, ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1,
     ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1,
     ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1,
     ProviderIngestTransactionIngressV1, ProviderIngestTransactionObservationV1,
-    musubi_provider_attestation_controller_policy_digest_v1,
     store::{StorageError, StoredManifest},
+};
+#[cfg(test)]
+use sorafs_node::{
+    MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationInventoryErrorV1,
+    MusubiProviderAttestationInventoryItemV1, MusubiProviderAttestationInventoryQualificationV1,
+    MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
+    MusubiProviderAttestationInventoryRuntimeErrorV1, MusubiProviderAttestationInventoryRuntimeV1,
+    MusubiProviderAttestationInventoryScopeV1, MusubiProviderAttestationInventorySinkV1,
+    MusubiProviderAttestationInventoryV1, MusubiProviderAttestationJournalRuntimeV1,
+    MusubiProviderAttestationSignerErrorV1, MusubiProviderAttestationSignerQualificationV1,
+    MusubiProviderAttestationSignerV1, ProviderIngestCompletedMusubiAttestationDriverV1,
+    ProviderIngestMusubiAttestationApprovalRequestV1,
+    musubi_provider_attestation_controller_policy_digest_v1,
     validate_musubi_provider_attestation_inventory_binding_v1,
 };
 use std::{

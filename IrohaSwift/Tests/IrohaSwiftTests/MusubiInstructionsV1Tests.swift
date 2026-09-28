@@ -164,7 +164,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         var admissionIntentReader = CanonicalNoritoReader(data: payloadFields[7])
         XCTAssertEqual(
             try admissionIntentReader.readUInt32LE(),
-            TransactionAdmissionIntentV1.queuePlanSynced.rawValue
+            TransactionAdmissionIntentV1.ordinary.rawValue
         )
         XCTAssertEqual(admissionIntentReader.remaining(), 0)
 

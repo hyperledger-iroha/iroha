@@ -62,11 +62,10 @@ interpreted as missing. A committed credit cannot be cancelled.
 Only an installed result may carry terminal envelope bytes. Those bytes must
 match the retained public inputs, candidate, commit certificate, outcome, and
 envelope digest. A peer acknowledgement releases only its byte-identical payment
-outbox entry. A redemption selector is not authority: the qualified in-process
-service must bind it to and consume the non-serializable
-`VerifiedKagemushaRedemptionReleaseV1` that Core created from the complete
-finalized operation status and caller-pinned trust anchor. Raw operation-12
-bytes or a host-computed digest can never release a redemption outbox entry.
+outbox entry. A redemption selector is not authority, and Core exposes no
+redemption outbox release path in this release. Raw operation-12 bytes, a
+host-computed digest, or a compact redemption terminal receipt can never release
+a redemption outbox entry.
 
 Recovery pages are ordered by operation ID, contain at most four entries per
 response, and pin a stable full-width index revision. This is a transport page

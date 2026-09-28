@@ -71,7 +71,7 @@ require the committed lock and pin to agree.
 Update all three authored spec copies together without changing their bytes,
 then commit the reviewed source. Plain `--unsigned-manifest` uses the Node
 metadata owner on that exact clean checkout. It runs no Cargo command, creates
-no clone or Cargo target, and does not execute a live router. The mandatory
+no clone or Cargo target, and does not execute the compiled Torii projection. The mandatory
 native Torii tests validate the compiled projection separately; their evidence
 must not be inferred from a successful metadata refresh.
 
@@ -159,7 +159,7 @@ OPENAPI_ALLOWED_SIGNERS_FILE=<absolute-operator-allowlist-path> \
 ```
 
 `ci/check_openapi_spec.sh` requires clean release provenance; byte-identical
-root, current, package-local, and live-router authority bytes; deterministic
+root, current, package-local, and compiled-projection authority bytes; deterministic
 replay from two independent sealed candidate mirrors; private out-of-tree
 targets and staging; and exact agreement with
 `release/openapi-generator-inputs-v1.txt`. It retains

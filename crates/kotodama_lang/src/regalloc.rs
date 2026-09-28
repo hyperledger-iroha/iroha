@@ -110,8 +110,6 @@ pub const RET_REG: usize = 10;
 pub const MAX_RETURN_VALUES: usize = ARG_REGS.len();
 /// r31 acts as the stack pointer.
 pub const SP_REG: usize = 31;
-/// r30 may be used as a frame pointer.
-pub const FP_REG: usize = 30;
 // Pool of allocatable registers (see policy above)
 const ALLOC_POOL: &[usize] = &[2, 3, 4, 5, 6, 7, 8, 9, 23, 24];
 #[derive(Clone, Copy, Debug)]

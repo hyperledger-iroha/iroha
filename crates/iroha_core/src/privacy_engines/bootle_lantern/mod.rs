@@ -11,6 +11,7 @@ pub mod compression;
 mod credential_sampling;
 mod falcon512;
 mod holder_aes256;
+#[cfg(test)]
 pub mod holder_store;
 pub mod issuance_store;
 pub mod issuer;
@@ -183,6 +184,7 @@ pub fn prove_bound_presentation_v1<R: CryptoRng + RngCore>(
     }
     prove_bound_presentation_enabled_v1(statement, policy, canonical_genesis_hash, witness, rng)
 }
+#[cfg(test)]
 /// Verify one canonical typed Bootle/Lantern presentation through the same governed policy,
 /// statement digest, genesis binding, and compiled relation used by the producer.
 ///

@@ -3,15 +3,19 @@
 //! Raw history authenticates retained rows and a selected block hash. The separate block-finality
 //! read joins that hash to the same State view's durable Kura/QC evidence. Neither read proves a
 //! successful role-13 Check, current signer eligibility, or completed release operations.
-use super::signer_custody_history::{self as history, HistoryError, ManifestPurpose};
+use super::signer_custody_history::HistoryError;
+#[cfg(test)]
+use super::signer_custody_history::{self as history, ManifestPurpose};
+#[cfg(test)]
 use super::signer_finality::{VerifiedSignerFinalityV1, verify_signer_finality_v1};
+#[cfg(test)]
 use crate::state::{StateReadOnly, StateView};
 use iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCustodyRecordV1;
 use sorafs_manifest::signer::{
-    custody::{SignerCustodyAnchorV1, SignerCustodyBindingV1},
-    custody_control::SignerCustodyControlStateV1,
-    protocol::SignerPurposeBindingV1,
+    custody::SignerCustodyAnchorV1, custody_control::SignerCustodyControlStateV1,
 };
+#[cfg(test)]
+use sorafs_manifest::signer::{custody::SignerCustodyBindingV1, protocol::SignerPurposeBindingV1};
 
 /// Payload-free raw role-13 custody history failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -64,6 +68,7 @@ pub struct ReleaseManifestCustodySnapshotV1 {
     pub custody_anchor: SignerCustodyAnchorV1,
 }
 
+#[cfg(test)]
 /// Raw role-13 custody paired with finality of its current State block.
 ///
 /// This is only a block-history prerequisite. The record may not have a successful native
@@ -75,6 +80,7 @@ pub struct ReleaseManifestCustodyBlockFinalityV1 {
     /// Exact same-State durable block and its certified Kura/QC finality.
     block_finality: VerifiedSignerFinalityV1,
 }
+#[cfg(test)]
 impl ReleaseManifestCustodyBlockFinalityV1 {
     /// Borrow the raw retained custody row; this does not grant signer or operation authority.
     #[must_use]
@@ -89,6 +95,7 @@ impl ReleaseManifestCustodyBlockFinalityV1 {
     }
 }
 
+#[cfg(test)]
 /// Read exact role-13 custody at a selected committed height.
 ///
 /// This is a raw same-State snapshot. A signer must separately authenticate an independently
@@ -104,6 +111,7 @@ pub fn read_release_manifest_custody_at_v1(
     read_at(state, binding, height).map_err(Into::into)
 }
 
+#[cfg(test)]
 /// Pair a role-13 raw custody row with finality of the current committed State block.
 ///
 /// This validates the deployment binding and retained custody chain from one State view, then
@@ -137,6 +145,7 @@ pub fn read_current_release_manifest_custody_block_finality_v1(
     )
 }
 
+#[cfg(test)]
 fn read_at(
     state: &impl StateReadOnly,
     binding: &SignerCustodyBindingV1,

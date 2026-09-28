@@ -11,7 +11,6 @@ use super::{
 };
 use crate::routing::MaybeTelemetry;
 use iroha_futures::supervisor::ShutdownSignal;
-use iroha_logger::prelude::*;
 use std::{
     sync::Arc,
     time::{Duration, SystemTime},

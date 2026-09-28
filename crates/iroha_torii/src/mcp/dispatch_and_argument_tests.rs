@@ -1,5 +1,4 @@
 // MCP dispatch, route, governance, and argument regressions.
-use base64::Engine as _;
 
 #[test]
 fn explorer_history_mcp_query_projection_accepts_only_cursor_contract_fields() {
@@ -1090,12 +1089,14 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
         .await
         .expect("canonical ZK selector dispatches");
     let zk_proof = with_target_headers(norito::json!({
-        "network_id": (network_id.clone()),
-        "authority": authority,
-        "election_id": (maximum_selector.clone()),
-        "ballot": {
-            "backend": "halo2/ipa",
-            "envelope_bytes": "AQ=="
+        "body": {
+            "network_id": (network_id.clone()),
+            "authority": authority,
+            "election_id": (maximum_selector.clone()),
+            "ballot": {
+                "backend": "halo2/ipa",
+                "envelope_bytes": "AQ=="
+            }
         }
     }));
     dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
@@ -1104,15 +1105,17 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
         zk_proof.as_object().expect("ZK proof arguments"),
     )
     .await
-    .expect("canonical flat ZK proof selector dispatches");
+    .expect("canonical ZK proof selector dispatches");
     let plain = with_target_headers(norito::json!({
-        "network_id": network_id,
-        "authority": authority,
-        "referendum_id": "referendum-1",
-        "owner": authority,
-        "amount": "100",
-        "duration_blocks": "600",
-        "direction": "Aye"
+        "body": {
+            "network_id": network_id,
+            "authority": authority,
+            "referendum_id": "referendum-1",
+            "owner": authority,
+            "amount": "100",
+            "duration_blocks": "600",
+            "direction": "Aye"
+        }
     }));
     dispatch_iroha_gov_ballots_plain(
         &app,
@@ -1120,7 +1123,7 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
         plain.as_object().expect("plain ballot arguments"),
     )
     .await
-    .expect("canonical flat plain selector dispatches");
+    .expect("canonical plain selector dispatches");
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         7,
@@ -2261,7 +2264,12 @@ fn governance_mcp_catalog_publishes_exact_id_grammars() {
         ),
     ] {
         let schema = tool_schema(tool);
-        assert_grammar(&schema, &["properties", field], pattern, max_length);
+        assert!(
+            schema_value_at(&schema, &["properties"])
+                .as_object()
+                .is_some_and(|properties| !properties.contains_key(field)),
+            "{tool} must publish `{field}` only inside `body`"
+        );
         assert_grammar(
             &schema,
             &["properties", "body", "properties", field],
@@ -2538,11 +2546,9 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
         ),
     ] {
         let schema = tool_schema(name);
-        assert_required(&schema, &["if", "required"], &["body"]);
-        assert_required(&schema, &["then", "properties", "body", "required"], fields);
-        assert_required(&schema, &["else", "required"], fields);
+        assert_required(&schema, &["properties", "body", "required"], fields);
         if name.starts_with("iroha.gov.ballots.") {
-            assert_required(&schema, &["required"], &["headers"]);
+            assert_required(&schema, &["required"], &["body", "headers"]);
             let headers = schema_value_at(&schema, &["properties", "headers"])
                 .as_object()
                 .expect("governance canonical headers schema");
@@ -2573,9 +2579,10 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
                 assert!(property.get("maxLength").is_some());
                 assert!(property.get("pattern").is_some());
             }
-            let authority = schema_value_at(&schema, &["properties", "authority"])
-                .as_object()
-                .expect("governance authority schema");
+            let authority =
+                schema_value_at(&schema, &["properties", "body", "properties", "authority"])
+                    .as_object()
+                    .expect("governance authority schema");
             let description = authority
                 .get("description")
                 .and_then(Value::as_str)
@@ -2585,11 +2592,6 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
         }
     }
     let proof = tool_schema("iroha.gov.ballots.zk_v1.ballot_proof");
-    assert_required(
-        &proof,
-        &["properties", "ballot", "required"],
-        &["backend", "envelope_bytes"],
-    );
     assert_required(
         &proof,
         &["properties", "body", "properties", "ballot", "required"],

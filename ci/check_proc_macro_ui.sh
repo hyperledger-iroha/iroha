@@ -15,13 +15,10 @@ default_crates=(
 	iroha_data_model
 	iroha_derive
 	iroha_schema_derive
-	iroha_version_derive
 	iroha_telemetry_derive
 	iroha_executor_data_model_derive
 	iroha_executor_derive
-	iroha_trigger_derive
 	iroha_smart_contract_derive
-	iroha_ffi_proc_macro
 	norito_derive
 )
 

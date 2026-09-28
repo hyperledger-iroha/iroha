@@ -272,6 +272,7 @@ TORII_ROUTE_CATALOG_RS = (
 )
 TORII_SORAFS_POP_ROUTE_CATALOG_RS = TORII_ROUTE_CATALOG_RS.with_name("route_catalog") / "sorafs_pop.rs"
 IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
+IROHA_CLI_SORAFS_TESTS_RS = IROHA_CLI_SORAFS_RS.parent / "sorafs" / "tests.rs"
 IROHA_P2P_PEER_RS = REPO_ROOT / "crates" / "iroha_p2p" / "src" / "peer.rs"
 IROHA_CRYPTO_SORANET_POW_RS = (
     REPO_ROOT / "crates" / "iroha_crypto" / "src" / "soranet" / "pow.rs"
@@ -902,6 +903,16 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     *sorted((REPO_ROOT / "ci").glob("*sorafs*.sh")),
 )
 
+
+
+def read_iroha_cli_sorafs_with_tests() -> str:
+    """Return the `iroha app sorafs` command source followed by its out-of-line unit tests."""
+
+    return (
+        read(IROHA_CLI_SORAFS_RS)
+        + "\n"
+        + read_rust_source_bundle(IROHA_CLI_SORAFS_TESTS_RS, root=REPO_ROOT)
+    )
 
 def test_rollout_checkers_use_exact_required_value_membership() -> None:
     offenders = [
@@ -1979,7 +1990,7 @@ def test_moderation_local_snapshot_reads_have_no_empty_projection_fallback() -> 
 
 
 def test_sorafs_incentives_service_has_no_missing_budget_override() -> None:
-    cli = read(IROHA_CLI_SORAFS_RS)
+    cli = read_iroha_cli_sorafs_with_tests()
     reward_engine = read(SORAFS_ORCHESTRATOR_INCENTIVES_RS)
     init_args = cli.split("pub struct IncentivesServiceInitArgs", 1)[1].split(
         "impl Run for IncentivesServiceInitArgs", 1
@@ -2334,7 +2345,7 @@ def test_sorafs_reference_ffi_governance_requires_expected_cid() -> None:
 
 
 def test_sorafs_transparency_publication_canary_requires_publisher_identity() -> None:
-    cli = read(IROHA_CLI_SORAFS_RS)
+    cli = read_iroha_cli_sorafs_with_tests()
     publication_args = cli.split(
         "pub struct TransparencyPublicationCanaryArgs", 1
     )[1].split("impl Run for TransparencyPublicationCanaryArgs", 1)[0]
@@ -2355,7 +2366,7 @@ def test_sorafs_transparency_publication_canary_requires_publisher_identity() ->
 
 
 def test_sorafs_direct_mode_enable_keeps_gateway_enforcement_closed() -> None:
-    cli = read(IROHA_CLI_SORAFS_RS)
+    cli = read_iroha_cli_sorafs_with_tests()
     enable_run = cli.split("impl Run for GatewayDirectModeEnableArgs", 1)[1].split(
         "#[derive(clap::Args, Debug)]\npub struct GatewayDirectModeRollbackArgs", 1
     )[0]
@@ -22312,13 +22323,16 @@ def test_unshipped_orderbook_service_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 def test_hedging_billing_cli_binds_exact_checkpoint_responses_before_output() -> None:
-    cli = read(IROHA_CLI_SORAFS_RS)
+    cli = read_iroha_cli_sorafs_with_tests()
     response = read(IROHA_CLI_SORAFS_RS.parent / "sorafs" / "hedging_billing_response.rs")
     response_tests = read(IROHA_CLI_SORAFS_RS.parent / "sorafs" / "hedging_billing_response_tests.rs")
-    assert "mod hedging_billing_response;" in cli and cli.count("hedging_billing_response::render(") == 2 and 'include!("sorafs/hedging_billing_response_tests.rs");' in cli
+    assert "mod hedging_billing_response;" in cli and cli.count("hedging_billing_response::render(") == 2
     render_position = response.index("context.print_data(&value)")
     assert all(response.index(marker) < render_position for marker in ('get_all("content-type")', 'Some("application/json")', "values.next().is_none()", "if status != StatusCode::OK", "norito::json::from_slice", 'anchor.get("checkpoint_fingerprint")', "expected_checkpoint.to_ascii_uppercase()"))
-    assert all(marker in response_tests for marker in ("billing_statements_cli_rejects_missing_response_anchor_without_output", "hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_output", "exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output", "exact_checkpoint_cli_rejects_non_ok_without_echoing_response"))
+    hedging_test_markers = ("billing_statements_cli_rejects_missing_response_anchor_without_output", "hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_output", "exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output", "exact_checkpoint_cli_rejects_non_ok_without_echoing_response")
+    assert all(marker in response_tests for marker in hedging_test_markers)
+    # The CLI unit-test module must actually include the response tests.
+    assert all(marker in cli for marker in hedging_test_markers)
 
 def test_hedging_runtime_docs_distinguish_shipped_core_from_external_deployment() -> None:
     source = read(SORAFS_HEDGING_PLAN)
@@ -23370,7 +23384,7 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
 
 def test_commit_reveal_client_cli_no_show_readback_regressions_are_pinned() -> None:
     client = read(IROHA_CLIENT_RS)
-    cli = read(IROHA_CLI_SORAFS_RS)
+    cli = read_iroha_cli_sorafs_with_tests()
     route_suffix = "no-show-plan"
 
     client_requirements = (

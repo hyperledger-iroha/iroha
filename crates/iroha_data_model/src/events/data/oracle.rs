@@ -11,16 +11,20 @@ use crate::{
     prelude::{AccountId, Hash},
 };
 /// Record emitted after aggregating a feed slot.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::oracle::FeedEventRecord")]
 pub struct FeedEventRecord {
     /// Feed event describing the aggregation outcome.
@@ -32,32 +36,40 @@ pub struct FeedEventRecord {
     pub evidence_hashes: Vec<Hash>,
 }
 /// Event emitted when a twitter binding attestation is recorded.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::oracle::TwitterBindingRecorded")]
 pub struct TwitterBindingRecorded {
     /// Recorded binding.
     pub record: TwitterBindingRecord,
 }
 /// Event emitted when a twitter binding is revoked.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::oracle::TwitterBindingRevoked")]
 pub struct TwitterBindingRevoked {
     /// Binding hash that was revoked.
@@ -70,16 +82,20 @@ pub struct TwitterBindingRevoked {
     pub recorded_at_ms: u64,
 }
 /// Event emitted when an oracle change proposal is registered.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::oracle::OracleChangeProposed")]
 pub struct OracleChangeProposed {
     /// Unique identifier of the change.
@@ -94,16 +110,20 @@ pub struct OracleChangeProposed {
     pub proposer: AccountId,
 }
 /// Event emitted whenever a pipeline stage records votes or reaches a terminal state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::oracle::OracleChangeStageUpdated")]
 pub struct OracleChangeStageUpdated {
     /// Identifier of the change.
@@ -121,16 +141,20 @@ pub struct OracleChangeStageUpdated {
     pub evidence_hashes: Vec<Hash>,
 }
 /// Event emitted when a native `DeFi` oracle attestation is recorded.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::oracle::DefiOracleAttestationRecorded")]
 pub struct DefiOracleAttestationRecorded {
     /// Recorded attestation.
@@ -148,14 +172,6 @@ pub struct DefiOracleAttestationRecorded {
     Encode,
     IntoSchema,
     iroha_data_model_derive::EventSet,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 #[norito(tag = "event", content = "payload")]
 #[event_set(schema_name = "iroha_data_model::events::data::oracle::OracleEventSet")]

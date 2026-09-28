@@ -68,16 +68,21 @@ pub use parameters::{
 };
 pub use protocol::{
     JINDO_NATIVE_PROOF_BYTES_V1, JINDO_SOURCE_PROFILE_V1, JINDO_SUITE_V1, JindoBindingFieldV1,
-    JindoErrorV1, JindoOpeningV1, commit_polynomial_v1, evaluate_polynomial_v1,
-    jindo_crs_digest_v1, prove_batched_evaluation_v1, verify_batched_evaluation_v1,
+    JindoErrorV1, JindoOpeningV1, evaluate_polynomial_v1, jindo_crs_digest_v1,
+    verify_batched_evaluation_v1,
 };
+#[cfg(test)]
+pub use protocol::{commit_polynomial_v1, prove_batched_evaluation_v1};
 pub use sampling::JindoSamplingErrorV1;
 pub use security::{
     JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1, JINDO_UNIT_DIFFERENCE_CERTIFICATE_DIGEST_V1,
-    JindoChallengePairErrorV1, JindoSecurityCertificateErrorV1, JindoSecurityCertificateV1,
     JindoUnitDifferenceCertificateErrorV1, JindoUnitDifferenceCertificateV1,
-    jindo_challenge_pair_has_unit_difference_v1, jindo_security_certificate_v1,
     jindo_unit_difference_certificate_v1,
+};
+#[cfg(test)]
+pub use security::{
+    JindoChallengePairErrorV1, JindoSecurityCertificateErrorV1, JindoSecurityCertificateV1,
+    jindo_challenge_pair_has_unit_difference_v1, jindo_security_certificate_v1,
 };
 pub use transcript::{
     JINDO_SIGNED_MONOMIAL_CHALLENGE_CARDINALITY_V1, JindoSignedMonomialChallengeV1,
@@ -368,6 +373,7 @@ impl core::fmt::Debug for JindoPreparedPrivacyActionV1 {
     }
 }
 impl JindoPreparedPrivacyActionV1 {
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     /// Borrow the exact immutable payload used to request an authenticated fee quote.
     ///
     /// Fee limits are transaction-intent bound, so callers must prepare the action again with
@@ -849,6 +855,7 @@ where
         coefficient_counts,
     })
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Prepare and prove one canonical direct Jindo action using operating-system
 /// randomness, without receiving a transaction signing key.
 ///

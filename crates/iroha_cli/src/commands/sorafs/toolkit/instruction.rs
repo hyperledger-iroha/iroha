@@ -1,4 +1,4 @@
-//! Offline SoraFS instruction preparation for `iroha ledger transaction stdin`.
+//! Offline SoraFS instruction preparation for `iroha tx stdin`.
 //!
 //! Typed command options feed the canonical instruction builders. This capability
 //! writes one instruction array without client configuration, signing, network

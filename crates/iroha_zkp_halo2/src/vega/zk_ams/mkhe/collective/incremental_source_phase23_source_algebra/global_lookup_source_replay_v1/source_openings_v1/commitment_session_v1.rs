@@ -9,21 +9,29 @@
 
 #![allow(dead_code, reason = "later commitment purposes remain uninhabited")]
 use super::super::super::super::super::super::super::MAX_RANDOM_REJECTION_ATTEMPTS_V1;
+use super::SOURCE_OPENING_BLINDING_SLOT_BYTES_V1;
+#[cfg(test)]
+use super::map_leaf_error_v1;
+#[cfg(test)]
 use super::{
-    SOURCE_OPENING_BLINDING_SLOT_BYTES_V1, SOURCE_OPENING_COMMITMENT_DOMAIN_V1,
-    SOURCE_OPENING_GROUP_COUNT_V1, SOURCE_OPENING_VERSION_V1,
+    SOURCE_OPENING_COMMITMENT_DOMAIN_V1, SOURCE_OPENING_GROUP_COUNT_V1, SOURCE_OPENING_VERSION_V1,
     ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, ZkAmsMkheErrorV1,
-    exact_source_opening_mapping_digest_v1, map_leaf_error_v1, source_opening_group_coordinate_v1,
+    exact_source_opening_mapping_digest_v1, source_opening_group_coordinate_v1,
 };
+#[cfg(test)]
+use crate::vega::VegaT256ScalarV1 as Scalar;
+#[cfg(test)]
 use crate::vega::{
-    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-    bulletproof_t256::ZeroizingT256ScalarCopyV1, sponge::Keccak256,
+    VegaT256PointV1 as Point, bulletproof_t256::ZeroizingT256ScalarCopyV1, sponge::Keccak256,
 };
 #[cfg(test)]
 use core::convert::Infallible;
+#[cfg(test)]
 use core::marker::PhantomData;
+#[cfg(test)]
 use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
 
+#[cfg(test)]
 const COMMITMENT_SESSION_VERSION_V1: u8 = 1;
 #[cfg(test)]
 const TEST_ENTROPY_DOMAIN_V1: &[u8] =
@@ -38,6 +46,9 @@ use crate::vega::zk_ams::mkhe::global_lookup_statement_v1::{
 };
 use crate::vega::zk_ams::mkhe::global_lookup_statement_v1::{
     GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1, GlobalLookupCommitmentCoordinateV1,
+};
+#[cfg(test)]
+use crate::vega::zk_ams::mkhe::global_lookup_statement_v1::{
     GlobalLookupCommitmentPhaseV1, GlobalLookupCommitmentPurposeV1, commitment_coordinate_v1,
 };
 
@@ -94,6 +105,7 @@ struct GlobalLookupCommitmentTicketV1 {
 
 // Minted only by the exact completed-source transition. No constructor,
 // mutation or rebind operation is exposed to later commitment stages.
+#[cfg(test)]
 struct CompletedSourcePrefixV1 {
     source_record_digest: [u8; 32],
     proof_session_context_digest: [u8; 32],
@@ -102,11 +114,13 @@ struct CompletedSourcePrefixV1 {
     blinding_snapshot_root: [u8; 32],
 }
 
+#[cfg(test)]
 struct GlobalLookupCommitmentInventorySkeletonV1 {
     slots: Vec<Option<GlobalLookupCommitmentTicketV1>>,
     source_prefix: Option<CompletedSourcePrefixV1>,
 }
 
+#[cfg(test)]
 impl GlobalLookupCommitmentInventorySkeletonV1 {
     fn new_v1() -> Result<Self, ZkAmsMkheErrorV1> {
         let exact_capacity = usize::try_from(GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1)
@@ -229,6 +243,7 @@ impl GlobalLookupCommitmentInventorySkeletonV1 {
     }
 }
 
+#[cfg(test)]
 enum GlobalLookupProofSessionEntropySourceV1<R> {
     Production {
         original_random: R,
@@ -263,6 +278,7 @@ impl Drop for DeterministicProofSessionEntropyV1 {
     }
 }
 
+#[cfg(test)]
 struct GlobalLookupCommitmentSessionLiveV1<R> {
     // Created once at the original entropy handoff and moved through every
     // consuming phase. Existing earlier allocations/work are not certified by
@@ -279,16 +295,20 @@ struct GlobalLookupCommitmentSessionLiveV1<R> {
     pending_source: Option<GlobalLookupCommitmentCoordinateV1>,
 }
 
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct SourceOpeningEntropyStageV1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct SourceOpeningCompleteStageV1;
 
 /// Move-only typestated session. Taking `live` before every operation poisons
 /// the owner on error and unwind.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupCommitmentSessionV1<R, State> {
     live: Option<GlobalLookupCommitmentSessionLiveV1<R>>,
     state: PhantomData<State>,
 }
 
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) type GlobalLookupProofSessionEntropySealV1<R> =
     GlobalLookupCommitmentSessionV1<R, SourceOpeningEntropyStageV1>;
 
@@ -330,6 +350,7 @@ impl GlobalLookupCommitmentSessionV1<Infallible, SourceOpeningEntropyStageV1> {
     }
 }
 
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1>
     GlobalLookupCommitmentSessionV1<R, SourceOpeningEntropyStageV1>
 {
@@ -442,6 +463,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1>
     }
 }
 
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, State> GlobalLookupCommitmentSessionV1<R, State> {
     // Source authentication is immutable after the complete-source seal. Each
     // advancing stage separately enforces its exact cursor and pending state.
@@ -466,6 +488,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, State> GlobalLookupCommitmentS
     }
 }
 
+#[cfg(test)]
 fn validate_completed_source_prefix_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
     live: &GlobalLookupCommitmentSessionLiveV1<R>,
     source_record_digest: [u8; 32],
@@ -502,6 +525,7 @@ fn validate_completed_source_prefix_v1<R: crate::vega::MaskedRelaxedRandomSource
     Ok(())
 }
 
+#[cfg(test)]
 fn sample_blinding_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
     entropy: &mut GlobalLookupProofSessionEntropySourceV1<R>,
     purpose_ordinal: u32,
@@ -530,6 +554,7 @@ fn sample_blinding_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
+#[cfg(test)]
 fn fill_entropy_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
     entropy: &mut GlobalLookupProofSessionEntropySourceV1<R>,
     purpose_ordinal: u32,
@@ -593,16 +618,22 @@ fn fill_entropy_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
     }
 }
 
+#[cfg(test)]
 #[path = "commitment_session_v1/prepared_opening_tail_v1.rs"]
 mod prepared_opening_tail_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_opening_tail_v1::PreparedPlaneOpeningTailV1;
 
+#[cfg(test)]
 #[path = "commitment_session_v1/retained_source_session_v1.rs"]
 mod retained_source_session_v1;
+#[cfg(test)]
 pub(super) use retained_source_session_v1::RetainedSourceSessionV1;
 
+#[cfg(test)]
 #[path = "commitment_session_v1/existing_radix_candidate_v1.rs"]
 mod existing_radix_candidate_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use existing_radix_candidate_v1::{
     RnsNativeExistingRadixCandidateAppendReceiptV1, RnsNativeExistingRadixCandidateAssemblyV1,
     RnsNativeExistingRadixCandidateBlindingV1, RnsNativeExistingRadixCandidateOwnerV1,
@@ -628,6 +659,7 @@ const MAX_COMMITMENT_ENTROPY_BYTES_V1: u64 = GLOBAL_LOOKUP_COMMITMENT_INVENTORY_
     * SOURCE_OPENING_BLINDING_SLOT_BYTES_V1;
 const _: () = assert!(MAX_COMMITMENT_ENTROPY_BYTES_V1 == 296_493_056);
 
+#[cfg(test)]
 #[path = "commitment_session_v1/original_entropy_handoff_v1.rs"]
 mod original_entropy_handoff_v1;
 
@@ -637,9 +669,12 @@ thread_local! {
     static SOURCE_PREFIX_ROOT_VALIDATIONS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
 #[path = "commitment_session_v1/q_mask_first_block_v1.rs"]
 mod q_mask_first_block_v1;
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use q_mask_first_block_v1::{
-    QMaskComplementOpeningsV1,
-    QMaskSBlockAdmissionV1, CompleteQMaskSOpeningsV1, QMaskSOpeningStreamV1, QMaskSErrorV1, QMaskFirstBlockMemoryV1, SampledQMaskSBlockV1,
-};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use q_mask_first_block_v1::QMaskComplementOpeningsV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use q_mask_first_block_v1::{QMaskSBlockAdmissionV1, CompleteQMaskSOpeningsV1, QMaskSOpeningStreamV1};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use q_mask_first_block_v1::{QMaskSErrorV1, QMaskFirstBlockMemoryV1, SampledQMaskSBlockV1};

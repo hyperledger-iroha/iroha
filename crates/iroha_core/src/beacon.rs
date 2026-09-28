@@ -30,9 +30,10 @@ pub use dkg_private_exchange::{
     sign_global_threshold_beacon_dkg_recipient_key_v1,
 };
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use seat_readiness::prove_global_threshold_beacon_seat_readiness_v1;
 pub use seat_readiness::{
     global_threshold_beacon_seat_readiness_challenge_v1,
-    prove_global_threshold_beacon_seat_readiness_v1,
     verify_global_threshold_beacon_seat_readiness_v1,
 };
 

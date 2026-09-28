@@ -28,10 +28,6 @@ impl<'a> BorrowedMcpJsonObject<'a> {
         self.entries.push((key, BorrowedMcpJson::Object(value)));
     }
 
-    fn contains_key(&self, key: &str) -> bool {
-        self.entries.iter().any(|(candidate, _)| *candidate == key)
-    }
-
     fn get(&self, key: &str) -> Option<&'a Value> {
         self.entries
             .iter()
@@ -232,33 +228,15 @@ fn build_required_exact_object_body<'a>(
     Ok(BorrowedMcpJson::Value(body))
 }
 
-fn build_object_body_or_flat_shortcuts<'a>(
-    arguments: &'a Map,
-    ignored_keys: &[&str],
-) -> Result<BorrowedMcpJson<'a>, String> {
-    if let Some(body) = arguments.get("body") {
-        body.as_object()
-            .ok_or_else(|| "`body` must be an object".to_owned())?;
-        return Ok(BorrowedMcpJson::Value(body));
-    }
-    let field_count = arguments
-        .iter()
-        .filter(|(key, value)| {
-            !ignored_keys.iter().any(|ignored| key == ignored) && !value.is_null()
-        })
-        .count();
-    let mut payload =
-        BorrowedMcpJsonObject::try_with_capacity(field_count, "borrowed MCP flat body fields")?;
-    for (key, value) in arguments {
-        if ignored_keys.iter().any(|ignored| key == ignored) || value.is_null() {
-            continue;
-        }
-        payload.insert_value(key, value);
-    }
-    if payload.entries.is_empty() {
-        return Err("`body` is required (or provide flat top-level fields)".to_owned());
-    }
-    Ok(BorrowedMcpJson::Object(payload.sorted()))
+/// Borrow the mandatory `body` object; request payloads are never assembled
+/// from top-level tool arguments.
+fn build_required_object_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
+    let body = arguments
+        .get("body")
+        .ok_or_else(|| "`body` is required".to_owned())?;
+    body.as_object()
+        .ok_or_else(|| "`body` must be an object".to_owned())?;
+    Ok(BorrowedMcpJson::Value(body))
 }
 
 fn build_accounts_onboard_exact_body<'a>(

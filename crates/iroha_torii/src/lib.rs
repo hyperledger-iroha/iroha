@@ -45,7 +45,7 @@
     clippy::suboptimal_flops,
     clippy::needless_pass_by_value
 )]
-#![allow(dead_code, clippy::unused_async, unused_imports)]
+#![allow(clippy::unused_async)]
 //!
 //! Crate features:
 //! - `telemetry` (on by default): Status and Metrics endpoints
@@ -60,6 +60,7 @@ mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
 mod bridge_attestation;
+mod canonical_history;
 mod game;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
@@ -75,17 +76,15 @@ mod parliament_tle_release;
 pub mod privacy_issuance_api;
 #[doc(hidden)]
 pub mod profile_stats;
-mod staking_preparation;
-mod validator_committee;
-#[cfg(test)]
-use iroha_data_model::events::trigger_completed::TriggerCompletedEvent;
-mod canonical_history;
 #[cfg(feature = "push")]
 mod push;
+#[cfg(any(test, feature = "bench"))]
 #[doc(hidden)]
 pub mod query_load_profiles;
+mod staking_preparation;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
+mod validator_committee;
 mod vpn;
 #[cfg(test)]
 use ledger_state_finality::StateFinalityResponse;
@@ -174,7 +173,7 @@ pub use crate::app_auth::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, HEADER_WITNESS, Method,
     Uri, canonical_network_request_hash, canonical_network_request_message,
     canonical_network_request_signature_message, canonical_request_message,
-    canonical_request_witness_message, signature_header_value, witness_header_value,
+    canonical_request_witness_message, signature_header_value,
 };
 pub use crate::operator_signatures::{
     OperatorSignatureError, signed_request_headers as operator_signed_request_headers,
@@ -191,20 +190,19 @@ pub mod sorafs;
 use axum::{
     Router,
     body::{Body, Bytes},
-    debug_handler,
     extract::{DefaultBodyLimit, Extension, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, Method as HttpMethod, Request, StatusCode, header::HeaderName},
     middleware::Next,
-    response::{IntoResponse, Json, Response},
-    routing::{delete, get, post},
+    response::{IntoResponse, Response},
 };
 #[allow(unused_imports)]
 use base64::Engine;
 #[cfg(feature = "app_api")]
-use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use blake3::hash as blake3_hash;
 use dashmap::{DashMap, mapref::entry::Entry as DashEntry};
-use error_stack::{Report, ResultExt};
+use error_stack::Report;
+use error_stack::ResultExt;
 use futures::FutureExt as _;
 use futures_util::StreamExt;
 #[cfg(feature = "app_api")]
@@ -219,28 +217,25 @@ use iroha_config::{
         defaults,
     },
 };
-#[cfg(feature = "app_api")]
-use iroha_core::state::StateBlock;
+#[cfg(test)]
+use iroha_core::alias::{AliasAttester, AliasService};
 use iroha_core::telemetry::{SorafsGatewayRequestMetricLabels, SorafsGatewayResponseMetricLabels};
 use iroha_core::{
     EventsSender,
-    alias::{AliasAttester, AliasError, AliasMetricKind, AliasService},
     kiso::{Error as KisoError, KisoHandle},
     kura::Kura,
     prelude::*,
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue, RoutingDecision, RoutingPlan},
     soracloud_runtime::{
-        SharedSoracloudRuntime, SoracloudHostedHttpReplicaRuntimeStateV1,
-        SoracloudHostedHttpRuntimeStateV1, SoracloudLocalReadRequest,
-        SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
-        SoracloudRuntimeReplicaPlan, authoritative_soracloud_sequence,
+        SharedSoracloudRuntime, SoracloudLocalReadRequest, SoracloudRuntimeExecutionError,
+        SoracloudRuntimeExecutionErrorKind, authoritative_soracloud_sequence,
     },
     state::{
         BlockProofError, BlockProofLimits, BlockProofResource,
         PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome,
-        QueuePlanAdmissionRegistryMatch, State as CoreState, StateReadOnly,
-        StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly,
+        QueuePlanAdmissionRegistryMatch, State as CoreState, StateReadOnly, TransactionsReadOnly,
+        WorldReadOnly,
     },
     torii_proxy::{
         QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
@@ -255,22 +250,21 @@ use iroha_core::{
         ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
         ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
         ToriiRoutingPlanHintV1, queue_plan_admission_attestation_signing_bytes_v1,
-        queue_plan_admission_network_id_digest,
         validate_queue_plan_admission_certificate_for_network_digest_v1,
     },
-    tx::external_entrypoint_hash_from_signed_hash as entrypoint_hash,
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SignatureRejectionCode,
-        SignatureVerificationFail,
+        SignatureVerificationFail, external_entrypoint_hash_from_signed_hash as entrypoint_hash,
     },
 };
 #[cfg(feature = "connect")]
 use iroha_crypto::Signature;
-use iroha_crypto::{
-    ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, SignatureOf,
-    blake2::{Blake2b512, digest::Digest},
-};
+use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, blake2::digest::Digest};
 use iroha_data_model::NetworkId;
+#[cfg(feature = "app_api")]
+#[cfg(test)]
+use iroha_data_model::alias::AliasIndex;
+#[cfg(test)]
 use iroha_data_model::alias::{AliasRecord, AliasTarget};
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -280,21 +274,18 @@ use iroha_data_model::events::{
 #[cfg(feature = "app_api")]
 use iroha_data_model::proof::ProofRecord;
 #[cfg(feature = "app_api")]
-use iroha_data_model::sorafs::capacity::ProviderId;
-#[cfg(feature = "app_api")]
 use iroha_data_model::{
     account::{
-        AccountAddress, AccountId,
+        AccountId,
         rekey::{AccountAlias, AccountAliasDomain},
     },
-    alias::AliasIndex,
     asset::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetId,
     },
     events::trigger_completed::TriggerCompletedOutcome,
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
-    nexus::{FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId},
+    nexus::{FeeRejectionCode, FeeSponsorProgramId},
     nft::NftId,
     peer::Peer,
     permission::Permission,
@@ -303,8 +294,7 @@ use iroha_data_model::{
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
         TransactionDomain, TransactionPayload, TransactionSubmissionReceipt,
-        TransactionSubmissionReceiptPayload,
-        signed::{TransactionAdmissionIntent, TransactionResult},
+        TransactionSubmissionReceiptPayload, signed::TransactionAdmissionIntent,
     },
 };
 use iroha_data_model::{
@@ -347,16 +337,12 @@ use iroha_torii_shared::{
     SORACLOUD_SERVED_SERVICE_VERSION_HEADER, TriggerCompletionListResponse,
     TriggerCompletionRecord, TriggerCompletionSummary,
     route_catalog::{self, RouteCatalog},
-    uri,
 };
 use ivm::iso20022::{MsgError, parse_xml_message};
 use mv::storage::StorageReadOnly;
-use norito::core::SerializePayload as _;
 #[cfg(feature = "app_api")]
 use norito::json::Map;
 use norito::json::Value;
-#[cfg(all(feature = "app_api", feature = "telemetry"))]
-use norito::json::{self};
 use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
@@ -1101,7 +1087,7 @@ where
 #[path = "tests/lib_tcp_listener_bind.rs"]
 mod tcp_listener_bind_tests;
 use crate::iso20022_bridge::{
-    Iso20022BridgeRuntime, IsoLifecycleApplyError, IsoMessageState, IsoMessageStatus, Pacs002Status,
+    Iso20022BridgeRuntime, IsoLifecycleApplyError, IsoMessageStatus, Pacs002Status,
 };
 use crate::{
     router::builder::{
@@ -1202,7 +1188,8 @@ pub use gov::{
     handle_gov_parliament_tle_release_context_read, handle_gov_parliament_transition_draft,
     handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
 };
-// Routing helpers used by tests
+// Routing helpers used by integration tests
+#[cfg(feature = "test-fixtures")]
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 #[cfg(feature = "telemetry")]
@@ -1225,25 +1212,25 @@ pub use routing::{
     MultisigProposalsResolveRequestDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
     RegisterPinManifestResponseDto, SetContractAliasDto, SetContractAliasResponseDto,
     SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
-    ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
-    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk,
-    handle_post_asset_transfer, handle_post_contract_alias_set,
+    ZkVkRegisterDto, ZkVkUpdateDto, handle_get_contract_code_bytes, handle_get_proof,
+    handle_get_vk, handle_list_vk, handle_post_asset_transfer, handle_post_contract_alias_set,
     handle_post_contract_call_batch_prepare, handle_post_contract_call_simulate,
     handle_post_contract_view, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
-    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
-    handle_queries_with_opts, handle_v1_events_sse_for_tests, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, signed_find_proof_by_id,
+    handle_post_vk_register, handle_post_vk_update, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list,
 };
+// Admission-free handler entry points kept only for integration tests.
+#[cfg(all(feature = "app_api", any(feature = "test-fixtures", feature = "bench")))]
+pub use routing::handle_queries_with_opts;
+#[cfg(feature = "test-fixtures")]
+pub use routing::handle_v1_zk_roots;
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", feature = "bench"))]
 pub use routing::{
     ContractActivityGetParams as ContractActivityGetParamsForBench,
-    handle_v1_account_assets_query as handle_v1_account_assets_query_for_bench,
-    handle_v1_accounts_query as handle_v1_accounts_query_for_bench,
-    handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
-    handle_v1_contracts_activity_get as handle_v1_contracts_activity_get_for_bench,
+    handle_v1_contracts_activity_get_for_bench,
 };
 pub use routing::{QueryOptions, SignedQueryAdmission};
 #[cfg(feature = "telemetry")]
@@ -1254,20 +1241,30 @@ pub use routing::{
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
     ZkRootsGetResponseDto, ZkVoteGetTallyRequestDto, ZkVoteGetTallyResponseDto,
-    handle_v1_zk_merkle_path, handle_v1_zk_roots, handle_v1_zk_vote_tally,
+    handle_v1_zk_vote_tally,
 };
 pub use routing::{
     accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
     handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
     verify_signed_query_request as verify_signed_query_request_for_bench,
 };
+#[cfg(all(feature = "app_api", feature = "test-fixtures"))]
+pub use routing::{
+    handle_count_proofs, handle_list_proofs, handle_v1_events_sse_for_tests,
+    signed_find_proof_by_id,
+};
 #[cfg(feature = "telemetry")]
 pub use routing::{
-    handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
-    handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
-    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics, handle_v1_sumeragi_leader,
-    handle_v1_sumeragi_params, handle_v1_sumeragi_qc, handle_v1_sumeragi_status,
-    handle_v1_sumeragi_status_sse,
+    handle_post_soranet_privacy_event, handle_post_soranet_privacy_share, handle_v1_kaigi_relays,
+    handle_v1_kaigi_relays_health, handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics,
+    handle_v1_sumeragi_leader, handle_v1_sumeragi_params, handle_v1_sumeragi_qc,
+    handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+};
+#[cfg(all(feature = "app_api", feature = "bench"))]
+pub use routing::{
+    handle_v1_account_assets_query as handle_v1_account_assets_query_for_bench,
+    handle_v1_accounts_query as handle_v1_accounts_query_for_bench,
+    handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
 };
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
@@ -1290,70 +1287,7 @@ fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
         released_at_unix: metadata.released_at_unix,
     }
 }
-fn alias_service_from_iso_config(
-    config: &iroha_config::parameters::actual::IsoBridge,
-    attester: AliasAttester,
-) -> Option<Arc<AliasService>> {
-    if !config.enabled {
-        return None;
-    }
-    let service = AliasService::new(attester);
-    let mut inserted = 0usize;
-    for (index, alias_cfg) in config.account_aliases.iter().enumerate() {
-        let canonical = normalise_alias(&alias_cfg.iban);
-        if canonical.is_empty() {
-            iroha_logger::warn!(
-                iban = %alias_cfg.iban,
-                "ISO bridge alias produced empty canonical representation"
-            );
-            continue;
-        }
-        let alias_name = match Name::from_str(&canonical) {
-            Ok(name) => name,
-            Err(err) => {
-                iroha_logger::warn!(
-                    iban = %alias_cfg.iban,
-                    %err,
-                    "ISO bridge alias is not a valid Name"
-                );
-                continue;
-            }
-        };
-        let account_id: AccountId = match AccountId::parse_encoded(&alias_cfg.account_id) {
-            Ok(account_id) => account_id,
-            Err(err) => {
-                iroha_logger::warn!(
-                    iban = %alias_cfg.iban,
-                    account = %alias_cfg.account_id,
-                    %err,
-                    "ISO bridge alias refers to an invalid account identifier"
-                );
-                continue;
-            }
-        };
-        let record = AliasRecord::new(
-            alias_name.clone(),
-            account_id.clone(),
-            AliasTarget::Account(account_id),
-            AliasIndex(index as u64),
-        );
-        match service.storage().put(record) {
-            Ok(_) => inserted += 1,
-            Err(err) => {
-                iroha_logger::warn!(
-                    iban = %alias_cfg.iban,
-                    ?err,
-                    "failed to insert ISO bridge alias into alias service storage"
-                );
-            }
-        }
-    }
-    if inserted == 0 {
-        None
-    } else {
-        Some(Arc::new(service))
-    }
-}
+#[cfg(test)]
 const ALIAS_METRIC_LANE: &str = "torii";
 #[cfg(feature = "app_api")]
 const EXACT_ALIAS_READ_MAX_BODY_BYTES: usize = 4 * 1024;
@@ -1477,12 +1411,14 @@ fn contract_alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
+#[cfg(test)]
 fn alias_error_response(status: StatusCode, message: &str) -> Result<AxResponse, Error> {
     let payload = routing::AliasErrorResponseDto {
         error: message.to_owned(),
     };
     alias_json_response(status, payload)
 }
+#[cfg(test)]
 fn alias_target_kind(target: &AliasTarget) -> &'static str {
     match target {
         AliasTarget::Account(_) => "account",
@@ -1491,6 +1427,7 @@ fn alias_target_kind(target: &AliasTarget) -> &'static str {
         AliasTarget::Custom(_) => "custom",
     }
 }
+#[cfg(test)]
 fn alias_non_account_target_response(target: &AliasTarget) -> Result<AxResponse, Error> {
     let message = format!(
         "alias resolves to `{}` target; account alias resolution only supports account targets",
@@ -1498,11 +1435,13 @@ fn alias_non_account_target_response(target: &AliasTarget) -> Result<AxResponse,
     );
     alias_error_response(StatusCode::CONFLICT, &message)
 }
+#[cfg(test)]
 fn map_alias_error(err: AliasError) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         err.to_string(),
     ))
 }
+#[cfg(test)]
 fn resolve_alias_via_service(
     service: &AliasService,
     alias_input: &str,
@@ -1557,27 +1496,6 @@ fn parse_account_alias_label_with_catalog(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    Ok((canonical, alias_label))
-}
-fn parse_exact_account_alias_label_with_catalog(
-    alias_input: &str,
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-) -> Result<(String, iroha_data_model::account::rekey::AccountAlias), Error> {
-    if alias_input.trim().is_empty() {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "alias must not be empty".to_owned(),
-            ),
-        )));
-    }
-    let (canonical, alias_label) = parse_account_alias_label_with_catalog(alias_input, catalog)?;
-    if alias_input != canonical {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "alias must use its canonical fully-qualified literal".to_owned(),
-            ),
-        )));
-    }
     Ok((canonical, alias_label))
 }
 #[derive(Clone, Debug)]
@@ -1843,13 +1761,6 @@ fn validate_exact_alias_lookup_filters(
     }
     Ok(dataspace_id)
 }
-fn resolve_alias_on_chain(
-    app: &SharedAppState,
-    alias_input: &str,
-) -> Result<Option<(String, AccountId, &'static str)>, Error> {
-    let alias = parse_account_alias_label_with_live_state(app, alias_input)?;
-    resolve_alias_label_on_chain(app, alias.canonical, &alias.label)
-}
 fn resolve_alias_label_on_chain(
     app: &SharedAppState,
     canonical: String,
@@ -1877,6 +1788,7 @@ fn resolve_alias_on_route(
     }
     resolve_alias_label_on_chain(app, alias.canonical, &alias.label)
 }
+#[cfg(test)]
 fn resolve_alias_index_on_chain(
     app: &SharedAppState,
     index: u64,
@@ -2226,6 +2138,7 @@ fn execute_alias_lookup_by_account_local_read(
     }
     Ok(account_aliases_by_account_not_found_response(request))
 }
+#[cfg(test)]
 fn resolve_alias_index_via_service(
     service: &AliasService,
     index: u64,
@@ -2477,7 +2390,6 @@ struct AppState {
     ws_message_timeout: Duration,
     require_api_token: bool,
     api_token_digests: Arc<limits::ApiTokenDigestSet>,
-    webhooks_enabled: bool,
     zk_attachments_enabled: bool,
     operator_auth: Arc<operator_auth::OperatorAuth>,
     operator_signatures: Arc<operator_signatures::OperatorSignatures>,
@@ -2507,18 +2419,15 @@ struct AppState {
     norito_rpc_allowed_client_digests: Arc<limits::ApiTokenDigestSet>,
     online_peers: OnlinePeersProvider,
     iso_bridge: Option<Arc<Iso20022BridgeRuntime>>,
-    alias_service: Option<Arc<AliasService>>,
     #[cfg(feature = "app_api")]
     identifier_resolver: Option<Arc<identifier_resolution::IdentifierResolutionService>>,
     #[cfg(feature = "app_api")]
     tx_history_access_policy: Arc<TxHistoryAccessPolicy>,
     telemetry: routing::MaybeTelemetry,
-    telemetry_profile: TelemetryProfile,
     zk_prover_keys_dir: PathBuf,
     zk_ivm_prove_jobs: Arc<DashMap<String, ZkIvmProveJobState>>,
     zk_ivm_prove_job_budget: Arc<ZkIvmProveJobBudget>,
     soracloud_public_inflight: Arc<tokio::sync::Semaphore>,
-    soracloud_public_inflight_total: usize,
     sns_name_cache: Arc<sns::SnsNameRecordCache>,
     zk_ivm_prove_inflight: Arc<tokio::sync::Semaphore>,
     zk_ivm_prove_slots: Arc<tokio::sync::Semaphore>,
@@ -2532,7 +2441,6 @@ struct AppState {
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_telemetry: Arc<telemetry::peers::PeerTelemetryService>,
     da_replay_cache: Arc<iroha_core::da::ReplayCache>,
-    da_replay_store: Arc<da::ReplayCursorStore>,
     da_receipt_log: Arc<da::DaReceiptLog>,
     da_replay_lifecycle_lock: Arc<parking_lot::Mutex<()>>,
     da_receipt_signer: KeyPair,
@@ -2661,7 +2569,6 @@ struct AppState {
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
 struct DaRuntimeServices {
     replay_cache: Arc<iroha_core::da::ReplayCache>,
-    replay_store: Arc<da::ReplayCursorStore>,
     receipt_log: Arc<da::DaReceiptLog>,
     replay_lifecycle_lock: Arc<parking_lot::Mutex<()>>,
     spooler: Option<Arc<da::DaSpooler>>,
@@ -2859,9 +2766,9 @@ struct PipelineStatusCache {
 enum BlockRecordOutcome {
     Recorded,
     MissingBlock,
-    HashMismatch,
 }
 impl PipelineStatusCache {
+    #[cfg(test)]
     fn new() -> Self {
         Self::with_limits(defaults::queue::CAPACITY.get(), PIPELINE_STATUS_CACHE_TTL)
     }
@@ -2940,7 +2847,6 @@ impl PipelineStatusCache {
                 );
                 self.prune_if_needed(now);
             }
-            BlockRecordOutcome::HashMismatch => {}
         }
     }
     fn lookup(&self, hash: &HashOf<SignedTransaction>) -> Option<PipelineStatusEntry> {
@@ -3028,7 +2934,7 @@ impl PipelineStatusCache {
             .collect();
         for (height, pending) in pending {
             match self.record_block_results(height, pending.block_hash, pending.kind, kura, now) {
-                BlockRecordOutcome::Recorded | BlockRecordOutcome::HashMismatch => {
+                BlockRecordOutcome::Recorded => {
                     self.remove_pending_by_height(&height);
                 }
                 BlockRecordOutcome::MissingBlock => {}
@@ -3633,7 +3539,7 @@ fn request_has_canonical_websocket_handshake<B>(req: &axum::http::Request<B>) ->
 }
 /// Held admission permit and telemetry accounting for one active request or upgraded connection.
 pub(crate) struct PreAuthRequestGuard {
-    permit: limits::PreAuthPermit,
+    _permit: limits::PreAuthPermit,
     telemetry: routing::MaybeTelemetry,
     scheme: ConnScheme,
 }
@@ -3706,7 +3612,7 @@ impl AppState {
         let telemetry = self.telemetry.clone();
         telemetry.with_metrics(|telemetry| telemetry.inc_torii_active_conn(scheme.label()));
         Ok(PreAuthRequestGuard {
-            permit,
+            _permit: permit,
             telemetry,
             scheme,
         })
@@ -3764,11 +3670,13 @@ impl AppState {
             }
         }
     }
+    #[cfg(test)]
     fn rpc_capabilities(&self) -> RpcCapabilitiesResponse {
         RpcCapabilitiesResponse {
             norito_rpc: RpcNoritoRpcCapability::from(self.norito_rpc_config()),
         }
     }
+    #[cfg(test)]
     fn rpc_ping(&self) -> RpcPingResponse {
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -4120,7 +4028,7 @@ async fn enforce_preauth(
     mut req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    use axum::{extract::ConnectInfo, response::IntoResponse};
+    use axum::extract::ConnectInfo;
     // MCP subrequests are in-process work admitted by the outer connection's
     // pre-auth guard. Counting them again lets one valid tool batch exhaust and
     // ban its own client/NAT address. This extension cannot cross an HTTP
@@ -6210,7 +6118,6 @@ async fn enforce_typed_error_contract_with_body_timeout(
     next: Next,
     body_read_timeout: Duration,
 ) -> Result<AxResponse, Infallible> {
-    use axum::body::HttpBody as _;
     let method = req.method().clone();
     let accept = response_boundary_accept_header(req.headers());
     let route = req.extensions().get::<MatchedRouteMetadata>().cloned();
@@ -7313,7 +7220,7 @@ async fn handler_push_unregister_device(
         Err(response) => return response,
     };
     let mut req = match utils::extractors::decode_body_as_norito_or_json::<
-        push::UnregisterDeviceRequest,
+        push::RegisterDeviceRequest,
     >(&body, format)
     {
         Ok(req) => req,
@@ -7849,6 +7756,7 @@ async fn verified_source_body_admission_middleware(
     };
     next.run(request).await
 }
+#[cfg(test)]
 fn proof_post_router_with_body_limits(
     router: Router<SharedAppState>,
     state: SharedAppState,
@@ -7963,6 +7871,7 @@ async fn proof_response_with_exact_egress(
         axum::body::Body::from(body),
     ))
 }
+#[cfg(test)]
 async fn proof_json_response_with_egress<T>(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -11149,17 +11058,6 @@ fn parse_account_id_for_endpoint(
     .map(|(account_id, _)| account_id.into())
 }
 #[cfg(feature = "app_api")]
-fn normalize_identifier_input(
-    policy: &iroha_data_model::identifier::IdentifierPolicy,
-    raw: &str,
-) -> Result<String, Error> {
-    policy.normalization.normalize(raw).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-        ))
-    })
-}
-#[cfg(feature = "app_api")]
 fn identifier_normalization_label(
     normalization: iroha_data_model::identifier::IdentifierNormalization,
 ) -> &'static str {
@@ -11233,12 +11131,7 @@ fn derive_ram_lfe_request_draft(
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
     resolver
         .execute_encrypted(program_policy, &ciphertext)
-        .map_err(|err| match err {
-            identifier_resolution::IdentifierResolutionError::InvalidUtf8 => {
-                identifier_conversion_error(err.to_string())
-            }
-            _ => identifier_internal_error(err.to_string()),
-        })
+        .map_err(|err| identifier_internal_error(err.to_string()))
 }
 #[cfg(feature = "app_api")]
 fn derive_identifier_request_draft(
@@ -14743,6 +14636,7 @@ impl ZkIvmProveJobBudget {
             }),
         }
     }
+    #[cfg(test)]
     fn used_bytes(&self) -> usize {
         self.inner.used_bytes.load(AtomicOrdering::Acquire)
     }
@@ -15325,6 +15219,7 @@ fn zk_ivm_prove_terminal_body(
         (ZkIvmProveJobStatus::Error, fallback)
     })
 }
+#[cfg(test)]
 fn zk_ivm_prove_store_terminal(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     budget: &ZkIvmProveJobBudget,
@@ -16807,18 +16702,6 @@ async fn handler_zk_attachments_create(
     )
 }
 #[cfg(feature = "app_api")]
-async fn handler_zk_attachments_list(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
-    let tenant = zk_attachments_tenant(&verified);
-    Ok(crate::zk_attachments::handle_list_attachments(tenant).await)
-}
-#[cfg(feature = "app_api")]
 async fn handler_zk_attachments_filtered(
     State(app): State<SharedAppState>,
     Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
@@ -17421,45 +17304,6 @@ fn authoritative_pending_public_mailbox_messages(
     .unwrap_or(u32::MAX)
 }
 #[cfg(feature = "app_api")]
-fn exact_local_soracloud_runtime_peer_id(
-    app: &SharedAppState,
-) -> Result<iroha_model_base::peer::PeerId, SoracloudRuntimeExecutionError> {
-    let runtime = app.soracloud_runtime.as_ref().ok_or_else(|| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "Soracloud runtime is unavailable on this Torii peer",
-        )
-    })?;
-    let runtime_peer_id = runtime.local_peer_id().ok_or_else(|| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "Soracloud runtime does not advertise a local peer id",
-        )
-    })?;
-    let runtime_peer_id: iroha_model_base::peer::PeerId =
-        runtime_peer_id.parse().map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!("invalid local Soracloud runtime peer id `{runtime_peer_id}`: {error}"),
-            )
-        })?;
-    let torii_peer_id = app.local_peer_id.as_ref().ok_or_else(|| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "Torii does not have a configured local peer identity for Soracloud runtime execution",
-        )
-    })?;
-    if torii_peer_id != &runtime_peer_id {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "local Soracloud runtime peer `{runtime_peer_id}` does not match Torii peer `{torii_peer_id}`"
-            ),
-        ));
-    }
-    Ok(runtime_peer_id)
-}
-#[cfg(feature = "app_api")]
 const SORACLOUD_LOCAL_READ_BLOCKING_MAX_IN_FLIGHT_V1: usize = 8;
 
 #[cfg(feature = "app_api")]
@@ -17945,6 +17789,7 @@ fn routing_resolve_error_to_torii_error(
         backpressure: current_torii_backpressure(app.as_ref()),
     }
 }
+#[cfg(test)]
 fn resolve_signed_query_routing(
     app: &AppState,
     query: &SignedQuery,
@@ -17965,6 +17810,7 @@ fn resolve_signed_query_authority_routing(
         Some(&state_view),
     )
 }
+#[cfg(test)]
 fn require_signed_query_route(
     mut routes: Vec<RoutingDecision>,
     target_dataspace: DataSpaceId,
@@ -17979,6 +17825,7 @@ fn require_signed_query_route(
             dataspace_id: target_dataspace,
         })
 }
+#[cfg(test)]
 fn resolve_signed_query_routing_for_app(
     app: &AppState,
     query: &SignedQuery,
@@ -18514,6 +18361,7 @@ fn torii_route_unavailable_response(
     );
     response
 }
+#[cfg(test)]
 #[cfg(feature = "connect")]
 fn effective_proxy_routing_decision(
     request_kind: &'static str,
@@ -18850,22 +18698,6 @@ fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecisio
     is_local_authoritative_for_route(app, routing_decision)
 }
 #[cfg(feature = "connect")]
-fn should_execute_route_locally_cached(
-    app: &AppState,
-    routing_decision: RoutingDecision,
-    cache: &mut Vec<(RoutingDecision, bool)>,
-) -> bool {
-    if let Some((_, result)) = cache
-        .iter()
-        .find(|(cached_route, _)| *cached_route == routing_decision)
-    {
-        return *result;
-    }
-    let result = should_execute_route_locally(app, routing_decision);
-    cache.push((routing_decision, result));
-    result
-}
-#[cfg(feature = "connect")]
 fn should_execute_incoming_torii_proxy_request_locally(
     app: &AppState,
     request_kind: &ToriiProxyRequestKindV1,
@@ -19010,50 +18842,9 @@ fn torii_route_for_public_lane_id(
     torii_route_for_lane_id(app, lane_id)
 }
 #[cfg(feature = "app_api")]
-fn torii_route_for_dataspace_id(
-    app: &AppState,
-    dataspace_id: iroha_model_base::topology::DataSpaceId,
-) -> Result<RoutingDecision, Error> {
-    resolve_torii_route_for_dataspace_id(app, dataspace_id).map_err(|error| Error::PushIntoQueue {
-        source: Box::new(queue::Error::UnresolvedRoute {
-            reason: error.to_string(),
-        }),
-        backpressure: current_torii_backpressure(app),
-    })
-}
-#[cfg(feature = "app_api")]
-fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
-    let state_view = app.state.view();
-    let nexus = state_view.nexus();
-    let mut seen_dataspaces = BTreeSet::new();
-    let mut routes = Vec::new();
-    for lane in nexus.lane_catalog.lanes() {
-        if !torii_lane_active_for_routing(app, lane.id) {
-            continue;
-        }
-        if lane.visibility != iroha_data_model::nexus::LaneVisibility::Restricted {
-            continue;
-        }
-        if !seen_dataspaces.insert(lane.dataspace_id) {
-            continue;
-        }
-        let Ok(route) = iroha_core::queue::resolve_routing_decision(
-            RoutingDecision::new(lane.id, lane.dataspace_id),
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
-        ) else {
-            continue;
-        };
-        routes.push(route);
-    }
-    routes.sort_by_key(|route| (route.dataspace_id.as_u64(), route.lane_id.as_u32()));
-    routes
-}
-#[cfg(feature = "app_api")]
 #[derive(Clone, Debug)]
 enum ToriiAccountReadVisibility {
     Signed(AccountId),
-    PublicExact,
     None,
 }
 #[cfg(feature = "app_api")]
@@ -19061,7 +18852,7 @@ impl ToriiAccountReadVisibility {
     fn caller(&self) -> Option<&AccountId> {
         match self {
             Self::Signed(account_id) => Some(account_id),
-            Self::PublicExact | Self::None => None,
+            Self::None => None,
         }
     }
     fn is_signed(&self) -> bool {
@@ -19071,7 +18862,7 @@ impl ToriiAccountReadVisibility {
     fn into_dataspace_context(self, app: SharedAppState) -> ToriiDataspaceReadContext {
         let caller = match self {
             Self::Signed(account_id) => Some(account_id),
-            Self::PublicExact | Self::None => None,
+            Self::None => None,
         };
         let admitted_visibility = torii_dataspace_read_visibility(app.as_ref(), caller.as_ref());
         ToriiDataspaceReadContext {
@@ -19401,33 +19192,6 @@ fn torii_dataspace_read_visibility(
     routing::DataspaceReadVisibility::new(visible_dataspaces, can_read_all)
 }
 #[cfg(feature = "app_api")]
-fn torii_dataspace_read_visibility_for_accounts(
-    app: &AppState,
-    callers: &[AccountId],
-    additional_dataspace_alias: Option<&str>,
-) -> routing::DataspaceReadVisibility {
-    let permission: Permission = CanReadAllLedgerData.into();
-    let can_read_all = callers.iter().any(|caller| {
-        let state_view = app.state.view();
-        torii_account_has_permission(state_view.world(), caller, &permission)
-    });
-    let mut visible_dataspaces = torii_visible_account_read_routes(app, None)
-        .into_iter()
-        .chain(
-            callers
-                .iter()
-                .flat_map(|caller| torii_visible_account_read_routes(app, Some(caller))),
-        )
-        .map(|route| route.dataspace_id)
-        .collect::<BTreeSet<_>>();
-    if let Some(alias) = additional_dataspace_alias
-        && let Some(dataspace) = app.state.view().nexus().dataspace_catalog.by_alias(alias)
-    {
-        visible_dataspaces.insert(dataspace.id);
-    }
-    routing::DataspaceReadVisibility::new(visible_dataspaces, can_read_all)
-}
-#[cfg(feature = "app_api")]
 fn torii_dataspace_read_visibility_for_scope(
     app: &AppState,
     scope: &ToriiFanoutRouteScopeV1,
@@ -19479,6 +19243,7 @@ fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     }
     dataspaces
 }
+#[cfg(test)]
 #[cfg(feature = "app_api")]
 fn torii_partition_routes_by_visibility(
     app: &SharedAppState,
@@ -20063,8 +19828,6 @@ fn try_new_torii_proxy_session_id_with_rng<R>(rng: &mut R) -> Result<Hash, Torii
 where
     R: rand::rand_core::TryCryptoRng + ?Sized,
 {
-    use rand::rand_core::TryRngCore as _;
-
     let mut nonce = [0_u8; Hash::LENGTH];
     rng.try_fill_bytes(&mut nonce).map_err(|error| {
         ToriiBuildError::component_initialization(
@@ -20783,6 +20546,7 @@ fn target_account_iterable_query(
         _ => None,
     }
 }
+#[cfg(test)]
 fn target_domain_iterable_query(
     _query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<iroha_model_base::domain::DomainId> {
@@ -20959,6 +20723,7 @@ impl SignedQueryScopeInput for iroha_data_model::query::SignedQuery {
         &self.payload
     }
 }
+#[cfg(test)]
 fn signed_query_scope(request: &impl SignedQueryScopeInput) -> SignedQueryScope {
     match request.request_with_authority().request() {
         iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
@@ -21275,7 +21040,17 @@ fn unsupported_canonical_iterable_fanout_response() -> Response {
         "cross-dataspace iterable fanout is unavailable for canonical opaque query envelopes",
     )
 }
+// TODO: routed iterable fanout is parked (`bounded_canonical_iterable_fanout_variant`
+// rejects every iterable start); only the encoder tests construct these variants
+// until the canonical iterable projection is enabled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "routed iterable fanout is parked; tests exercise the encoder"
+    )
+)]
 enum BoundedCanonicalFanoutVariant {
     RoleId,
     TriggerId,
@@ -21795,7 +21570,10 @@ fn torii_response_has_reject_code(response: &Response, code: &str) -> bool {
 }
 include!("torii_fanout_diagnostics.rs");
 include!("torii_fanout_decode_helpers.rs");
-#[cfg(feature = "app_api")]
+// Generic fanout memory admission is scaffolding until its first production
+// DTO lands (see the TODO in torii_app_fanout_memory.rs); only its bounds tests
+// compile it today.
+#[cfg(all(test, feature = "app_api"))]
 include!("torii_app_fanout_memory.rs");
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_memory.rs");
@@ -22746,14 +22524,6 @@ fn asset_definition_home_dataspace_id(
         .as_deref()
         .and_then(|alias| dataspace_id_for_alias_segment(app, alias))
         .or_else(|| is_global.then_some(DataSpaceId::UNIVERSAL))
-}
-#[cfg(feature = "app_api")]
-fn torii_asset_definition_read_route(
-    app: &AppState,
-    definition_id: &AssetDefinitionId,
-) -> Option<RoutingDecision> {
-    asset_definition_home_dataspace_id(app, definition_id)
-        .and_then(|dataspace_id| resolve_torii_route_for_dataspace_id(app, dataspace_id).ok())
 }
 #[cfg(feature = "app_api")]
 fn contract_alias_dataspace_id(app: &AppState, alias: &ContractAlias) -> Option<DataSpaceId> {
@@ -23961,6 +23731,7 @@ async fn execute_torii_proxy_request_via_peer(
         }
     }
 }
+#[cfg(test)]
 #[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_via_http_bridge(
     app: &SharedAppState,
@@ -24097,6 +23868,7 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
     })?
     .map_err(ToriiProxyAttemptError::after_dispatch)
 }
+#[cfg(test)]
 #[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_locally(
     app: &SharedAppState,
@@ -25051,6 +24823,7 @@ fn queue_plan_admission_registry_conflict_response(
     insert_transaction_submission_identity_headers(&mut response, &entrypoint_hash, None);
     response
 }
+#[cfg(test)]
 #[cfg(feature = "connect")]
 fn queue_plan_admission_publication_targets(
     local_peer_id: &PeerId,
@@ -25493,6 +25266,12 @@ async fn execute_torii_transaction_via_proxy(
     minimal_response: bool,
     format: ResponseFormat,
 ) -> Response {
+    if let Err(error) =
+        require_current_transaction_admission(accepted_transaction.entrypoint().admission_intent())
+            .and_then(|()| require_current_transaction_route(&routing_plan))
+    {
+        return error.into_response();
+    }
     let ingress_validation_timestamp_ms = app
         .queue
         .queue_plan_admission_timestamp_ms_for(&accepted_transaction);
@@ -27685,6 +27464,7 @@ impl ToriiProxyRequestHead {
         }
     }
 }
+#[cfg(test)]
 #[cfg(feature = "connect")]
 async fn execute_incoming_torii_proxy_request(
     app: &SharedAppState,
@@ -27732,6 +27512,15 @@ async fn execute_incoming_torii_proxy_request_with_admission(
                 proxy_request.schema_version
             ),
         );
+    }
+    if matches!(
+        &proxy_request.request,
+        ToriiProxyRequestKindV1::SubmitTransaction { .. }
+    ) {
+        return unsupported_transaction_admission(
+            "QueuePlanSynced peer admission is unsupported by the current consensus driver; no durable transaction promise was issued",
+        )
+        .into_response();
     }
     let budget_observed_at = tokio::time::Instant::now();
     let absolute_budget = match validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)
@@ -28852,13 +28641,6 @@ fn soracloud_local_read_conflict_maps_to_http_conflict() {
         ),
     );
     assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-#[cfg(feature = "app_api")]
-fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response {
-    Response::builder()
-        .status(StatusCode::SERVICE_UNAVAILABLE)
-        .body(Body::from(message.into()))
-        .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
 }
 #[cfg(feature = "app_api")]
 fn hosted_http_request_hash(
@@ -31482,12 +31264,6 @@ struct MintRequestsQuery {
     cursor: Option<String>,
     #[norito(default)]
     limit: Option<u64>,
-    #[norito(default)]
-    status: Option<String>,
-    #[norito(default)]
-    requires_my_signature: Option<bool>,
-    #[norito(default)]
-    include_signing_payload: Option<bool>,
 }
 #[cfg(feature = "app_api")]
 fn non_empty_string(value: Option<String>) -> Option<String> {
@@ -36155,6 +35931,33 @@ enum PreparedTransactionIngress {
     Fresh(iroha_core::tx::AcceptedTransaction<'static>),
 }
 
+fn unsupported_transaction_admission(message: &str) -> Error {
+    Error::AppQueryValidation {
+        code: "unsupported_transaction_admission",
+        message: message.to_owned(),
+    }
+}
+
+/// Reject an intent for which the current consensus driver has no execution consumer.
+/// This must precede canonical retry lookup as well as fresh durable queue admission.
+fn require_current_transaction_admission(intent: TransactionAdmissionIntent) -> Result<(), Error> {
+    if intent != TransactionAdmissionIntent::Ordinary {
+        return Err(unsupported_transaction_admission(
+            "QueuePlanSynced admission is unsupported by the current consensus driver; only signature-bound Ordinary transactions with one resolved route can execute",
+        ));
+    }
+    Ok(())
+}
+
+fn require_current_transaction_route(plan: &RoutingPlan) -> Result<(), Error> {
+    if !matches!(plan, RoutingPlan::Single(_)) {
+        return Err(unsupported_transaction_admission(
+            "multi-route transaction admission is unsupported by the current consensus driver; the transaction must resolve to one route without changing its signed meaning",
+        ));
+    }
+    Ok(())
+}
+
 async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -36198,6 +36001,7 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
                         .to_owned(),
                 });
             }
+            require_current_transaction_admission(transaction.signed().admission_intent())?;
             #[cfg(feature = "connect")]
             if let Some(authenticated) = AuthenticatedQueuePlanRetry::from_signed(
                 state.network_id_ref(),
@@ -36255,10 +36059,19 @@ fn prepare_fresh_transaction_ingress(
     app: &SharedAppState,
     transaction: iroha_core::tx::AcceptedTransaction<'static>,
 ) -> Result<PreparedFreshTransactionIngress, Error> {
+    require_current_transaction_admission(transaction.entrypoint().admission_intent())?;
     let durable_retry_claim = app
         .queue
         .durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(app, error))?;
+    let routing_plan = if let Some(claim) = &durable_retry_claim {
+        claim.routing_plan.clone()
+    } else {
+        app.queue
+            .route_plan_with_state(&transaction, app.state.as_ref())
+            .map_err(|error| routing_resolve_error_to_torii_error(app, error))?
+    };
+    require_current_transaction_route(&routing_plan)?;
     if !durable_retry_claim
         .as_ref()
         .is_some_and(|claim| claim.global_admission_identity.is_some())
@@ -36269,13 +36082,6 @@ fn prepare_fresh_transaction_ingress(
             1,
         )?;
     }
-    let routing_plan = if let Some(claim) = &durable_retry_claim {
-        claim.routing_plan.clone()
-    } else {
-        app.queue
-            .route_plan_with_state(&transaction, app.state.as_ref())
-            .map_err(|error| routing_resolve_error_to_torii_error(app, error))?
-    };
     Ok(PreparedFreshTransactionIngress {
         transaction,
         routing_plan,
@@ -36295,6 +36101,8 @@ async fn submit_prepared_transaction_ingress(
         routing_plan,
         durable_retry_claim,
     } = prepared;
+    require_current_transaction_admission(transaction.entrypoint().admission_intent())?;
+    require_current_transaction_route(&routing_plan)?;
     #[cfg(feature = "connect")]
     {
         // Preflight is a snapshot. An earlier batch entry or concurrent ingress
@@ -36392,6 +36200,7 @@ async fn handler_post_transaction_entrypoint(
         compute_permit,
         "transaction_entrypoint_admission_worker_failed",
         move || {
+            require_current_transaction_admission(transaction.admission_intent())?;
             #[cfg(feature = "connect")]
             if let Some(authenticated) =
                 AuthenticatedQueuePlanRetry::from_entrypoint(state.network_id_ref(), &transaction)?
@@ -40195,6 +40004,7 @@ async fn handler_identifier_receipt_lookup(
     };
     json_ok(identifier_claim_lookup_response(&claim))
 }
+#[cfg(test)]
 fn normalise_alias(input: &str) -> String {
     input
         .chars()
@@ -41458,6 +41268,7 @@ const SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES: &str = "missing_runti
 #[cfg(feature = "app_api")]
 const SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES: &str =
     "unexpected_runtime_dependencies";
+#[cfg(test)]
 #[cfg(feature = "app_api")]
 const SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED: &str = "initialization_failed";
 #[cfg(feature = "app_api")]
@@ -41512,9 +41323,7 @@ fn rebuild_musubi_search_index(
     iroha_core::musubi_search::MusubiSearchError,
 > {
     use iroha_core::musubi_search::{MusubiSearchError, MusubiSearchIndexV1};
-    use iroha_data_model::musubi::{
-        MusubiPackageMetadataRecordV1, MusubiPackageRecordV1, MusubiSearchSnapshotV1,
-    };
+    use iroha_data_model::musubi::MusubiSearchSnapshotV1;
     let state_view = state.view();
     let Some(finalized_block_hash) = state_view.block_hashes().last().map(|hash| *hash.as_ref())
     else {
@@ -41759,7 +41568,6 @@ pub struct Torii {
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     telemetry: routing::MaybeTelemetry,
-    telemetry_profile: TelemetryProfile,
     online_peers: OnlinePeersProvider,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_telemetry_urls: Vec<telemetry::peers::ToriiUrl>,
@@ -41838,7 +41646,6 @@ pub struct Torii {
     #[cfg(feature = "push")]
     push_rate_limiter: limits::RateLimiter,
     iso_bridge: Option<Arc<Iso20022BridgeRuntime>>,
-    alias_service: Option<Arc<AliasService>>,
     #[cfg(feature = "app_api")]
     identifier_resolver: Option<Arc<identifier_resolution::IdentifierResolutionService>>,
     #[cfg(feature = "app_api")]
@@ -46171,10 +45978,6 @@ impl Torii {
                 ToriiBuildError::invalid_configuration("iso_bridge", format!("{error:?}"))
             })?
             .map(Arc::new);
-        let alias_service = alias_service_from_iso_config(
-            &config.iso_bridge,
-            AliasAttester::new(da_receipt_signer.clone()),
-        );
         let fee_policy = match (
             config.api_fee_asset_id.clone(),
             config.api_fee_amount.clone(),
@@ -46219,7 +46022,6 @@ impl Torii {
         let high_load_subscription_tx_threshold = config
             .api_high_load_subscription_threshold
             .unwrap_or(high_load_stream_tx_threshold);
-        let telemetry_profile = telemetry.profile();
         let api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(
             config.api_tokens.iter().map(String::as_str),
         ));
@@ -47247,7 +47049,6 @@ impl Torii {
             peer_geo,
             sumeragi,
             telemetry: telemetry.clone(),
-            telemetry_profile,
             content_config: content_snapshot,
             address: config.address,
             transaction_max_content_len,
@@ -47334,7 +47135,6 @@ impl Torii {
             high_load_stream_tx_threshold,
             high_load_subscription_tx_threshold,
             iso_bridge: iso_bridge_runtime,
-            alias_service,
             #[cfg(feature = "app_api")]
             identifier_resolver,
             #[cfg(feature = "app_api")]
@@ -47898,12 +47698,11 @@ impl Torii {
                 self.da_ingest.replay_cache_max_lane_epochs,
             ));
             let receipt_log = Arc::new(da::DaReceiptLog::in_memory(
-                Arc::clone(&replay_store),
+                replay_store,
                 self.da_receipt_signer.public_key().clone(),
             ));
             return Ok(DaRuntimeServices {
                 replay_cache,
-                replay_store,
                 receipt_log,
                 replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
                 spooler: None,
@@ -48002,7 +47801,6 @@ impl Torii {
         ));
         Ok(DaRuntimeServices {
             replay_cache,
-            replay_store,
             receipt_log,
             replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
             spooler,
@@ -48295,7 +48093,6 @@ impl Torii {
             ws_message_timeout: self.ws_message_timeout,
             require_api_token: self.require_api_token,
             api_token_digests: self.api_token_digests.clone(),
-            webhooks_enabled: self.webhooks_enabled,
             zk_attachments_enabled: self.zk_attachments_enabled,
             operator_auth: self.operator_auth.clone(),
             operator_signatures: self.operator_signatures.clone(),
@@ -48329,18 +48126,15 @@ impl Torii {
             high_load_subscription_tx_threshold: self.high_load_subscription_tx_threshold,
             online_peers: self.online_peers.clone(),
             iso_bridge: self.iso_bridge.clone(),
-            alias_service: self.alias_service.clone(),
             #[cfg(feature = "app_api")]
             identifier_resolver: self.identifier_resolver.clone(),
             #[cfg(feature = "app_api")]
             tx_history_access_policy: self.tx_history_access_policy.clone(),
             telemetry: self.telemetry.clone(),
-            telemetry_profile: self.telemetry_profile,
             zk_prover_keys_dir: self.zk_prover_keys_dir.clone(),
             zk_ivm_prove_jobs,
             zk_ivm_prove_job_budget,
             soracloud_public_inflight,
-            soracloud_public_inflight_total,
             sns_name_cache: Arc::new(sns::SnsNameRecordCache::new()),
             zk_ivm_prove_inflight,
             zk_ivm_prove_slots,
@@ -48355,7 +48149,6 @@ impl Torii {
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry,
             da_replay_cache: da_runtime.replay_cache,
-            da_replay_store: da_runtime.replay_store,
             da_receipt_log: da_runtime.receipt_log,
             da_replay_lifecycle_lock: da_runtime.replay_lifecycle_lock,
             da_receipt_signer: self.da_receipt_signer.clone(),
@@ -48834,7 +48627,6 @@ impl Torii {
     /// # Errors
     /// Can fail due to listening to network or if http server fails
     // #[iroha_futures::telemetry_future]
-    #[cfg(not(test))]
     pub async fn start(
         self,
         shutdown_signal: ShutdownSignal,
@@ -50759,6 +50551,24 @@ fn _assert_torii_types_are_send_sync() {
 include!("tests/lib_runtime_handlers.rs");
 // Textual inclusion keeps the original test-module namespace unchanged.
 include!("tests/lib_queue_metadata.rs");
+#[cfg(test)]
+use axum::routing::get;
+#[cfg(test)]
+use axum::routing::post;
+#[cfg(test)]
+use iroha_core::alias::AliasError;
+#[cfg(test)]
+use iroha_core::alias::AliasMetricKind;
+#[cfg(test)]
+use iroha_core::soracloud_runtime::SoracloudRuntimeReplicaPlan;
+#[cfg(test)]
+use iroha_crypto::SignatureOf;
+#[cfg(test)]
+use iroha_data_model::account::AccountAddress;
+#[cfg(test)]
+use iroha_data_model::nexus::FeeSponsorProgram;
+#[cfg(test)]
+use iroha_torii_shared::uri;
 #[cfg(all(test, feature = "app_api"))]
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
 impl Error {

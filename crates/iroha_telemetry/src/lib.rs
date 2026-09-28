@@ -10,6 +10,8 @@ pub mod privacy;
 mod retry_period;
 #[cfg(feature = "telegram")]
 pub mod telegram;
+#[cfg(any(feature = "event-exporter", feature = "dev-telemetry"))]
+mod timestamp;
 #[cfg(feature = "event-exporter")]
 pub mod ws;
 pub use iroha_telemetry_derive::metrics;

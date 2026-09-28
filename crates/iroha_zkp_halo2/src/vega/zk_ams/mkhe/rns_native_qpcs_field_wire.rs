@@ -4,16 +4,21 @@
 //! the 120-bit integer `(c0 << 60) | c1`, encoded in exactly fifteen big-endian
 //! bytes. This is a wire representation; the field and FRI algebra are unchanged.
 
+#[cfg(test)]
 use super::{rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, rns_native_qpcs_prefix::Fq2V1};
 
 /// Exact coefficient width of every modulus in the fixed native RNS profile.
+#[cfg(test)]
 pub(super) const RNS_NATIVE_QPCS_COEFFICIENT_BITS_V1: u32 = 60;
 /// Sole encoded width of a pair of canonical field coefficients.
 pub(super) const RNS_NATIVE_QPCS_FQ2_BYTES_V1: usize = 15;
+#[cfg(test)]
 const COEFFICIENT_LIMIT_V1: u64 = 1_u64 << RNS_NATIVE_QPCS_COEFFICIENT_BITS_V1;
+#[cfg(test)]
 const COEFFICIENT_MASK_V1: u128 = (COEFFICIENT_LIMIT_V1 - 1) as u128;
 
 /// Invalid exact qPCS pair, modulus coordinate, or field value.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeQpcsFieldWireErrorV1 {
     /// A coordinate is outside the current forty-prime profile.
@@ -26,6 +31,7 @@ pub(super) enum RnsNativeQpcsFieldWireErrorV1 {
     NonCanonicalResidue,
 }
 
+#[cfg(test)]
 fn modulus_v1(limb: usize) -> Result<u64, RnsNativeQpcsFieldWireErrorV1> {
     let modulus = *ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1
         .get(limb)
@@ -57,6 +63,7 @@ pub(super) fn encode_fq2_v1(
 }
 
 /// Decode exactly fifteen bytes and check both coefficients against their limb.
+#[cfg(test)]
 pub(super) fn decode_fq2_v1(
     limb: usize,
     bytes: &[u8],

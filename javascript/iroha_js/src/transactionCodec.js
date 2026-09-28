@@ -1346,7 +1346,7 @@ function encodeTransactionPayload(normalized, executable, validatePayloadBound) 
     option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
-    u32(TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG),
+    u32(TRANSACTION_ADMISSION_ORDINARY_TAG),
     metadataArchive(normalized.metadata),
     Buffer.of(0),
   ]);
@@ -2355,7 +2355,7 @@ function validateTransactionPayloadEnvelope(
   validateFeePayment?.(executableValidation, feePayment);
   validateTransactionAdmissionIntentArchive(
     reader.readField(FIELD_ADMISSION_INTENT),
-    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+    TRANSACTION_ADMISSION_ORDINARY_TAG,
     (TEXT_TRANSACTION_PAYLOAD + "admissionIntent"),
   );
   rejectLegacyFeeMetadata(
@@ -2652,7 +2652,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   );
   validateTransactionAdmissionIntentArchive(
     reader.readField(FIELD_ADMISSION_INTENT),
-    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+    TRANSACTION_ADMISSION_ORDINARY_TAG,
     (TEXT_VERIFYING_KEY_TRANSACTION + "payload.admissionIntent"),
   );
   rejectLegacyFeeMetadata(

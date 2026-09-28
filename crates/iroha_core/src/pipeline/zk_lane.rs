@@ -767,13 +767,6 @@ fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
         ));
     }
 }
-#[cfg(test)]
-#[allow(dead_code)]
-fn process_batch(batch: &mut Vec<ZkTask>) {
-    for job in batch.drain(..) {
-        process_job(job);
-    }
-}
 /// Try to submit a task through a globally registered lane, if present.
 pub fn try_submit(task: ZkTask) -> bool {
     GLOBAL_SENDER

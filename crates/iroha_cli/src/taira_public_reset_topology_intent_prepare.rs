@@ -1,13 +1,22 @@
 //! Read-only producer for one fresh topology intent after a durable dispatcher apply.
-use super::super::{admission, storage};
+#[cfg(any(target_os = "linux", test))]
+use super::super::admission;
+#[cfg(target_os = "linux")]
+use super::super::storage;
 use super::*;
+#[cfg(any(target_os = "linux", test))]
 use crate::taira_public_reset as reset;
+#[cfg(target_os = "linux")]
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+#[cfg(any(target_os = "linux", test))]
 use reset::history::TerminalInventory;
+#[cfg(any(target_os = "linux", test))]
 use reset::{
-    BUILD_PROFILE, BUILD_TARGET, CHAIN_ID, EdgeInitialStateV1, FaucetPolicyV1, FeeIntentV1,
-    RevisionV1, SourceManifestV1, ValidatorClientV1, ValidatorInitialStateV1,
+    BUILD_PROFILE, BUILD_TARGET, CHAIN_ID, FaucetPolicyV1, RevisionV1, SourceManifestV1,
+    ValidatorClientV1,
 };
+#[cfg(target_os = "linux")]
+use reset::{EdgeInitialStateV1, FeeIntentV1, ValidatorInitialStateV1};
 
 /// Live predecessor identity comes from the sealed plan, stopped capture and selected inventory.
 #[derive(clap::Args, Debug)]
@@ -53,6 +62,7 @@ pub(in super::super::super::super) struct PrepareTopologyIntent {
     output: PathBuf,
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn absolute(path: &Path, label: &str) -> Result<String> {
     validate_absolute_normal_path(path, label)?;
     path.to_str()
@@ -60,6 +70,7 @@ fn absolute(path: &Path, label: &str) -> Result<String> {
         .ok_or_else(|| eyre!("{label} must be UTF-8"))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn artifact(
     role: &str,
     local: &Path,
@@ -73,6 +84,7 @@ fn artifact(
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Plan) -> Result<()> {
     need(
         old.validators.len() == 4
@@ -158,6 +170,7 @@ fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Pl
 /// release is again the selected network after a complete rollback. Do not use
 /// the failed reset's candidate revision, genesis or client identities as the
 /// source of the successor topology.
+#[cfg(any(target_os = "linux", test))]
 fn bind_selected_inventory(
     selected: &TerminalInventory,
     selected_sha256: &str,
@@ -176,6 +189,7 @@ fn bind_selected_inventory(
     bind_predecessor(selected, runtime, plan)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn bind_inventory_lineage(
     selected: &TerminalInventory,
     selected_sha256: &str,
@@ -213,6 +227,7 @@ fn bind_inventory_lineage(
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn distinct_new_clients(
     old: &TerminalInventory,
     new: &[ValidatorClientV1],
@@ -526,6 +541,7 @@ mod tests {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn daemon_identity(
     path: &Path,
     release: &str,
@@ -578,6 +594,7 @@ fn daemon_identity(
     Ok((config.common.peer.id.to_string(), origin, policy))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn source_revision(
     source_manifest: &Path,
     import_root: &Path,

@@ -566,7 +566,7 @@ def test_foundation_model_selections_reject_upper_layer_dependencies() -> None:
         if selection["package"] == "iroha_model_base"
     }
     assert {tuple(row["features"]) for row in selections.values()} == {
-        (), ("ffi_export",), ("transparent_api",), ("ffi_export", "transparent_api"),
+        (), ("transparent_api",),
     }
     forbidden = {
         "iroha_data_model", "iroha_privacy_model", "iroha_service_model",

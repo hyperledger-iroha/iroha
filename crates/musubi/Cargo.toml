@@ -34,7 +34,6 @@ ivm = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
 toml = { workspace = true }
 url = { workspace = true }
 
@@ -42,5 +41,4 @@ url = { workspace = true }
 rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
-base64 = { workspace = true }
 tempfile = { workspace = true }

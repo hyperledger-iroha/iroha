@@ -41,12 +41,10 @@ description = "Reference SoraNet relay daemon"
 [dependencies]
 iroha_model_base = { workspace = true }
 clap = { version = "4.5.51", features = ["derive"] }
-futures = { workspace = true, features = ["std"] }
 hex = { workspace = true, features = ["alloc"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 base64 = { workspace = true }
 quinn = "0.11.9"
-rcgen = "=0.14.5"
 rustls = { version = "0.23.35", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync"] }
@@ -67,6 +65,7 @@ tempfile = "3.23.0"
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+rcgen = "=0.14.5"
 
 [[test]]
 name = "soranet_relay_integration"

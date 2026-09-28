@@ -12,7 +12,7 @@ use iroha_config::parameters::actual::{
 };
 use iroha_core::{
     query::signer_finality::verify_signer_finality_v1,
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, WorldReadOnly},
 };
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{

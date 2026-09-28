@@ -11,7 +11,19 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PYO3_PYTHON");
     println!("cargo:rerun-if-env-changed=PYTHON_SYS_EXECUTABLE");
     println!("cargo:rerun-if-env-changed=PYTHON");
-    println!("cargo:rerun-if-changed=python-runtime-path");
+    println!("cargo:rerun-if-changed=build.rs");
+    // A watched path that does not exist is permanently stale for Cargo, which
+    // would rerun this script (and relink the crate) on every build. Watch the
+    // optional override file only once it exists; until then, watch the package
+    // directory so creating the override still triggers a rerun.
+    let override_file = env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .map(|dir| dir.join("python-runtime-path"));
+    if override_file.as_deref().is_some_and(Path::is_file) {
+        println!("cargo:rerun-if-changed=python-runtime-path");
+    } else {
+        println!("cargo:rerun-if-changed=.");
+    }
     // Tests link as executables; on macOS they also require the dynamic lookup flag set.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-arg=-undefined");

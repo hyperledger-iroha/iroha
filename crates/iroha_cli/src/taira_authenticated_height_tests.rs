@@ -32,9 +32,20 @@ struct Fixture {
 
 impl Fixture {
     fn chain() -> CertifiedTestChain {
+        use iroha_data_model::parameter::system::{
+            Parameter, SumeragiNposParameters, SumeragiParameter,
+        };
+
         let mut config = TestChainConfig::new(World::new(), 10_000);
         config.chain_id = "fc56984b-2be7-431d-840e-21514d1883f0".into();
         config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+        let npos = SumeragiNposParameters::default();
+        config.genesis_parameters = vec![
+            Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                npos.epoch_length_blocks,
+            )),
+            Parameter::Custom(npos.into_custom_parameter()),
+        ];
         CertifiedTestChain::start(config).expect("real NPoS fixture chain")
     }
 
@@ -857,7 +868,9 @@ mod deployment_prefix {
         let fixture = fixture();
         TrustV1 {
             genesis_public_key: fixture.genesis.public_key().clone(),
-            genesis_signed_wire_hex: hex::encode(fixture.genesis.canonical_wire()),
+            // Release trust consumes the genuinely executed genesis frame; the original
+            // signed manifest fixture intentionally predates deterministic execution.
+            genesis_signed_wire_hex: hex::encode(&fixture.proofs[0].block_wire),
             peers: fixture.peers.clone(),
         }
         .authority(NetworkId::from_genesis_hash(

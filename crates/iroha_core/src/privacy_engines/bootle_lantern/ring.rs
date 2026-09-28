@@ -311,6 +311,7 @@ impl ProofPolynomialV1 {
         coefficients[0] = constant;
         Ok(Self { coefficients })
     }
+    #[cfg(test)]
     /// Construct a constant polynomial from any centered integer.
     #[must_use]
     pub fn constant_centered(constant: i64) -> Self {

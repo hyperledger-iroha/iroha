@@ -1,8 +1,18 @@
 //! State-owned, authority-neutral creator that retains `u_i` and returns public membership only.
 
+#[cfg(test)]
+use super::super::ZkAmsMkheErrorV1;
+use super::super::{
+    exact_eight_chunk_membership::{
+        ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1, ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1,
+        ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1,
+    },
+    manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
+};
+#[cfg(test)]
 use super::{
     super::{
-        MAX_RANDOM_REJECTION_ATTEMPTS_V1, SecretPolynomial, ZkAmsMkheErrorV1,
+        MAX_RANDOM_REJECTION_ATTEMPTS_V1, SecretPolynomial,
         active_exact_binding::{
             PersistentWitnessConsumerV1, VerifiedPersistentWitnessBindingSetV1,
         },
@@ -14,19 +24,17 @@ use super::{
             ZkAmsMkheDirectRkgEphemeralMembershipErrorV1,
             ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1,
         },
-        exact_eight_chunk_membership::{
-            ExactEightChunkMembershipErrorV1, ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1,
-            ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1,
-            ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1,
-        },
-        manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
+        exact_eight_chunk_membership::ExactEightChunkMembershipErrorV1,
+        manifest::release_profile_v1,
     },
     ZkAmsMkheCollectivePartyStateV1, clear_secret_i64_slice_v1,
 };
+use crate::vega::VegaT256ScalarV1 as Scalar;
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{GeneralizedBulletproofErrorV1, ProofRandomSource},
     vega::{
-        MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+        MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point,
         bulletproof_t256::{
             ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZkAmsT256MembershipBoundV1,
             ZkAmsT256MembershipErrorV1, commit_zk_ams_t256_membership_chunk_v1,
@@ -34,19 +42,26 @@ use crate::{
     },
 };
 
+#[cfg(test)]
 #[path = "direct_rkg_one_candidate_v1.rs"]
 mod direct_rkg_one_candidate_v1;
+#[cfg(test)]
 #[path = "direct_rkg_one_creator_v2.rs"]
 mod direct_rkg_one_creator_v2;
+#[cfg(test)]
 #[path = "direct_rkg_one_publication_v1.rs"]
 mod direct_rkg_one_publication_v1;
+#[cfg(test)]
 #[path = "direct_rkg_one_sealed_candidate_v1.rs"]
 mod direct_rkg_one_sealed_candidate_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_candidate_v1::DirectRkgOneProverSessionV1;
-pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_publication_v1::{
-    DirectRkgOneProofDurabilityPermitV2, DirectRkgOnePublicationOwnerV1,
-};
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_publication_v1::DirectRkgOneProofDurabilityPermitV2;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_publication_v1::DirectRkgOnePublicationOwnerV1;
 
+#[cfg(test)]
 const RKG_EPHEMERAL_BLINDING_ENTROPY_BYTES_V1: usize = 64;
 const RKG_EPHEMERAL_POINT_WIRE_BYTES_V1: usize = 33;
 const RKG_EPHEMERAL_CREATION_MASK_BITS_V1: usize = 38;
@@ -71,12 +86,14 @@ const _: () = {
 };
 
 /// Public membership evidence only; carries no binding or release authority.
+#[cfg(test)]
 #[allow(dead_code)]
 pub(super) struct StateOwnedDirectRkgEphemeralMembershipPrecursorV1 {
     membership: ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1,
 }
 
 /// Sole owner; candidate creation consumes this slot and never reinserts it.
+#[cfg(test)]
 #[allow(dead_code)]
 pub(super) struct PartyLocalRkgEphemeralOpeningV1 {
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
@@ -85,7 +102,9 @@ pub(super) struct PartyLocalRkgEphemeralOpeningV1 {
     retained_commitment_wire: RkgEphemeralCommitmentWireV1,
 }
 
+#[cfg(test)]
 struct RkgEphemeralSecretV1(SecretPolynomial);
+#[cfg(test)]
 impl Drop for RkgEphemeralSecretV1 {
     fn drop(&mut self) {
         clear_secret_i64_slice_v1(&mut self.0.coefficients);
@@ -94,8 +113,10 @@ impl Drop for RkgEphemeralSecretV1 {
     }
 }
 
+#[cfg(test)]
 struct ZeroizingRkgEphemeralBlindingEntropyV1([u8; RKG_EPHEMERAL_BLINDING_ENTROPY_BYTES_V1]);
 
+#[cfg(test)]
 impl Drop for ZeroizingRkgEphemeralBlindingEntropyV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -107,8 +128,10 @@ impl Drop for ZeroizingRkgEphemeralBlindingEntropyV1 {
     }
 }
 
+#[cfg(test)]
 struct RkgEphemeralCommitmentBlindingsV1([Scalar; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1]);
 
+#[cfg(test)]
 impl RkgEphemeralCommitmentBlindingsV1 {
     fn sample<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut owner = Self([Scalar::zero(); ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1]);
@@ -135,6 +158,7 @@ impl RkgEphemeralCommitmentBlindingsV1 {
     }
 }
 
+#[cfg(test)]
 impl Drop for RkgEphemeralCommitmentBlindingsV1 {
     fn drop(&mut self) {
         let blindings = core::hint::black_box(&mut self.0);
@@ -148,8 +172,10 @@ impl Drop for RkgEphemeralCommitmentBlindingsV1 {
     }
 }
 
+#[cfg(test)]
 struct ZeroizingRkgEphemeralCoefficientsV1(Vec<i8>);
 
+#[cfg(test)]
 impl ZeroizingRkgEphemeralCoefficientsV1 {
     fn from_ternary_secret(secret: &SecretPolynomial) -> Result<Self, ZkAmsMkheErrorV1> {
         if secret.coefficients.len() != ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 {
@@ -172,6 +198,7 @@ impl ZeroizingRkgEphemeralCoefficientsV1 {
     }
 }
 
+#[cfg(test)]
 impl Drop for ZeroizingRkgEphemeralCoefficientsV1 {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.0);
@@ -183,6 +210,7 @@ impl Drop for ZeroizingRkgEphemeralCoefficientsV1 {
     }
 }
 
+#[cfg(test)]
 impl ZkAmsMkheCollectivePartyStateV1 {
     /// Prepare public membership while retaining the sole party-local opening.
     #[allow(dead_code)]
@@ -270,6 +298,7 @@ impl ZkAmsMkheCollectivePartyStateV1 {
     }
 }
 
+#[cfg(test)]
 fn sample_nonzero_rkg_ephemeral_v1<R: MaskedRelaxedRandomSourceV1>(
     profile: &super::super::BgvProfile,
     random: &mut R,
@@ -283,6 +312,7 @@ fn sample_nonzero_rkg_ephemeral_v1<R: MaskedRelaxedRandomSourceV1>(
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
+#[cfg(test)]
 fn prove_rkg_ephemeral_membership_v1<R: ProofRandomSource>(
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
     coefficients: &[i8],
@@ -300,6 +330,7 @@ fn prove_rkg_ephemeral_membership_v1<R: ProofRandomSource>(
     ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1::prove(context, coefficients, blindings, random)
 }
 
+#[cfg(test)]
 fn commit_rkg_ephemeral_opening_v1(
     coefficients: &[i8],
     blindings: &[Scalar; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
@@ -327,6 +358,7 @@ fn commit_rkg_ephemeral_opening_v1(
         .map_err(|_: Vec<Point>| ZkAmsMkheErrorV1::InvalidKeyMaterial)
 }
 
+#[cfg(test)]
 fn encode_rkg_ephemeral_commitments_v1(
     commitments: &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
 ) -> Result<RkgEphemeralCommitmentWireV1, ZkAmsMkheErrorV1> {
@@ -340,6 +372,7 @@ fn encode_rkg_ephemeral_commitments_v1(
     Ok(wire)
 }
 
+#[cfg(test)]
 fn map_membership_error_v1(
     error: ZkAmsMkheDirectRkgEphemeralMembershipErrorV1,
 ) -> ZkAmsMkheErrorV1 {
@@ -354,6 +387,7 @@ fn map_membership_error_v1(
     }
 }
 
+#[cfg(test)]
 fn map_t256_error_v1(error: ZkAmsT256MembershipErrorV1) -> ZkAmsMkheErrorV1 {
     match error {
         ZkAmsT256MembershipErrorV1::Backend(

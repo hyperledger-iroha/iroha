@@ -10,7 +10,7 @@ use iroha_core::{
         SnsError as CoreSnsError, SnsNamespace, get_name_record_by_selector, policy_by_id,
         selector_for_namespace_literal,
     },
-    state::{StateReadOnly, StateReadOnlyWithTransactions},
+    state::StateReadOnly,
 };
 use iroha_data_model::sns::{NameRecordV1, NameSelectorV1, NameStatus, SuffixId};
 use iroha_torii_shared::{

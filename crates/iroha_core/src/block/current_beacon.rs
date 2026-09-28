@@ -333,7 +333,7 @@ mod current_beacon_tests {
         let mut world = predecessor.state().world.block();
         world
             .parliament_required_beacon_pulse_slots
-            .remove(&(BeaconSessionId::for_network_v1(&pulse.network_id), 5));
+            .remove((BeaconSessionId::for_network_v1(&pulse.network_id), 5));
         world.commit();
         assert!(
             validate(&predecessor, proposal).is_err(),

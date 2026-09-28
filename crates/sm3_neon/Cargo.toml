@@ -13,9 +13,9 @@ force-neon = []
 bench = []
 
 [dependencies]
-sm3 = "0.5.0-rc.1"
 
 [dev-dependencies]
+sm3 = "0.5.0-rc.1"
 criterion = { workspace = true }
 rand = { version = "0.9.3", default-features = false, features = ["std", "std_rng", "alloc"] }
 hex-literal = "1.1.0"

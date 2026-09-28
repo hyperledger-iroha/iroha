@@ -163,7 +163,6 @@ mod model {
     )]
     #[norito(tag = "kind", content = "content")]
     #[derive(thiserror::Error)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     /// Item-level errors returned when resolving query inputs.
     pub enum FindError {
         /// Failed to find asset: `{0}`

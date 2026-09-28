@@ -165,9 +165,20 @@ fn minimal_config_snapshot() {
 /// A minimal node config inherits application-sized budgets without deployment overrides.
 #[test]
 fn minimal_config_inherits_large_application_rate_budgets() {
-    let torii = load_config_from_fixtures("minimal_with_trusted_peers.toml")
-        .expect("minimal node configuration")
-        .torii;
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("minimal node configuration");
+    let content = &config.content.limits;
+    assert_eq!(content.max_requests_per_second.get(), 10_000);
+    assert_eq!(content.request_burst.get(), 100_000);
+    assert_eq!(content.max_egress_bytes_per_second.get(), 256 * 1024 * 1024);
+    assert_eq!(content.egress_burst_bytes.get(), 1024 * 1024 * 1024);
+    let torii = config.torii;
+    let gateway = &torii.sorafs_gateway.rate_limit;
+    assert_eq!(
+        gateway.max_requests.map(std::num::NonZeroU32::get),
+        Some(600_000)
+    );
+    assert_eq!(gateway.window, Duration::from_secs(60));
     for rate in [
         torii.query_rate_per_authority_per_sec,
         torii.tx_rate_per_authority_per_sec,

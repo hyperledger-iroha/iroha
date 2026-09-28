@@ -5,6 +5,7 @@ pub const APPLICATION_RING_DEGREE_V1: usize = 64;
 pub const APPLICATION_MODULUS_V1: u16 = 12_289;
 /// Number of application equations.
 pub const APPLICATION_ROWS_V1: usize = 8;
+#[cfg(test)]
 /// Number of credential attributes.
 pub const ATTRIBUTE_COUNT_V1: usize = 8;
 /// Number of application witness polynomials before norm padding.
@@ -13,14 +14,13 @@ pub const APPLICATION_WITNESS_POLYNOMIALS_V1: usize = 48;
 pub const PROOF_MODULUS_V1: u64 = 1_125_899_906_843_221;
 /// Canonical inverse of two modulo the internal proof modulus.
 pub const PROOF_INVERSE_TWO_V1: u64 = 562_949_953_421_611;
+#[cfg(test)]
 /// Canonical inverse of four modulo the internal proof modulus.
 pub const PROOF_INVERSE_FOUR_V1: u64 = 844_424_930_132_416;
 /// Canonical inverse of the application modulus modulo the proof modulus.
 pub const APPLICATION_MODULUS_INVERSE_IN_PROOF_V1: u64 = 305_914_215_066_280;
 /// Exact quotient bound used when lifting the eight application equations from `R_p` into `R_q`.
 pub const APPLICATION_RELATION_QUOTIENT_BOUND_V1: u64 = 30_064;
-/// Encoded bit width of an internal proof residue.
-pub const PROOF_MODULUS_BITS_V1: u8 = 51;
 /// Canonical wire width of one proof residue.
 pub const PROOF_RESIDUE_BYTES_V1: usize = 7;
 /// Compression exponent used by the mathematical ABDLOP relation.
@@ -33,22 +33,18 @@ pub const COMPRESSION_MODULUS_V1: u64 = 68_106_378;
 pub const TBOX_M1_V1: usize = 50;
 /// Internal mask dimension.
 pub const TBOX_M2_V1: usize = 64;
-/// Large-message dimension.
-pub const TBOX_L_V1: usize = 0;
 /// Extended-message dimension.
 pub const TBOX_LEXT_V1: usize = 12;
 /// Module-SIS commitment dimension.
 pub const TBOX_KMSIS_V1: usize = 20;
 /// Number of binary witness polynomials.
 pub const BINARY_POLYNOMIALS_V1: usize = 16;
+#[cfg(test)]
 /// Number of exact application relations.
 pub const EXACT_RELATIONS_V1: usize = 8;
+#[cfg(test)]
 /// Number of norm statements.
 pub const NORM_STATEMENTS_V1: usize = 2;
-/// Number of exact-coordinate relations.
-pub const EXACT_COORDINATE_RELATIONS_V1: usize = 50;
-/// Schwartz-Zippel repetition parameter.
-pub const LAMBDA_V1: usize = 4;
 /// Maximum column count of either fixed-profile ternary projection matrix.
 ///
 /// The larger matrix projects all 50 short-witness polynomials coefficient by

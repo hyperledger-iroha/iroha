@@ -6096,6 +6096,7 @@ impl PrivacyNullifierKeyV1 {
             key_image,
         })
     }
+    #[cfg(test)]
     /// Return the exact ZK-AMS namespace, if this is a key-image marker.
     #[must_use]
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
@@ -6106,18 +6107,6 @@ impl PrivacyNullifierKeyV1 {
             | Self::FcmpKeyImage { .. }
             | Self::ProofManagedNullifier { .. } => None,
             Self::ZkAmsKeyImage { namespace, .. } => Some(namespace),
-        }
-    }
-    /// Return the typed ZK-AMS key image, if present.
-    #[must_use]
-    pub const fn zk_ams_image(self) -> Option<PrivacyZkAmsKeyImageV1> {
-        match self {
-            Self::ZkAceReplay { .. }
-            | Self::ZkX509CertificateNullifier { .. }
-            | Self::OrchardNullifier { .. }
-            | Self::FcmpKeyImage { .. }
-            | Self::ProofManagedNullifier { .. } => None,
-            Self::ZkAmsKeyImage { key_image, .. } => Some(key_image),
         }
     }
     /// Return the exact X.509 policy namespace and certificate nullifier.
@@ -6476,6 +6465,7 @@ impl PrivacyCommitmentKeyV1 {
             policy_id,
         })
     }
+    #[cfg(test)]
     /// Return the Bootle/Lantern issuer and policy identity, if present.
     #[must_use]
     pub const fn bootle_lantern_issuer_policy_identity(
@@ -6850,6 +6840,7 @@ impl PrivacyCommitmentKeyV1 {
             seed_public_key,
         })
     }
+    #[cfg(test)]
     /// Return the exact ZK-AMS namespace, if this is a ZK-AMS record.
     #[must_use]
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
@@ -9172,6 +9163,7 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
     }
+    #[cfg(test)]
     /// Borrow the immutable Vega issuer revision carried by this record.
     #[must_use]
     pub const fn vega_issuer(&self) -> Option<&PrivacyVegaIssuerRecordV1> {
@@ -9222,6 +9214,7 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Borrow the immutable X.509 trust-anchor revision carried by this record.
     #[must_use]
     pub const fn zk_x509_trust_anchor(&self) -> Option<&PrivacyZkX509TrustAnchorRecordV1> {
@@ -9247,6 +9240,7 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Borrow the immutable X.509 certificate-policy revision carried by this record.
     #[must_use]
     pub const fn zk_x509_certificate_policy(
@@ -9274,6 +9268,7 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Borrow the current X.509 signed-CRL record carried by this state item.
     #[must_use]
     pub const fn zk_x509_crl(&self) -> Option<&PrivacyZkX509CrlRecordV1> {

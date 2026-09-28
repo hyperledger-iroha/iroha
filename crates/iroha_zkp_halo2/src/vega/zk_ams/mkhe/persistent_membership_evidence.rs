@@ -16,6 +16,7 @@ use super::exact_eight_chunk_membership::{
     proof_set_digest as exact_proof_set_digest,
     verifier_transcript_set_digest as exact_verifier_transcript_set_digest,
 };
+#[cfg(test)]
 use super::{
     ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -25,6 +26,7 @@ use super::{
         VerifiedExactEightChunkMembershipV1,
     },
 };
+use crate::vega::bulletproof_t256::ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1;
 #[cfg(test)]
 use crate::vega::{
     bulletproof_t256::{
@@ -32,19 +34,23 @@ use crate::vega::{
     },
     sponge::Keccak256,
 };
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::ProofRandomSource,
     vega::{
         VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
         bulletproof_t256::{
-            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZkAmsT256MembershipBoundV1,
-            ZkAmsT256MembershipErrorV1, ZkAmsT256MembershipProofV1,
+            ZkAmsT256MembershipBoundV1, ZkAmsT256MembershipErrorV1, ZkAmsT256MembershipProofV1,
         },
     },
 };
+#[cfg(test)]
 use thiserror::Error;
+#[cfg(test)]
 const PERSISTENT_MEMBERSHIP_MAGIC_V1: [u8; 4] = *b"ZPME";
+#[cfg(test)]
 const PERSISTENT_MEMBERSHIP_VERSION_V1: u8 = 1;
+#[cfg(test)]
 const PERSISTENT_MEMBERSHIP_BOUND_V1: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::One;
 /// Exact number of ordered proofs for one release-ring persistent secret.
 pub(super) const ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1: usize = 8;
@@ -86,6 +92,7 @@ const _: () = {
     assert!(!ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CPK_RELATION_LINKED_V1);
 };
 /// Stable failures for persistent T256 membership evidence.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ZkAmsMkhePersistentMembershipErrorV1 {
     /// One or more source-context axes are zero or inconsistent with the roster.
@@ -107,6 +114,7 @@ pub(super) enum ZkAmsMkhePersistentMembershipErrorV1 {
     #[error(transparent)]
     Membership(#[from] ZkAmsT256MembershipErrorV1),
 }
+#[cfg(test)]
 impl From<ExactEightChunkMembershipErrorV1> for ZkAmsMkhePersistentMembershipErrorV1 {
     fn from(error: ExactEightChunkMembershipErrorV1) -> Self {
         match error {
@@ -120,6 +128,7 @@ impl From<ExactEightChunkMembershipErrorV1> for ZkAmsMkhePersistentMembershipErr
     }
 }
 /// Complete public context bound into all eight persistent-membership proofs.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkhePersistentMembershipContextV1 {
     profile_digest: [u8; 32],
@@ -130,6 +139,7 @@ pub(super) struct ZkAmsMkhePersistentMembershipContextV1 {
     party: ZkAmsMkhePartyIdV1,
     share_statement_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkhePersistentMembershipContextV1 {
     /// Construct the exact context for one governed roster participant.
     pub(super) fn from_governed_roster(
@@ -276,6 +286,7 @@ impl ZkAmsMkhePersistentMembershipContextV1 {
 /// `VerifiedPersistentWitnessBindingV1`.  [`Self::verify`] establishes only
 /// coefficient membership and context-bound transcript integrity, not the CPK
 /// relation which must consume the same commitment set.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkhePersistentMembershipEvidenceV1 {
     context: ZkAmsMkhePersistentMembershipContextV1,
@@ -285,6 +296,7 @@ pub(super) struct ZkAmsMkhePersistentMembershipEvidenceV1 {
     proof_set_digest: [u8; 32],
     verifier_transcript_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsMkhePersistentMembershipEvidenceV1 {
     fn from_exact(
         evidence: ExactEightChunkMembershipEvidenceV1<PersistentSecretMembershipRoleV1>,
@@ -498,9 +510,11 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
 /// This receipt proves only coefficient membership and context integrity.  It
 /// intentionally has no `From` path to the active exact-binding graph and no
 /// relation/admission constructor.
+#[cfg(test)]
 pub(super) struct ZkAmsMkheVerifiedPersistentMembershipV1 {
     inner: VerifiedExactEightChunkMembershipV1<PersistentSecretMembershipRoleV1>,
 }
+#[cfg(test)]
 impl ZkAmsMkheVerifiedPersistentMembershipV1 {
     pub(super) fn context(&self) -> ZkAmsMkhePersistentMembershipContextV1 {
         ZkAmsMkhePersistentMembershipContextV1::from_exact(self.inner.context())
@@ -523,6 +537,7 @@ impl ZkAmsMkheVerifiedPersistentMembershipV1 {
         self.inner.verifier_transcript_digest()
     }
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheVerifiedPersistentMembershipV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter

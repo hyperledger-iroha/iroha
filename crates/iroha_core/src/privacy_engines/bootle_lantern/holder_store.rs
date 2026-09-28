@@ -12,36 +12,46 @@
 //! directory snapshot.  The injected sealed-head provider is consequently a
 //! mandatory production dependency, not an optional hardening layer.  It must
 //! provide linearizable compare-and-swap and rollback-resistant storage.
+#[cfg(test)]
 use super::{
-    codec::{BLIND_ISSUANCE_REQUEST_BYTES_V1, BLIND_ISSUANCE_RESPONSE_BYTES_V1, PROOF_BYTES_V1},
+    codec::PROOF_BYTES_V1,
+    issuer::{
+        BootleLanternBlindIssuanceStateV1, BootleLanternCredentialV1,
+        BootleLanternIssuanceAuthorizationV1, holder_finalize_blind_issuance_v1,
+        holder_prepare_blind_issuance_with_rng_v1,
+    },
+    scope::BootleLanternCredentialScopeV1,
+};
+use super::{
+    codec::{BLIND_ISSUANCE_REQUEST_BYTES_V1, BLIND_ISSUANCE_RESPONSE_BYTES_V1},
     issuer::{
         BootleLanternBlindIssuanceRequestV1, BootleLanternBlindIssuanceResponseV1,
-        BootleLanternBlindIssuanceStateV1, BootleLanternCredentialV1,
-        BootleLanternIssuanceAuthorizationV1, BootleLanternIssuanceErrorV1,
-        holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
+        BootleLanternIssuanceErrorV1,
     },
     params::{APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1},
     ring::ApplicationPolynomialV1,
-    scope::BootleLanternCredentialScopeV1,
 };
 use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead as _, KeyInit as _, Payload},
 };
+use iroha_data_model::privacy::BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1;
+#[cfg(test)]
 use iroha_data_model::privacy::{
-    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
-    IrohaBootleLanternAnoncredStatementV1, PrivacyStatementContextV1,
+    BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, PrivacyStatementContextV1,
 };
+#[cfg(test)]
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use sha2::{Digest as _, Sha256};
 #[cfg(unix)]
 use std::io::Read as _;
 #[cfg(test)]
+use std::io::Write;
+#[cfg(test)]
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -78,6 +88,7 @@ const HOLDER_MANIFEST_ENTRY_BYTES_V1: usize = 208;
 const HOLDER_MANIFEST_REVISION_BYTES_V1: usize = 32;
 const HOLDER_AEAD_TAG_BYTES_V1: usize = 16;
 const HOLDER_NONCE_BYTES_V1: usize = 24;
+#[cfg(test)]
 const HOLDER_DEK_BYTES_V1: usize = 32;
 const HOLDER_KEY_ID_MAX_BYTES_V1: usize = 255;
 const HOLDER_WRAPPED_DEK_MAX_BYTES_V1: usize = 4_096;
@@ -91,8 +102,6 @@ const HOLDER_ENVELOPE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.holder-envelope-digest.v1";
 const HOLDER_MANIFEST_REVISION_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.holder-manifest-revision.v1";
-/// Exact encrypted-holder-store profile committed by the first release.
-pub const BOOTLE_LANTERN_HOLDER_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"ILV1:XChaCha20-Poly1305+runtime-wrapped-random-DEK|secret-wires:ILP1-pending-73856,ILC1-response-cached-77032,ILF1-finalized-5352,ILX1-secret-free-terminal-176|outer-header:276|key-id<=255|wrapped-DEK<=4096|max-envelope=81675|ILM1:sealed-monotonic-CAS-head,sorted-208-byte-entries,max4096,max852084|lifecycle:Pending-before-ILQ1-egress->ResponseCached-before-finalization->Finalized;untrusted-invalid-response-durable-restore-to-Pending;holder-semantic-invalidity-only->Rejected|storage:immutable-content-addressed-create-new-0600+file-fsync+objects-dir-fsync-before-head-CAS+exact-decrypting-readback|ownership:effective-uid+exact-0700-dirs+0600-files+canonical-process-lease+unix-nonblocking-exclusive-flock+nofollow-single-link|rollback:sealed-head-authoritative-per-operation+generation+predecessor+envelope-digest|secrets:no-public-state-or-credential-codec,zeroize-on-drop,proof-only-presentation";
 /// Exact plaintext bytes in one pending holder object.
 pub const BOOTLE_LANTERN_HOLDER_PENDING_PLAINTEXT_BYTES_V1: usize = HOLDER_SECRET_HEADER_BYTES_V1
     + HOLDER_BINDING_DIGESTS_V1 * 32
@@ -170,12 +179,14 @@ impl BootleLanternHolderHandleV1 {
         &self.0
     }
 }
+#[cfg(test)]
 /// Result released only after pending holder state is durably authoritative.
 #[derive(Debug, PartialEq, Eq)]
 pub struct BootleLanternPreparedRequestV1 {
     handle: BootleLanternHolderHandleV1,
     request_bytes: Vec<u8>,
 }
+#[cfg(test)]
 impl BootleLanternPreparedRequestV1 {
     /// Stable recovery handle, equal to the authorization digest.
     #[must_use]
@@ -186,11 +197,6 @@ impl BootleLanternPreparedRequestV1 {
     #[must_use]
     pub fn request_bytes(&self) -> &[u8] {
         &self.request_bytes
-    }
-    /// Consume this result and return the exact canonical `ILQ1` bytes.
-    #[must_use]
-    pub fn into_request_bytes(self) -> Vec<u8> {
-        self.request_bytes
     }
 }
 /// Public, non-secret qualification of one runtime custody provider.
@@ -272,6 +278,7 @@ impl core::fmt::Debug for BootleLanternHolderSealedHeadV1 {
     }
 }
 impl BootleLanternHolderSealedHeadV1 {
+    #[cfg(test)]
     /// Reconstruct a head loaded from the provider's durable representation.
     ///
     /// Full manifest, namespace, and revision validation is performed by the
@@ -390,6 +397,7 @@ impl HolderManifestV1 {
         manifest.revision = manifest_revision_v1(&manifest)?;
         Ok(manifest)
     }
+    #[cfg(test)]
     fn successor_with_entry(
         &self,
         entry: HolderManifestEntryV1,
@@ -663,6 +671,7 @@ impl BootleLanternFileHolderStoreV1 {
             .map(|entry| entry.phase)
             .ok_or(BootleLanternHolderStoreErrorV1::NotFound)
     }
+    #[cfg(test)]
     /// Prepare and durably retain one holder P1 state before releasing `ILQ1`.
     ///
     /// Repeating the same authorization/context/policy/attributes returns the exact already-durable
@@ -751,6 +760,7 @@ impl BootleLanternFileHolderStoreV1 {
             request_bytes,
         })
     }
+    #[cfg(test)]
     /// Read the exact already-durable `ILQ1` for transport retry.
     pub fn pending_request_v1(
         &self,
@@ -779,6 +789,7 @@ impl BootleLanternFileHolderStoreV1 {
             .request_bytes
             .clone())
     }
+    #[cfg(test)]
     /// Cache one exact, correctly bound `ILR1` before attempting finalization.
     ///
     /// Once this returns, process loss cannot require another issuer response:
@@ -868,6 +879,7 @@ impl BootleLanternFileHolderStoreV1 {
         drop(state);
         self.revalidate_providers_v1()
     }
+    #[cfg(test)]
     /// Cache one exact `ILR1`, then finalize and durably retain its credential.
     ///
     /// The cache transition commits independently first, so a crash cannot
@@ -890,6 +902,7 @@ impl BootleLanternFileHolderStoreV1 {
         )?;
         self.resume_cached_response_v1(handle, context, canonical_genesis_hash, policy)
     }
+    #[cfg(test)]
     /// Finalize an already cached response after process restart.
     ///
     /// A correctly bound but cryptographically invalid untrusted response is
@@ -915,6 +928,7 @@ impl BootleLanternFileHolderStoreV1 {
             &scope,
         )
     }
+    #[cfg(test)]
     /// Produce one complete presentation while keeping credential material local.
     pub fn prove_presentation_encoded_with_rng_v1<R: CryptoRng + RngCore>(
         &self,
@@ -969,6 +983,7 @@ impl BootleLanternFileHolderStoreV1 {
         self.revalidate_providers_v1()?;
         Ok(bytes)
     }
+    #[cfg(test)]
     fn finalize_cached_locked_v1(
         &self,
         state: &mut HolderFileStateV1,
@@ -1100,6 +1115,7 @@ impl BootleLanternFileHolderStoreV1 {
         )?;
         self.revalidate_providers_v1()
     }
+    #[cfg(test)]
     fn load_pending_locked_v1(
         &self,
         entry: &HolderManifestEntryV1,
@@ -1146,6 +1162,7 @@ impl BootleLanternFileHolderStoreV1 {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn load_finalized_locked_v1(
         &self,
         entry: &HolderManifestEntryV1,
@@ -1211,6 +1228,7 @@ impl BootleLanternFileHolderStoreV1 {
         }
         Ok(Zeroizing::new(plaintext))
     }
+    #[cfg(test)]
     fn publish_secret_locked_v1(
         &self,
         state: &mut HolderFileStateV1,
@@ -1310,6 +1328,7 @@ impl BootleLanternFileHolderStoreV1 {
             }
         }
     }
+    #[cfg(test)]
     fn encrypt_envelope_v1(
         &self,
         binding: HolderPublishBindingV1,
@@ -1415,6 +1434,7 @@ impl BootleLanternFileHolderStoreV1 {
         }
         Ok(envelope)
     }
+    #[cfg(test)]
     fn persist_immutable_object_v1(
         &self,
         digest: [u8; 32],
@@ -1469,6 +1489,7 @@ impl BootleLanternFileHolderStoreV1 {
         sync_directory_v1(&self.temp_root)
             .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)
     }
+    #[cfg(test)]
     fn cleanup_superseded_object_v1(&self, digest: [u8; 32], manifest: &HolderManifestV1) {
         if digest == [0; 32]
             || manifest
@@ -1537,6 +1558,7 @@ impl BootleLanternFileHolderStoreV1 {
         self.fail_next_write_stage.store(2, Ordering::SeqCst);
     }
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct HolderPublishBindingV1 {
     phase: BootleLanternHolderPhaseV1,
@@ -2070,6 +2092,7 @@ fn response_digest_v1(bytes: &[u8]) -> [u8; 32] {
     hash.update(bytes);
     hash.finalize().into()
 }
+#[cfg(test)]
 fn encode_pending_secret_v1(
     pending: &PendingSecretV1,
 ) -> Result<Zeroizing<Vec<u8>>, BootleLanternHolderStoreErrorV1> {
@@ -2213,6 +2236,7 @@ fn decode_pending_secret_v1(
         response_bytes,
     })
 }
+#[cfg(test)]
 fn encode_finalized_secret_v1(
     secret: &FinalizedSecretV1,
 ) -> Result<Zeroizing<Vec<u8>>, BootleLanternHolderStoreErrorV1> {
@@ -2309,6 +2333,7 @@ fn decode_finalized_secret_v1(
         attributes,
     })
 }
+#[cfg(test)]
 fn encode_rejected_secret_v1(
     authorization_digest: [u8; 32],
     request_digest: [u8; 32],
@@ -2353,6 +2378,7 @@ fn encode_rejected_secret_v1(
     }
     Ok(bytes)
 }
+#[cfg(test)]
 fn validate_publish_plaintext_v1(
     binding: HolderPublishBindingV1,
     bytes: &[u8],
@@ -2422,6 +2448,7 @@ fn decode_rejected_secret_v1(
     }
     Ok(bindings)
 }
+#[cfg(test)]
 fn encode_polynomials_v1<const N: usize>(
     polynomials: &[ApplicationPolynomialV1; N],
     output: &mut Vec<u8>,
@@ -2579,6 +2606,7 @@ fn load_or_create_manifest_v1(
         Err(error) => Err(map_external_provider_error_v1(error)),
     }
 }
+#[cfg(test)]
 fn publish_manifest_v1(
     vault_id: [u8; 32],
     current: &HolderManifestV1,
@@ -2714,6 +2742,7 @@ fn ensure_state_healthy_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn poison_on_integrity_error_v1(
     state: &mut HolderFileStateV1,
     error: &BootleLanternHolderStoreErrorV1,
@@ -3073,6 +3102,7 @@ fn read_regular_bounded_v1(
         Err(BootleLanternHolderStoreErrorV1::UnsupportedPlatform)
     }
 }
+#[cfg(test)]
 fn reject_existing_holder_path_v1(path: &Path) -> Result<(), BootleLanternHolderStoreErrorV1> {
     match fs::symlink_metadata(path) {
         Ok(_) => Err(BootleLanternHolderStoreErrorV1::Corrupt),

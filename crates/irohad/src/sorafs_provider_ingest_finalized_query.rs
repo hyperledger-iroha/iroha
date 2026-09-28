@@ -179,6 +179,9 @@ pub(crate) enum ProviderIngestFinalizedArchiveStartupModeV1 {
 #[must_use]
 pub(crate) struct PreparedProviderIngestFinalizedArchiveV1 {
     startup_mode: ProviderIngestFinalizedArchiveStartupModeV1,
+    // TODO(WP6-sorafs): compile outside tests once Sumeragi's executor captures commits into
+    // this single-writer archive; until then only the startup tests read it back.
+    #[cfg(test)]
     archive: Arc<ProviderIngestFinalizedArchiveV1>,
     query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     runtime_query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
@@ -192,6 +195,7 @@ impl PreparedProviderIngestFinalizedArchiveV1 {
     }
     /// Return the single-writer archive installed in the consensus commit
     /// corridor.
+    #[cfg(test)]
     pub(crate) const fn archive(&self) -> &Arc<ProviderIngestFinalizedArchiveV1> {
         &self.archive
     }
@@ -360,6 +364,7 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         Some(ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(reader_args));
     Ok(PreparedProviderIngestFinalizedArchiveV1 {
         startup_mode,
+        #[cfg(test)]
         archive,
         query,
         runtime_query,

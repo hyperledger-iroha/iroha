@@ -207,19 +207,6 @@ WAVE_TWO_TARGETS = (
         required_features=("trybuild-tests",),
     ),
     WaveTwoTarget(
-        package="crates/iroha_version_derive",
-        target="codec",
-        root="codec.rs",
-        modules=(("json", "json.rs"),),
-    ),
-    WaveTwoTarget(
-        package="crates/iroha_version_derive",
-        target="ui",
-        root="ui.rs",
-        modules=(),
-        required_features=("trybuild-tests",),
-    ),
-    WaveTwoTarget(
         package="crates/iroha_zkp_halo2",
         target="vega_engine_reachability",
         root="vega_engine_reachability.rs",
@@ -271,7 +258,6 @@ WAVE_TWO_MANIFEST_BASE_SHA256 = {
     "crates/iroha_derive": "93c00d79bedfb21c6f4be400b7090050faedd8beeac477ce119ef03695e30b35",
     "crates/iroha_monitor": "b939b6dacf84952700e3d4fe47d657c31cfa90b2a29894f9334edba541483bb5",
     "crates/iroha_primitives": "e50a81a1a73a621cf671aaf80b82fbf490487e85518fc472177d10bb33947ed2",
-    "crates/iroha_version_derive": "d652a0868d36147e19e196692830566858eed0a46b92b752ae451a93eaeb2977",
     "crates/iroha_zkp_halo2": "a36b5af199792222b2622bced949bac7599fea6e9d6137ab336543226f8152aa",
     "crates/soranet_pq": "09814d2ba4ed385c0683a0ecb7b8936b99f7df631391ce09dbe783e96c791c83",
     "mochi/mochi-core": "7dd684c46e9f4984673370b7b194c7ba029f99cab228c848586c98680cc987c5",
@@ -292,9 +278,6 @@ WAVE_TWO_SOURCE_SHA256 = {
     "crates/iroha_primitives/tests/addr_parsing.rs": "609cdcf28f60920931fc88b584cab6d319bd6983eaf734fe746c39e53e2bb3d3",
     "crates/iroha_primitives/tests/numeric_inspect.rs": "5034969e36547a4b70294280f6ba2dbdec1089eae5b8f6aac4dbc51685205459",
     "crates/iroha_primitives/tests/ui.rs": "ca0d4e7a21ea77122e52f0ad9f2eb14c0a9d4865fb556db3ba3d935521e04818",
-    "crates/iroha_version_derive/tests/codec.rs": "f4386043897cf21f4c4115ad453c1495a59d258b65e12471dc5ea75e116ccf46",
-    "crates/iroha_version_derive/tests/json.rs": "8092c6769cdeec5ffde1cacf13626193c88324ae8d76a940cc41a5d29d21a041",
-    "crates/iroha_version_derive/tests/ui.rs": "72fcf2f051e0f9d9d85a5918820d62e2d65168d4ad00d8cb7eb7584236776823",
     "crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs": "6350e46bd567e6eb2ea523e725e50fb93d76878c76244b27220456a692a520f9",
     "crates/iroha_zkp_halo2/tests/vega_microsoft_cross_conformance.rs": "5cde89a58cffa1e77d578b20c44a92b30e924b6fe80eb9a3d56cc84b81039d23",
     "crates/soranet_pq/tests/kat_vectors.rs": "84b89d698051989013d4147dffd10d5261c741e352f213ad9150aa0b1c28321c",
@@ -312,10 +295,10 @@ WAVE_TWO_SOURCE_SHA256 = {
 }
 
 WAVE_TWO_TARGET_INVENTORY_SHA256 = (
-    "088785f56a3ac0ab2a879a503c5e4d26a989e55b623a873d84a8438ee20a2640"
+    "fda25c0458699640e7de2b4076fee59609e2722a2314f717882979bdd2530dab"
 )
 WAVE_TWO_MODULE_INVENTORY_SHA256 = (
-    "931d70b2ecfbf8865ee9e1c9ed4486b4280d508cb109776b52b8e4397bed56f6"
+    "2abf7c6713dfefdfb8bd83b8e2c3498b8b8c5580d0bb474e214308972d465ae4"
 )
 WAVE_TWO_TEST_INVENTORY_SHA256 = (
     "5ed15c8aa7951bbab01d42c03820f284ccfc6e4a793b911eb66ed5495bf76d30"
@@ -515,10 +498,10 @@ def validate_wave_two(sources: dict[str, str] | None = None) -> None:
                     )
 
     target_digest = hashlib.sha256("".join(sorted(target_rows)).encode()).hexdigest()
-    if len(target_rows) != 13 or target_digest != WAVE_TWO_TARGET_INVENTORY_SHA256:
+    if len(target_rows) != 11 or target_digest != WAVE_TWO_TARGET_INVENTORY_SHA256:
         raise AssertionError("wave-two target count or identity drifted")
     module_digest = hashlib.sha256("".join(sorted(module_rows)).encode()).hexdigest()
-    if len(module_rows) != 15 or module_digest != WAVE_TWO_MODULE_INVENTORY_SHA256:
+    if len(module_rows) != 14 or module_digest != WAVE_TWO_MODULE_INVENTORY_SHA256:
         raise AssertionError("wave-two module item count or identity drifted")
 
     serial_members = _serial_members()
@@ -543,7 +526,7 @@ def validate_wave_two(sources: dict[str, str] | None = None) -> None:
         for attribute, name in _test_items(source):
             test_rows.append(f"{path}\0{attribute}\0{name}\n")
     test_digest = hashlib.sha256("".join(test_rows).encode()).hexdigest()
-    if len(test_rows) != 60 or test_digest != WAVE_TWO_TEST_INVENTORY_SHA256:
+    if len(test_rows) != 55 or test_digest != WAVE_TWO_TEST_INVENTORY_SHA256:
         raise AssertionError("wave-two test ID, attribute, or order drifted")
 
 

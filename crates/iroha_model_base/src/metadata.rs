@@ -14,7 +14,6 @@ mod model {
     use iroha_schema::IntoSchema;
     /// Collection of parameters by their names with checked insertion.
     #[derive(Debug, Display, Clone, Default, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[repr(transparent)]
     #[display("Metadata")]
     #[allow(clippy::multiple_inherent_impl)]

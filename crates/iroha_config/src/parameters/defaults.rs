@@ -691,17 +691,17 @@ pub mod content {
     /// Force immutable cache-control by default.
     pub const IMMUTABLE_BUNDLES: bool = true;
     /// Maximum served requests per second for the content gateway.
-    pub const MAX_REQUESTS_PER_SECOND: u32 = 200;
+    pub const MAX_REQUESTS_PER_SECOND: u32 = 10_000;
     /// Maximum served egress bytes per second for the content gateway.
-    pub const MAX_EGRESS_BYTES_PER_SECOND: u32 = 16 * 1024 * 1024;
+    pub const MAX_EGRESS_BYTES_PER_SECOND: u32 = 256 * 1024 * 1024;
     /// Target p50 latency (milliseconds) for content responses.
     pub const TARGET_P50_LATENCY_MS: u32 = 50;
     /// Target p99 latency (milliseconds) for content responses.
     pub const TARGET_P99_LATENCY_MS: u32 = 250;
     /// Burst size for the content request token bucket.
-    pub const REQUEST_BURST: u32 = 200;
+    pub const REQUEST_BURST: u32 = 100_000;
     /// Burst size for the egress token bucket.
-    pub const EGRESS_BURST_BYTES: u64 = 8 * 1024 * 1024;
+    pub const EGRESS_BURST_BYTES: u64 = 1024 * 1024 * 1024;
     /// Target availability in basis points (10000 = 100%).
     pub const TARGET_AVAILABILITY_BPS: u32 = 9_990;
     /// Default PoW difficulty (leading zero bits) when enabled for content fetches.
@@ -1684,9 +1684,6 @@ pub mod sorafs {
                 /// The unsigned payload and signed transaction are counted
                 /// separately by [`worst_case_checkpoint_bytes_v1`].
                 pub const ACTIVE_ENTRY_CANONICAL_OVERHEAD_BYTES_V1: u64 = 64 * 1024;
-                /// Maximum canonical bytes for a chain identifier retained
-                /// outside the completion transaction payload.
-                pub const COMPLETION_CHAIN_ID_MAX_BYTES_V1: usize = 255;
                 /// Maximum canonical bytes for each retained completion account identity.
                 pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 =
                     iroha_data_model::musubi::MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 as u64;
@@ -2203,9 +2200,9 @@ pub mod sorafs {
         /// Rate-limiting defaults applied to gateway clients.
         pub mod rate_limit {
             use std::time::Duration;
-            /// Maximum requests permitted within the rolling window.
-            pub const MAX_REQUESTS: Option<u32> = Some(300);
-            /// Rolling window duration (seconds).
+            /// Maximum burst and tokens replenished per window.
+            pub const MAX_REQUESTS: Option<u32> = Some(600_000);
+            /// Time required to replenish the complete token budget.
             pub const WINDOW: Duration = Duration::from_secs(60);
             /// Temporary ban duration applied after repeated violations.
             pub const BAN: Option<Duration> = Some(Duration::from_secs(30));

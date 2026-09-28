@@ -170,13 +170,11 @@ pub const ERR_DECODE: u64 = 5;
 pub const ERR_VERIFY: u64 = 6;
 pub const ERR_BATCH: u64 = 7;
 pub const ERR_ENVELOPE_SIZE: u64 = 8;
-pub const ERR_TRANSCRIPT_LABEL: u64 = 9;
 pub const ERR_PROOF_LEN: u64 = 10;
 pub const ERR_VK_MISSING: u64 = 11;
 pub const ERR_VK_MISMATCH: u64 = 12;
 pub const ERR_VK_INACTIVE: u64 = 13;
 pub const ERR_NAMESPACE: u64 = 14;
-pub const ERR_DOMAIN_TAG: u64 = 15;
 pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v2";
 pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v2";
 pub const LABEL_BATCH: &str = "zk_verify_batch/v2";
@@ -1449,20 +1447,6 @@ pub fn preflight_reserved_syscall_gas(vm: &IVM, actual: u64) -> Result<(), VMErr
     }
     Ok(())
 }
-/// Charge the next state-scan item against the pre-debited syscall reserve.
-///
-/// `examined_before` is the number of items whose host work has already begun.
-/// Callers must invoke this before reading or copying the next item. Direct
-/// low-level host calls have no reserve and remain unbounded for test tooling;
-/// every VM-dispatched call has a non-zero reserve established by preparation.
-///
-/// # Errors
-///
-/// Returns a metered [`VMError::OutOfGas`] before the next item is examined when
-/// the base charge plus item count would exceed the reserved quote.
-pub fn preflight_reserved_state_scan_item(vm: &IVM, examined_before: usize) -> Result<(), VMError> {
-    preflight_reserved_state_scan_work(vm, u64::try_from(examined_before).unwrap_or(u64::MAX), 0)
-}
 /// Charge one key comparison against a state scan's reserved work budget.
 ///
 /// `charged_before` includes the encoded prefix and every previously examined
@@ -1820,17 +1804,6 @@ pub trait IVMHost {
     fn as_any(&mut self) -> &mut dyn Any
     where
         Self: 'static;
-    /// Whether this host is safe to share across worker threads during block execution.
-    /// Hosts with internal mutable state should override and return `false` so the VM
-    /// falls back to sequential execution.
-    ///
-    /// A host returning `true` must also make each transaction's side effects
-    /// atomic internally. Parallel execution cannot take isolated shared-host
-    /// checkpoints, so it does not invoke [`Self::checkpoint`] or
-    /// [`Self::restore`] for failed transactions.
-    fn supports_concurrent_blocks(&self) -> bool {
-        false
-    }
     /// Hint that a transaction is about to start. Hosts can reset per-tx state here.
     /// Returning an error aborts the transaction before execution begins.
     fn begin_tx(&mut self, _declared: &StateAccessSet) -> Result<(), VMError> {
@@ -1847,18 +1820,16 @@ pub trait IVMHost {
         let _ = backend;
         let _ = bytes;
     }
-    /// Optional transactional checkpoint. When provided, the VM will restore this snapshot
-    /// if a transaction fails during block execution to avoid leaking side effects.
-    /// A sequential host that returns `None` is detached and poisons block execution if a
-    /// transaction fails or panics because the VM cannot prove that host side effects rolled back.
+    /// Optional transactional checkpoint. Transactional callers (for example the
+    /// Kotodama test driver) restore this snapshot when a transaction fails so
+    /// host side effects do not leak. `None` means the host cannot prove rollback.
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         None
     }
     /// Restore a previously taken checkpoint.
     ///
-    /// An error means rollback could not be completed durably. Block execution
-    /// treats that outcome as fatal and must not execute another transaction
-    /// with the affected host.
+    /// An error means rollback could not be completed durably; callers must not
+    /// execute another transaction with the affected host.
     fn restore(&mut self, _snapshot: &dyn Any) -> Result<(), VMError> {
         Err(VMError::HostUnavailable)
     }
@@ -2103,18 +2074,10 @@ impl DefaultHost {
     pub const fn zk_execution_counters(&self) -> ZkExecutionCounters {
         self.zk_execution_counters
     }
-    /// Reset the ZK execution-order counters.
-    pub fn reset_zk_execution_counters(&mut self) {
-        self.zk_execution_counters = ZkExecutionCounters::default();
-    }
     /// Return the current VRF execution-order counters.
     #[must_use]
     pub const fn vrf_execution_counters(&self) -> VrfExecutionCounters {
         self.vrf_execution_counters
-    }
-    /// Reset the VRF execution-order counters.
-    pub fn reset_vrf_execution_counters(&mut self) {
-        self.vrf_execution_counters = VrfExecutionCounters::default();
     }
     /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
     pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
@@ -2166,11 +2129,6 @@ impl DefaultHost {
     /// envelopes whose claimed network identity does not match it.
     pub fn with_network_id(mut self, network_id: iroha_data_model::NetworkId) -> Self {
         self.network_id = Some(network_id);
-        self
-    }
-    /// Set maximum supported k (where n = 2^k) for Halo2 IPA verifier.
-    pub fn with_max_k(mut self, max_k: u32) -> Self {
-        self.zk_cfg.max_k = max_k;
         self
     }
     /// Mutably set the display chain label without moving the host.
@@ -4738,9 +4696,6 @@ impl IVMHost for DefaultHost {
         Self: 'static,
     {
         self
-    }
-    fn supports_concurrent_blocks(&self) -> bool {
-        false
     }
     fn begin_tx(&mut self, _declared: &StateAccessSet) -> Result<(), VMError> {
         self.access_log.read_keys.clear();

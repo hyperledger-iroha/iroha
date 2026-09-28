@@ -274,14 +274,6 @@ fn cuda_empty_and_singleton_boundaries_short_circuit_without_device_work() {
     assert_eq!(ivm::poseidon6_cuda_many(&[]), Some(Vec::new()));
     assert_eq!(ivm::aesenc_batch_cuda(&[], [0u8; 16]), Some(Vec::new()));
     assert_eq!(ivm::aesdec_batch_cuda(&[], [0u8; 16]), Some(Vec::new()));
-    assert_eq!(
-        ivm::aesenc_rounds_batch_cuda(&[[0x42u8; 16]], &[]),
-        Some(vec![[0x42u8; 16]])
-    );
-    assert_eq!(
-        ivm::aesdec_rounds_batch_cuda(&[[0x24u8; 16]], &[]),
-        Some(vec![[0x24u8; 16]])
-    );
     let digest = [0xa5u8; 32];
     assert_eq!(ivm::sha256_pairs_reduce_cuda(&[]), None);
     assert_eq!(ivm::sha256_pairs_reduce_cuda(&[digest]), Some(digest));

@@ -2,17 +2,18 @@
 //!
 //! This module reads Torii-emitted `da-commitment-*.norito` files from the configured spool
 //! directory and assembles a deterministic bundle ready to embed into a block payload.
-use crate::da::{ReplayFingerprint, commitment_store::DaCommitmentStore};
-use iroha_data_model::da::{
-    commitment::{DaCommitmentBundle, DaCommitmentRecord},
-    types::StorageTicketId,
-};
+use crate::da::ReplayFingerprint;
+#[cfg(test)]
+use crate::da::commitment_store::DaCommitmentStore;
+#[cfg(test)]
+use iroha_data_model::da::commitment::{DaCommitmentBundle, DaCommitmentRecord};
+use iroha_data_model::da::types::StorageTicketId;
 use iroha_model_base::topology::LaneId;
+#[cfg(test)]
 use norito::decode_from_bytes;
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
+#[cfg(test)]
+use std::{collections::BTreeMap, path::Path};
 use thiserror::Error;
 /// Errors encountered while loading DA commitment artefacts from disk.
 #[derive(Debug, Error)]
@@ -110,6 +111,7 @@ pub enum DaSpoolError {
         sequence: u64,
     },
 }
+#[cfg(test)]
 /// Load all DA commitment records from the spool directory.
 ///
 /// Commitment-record files are filtered by filename (`da-commitment-*.norito`,
@@ -182,6 +184,7 @@ pub fn load_commitment_bundle(
     records.sort();
     Ok(Some(DaCommitmentBundle::new(records)))
 }
+#[cfg(test)]
 fn open_commitment_spool_dir(spool_dir: &Path) -> Result<Option<std::fs::ReadDir>, DaSpoolError> {
     let metadata = match std::fs::symlink_metadata(spool_dir) {
         Ok(metadata) => metadata,
@@ -209,6 +212,7 @@ fn open_commitment_spool_dir(spool_dir: &Path) -> Result<Option<std::fs::ReadDir
             source,
         })
 }
+#[cfg(test)]
 fn read_regular_commitment_file(path: &Path) -> Result<Vec<u8>, DaSpoolError> {
     let metadata = std::fs::symlink_metadata(path).map_err(|source| DaSpoolError::ReadFile {
         path: path.to_path_buf(),
@@ -230,6 +234,7 @@ fn read_regular_commitment_file(path: &Path) -> Result<Vec<u8>, DaSpoolError> {
     revalidate_regular_commitment_file(path, &metadata, bytes.len())?;
     Ok(bytes)
 }
+#[cfg(test)]
 fn revalidate_regular_commitment_file(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -262,6 +267,7 @@ fn revalidate_regular_commitment_file(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Load commitments from disk and build an in-memory index for query paths.
 ///
 /// Returns an empty store if no commitments are present. See
@@ -276,6 +282,7 @@ pub fn load_commitment_store(spool_dir: &Path) -> Result<DaCommitmentStore, DaSp
         None => Ok(DaCommitmentStore::default()),
     }
 }
+#[cfg(test)]
 fn is_da_commitment_file(path: &Path) -> Result<bool, DaSpoolError> {
     let Some(name) = path.file_name() else {
         return Ok(false);
@@ -293,6 +300,7 @@ fn is_da_commitment_file(path: &Path) -> Result<bool, DaSpoolError> {
     }
     Ok(false)
 }
+#[cfg(test)]
 #[cfg(unix)]
 fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
@@ -303,6 +311,7 @@ fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix:
 fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
     false
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct CommitmentFileKey {
     lane_id: LaneId,
@@ -311,6 +320,7 @@ struct CommitmentFileKey {
     storage_ticket: StorageTicketId,
     fingerprint: ReplayFingerprint,
 }
+#[cfg(test)]
 fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolError> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err(malformed_filename(path));
@@ -353,18 +363,21 @@ fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolEr
         fingerprint,
     })
 }
+#[cfg(test)]
 fn parse_fixed_hex_u32(value: &str, width: usize, path: &Path) -> Result<u32, DaSpoolError> {
     if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
     }
     u32::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
+#[cfg(test)]
 fn parse_fixed_hex_u64(value: &str, width: usize, path: &Path) -> Result<u64, DaSpoolError> {
     if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
     }
     u64::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
 }
+#[cfg(test)]
 fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaSpoolError> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(malformed_filename(path));
@@ -373,11 +386,13 @@ fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaSpoolError
     hex::decode_to_slice(value, &mut bytes).map_err(|_| malformed_filename(path))?;
     Ok(bytes)
 }
+#[cfg(test)]
 fn malformed_filename(path: &Path) -> DaSpoolError {
     DaSpoolError::MalformedFilename {
         path: path.to_path_buf(),
     }
 }
+#[cfg(test)]
 fn decode_commitment_record(
     data: &[u8],
     path: &Path,
