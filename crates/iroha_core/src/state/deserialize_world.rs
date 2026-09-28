@@ -7730,6 +7730,7 @@ fn parse_world(
     let verifying_keys_by_circuit = take_required(&mut map, "verifying_keys_by_circuit")?;
     let consensus_keys = take_required(&mut map, "consensus_keys")?;
     let consensus_keys_by_pk = take_required(&mut map, "consensus_keys_by_pk")?;
+    let sumeragi_lanes = take_required(&mut map, "sumeragi_lanes")?;
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
@@ -8226,6 +8227,7 @@ fn parse_world(
         verifying_keys_by_circuit,
         consensus_keys,
         consensus_keys_by_pk,
+        sumeragi_lanes,
         pedersen_params,
         poseidon_params,
         runtime_upgrades,

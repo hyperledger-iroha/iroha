@@ -1219,6 +1219,7 @@ macro_rules! with_world_overlay_fields {
             consensus_schedule,
             consensus_keys,
             consensus_keys_by_pk,
+            sumeragi_lanes,
             domain_committees,
             domain_endorsement_policies,
             domain_endorsements,
@@ -5840,6 +5841,8 @@ pub struct WorldData {
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk:
         Storage<String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
+    /// Lifecycle records of the global chain's lanes (`specs/sumeragi_lanes.md` §2).
+    pub(crate) sumeragi_lanes: Storage<iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6510,6 +6513,8 @@ pub struct WorldBlockFields<'world> {
     pub(crate) consensus_keys: StorageField<'world, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk: StorageField<'world, String, Vec<ConsensusKeyId>>,
+    /// Lifecycle records of the global chain's lanes.
+    pub(crate) sumeragi_lanes: StorageField<'world, iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -7816,6 +7821,7 @@ impl WorldBlock<'_> {
         storage!(
             consensus_keys,
             consensus_keys_by_pk,
+            sumeragi_lanes,
             domain_committees,
             domain_endorsement_policies,
             domain_endorsements,
@@ -8152,6 +8158,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) consensus_keys: StorageTransaction<'block, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk: StorageTransaction<'block, String, Vec<ConsensusKeyId>>,
+    /// Lifecycle records of the global chain's lanes.
+    pub(crate) sumeragi_lanes: StorageTransaction<'block, iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -10628,6 +10636,8 @@ pub struct WorldView<'world> {
     /// Secondary index from public key to consensus key identifiers.
     pub(crate) consensus_keys_by_pk:
         StorageView<'world, String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
+    /// Lifecycle records of the global chain's lanes.
+    pub(crate) sumeragi_lanes: StorageView<'world, iroha_model_base::topology::LaneId, iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -23486,6 +23496,8 @@ macro_rules! world_ro_accessors {
             storage consensus_keys: ConsensusKeyId => ConsensusKeyRecord;
             /// Index mapping consensus public keys to registered identifiers.
             storage consensus_keys_by_pk: String => Vec<ConsensusKeyId>;
+            /// Lifecycle records of the global chain's lanes (read-only).
+            storage sumeragi_lanes: iroha_model_base::topology::LaneId => iroha_data_model::sumeragi_lanes::SumeragiLaneRecord;
             /// Pedersen parameter registry (read-only).
             storage pedersen_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>
@@ -27236,6 +27248,7 @@ impl WorldTransaction<'_, '_> {
             verifying_keys_by_circuit: _,
             consensus_keys: _,
             consensus_keys_by_pk: _,
+            sumeragi_lanes: _,
             pedersen_params: _,
             poseidon_params: _,
             runtime_upgrades: _,
@@ -27463,6 +27476,7 @@ impl WorldTransaction<'_, '_> {
         self.verifying_keys_by_circuit.apply();
         self.consensus_keys.apply();
         self.consensus_keys_by_pk.apply();
+        self.sumeragi_lanes.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
         self.runtime_upgrades.apply();
