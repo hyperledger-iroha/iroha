@@ -60,7 +60,7 @@ use super::{
         traits::{Frame, Net},
     },
 };
-use crate::{InboundStructField, IrohaNetwork, NetworkMessage};
+use crate::{IrohaNetwork, NetworkMessage};
 
 /// One Sumeragi wire frame in the P2P envelope: the exact canonical `WireMessage` encoding and
 /// the instance it belongs to. The bytes are never decoded by the network codec.
@@ -197,13 +197,10 @@ impl FrameCaps {
 /// The exact `WireMessage` bytes inside the bare `SumeragiFrame` payload `field` (the value
 /// after the `NetworkMessage` variant and `Arc` boundaries), without copying or decoding.
 fn raw_frame(field: &[u8], flags: u8) -> Result<&[u8], norito::core::Error> {
-    // `instance: [u8; 32]` is 32 fixed bytes; `frame: Vec<u8>` is a self-delimiting byte
-    // sequence (a fixed u64 count, then the bytes) in every layout.
-    const FIELDS: [InboundStructField; 2] = [
-        InboundStructField::Fixed(32),
-        InboundStructField::ByteSequence,
-    ];
-    let bytes = crate::inbound_struct_field(field, flags, &FIELDS, 1)?;
+    // Both fields (`instance: [u8; 32]`, `frame: Vec<u8>`) are length-prefixed; the `frame`
+    // value is a self-delimiting byte sequence (a fixed u64 count, then the bytes).
+    const FIELDS: usize = 2;
+    let bytes = crate::inbound_struct_field(field, flags, FIELDS, 1)?;
     if crate::inbound_byte_sequence_wire_len(bytes)? != bytes.len() {
         return Err(norito::core::Error::LengthMismatch);
     }
@@ -806,14 +803,7 @@ mod tests {
         }
     }
 
-    const LAYOUTS: [u8; 4] = [
-        0,
-        ncore::header_flags::COMPACT_LEN,
-        ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
-        ncore::header_flags::PACKED_STRUCT
-            | ncore::header_flags::COMPACT_LEN
-            | ncore::header_flags::FIELD_BITSET,
-    ];
+    const LAYOUTS: [u8; 2] = [0, ncore::header_flags::COMPACT_LEN];
 
     /// The raw (pre-decode) topic, admission class and decode limits of a network message
     /// encoded under `layout`, and the message decoded back.

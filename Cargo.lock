@@ -10324,7 +10324,6 @@ dependencies = [
  "norito",
  "soranet_pq",
  "tempfile",
- "x25519-dalek",
 ]
 
 [[package]]

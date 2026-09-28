@@ -1,5 +1,6 @@
 //! Round-trip and cross-SDK outcome coverage for committed SoraFS PDP fixtures.
 #![allow(unexpected_cfgs)]
+#[cfg(feature = "dev-tools")]
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     PdpChallengeV1, PdpCommitmentV1, PdpProofV1, validate_pdp_challenge_bytes,
@@ -7,7 +8,10 @@ use sorafs_manifest::{
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
     validate_pdp_proof_bytes,
 };
-use std::{fs, path::Path};
+use std::fs;
+#[cfg(feature = "dev-tools")]
+use std::path::Path;
+#[cfg(feature = "dev-tools")]
 use tempfile::tempdir;
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -17,6 +21,7 @@ fn read_fixture_bytes(path: &str) -> Vec<u8> {
     let path = format!("{FIXTURES_ROOT}/{path}");
     fs::read(&path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
+#[cfg(feature = "dev-tools")]
 fn regenerate_fixtures(root: &Path) {
     let root = fs::canonicalize(root).expect("canonicalize isolated fixture output directory");
     fs::create_dir(root.join("negative")).expect("create isolated negative fixture directory");
@@ -324,6 +329,7 @@ fn pdp_reference_outcomes_match_cross_sdk_fixtures_exactly() {
         );
     }
 }
+#[cfg(feature = "dev-tools")]
 #[test]
 fn pdp_fixture_regeneration_is_byte_identical() {
     const FILES: [&str; 31] = [

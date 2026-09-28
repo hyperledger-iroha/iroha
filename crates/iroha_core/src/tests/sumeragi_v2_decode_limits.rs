@@ -307,21 +307,7 @@ fn sumeragi_v2_manifest_limit_covers_every_supported_norito_layout() {
     use iroha_data_model::block::consensus_v2 as wire;
 
     const COMPACT: u8 = ncore::header_flags::COMPACT_LEN;
-    const PACKED_SEQUENCE: u8 = ncore::header_flags::PACKED_SEQ;
-    const PACKED_STRUCT: u8 = ncore::header_flags::PACKED_STRUCT;
-    const FIELD_BITSET: u8 = ncore::header_flags::FIELD_BITSET;
-    const LAYOUTS: [u8; 10] = [
-        0,
-        COMPACT,
-        PACKED_SEQUENCE,
-        PACKED_SEQUENCE | COMPACT,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT,
-        PACKED_STRUCT | PACKED_SEQUENCE,
-        PACKED_STRUCT | PACKED_SEQUENCE | COMPACT,
-        PACKED_STRUCT | COMPACT | FIELD_BITSET,
-        PACKED_STRUCT | PACKED_SEQUENCE | COMPACT | FIELD_BITSET,
-    ];
+    const LAYOUTS: [u8; 2] = [0, COMPACT];
 
     let proposal = |chunk_hash_count| {
         v2_decode_limit_proposal(

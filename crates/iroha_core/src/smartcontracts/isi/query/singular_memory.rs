@@ -302,20 +302,12 @@ impl<'a, const N: usize> BorrowedSingularStruct<'a, N> {
 }
 impl<const N: usize> SerializePayload for BorrowedSingularStruct<'_, N> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
-        if norito::core::use_packed_struct() {
-            return Err(norito::core::Error::UnsupportedFeature(
-                "borrowed singular packed struct",
-            ));
-        }
         for value in self.fields.iter().copied() {
             norito::core::write_len_prefixed(writer, value)?;
         }
         Ok(())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        if norito::core::use_packed_struct() {
-            return None;
-        }
         self.fields.iter().try_fold(0usize, |total, value| {
             let value_len = value.encoded_len_exact()?;
             total

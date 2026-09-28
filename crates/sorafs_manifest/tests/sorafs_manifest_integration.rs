@@ -11,6 +11,8 @@ mod orderbook_fixtures;
 mod pdp;
 #[path = "pdp_fixtures.rs"]
 mod pdp_fixtures;
+// Every test drives the `dev-tools` `generate_pdp_fixtures` binary.
+#[cfg(feature = "dev-tools")]
 #[path = "pdp_generator_cli.rs"]
 mod pdp_generator_cli;
 #[path = "por_fixtures.rs"]
