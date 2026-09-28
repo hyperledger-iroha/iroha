@@ -378,7 +378,7 @@ def test_root_scratch_ignore_does_not_hide_nested_security_tests(tmp_path: Path)
     )
     (tmp_path / "security_probe.rs").write_text("//! Scratch.\n", encoding="utf-8")
     relative = (
-        "crates/iroha_torii/src/mcp/catalog_and_policy_tests/security_and_registry.rs"
+        "crates/iroha_torii/src/mcp/catalog_and_policy_tests/registry_security.rs"
     )
     source = tmp_path / relative
     source.parent.mkdir(parents=True)
