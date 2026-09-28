@@ -1753,7 +1753,9 @@ fn hash_immutable_file_exact(
     let after = file
         .metadata()
         .wrap_err_with(|| format!("failed to re-inspect opened {description}"))?;
-    if observed_len != expected_len || !crate::secure_fs::same_single_link_input_snapshot(&opened, &after) {
+    if observed_len != expected_len
+        || !crate::secure_fs::same_single_link_input_snapshot(&opened, &after)
+    {
         bail!("{description} changed while its immutable hash snapshot was read");
     }
     Ok(digest)
