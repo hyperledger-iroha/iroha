@@ -7,6 +7,8 @@
 //! anchor block's hash and creation time, and the lane record's immutable fields), so every
 //! honest member computes the same `R` whenever it executes.
 
+/// The executor of a lane instance.
+pub mod executor;
 /// Routing transactions to lanes from committed state.
 pub mod routing;
 /// The durable block store of a lane instance.
@@ -181,14 +183,17 @@ pub trait AnchorView {
     fn creation_time_ms(&self, height: u64) -> Option<u64>;
 }
 
-/// The lane chain that admission reads: the previous block's anchor and the hashes of committed
-/// lane transactions the global chain has not merged yet (§3.2 steps 2 and 5).
+/// Blocks of the lane chain that admission deduplicates against (§3.2 step 5).
+pub const LANE_DEDUP_WINDOW: usize = 64;
+
+/// The lane chain that admission reads: the previous block's anchor and the transactions of the
+/// last [`LANE_DEDUP_WINDOW`] lane blocks (§3.2 steps 2 and 5).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LaneChainView {
     /// Anchor height of the lane's previous block (`0` before the first block).
     pub previous_anchor: u64,
-    /// Transactions of committed, not yet merged lane blocks.
-    pub unmerged: BTreeSet<HashOf<TransactionEntrypoint>>,
+    /// Transactions of the last [`LANE_DEDUP_WINDOW`] lane blocks.
+    pub recent: BTreeSet<HashOf<TransactionEntrypoint>>,
 }
 
 /// The outcome of admission.
@@ -231,7 +236,7 @@ pub enum AdmissionError {
         /// Why.
         reason: String,
     },
-    /// A transaction repeats one of this block or of the lane's unmerged blocks.
+    /// A transaction repeats one of this block or of the lane's recent blocks.
     #[error("transaction {0} is a duplicate")]
     Duplicate(usize),
 }
@@ -297,7 +302,7 @@ pub fn admit(
             .check(tx, anchor_time_ms)
             .map_err(|reason| AdmissionError::Transaction { index, reason })?;
         let hash = tx.hash_as_entrypoint();
-        if chain.unmerged.contains(&hash) || !seen.insert(hash) {
+        if chain.recent.contains(&hash) || !seen.insert(hash) {
             return Err(AdmissionError::Duplicate(index));
         }
         tx_hashes.push(hash);
@@ -460,7 +465,7 @@ mod tests {
         let unmerged_tx = tx(50);
         let chain = LaneChainView {
             previous_anchor: 7,
-            unmerged: BTreeSet::from([unmerged_tx.hash_as_entrypoint()]),
+            recent: BTreeSet::from([unmerged_tx.hash_as_entrypoint()]),
         };
         let admit = |payload: &[u8], chain: &LaneChainView| {
             admit(&record, &anchors(), chain, &AcceptAll, &config, payload)

@@ -121,15 +121,17 @@ A lane member executes a lane block `B` at lane height `x` as follows; `Valid(R)
    (`closing = Some(c)` with `anchor_height ≥ c`).
 4. Every transaction: canonical encoding, size and signature limits, chain id, and not expired at
    the anchor block's creation time.
-5. No transaction hash appears earlier in `B` or in the lane's committed blocks that `G` has not
-   merged as of the anchor (the lane executor keeps these hashes from its committed results).
+5. No transaction hash appears earlier in `B` or in lane blocks `x − W .. x − 1`
+   (`W = LANE_DEDUP_WINDOW` blocks; the lane executor keeps these hashes from its own chain).
+   Duplicates across lanes, or of transactions `G` already committed, are rejected at merge.
 
 `R_x = H("iroha/lane/result/v1" ‖ norito(LaneResult))` with
 `LaneResult { anchor_height, anchor_hash, tx_hashes, payload_bytes, next_committee_digest, next_params }`;
 `next_*` are the pinned constants (§2.3), so the core's lag-2 rule holds trivially.
 
-Admission is a pure function of the lane block, the lane's own chain and permanent facts of `G`
-(the anchor block's hash and time, and this lane's record fields, which never change once set),
+Admission is a pure function of the lane block, the lane's own chain (its previous anchor and the
+last `W` blocks) and permanent facts of `G` (the anchor block's hash and time, and this lane's
+record fields, which never change once set),
 so every honest lane member computes the same `R_x` whenever it executes. Admission never reads
 world state and never checks routing: routing is decided at merge (§4.3 step 3), where `G`'s
 state is the single authority, so a lane's result cannot depend on how recent a node's view of
