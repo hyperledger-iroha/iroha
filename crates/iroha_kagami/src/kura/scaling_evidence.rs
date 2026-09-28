@@ -680,9 +680,7 @@ fn validate_carrier(block: &SignedBlock, maximum: usize) -> Result<()> {
 
 #[cfg(test)]
 #[allow(dead_code, reason = "fixture is shared by focused test suites")]
-#[path = "scaling_evidence/fixture.rs"]
 mod fixture;
 
 #[cfg(test)]
-#[path = "scaling_evidence/tests.rs"]
 mod tests;

@@ -4,6 +4,7 @@
 //! Native source fixture and public BlockStore framing; it does not claim runtime autonomous execution.
 
 use super::*;
+use crate::kura::scaling_evidence::fixture;
 use crate::{
     RunArgs as _,
     kura::scaling_evidence::export::filesystem::{FactsInputBindings, ProofInputBinding},
@@ -16,9 +17,6 @@ use std::{
     path::PathBuf,
 };
 use zeroize::Zeroizing;
-#[path = "../../../../fixture.rs"]
-#[allow(dead_code, reason = "fixture is shared by focused test suites")]
-mod transcript;
 
 /// Run a full generated-genesis facts fixture on the bounded stack already used by
 /// Kagami genesis staging. Keep every fixture owner and assertion on that worker;
@@ -108,7 +106,7 @@ pub(in crate::kura::scaling_evidence::export) struct Fixture {
     validators: [PublicKey; 4],
     accounts: Vec<AccountId>,
     lanes: usize,
-    transcript: transcript::Fixture,
+    transcript: fixture::Fixture,
 }
 #[cfg(all(
     unix,
@@ -257,7 +255,7 @@ impl Fixture {
         custody
             .sort_by_key(|(key, _)| iroha_model_base::peer::PeerId::new(key.public_key().clone()));
         let (keys, pasta_seeds): (Vec<_>, Vec<_>) = custody.into_iter().unzip();
-        let deferred = std::sync::Arc::new(transcript::producer::Deferred::default());
+        let deferred = std::sync::Arc::new(fixture::producer::Deferred::default());
         let chain = crate::genesis::prepared_native_test_chain(
             validated,
             &manifest,
@@ -268,9 +266,8 @@ impl Fixture {
             deferred.clone(),
         )
         .unwrap();
-        let transcript = transcript::Fixture::from_generated_genesis(
-            chain, deferred, keys, &authority, &scheduled,
-        );
+        let transcript =
+            fixture::Fixture::from_generated_genesis(chain, deferred, keys, &authority, &scheduled);
         let context = norito::encode_canonical(authority.epoch()).unwrap();
         let carrier = norito::encode_canonical(&finalized_contexts(&transcript)).unwrap();
         let queries = transcript
@@ -705,7 +702,7 @@ fn routing_decode_rejects_finite_work_before_any_signed_frame_decode() {
     assert!(decode_requests(&scheduled, 1).is_err());
 }
 
-fn finalized_contexts(fixture: &transcript::Fixture) -> Vec<NativeHeightEvidenceV1> {
+fn finalized_contexts(fixture: &fixture::Fixture) -> Vec<NativeHeightEvidenceV1> {
     fixture
         .heights
         .iter()
@@ -718,7 +715,7 @@ fn finalized_contexts(fixture: &transcript::Fixture) -> Vec<NativeHeightEvidence
 
 #[test]
 fn five_query_group_reserves_exact_slots_and_frames_before_allocation() {
-    let fixture = transcript::Fixture::new(4);
+    let fixture = fixture::Fixture::new(4);
     let carrier = finalized_contexts(&fixture);
     let queries = fixture
         .heights
@@ -740,7 +737,7 @@ fn five_query_group_reserves_exact_slots_and_frames_before_allocation() {
         + carrier.len() * std::mem::size_of::<SuppliedEvidenceHeightV1>()
         + 5 * std::mem::size_of::<Vec<u8>>();
     let last = carrier.len() as u64;
-    let mut limits = transcript::limits();
+    let mut limits = fixture::limits();
     limits.input_bytes = count as u64;
     let rows = group_supplied(carrier.clone(), queries.clone(), last, limits).unwrap();
     assert_eq!(rows.len(), carrier.len());
@@ -762,7 +759,7 @@ fn five_query_group_reserves_exact_slots_and_frames_before_allocation() {
 
 #[test]
 fn query_grouping_preserves_all_rows_and_rejects_height_carrier_or_leaf_reordering() {
-    let fixture = transcript::Fixture::new(4);
+    let fixture = fixture::Fixture::new(4);
     let proofs = finalized_contexts(&fixture);
     let queries = fixture
         .heights
@@ -771,24 +768,24 @@ fn query_grouping_preserves_all_rows_and_rejects_height_carrier_or_leaf_reorderi
         .map(|raw| canonical::<CommittedTransaction>(&raw).unwrap())
         .collect::<Vec<_>>();
     let last = proofs.len() as u64;
-    let rows = group_supplied(proofs.clone(), queries.clone(), last, transcript::limits()).unwrap();
+    let rows = group_supplied(proofs.clone(), queries.clone(), last, fixture::limits()).unwrap();
     assert_eq!(
         rows.iter().map(|row| row.queries.len()).sum::<usize>(),
         queries.len()
     );
     let mut reversed = proofs.clone();
     reversed.reverse();
-    assert!(group_supplied(reversed, queries.clone(), last, transcript::limits()).is_err());
+    assert!(group_supplied(reversed, queries.clone(), last, fixture::limits()).is_err());
     let mut wrong_leaf = queries.clone();
     wrong_leaf.swap(0, 1);
-    assert!(group_supplied(proofs.clone(), wrong_leaf, last, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), wrong_leaf, last, fixture::limits()).is_err());
     let mut unknown = queries.clone();
     unknown[0].block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong carrier"));
-    assert!(group_supplied(proofs.clone(), unknown, last, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), unknown, last, fixture::limits()).is_err());
     let mut extra = queries.clone();
     extra.push(queries[0].clone());
-    assert!(group_supplied(proofs.clone(), extra, last, transcript::limits()).is_err());
-    assert!(group_supplied(vec![proofs[0].clone()], queries, last, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), extra, last, fixture::limits()).is_err());
+    assert!(group_supplied(vec![proofs[0].clone()], queries, last, fixture::limits()).is_err());
 }
 
 #[cfg(all(
@@ -1061,7 +1058,7 @@ mod generated {
     }
     #[test]
     fn direct_work_bounds_reject_zero_unbounded_or_excess_reader_before_genesis() {
-        let limits = transcript::limits();
+        let limits = fixture::limits();
         let reader = CanonicalKuraEvidenceLimits {
             first_height: 1,
             last_height: 2,

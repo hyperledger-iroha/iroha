@@ -3599,22 +3599,17 @@ pub struct Acceleration {
     #[config(default = "defaults::accel::ENABLE_METAL")]
     pub enable_metal: bool,
     /// Optional device-selection cap; Some(0) explicitly opts out.
-    #[config(default = "defaults::accel::MAX_GPUS")]
     pub max_gpus: Option<usize>,
     /// GPU Merkle workload threshold; zero is an explicit threshold.
     #[config(default = "defaults::accel::MERKLE_MIN_LEAVES_GPU")]
     pub merkle_min_leaves_gpu: usize,
     /// Optional Metal threshold; omission inherits the generic threshold.
-    #[config(default)]
     pub merkle_min_leaves_metal: Option<usize>,
     /// Optional CUDA threshold; omission inherits the generic threshold.
-    #[config(default)]
     pub merkle_min_leaves_cuda: Option<usize>,
     /// Optional CPU SHA2 preference threshold on aarch64.
-    #[config(default)]
     pub prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
     /// Optional CPU SHA2 preference threshold on x86.
-    #[config(default)]
     pub prefer_cpu_sha2_max_leaves_x86: Option<usize>,
     /// Shared physical-owner resource ceilings, supplied only by configuration.
     #[config(nested)]

@@ -3,9 +3,7 @@
 use super::*;
 use norito::codec::Encode as _;
 
-#[path = "../../../fixture.rs"]
-#[allow(dead_code, reason = "fixture is shared by focused test suites")]
-mod fixture;
+use crate::kura::scaling_evidence::fixture;
 
 /// Test-only raw transport assembly for the retained pair owner's signed fixtures.
 /// It performs no admission and returns no authority or publication capability.

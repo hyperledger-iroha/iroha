@@ -16,9 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[path = "../fixture.rs"]
-#[allow(dead_code, reason = "fixture is shared by focused test suites")]
-mod fixture;
+use crate::kura::scaling_evidence::fixture;
 
 const OUTPUT_CAP: u64 = 1024 * 1024;
 const REPLY_CAP: u64 = 1024;
