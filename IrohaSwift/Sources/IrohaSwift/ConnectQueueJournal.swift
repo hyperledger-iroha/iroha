@@ -80,7 +80,10 @@ public struct ConnectJournalRecord: Equatable, Sendable {
         cursor += 8
         let checksum = try data.readUInt64LE(at: cursor)
         cursor += 8
-        cursor += 1 // flags
+        guard data[cursor] == 0 else {
+            throw ConnectQueueError.corrupted
+        }
+        cursor += 1
         let (payload, padding) = try payloadWithPadding(data: data,
                                                         offset: offset,
                                                         payloadLength: payloadLength,

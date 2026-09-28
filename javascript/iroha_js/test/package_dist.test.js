@@ -109,7 +109,7 @@ const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE = privacyNoritoFrameWithPayload(0
 const VALID_PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVES = [
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE,
   privacyNoritoFrameWithPadding(0x50, 64),
-  privacyNoritoFrameWithFlags(0x50, 0x26),
+  privacyNoritoFrameWithFlags(0x50, 0x02),
 ];
 
 function validatePrivacyCompiledProfileCatalogFixture(archive) {
@@ -157,6 +157,14 @@ function malformedPrivacyNativeOutputArchives(schemaByte) {
   badFlags[39] = 0x08;
   const badFieldBitsetFlags = Buffer.from(archive);
   badFieldBitsetFlags[39] = 0x20;
+  const badPackedSeqFlags = Buffer.from(archive);
+  badPackedSeqFlags[39] = 0x01;
+  const badPackedStructFlags = Buffer.from(archive);
+  badPackedStructFlags[39] = 0x04;
+  const badCompactPackedStructFlags = Buffer.from(archive);
+  badCompactPackedStructFlags[39] = 0x06;
+  const badCompactFieldBitsetFlags = Buffer.from(archive);
+  badCompactFieldBitsetFlags[39] = 0x26;
   const badChecksum = Buffer.from(archive);
   badChecksum[31] ^= 0x01;
   const badPayload = Buffer.from(archive);
@@ -173,6 +181,10 @@ function malformedPrivacyNativeOutputArchives(schemaByte) {
     badExcessivePadding,
     badFlags,
     badFieldBitsetFlags,
+    badPackedSeqFlags,
+    badPackedStructFlags,
+    badCompactPackedStructFlags,
+    badCompactFieldBitsetFlags,
     badChecksum,
     badPayload,
   ];
@@ -929,8 +941,8 @@ test("package dist privacy compiled-profile catalog wrapper accepts maximum Nori
   );
 });
 
-test("package dist privacy compiled-profile catalog wrapper accepts complete field-bitset flags", () => {
-  const flaggedArchive = privacyNoritoFrameWithFlags(0x50, 0x26);
+test("package dist privacy compiled-profile catalog wrapper accepts compact-length header flags", () => {
+  const flaggedArchive = privacyNoritoFrameWithFlags(0x50, 0x02);
   withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {

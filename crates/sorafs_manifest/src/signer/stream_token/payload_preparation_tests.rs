@@ -35,22 +35,8 @@ fn fixture() -> (StreamTokenBodyV1, SignerCustodyBindingV1) {
     };
     (body, binding)
 }
-fn layouts() -> [u8; 10] {
-    use norito::core::header_flags::{
-        COMPACT_LEN as C, FIELD_BITSET as F, PACKED_SEQ as Q, PACKED_STRUCT as S,
-    };
-    [
-        0,
-        C,
-        Q,
-        Q | C,
-        S,
-        S | C,
-        Q | S,
-        Q | S | C,
-        S | C | F,
-        Q | S | C | F,
-    ]
+fn layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 fn payload_with_frame(frame: &[u8]) -> Vec<u8> {
     let mut payload = b"sorafs.stream-token.signature.v1\0".to_vec();

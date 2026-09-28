@@ -6284,7 +6284,6 @@ mod retained_polynomial_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
     use rand::{SeedableRng as _, rngs::StdRng};
     pub(super) const PARAMETERS: AggregateStarkParametersV1 = AggregateStarkParametersV1 {
         proof_magic: *b"AGG1",
@@ -7549,7 +7548,10 @@ mod tests {
                     (0..rows)
                         .map(|row| match (row + column) % 3 {
                             0 => F::ZERO,
-                            1 => F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1 - 1),
+                            1 => F(
+                                crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1
+                                    - 1,
+                            ),
                             _ => F((row * 31 + column * 17) as u64),
                         })
                         .collect::<Vec<_>>()

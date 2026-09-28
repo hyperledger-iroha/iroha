@@ -472,7 +472,7 @@ mod operation_ordinal_tests {
         assert!(super::super::operation_is_known(
             OPERATION_POP_RUNTIME_OPEN_V1
         ));
-        assert!(!super::super::operation_is_known(130));
+        assert!(!super::super::operation_is_known(131));
     }
 }
 

@@ -1814,19 +1814,15 @@ fn handshake_rejects_catalog_nonce_session_binding_metadata_and_transcript_confu
 }
 
 #[test]
-fn canonical_broker_encoding_counts_exact_output_and_limit_under_all_ten_layouts() {
+fn canonical_broker_encoding_counts_exact_output_and_limit_under_both_layouts() {
     let value = SoracloudProvenanceSignRequestWireV1 {
         purpose: iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert
             .wire_id(),
         preimage: vec![0xc1; 257],
     };
     let canonical = norito::encode_canonical(&value).unwrap();
-    let layouts: Vec<_> = (0..=u8::MAX)
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-        .collect();
-    assert_eq!(layouts.len(), 10, "exercise every supported V1 layout");
     let mut different_ambient_length = false;
-    for flags in layouts {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         let ambient_before = norito::core::to_bytes(&value).unwrap();
         different_ambient_length |= ambient_before.len() != canonical.len();
@@ -1886,6 +1882,7 @@ fn stream_token_discriminator_rejects_foreign_bulk_operations_before_reading_len
         OPERATION_STREAM_TOKEN_SIGN_V1,
         OPERATION_STREAM_TOKEN_RECOVER_V1,
         OPERATION_STREAM_TOKEN_OBSERVE_V1,
+        OPERATION_STREAM_TOKEN_CHECK_V1,
     ];
     let mut rejected = 0;
     for operation in 0..=u16::MAX {

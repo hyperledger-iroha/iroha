@@ -315,10 +315,10 @@ const PROTOCOL3_OPTIMIZED_DEGREE_BOUND_EXCLUSIVE: usize =
 const MAX_STRUCTURED_BATCH_DEGREE: usize = COMPOSITION_MAX_DEGREE - 1;
 const PRIVATE_LIMBS: usize = 15;
 const LIMB_BITS: usize = 56;
-const DIGEST_LANES: usize = fastpq_prover::fastpq_isi_v1::GOLDILOCKS_DIGEST384_LANES_V1;
+const DIGEST_LANES: usize = fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1;
 const PUBLIC_OUTPUTS: usize = DIGEST_LANES * 2;
 const POSEIDON_FULL_ROUNDS_HALF: usize = 4;
-const POSEIDON_ROUNDS: usize = fastpq_prover::fastpq_isi_v1::GOLDILOCKS_DIGEST384_ROUNDS_V1;
+const POSEIDON_ROUNDS: usize = fastpq_isi::GOLDILOCKS_DIGEST384_ROUNDS_V1;
 const PROOF_VERSION: u16 = 1;
 const STATE_OFFSET: usize = 0;
 const X2_OFFSET: usize = STATE_OFFSET + 3;
@@ -1232,8 +1232,8 @@ fn append_poseidon_lane(
 
 fn identity_prefix_stream(
     public_inputs: &ZkAceAirRelationInputsV1,
-) -> Result<fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1, ZkAceStarkError> {
-    fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1::new(
+) -> Result<fastpq_isi::GoldilocksDigest384LastFieldStreamV1, ZkAceStarkError> {
+    fastpq_isi::GoldilocksDigest384LastFieldStreamV1::new(
         zk_ace_digest384_domain_v1(
             ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
             ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1,
@@ -1248,8 +1248,8 @@ fn identity_prefix_stream(
 
 fn replay_prefix_stream(
     public_inputs: &ZkAceAirRelationInputsV1,
-) -> Result<fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1, ZkAceStarkError> {
-    fastpq_prover::fastpq_isi_v1::GoldilocksDigest384LastFieldStreamV1::new(
+) -> Result<fastpq_isi::GoldilocksDigest384LastFieldStreamV1, ZkAceStarkError> {
+    fastpq_isi::GoldilocksDigest384LastFieldStreamV1::new(
         zk_ace_digest384_domain_v1(
             ZK_ACE_REPLAY_NULLIFIER_ROLE_V1,
             ZK_ACE_REPLAY_NULLIFIER_PHASE_V1,
@@ -1360,7 +1360,7 @@ fn public_output_words(
     Ok(words)
 }
 fn apply_mds(state: [F; 3]) -> [F; 3] {
-    let mds = fastpq_prover::fastpq_isi_v1::poseidon::MDS;
+    let mds = fastpq_isi::poseidon::MDS;
     let mut result = [F::ZERO; 3];
     for row in 0..3 {
         for (column, value) in state.iter().copied().enumerate() {
@@ -1370,7 +1370,7 @@ fn apply_mds(state: [F; 3]) -> [F; 3] {
     result
 }
 fn apply_mds_extension(state: [E; 3]) -> [E; 3] {
-    let mds = fastpq_prover::fastpq_isi_v1::poseidon::MDS;
+    let mds = fastpq_isi::poseidon::MDS;
     let mut result = [E::ZERO; 3];
     for row in 0..3 {
         for (column, value) in state.iter().copied().enumerate() {
@@ -1434,10 +1434,7 @@ fn fixed_row(schedule: ScheduleRow) -> Vec<F> {
         }
         ScheduleOp::FullRound { lane, round } => {
             fixed[FIX_FULL] = F::ONE;
-            let constants =
-                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
-                    lane, round,
-                )
+            let constants = fastpq_isi::goldilocks_digest384_lane_round_constants_v1(lane, round)
                 .expect("compiled digest lane and round are in range");
             for index in 0..3 {
                 fixed[FIX_RC_OFFSET + index] = F(constants[index]);
@@ -1445,10 +1442,7 @@ fn fixed_row(schedule: ScheduleRow) -> Vec<F> {
         }
         ScheduleOp::PartialRound { lane, round } => {
             fixed[FIX_PARTIAL] = F::ONE;
-            let constants =
-                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
-                    lane, round,
-                )
+            let constants = fastpq_isi::goldilocks_digest384_lane_round_constants_v1(lane, round)
                 .expect("compiled digest lane and round are in range");
             for index in 0..3 {
                 fixed[FIX_RC_OFFSET + index] = F(constants[index]);
@@ -1614,10 +1608,7 @@ fn accumulate_fixed_row(result: &mut [F], schedule_row: ScheduleRow, weight: F) 
                 },
                 F::ONE,
             );
-            let constants =
-                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
-                    lane, round,
-                )
+            let constants = fastpq_isi::goldilocks_digest384_lane_round_constants_v1(lane, round)
                 .expect("compiled digest lane and round are in range");
             for (index, constant) in constants.into_iter().enumerate() {
                 add(FIX_RC_OFFSET + index, F(constant));
@@ -1803,10 +1794,7 @@ fn accumulate_fixed_row_extension(result: &mut [E], schedule_row: ScheduleRow, w
                 },
                 F::ONE,
             );
-            let constants =
-                fastpq_prover::fastpq_isi_v1::goldilocks_digest384_lane_round_constants_v1(
-                    lane, round,
-                )
+            let constants = fastpq_isi::goldilocks_digest384_lane_round_constants_v1(lane, round)
                 .expect("compiled digest lane and round are in range");
             for (index, constant) in constants.into_iter().enumerate() {
                 add(FIX_RC_OFFSET + index, F(constant));

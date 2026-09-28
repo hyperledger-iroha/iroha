@@ -13318,16 +13318,6 @@ seiyaku Privacy {
             bytes
         };
         assert_ne!(alternate_layout, versioned);
-        let packed_struct = {
-            let packed_flags =
-                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
-            let _packed_flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
-            let mut bytes = vec![1];
-            norito::core::serialize_to_buffer(&signed, &mut bytes)
-                .expect("packed-struct signed transaction");
-            bytes
-        };
-        assert_ne!(packed_struct, versioned);
         let mut unsupported = versioned.clone();
         unsupported[0] = 2;
         let mut trailing = versioned.clone();
@@ -13337,7 +13327,6 @@ seiyaku Privacy {
             ("framed", framed),
             ("headerless", headerless),
             ("alternate-layout", alternate_layout),
-            ("packed-struct", packed_struct),
             ("unsupported", unsupported),
             ("trailing", trailing),
         ] {

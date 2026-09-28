@@ -62,42 +62,6 @@ fn length_prefixed_compact_spans_include_multibyte_lengths() {
     assert_eq!(plan.used, bytes.len());
 }
 #[test]
-fn packed_fixed_offsets_spans() {
-    let mut bytes = fixed_seq_header(3);
-    for offset in [0u64, 1, 3, 6] {
-        bytes.extend_from_slice(&offset.to_le_bytes());
-    }
-    bytes.extend_from_slice(b"abcdef");
-    let plan = plan_binary_sequence(
-        &bytes,
-        header_flags::PACKED_SEQ,
-        BinarySequenceLayout::FixedOffsets,
-    )
-    .expect("plan packed sequence");
-    assert_eq!(
-        plan.spans,
-        vec![
-            SequenceSpan { start: 40, end: 41 },
-            SequenceSpan { start: 41, end: 43 },
-            SequenceSpan { start: 43, end: 46 },
-        ],
-    );
-    assert_eq!(plan.used, bytes.len());
-}
-#[test]
-fn packed_empty_sequence_consumes_zero_offset_sentinel() {
-    let mut bytes = fixed_seq_header(0);
-    bytes.extend_from_slice(&0u64.to_le_bytes());
-    let plan = plan_binary_sequence(
-        &bytes,
-        header_flags::PACKED_SEQ,
-        BinarySequenceLayout::FixedOffsets,
-    )
-    .expect("plan empty packed sequence");
-    assert!(plan.spans.is_empty());
-    assert_eq!(plan.used, 16);
-}
-#[test]
 fn compact_length_rejects_truncated_varint() {
     let mut bytes = fixed_seq_header(1);
     bytes.push(0x80);
@@ -131,32 +95,16 @@ fn length_prefixed_rejects_truncated_payload() {
     assert!(matches!(err, core::Error::LengthMismatch));
 }
 #[test]
-fn packed_offsets_reject_non_monotonic_table() {
-    let mut bytes = fixed_seq_header(2);
-    for offset in [0u64, 5, 4] {
-        bytes.extend_from_slice(&offset.to_le_bytes());
-    }
-    bytes.extend_from_slice(b"abcdef");
-    let err = plan_binary_sequence(
-        &bytes,
-        header_flags::PACKED_SEQ,
-        BinarySequenceLayout::FixedOffsets,
-    )
-    .expect_err("non-monotonic offsets must fail");
-    assert!(matches!(err, core::Error::LengthMismatch));
-}
-#[test]
-fn packed_offsets_reject_truncated_data() {
+fn reserved_layout_flags_are_rejected_before_planning() {
     let mut bytes = fixed_seq_header(1);
-    for offset in [0u64, 4] {
-        bytes.extend_from_slice(&offset.to_le_bytes());
+    bytes.extend_from_slice(&1u64.to_le_bytes());
+    bytes.push(b'a');
+    for flags in [0x01, 0x03, 0x04, 0x20] {
+        let err = plan_binary_sequence(&bytes, flags, BinarySequenceLayout::LengthPrefixed)
+            .expect_err("reserved layout flags must fail");
+        assert!(
+            matches!(err, core::Error::UnsupportedFeature("layout flag")),
+            "flags {flags:#04x}: {err:?}"
+        );
     }
-    bytes.extend_from_slice(b"abc");
-    let err = plan_binary_sequence(
-        &bytes,
-        header_flags::PACKED_SEQ,
-        BinarySequenceLayout::FixedOffsets,
-    )
-    .expect_err("truncated packed payload must fail");
-    assert!(matches!(err, core::Error::LengthMismatch));
 }

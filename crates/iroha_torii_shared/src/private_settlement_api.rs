@@ -577,26 +577,24 @@ impl PrivateSettlementAuditApprovalResponseV1 {
 #[non_exhaustive]
 pub enum PrivateSettlementResponseValidationErrorV1 {
     /// A committee proof view was malformed, inconsistent, or substituted.
-    InvalidCommitteeProofResponse,
+    CommitteeProofResponse,
     /// An auditor capsule view or its responder attestation was invalid.
-    InvalidAuditorCapsuleResponse,
+    AuditorCapsuleResponse,
     /// The supplied signing key was not governed or reused a committee key.
-    InvalidAuditorKeySeparation,
+    AuditorKeySeparation,
     /// An audit-approval acknowledgement was invalid or request-substituted.
-    InvalidAuditApprovalAcknowledgement,
+    AuditApprovalAcknowledgement,
 }
 
 impl fmt::Display for PrivateSettlementResponseValidationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            Self::InvalidCommitteeProofResponse => {
+            Self::CommitteeProofResponse => {
                 "private-settlement committee response validation failed"
             }
-            Self::InvalidAuditorCapsuleResponse => {
-                "private-settlement auditor response validation failed"
-            }
-            Self::InvalidAuditorKeySeparation => "private-settlement auditor key validation failed",
-            Self::InvalidAuditApprovalAcknowledgement => {
+            Self::AuditorCapsuleResponse => "private-settlement auditor response validation failed",
+            Self::AuditorKeySeparation => "private-settlement auditor key validation failed",
+            Self::AuditApprovalAcknowledgement => {
                 "private-settlement approval acknowledgement validation failed"
             }
         };
@@ -610,7 +608,7 @@ fn validate_response_availability_certificate_v1(
     certificate: &PrivateSettlementSidecarAvailabilityV1,
     authority: &PrivateSettlementCommitteeAuthorityV1,
 ) -> Result<(), PrivateSettlementResponseValidationErrorV1> {
-    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse;
+    let invalid = PrivateSettlementResponseValidationErrorV1::CommitteeProofResponse;
     certificate.validate_shape().map_err(|_| invalid)?;
     authority.validate().map_err(|_| invalid)?;
     let authority_digest = authority.digest().map_err(|_| invalid)?;
@@ -656,7 +654,7 @@ fn validate_response_availability_certificate_v1(
 ///
 /// # Errors
 ///
-/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse`]
+/// Returns [`PrivateSettlementResponseValidationErrorV1::CommitteeProofResponse`]
 /// for any malformed, inconsistent, unauthenticated, stale, or substituted
 /// field.
 pub fn validate_private_settlement_committee_proof_response_v1(
@@ -664,7 +662,7 @@ pub fn validate_private_settlement_committee_proof_response_v1(
     requested_payload_digest: Hash,
     response: &PrivateSettlementCommitteeProofResponseV1,
 ) -> Result<(), PrivateSettlementResponseValidationErrorV1> {
-    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse;
+    let invalid = PrivateSettlementResponseValidationErrorV1::CommitteeProofResponse;
     response.manifest.validate().map_err(|_| invalid)?;
     response.audit_policy.validate().map_err(|_| invalid)?;
     response
@@ -770,7 +768,7 @@ fn validate_private_settlement_auditor_view_attestation_v1(
     requested_payload_digest: Hash,
     response: &PrivateSettlementAuditorCapsuleResponseV1,
 ) -> Result<usize, PrivateSettlementResponseValidationErrorV1> {
-    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse;
+    let invalid = PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse;
     let attestation = &response.responder_attestation;
     attestation.validate_shape().map_err(|_| invalid)?;
     let authority_digest = response.committee_authority.digest().map_err(|_| invalid)?;
@@ -862,7 +860,7 @@ fn private_settlement_lifecycle_is_terminal_v1(lifecycle: PrivateSettlementLifec
 ///
 /// # Errors
 ///
-/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse`]
+/// Returns [`PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse`]
 /// for any malformed, inconsistent, unauthenticated, stale, or substituted
 /// field.
 pub fn validate_private_settlement_auditor_capsule_response_v1(
@@ -871,7 +869,7 @@ pub fn validate_private_settlement_auditor_capsule_response_v1(
     request: &PrivateSettlementAuditorCapsuleRequestV1,
     response: &PrivateSettlementAuditorCapsuleResponseV1,
 ) -> Result<usize, PrivateSettlementResponseValidationErrorV1> {
-    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse;
+    let invalid = PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse;
     response.manifest.validate().map_err(|_| invalid)?;
     response.audit_policy.validate().map_err(|_| invalid)?;
     response
@@ -982,13 +980,13 @@ pub fn validate_private_settlement_auditor_capsule_response_v1(
 ///
 /// # Errors
 ///
-/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation`]
+/// Returns [`PrivateSettlementResponseValidationErrorV1::AuditorKeySeparation`]
 /// when the key is not governed or is reused as a consensus key.
 pub fn validate_private_settlement_auditor_identity_v1(
     auditor_signing_key: &PublicKey,
     response: &PrivateSettlementAuditorCapsuleResponseV1,
 ) -> Result<(), PrivateSettlementResponseValidationErrorV1> {
-    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation;
+    let invalid = PrivateSettlementResponseValidationErrorV1::AuditorKeySeparation;
     response.audit_policy.validate().map_err(|_| invalid)?;
     response
         .access_audit_policy
@@ -1062,7 +1060,7 @@ pub fn validate_private_settlement_auditor_identity_v1(
 ///
 /// # Errors
 ///
-/// Returns [`PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement`]
+/// Returns [`PrivateSettlementResponseValidationErrorV1::AuditApprovalAcknowledgement`]
 /// for any malformed, inconsistent, unauthenticated, expired, or substituted
 /// field.
 pub fn validate_private_settlement_audit_approval_response_v1(
@@ -1070,7 +1068,7 @@ pub fn validate_private_settlement_audit_approval_response_v1(
     request: &PrivateSettlementAuditApprovalRequestV1,
     response: &PrivateSettlementAuditApprovalResponseV1,
 ) -> Result<usize, PrivateSettlementResponseValidationErrorV1> {
-    let invalid = PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement;
+    let invalid = PrivateSettlementResponseValidationErrorV1::AuditApprovalAcknowledgement;
     request.audit_policy.validate().map_err(|_| invalid)?;
     request
         .approval
@@ -1238,6 +1236,10 @@ pub struct PrivateSettlementBundleStatusResponseV1 {
 #[norito_schema(
     name = "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleReceiptResponseV1"
 )]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing one payload would change the canonical public V1 enum construction and wire shape"
+)]
 pub enum PrivateSettlementBundleReceiptResponseV1 {
     /// This node has no public finalized receipt or abort marker for this identifier.
     /// This does not establish that the bundle is known, accepted, or locally stored.
@@ -1265,9 +1267,9 @@ mod tests {
             PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
             PrivateSettlementAuditApprovalBodyV1, PrivateSettlementAuditPolicyBodyV1,
             PrivateSettlementAuditorV1, PrivateSettlementAuditorViewAttestationBodyV1,
-            PrivateSettlementCapsulePaddingV1, PrivateSettlementHybridPublicKeyV1,
-            PrivateSettlementLegCommitmentV1, PrivateSettlementProofProfileV1,
-            PrivateSettlementWrappedDekV1,
+            PrivateSettlementAuthorityCatalogV1, PrivateSettlementCapsulePaddingV1,
+            PrivateSettlementHybridPublicKeyV1, PrivateSettlementLegCommitmentV1,
+            PrivateSettlementProofProfileV1, PrivateSettlementWrappedDekV1,
         },
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
@@ -1414,6 +1416,10 @@ mod tests {
         (policy, signing)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture signs every mutually bound committee, auditor and approval view"
+    )]
     fn response_validation_fixture_v1() -> ResponseValidationFixtureV1 {
         let network_id = validation_network(0x31);
         let route = validation_route(7);
@@ -1824,7 +1830,7 @@ mod tests {
                 fixture.payload_digest,
                 &fixture.committee,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse)
+            Err(PrivateSettlementResponseValidationErrorV1::CommitteeProofResponse)
         );
         let mut substituted = fixture.committee;
         substituted.delta.proof_digest = Hash::new(b"substituted committee proof digest");
@@ -1834,7 +1840,7 @@ mod tests {
                 fixture.payload_digest,
                 &substituted,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse)
+            Err(PrivateSettlementResponseValidationErrorV1::CommitteeProofResponse)
         );
 
         let mut substituted_policy = substituted;
@@ -1868,7 +1874,7 @@ mod tests {
                 fixture.payload_digest,
                 &substituted_policy,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse)
+            Err(PrivateSettlementResponseValidationErrorV1::CommitteeProofResponse)
         );
     }
 
@@ -1899,7 +1905,7 @@ mod tests {
                 &fixture.capsule_request,
                 &fixture.auditor,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse)
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse)
         );
         let mut substituted = fixture.auditor;
         substituted.responder_attestation.signature = sign_bytes(
@@ -1917,7 +1923,7 @@ mod tests {
                 &fixture.capsule_request,
                 &substituted,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse)
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse)
         );
     }
 
@@ -1928,6 +1934,21 @@ mod tests {
             successor_policy_v1(&fixture.auditor.audit_policy);
         let successor_request = PrivateSettlementAuditorCapsuleRequestV1 {
             audit_policy: successor_policy.clone(),
+        };
+        let validate_successor = |response: &PrivateSettlementAuditorCapsuleResponseV1| {
+            validate_private_settlement_auditor_capsule_response_v1(
+                &fixture.network_id,
+                fixture.payload_digest,
+                &successor_request,
+                response,
+            )
+        };
+        let attest = |response: &mut PrivateSettlementAuditorCapsuleResponseV1| {
+            attest_auditor_response_v1(
+                response,
+                fixture.payload_digest,
+                &fixture.validator_keys[0],
+            );
         };
         let original_view_digest = fixture
             .auditor
@@ -1945,18 +1966,9 @@ mod tests {
         let mut overlapping = fixture.auditor.clone();
         overlapping.access_audit_policy = successor_policy.clone();
         overlapping.authoritative_height = 19;
-        attest_auditor_response_v1(
-            &mut overlapping,
-            fixture.payload_digest,
-            &fixture.validator_keys[0],
-        );
+        attest(&mut overlapping);
         assert_eq!(
-            validate_private_settlement_auditor_capsule_response_v1(
-                &fixture.network_id,
-                fixture.payload_digest,
-                &successor_request,
-                &overlapping,
-            ),
+            validate_successor(&overlapping),
             Ok(0),
             "the signed view does not second-guess an overlapping WSV governance rotation"
         );
@@ -1967,28 +1979,14 @@ mod tests {
         retained.lifecycle = PrivateSettlementLifecycleDtoV1::Finalized;
 
         assert_eq!(
-            validate_private_settlement_auditor_capsule_response_v1(
-                &fixture.network_id,
-                fixture.payload_digest,
-                &successor_request,
-                &retained,
-            ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse),
+            validate_successor(&retained),
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse),
             "the responder signature must bind the access policy"
         );
 
-        attest_auditor_response_v1(
-            &mut retained,
-            fixture.payload_digest,
-            &fixture.validator_keys[0],
-        );
+        attest(&mut retained);
         assert_eq!(
-            validate_private_settlement_auditor_capsule_response_v1(
-                &fixture.network_id,
-                fixture.payload_digest,
-                &successor_request,
-                &retained,
-            ),
+            validate_successor(&retained),
             Ok(0),
             "an overlapping, preactivated successor may read retained terminal material"
         );
@@ -2007,43 +2005,25 @@ mod tests {
                 &fixture.capsule_request,
                 &retained,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse),
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse),
             "the response access policy must equal the exact request policy"
         );
 
         let mut live_after_expiry = retained.clone();
         live_after_expiry.lifecycle = PrivateSettlementLifecycleDtoV1::Collecting;
-        attest_auditor_response_v1(
-            &mut live_after_expiry,
-            fixture.payload_digest,
-            &fixture.validator_keys[0],
-        );
+        attest(&mut live_after_expiry);
         assert_eq!(
-            validate_private_settlement_auditor_capsule_response_v1(
-                &fixture.network_id,
-                fixture.payload_digest,
-                &successor_request,
-                &live_after_expiry,
-            ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse),
+            validate_successor(&live_after_expiry),
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse),
             "non-terminal reads remain bounded by bundle expiry"
         );
 
         let mut outside_retention = retained;
         outside_retention.authoritative_height = 121;
-        attest_auditor_response_v1(
-            &mut outside_retention,
-            fixture.payload_digest,
-            &fixture.validator_keys[0],
-        );
+        attest(&mut outside_retention);
         assert_eq!(
-            validate_private_settlement_auditor_capsule_response_v1(
-                &fixture.network_id,
-                fixture.payload_digest,
-                &successor_request,
-                &outside_retention,
-            ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse),
+            validate_successor(&outside_retention),
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse),
             "terminal reads fail closed after restricted-DA retention"
         );
     }
@@ -2054,7 +2034,7 @@ mod tests {
         let unknown = KeyPair::from_seed(vec![0xC1; 32], Algorithm::Ed25519);
         assert_eq!(
             validate_private_settlement_auditor_identity_v1(unknown.public_key(), &fixture.auditor,),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation)
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorKeySeparation)
         );
 
         let mut reused = fixture.auditor;
@@ -2069,7 +2049,7 @@ mod tests {
         reused.access_audit_policy = reused_policy;
         assert_eq!(
             validate_private_settlement_auditor_identity_v1(&consensus_key, &reused),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation)
+            Err(PrivateSettlementResponseValidationErrorV1::AuditorKeySeparation)
         );
     }
 
@@ -2093,7 +2073,7 @@ mod tests {
                 &substituted_request,
                 &fixture.approval_response,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement)
+            Err(PrivateSettlementResponseValidationErrorV1::AuditApprovalAcknowledgement)
         );
 
         let mut wrong_policy = fixture.approval_request.clone();
@@ -2108,7 +2088,7 @@ mod tests {
                 &wrong_policy,
                 &fixture.approval_response,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement),
+            Err(PrivateSettlementResponseValidationErrorV1::AuditApprovalAcknowledgement),
             "the signed approval must match the exact submitted policy"
         );
         let mut expired = fixture.approval_response;
@@ -2119,7 +2099,7 @@ mod tests {
                 &substituted_request,
                 &expired,
             ),
-            Err(PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement)
+            Err(PrivateSettlementResponseValidationErrorV1::AuditApprovalAcknowledgement)
         );
     }
 
@@ -2127,10 +2107,10 @@ mod tests {
     fn shared_response_validation_errors_are_redacted() {
         let sensitive_canary = "account=alice amount=424242 memo=classified";
         for error in [
-            PrivateSettlementResponseValidationErrorV1::InvalidCommitteeProofResponse,
-            PrivateSettlementResponseValidationErrorV1::InvalidAuditorCapsuleResponse,
-            PrivateSettlementResponseValidationErrorV1::InvalidAuditorKeySeparation,
-            PrivateSettlementResponseValidationErrorV1::InvalidAuditApprovalAcknowledgement,
+            PrivateSettlementResponseValidationErrorV1::CommitteeProofResponse,
+            PrivateSettlementResponseValidationErrorV1::AuditorCapsuleResponse,
+            PrivateSettlementResponseValidationErrorV1::AuditorKeySeparation,
+            PrivateSettlementResponseValidationErrorV1::AuditApprovalAcknowledgement,
         ] {
             let rendered = format!("{error}: {sensitive_canary}");
             assert!(!error.to_string().contains(sensitive_canary));
@@ -2251,7 +2231,7 @@ mod tests {
             PrivateSettlementBundleReceiptResponseV1::Finalized(PrivateSettlementReceiptV1 {
                 version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
                 manifest: fixture.committee.manifest.clone(),
-                authority_catalog: Default::default(),
+                authority_catalog: PrivateSettlementAuthorityCatalogV1::default(),
                 legs: Vec::new(),
                 finalized_height: fixture.committee.manifest.authority_context_height,
             }),
@@ -2334,6 +2314,10 @@ mod tests {
 #[cfg(test)]
 mod captured_frame_identity_tests {
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one assertion pins each declared wire identity"
+    )]
     fn observed_declared_identities() {
         crate::captured_identity_tests::assert_bidirectional::<
             super::PrivateSettlementAuditApprovalRequestV1,

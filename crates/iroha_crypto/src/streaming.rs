@@ -576,7 +576,6 @@ pub struct StreamingSession {
     role: CapabilityRole,
     session_id: Option<Hash>,
     key_state: KeyUpdateState,
-    #[allow(dead_code)]
     /// Tracks the latest content-key rotation accepted by this session.
     content_state: ContentKeyState,
     suite: Option<EncryptionSuite>,

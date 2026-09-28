@@ -1850,7 +1850,7 @@ mod tests {
     }
     #[test]
     fn merkle_proof_lengths_and_wire_match_owned_tuple_for_all_supported_layouts() {
-        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+        use norito::core::header_flags::COMPACT_LEN;
         let proof: MerkleProof<()> = MerkleProof::from_audit_path(
             1,
             vec![
@@ -1863,18 +1863,7 @@ mod tests {
                 ))),
             ],
         );
-        for flags in [
-            0,
-            COMPACT_LEN,
-            PACKED_SEQ,
-            PACKED_SEQ | COMPACT_LEN,
-            PACKED_STRUCT,
-            PACKED_SEQ | PACKED_STRUCT,
-            PACKED_STRUCT | COMPACT_LEN,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        ] {
+        for flags in [0, COMPACT_LEN] {
             norito::core::reset_decode_state();
             let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             let mut actual = Vec::new();

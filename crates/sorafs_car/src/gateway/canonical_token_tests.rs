@@ -1,10 +1,6 @@
 // Gateway stream-token frames have one canonical encoding, independently of caller layout.
-fn canonical_token_layouts() -> Vec<u8> {
-    let layouts: Vec<_> = (0..=norito::core::supported_header_flags())
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-        .collect();
-    assert_eq!(layouts.len(), 10);
-    layouts
+fn canonical_token_layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 
 fn canonical_token_fixture() -> StreamTokenV1 {

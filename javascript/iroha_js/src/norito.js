@@ -208,14 +208,8 @@ const WIRE_FIELD_ORDER_ID = "order_id";
 const COMPACT_LEN_FLAG = 0x02;
 const NORITO_FRAME_HEADER_LENGTH = 40;
 const NORITO_MAX_HEADER_PADDING = 64;
-const NORITO_PACKED_SEQ_FLAG = 0x01;
-const NORITO_PACKED_STRUCT_FLAG = 0x04;
-const NORITO_FIELD_BITSET_FLAG = 0x20;
-const NORITO_SUPPORTED_HEADER_FLAGS =
-  NORITO_PACKED_SEQ_FLAG |
-  COMPACT_LEN_FLAG |
-  NORITO_PACKED_STRUCT_FLAG |
-  NORITO_FIELD_BITSET_FLAG;
+// Norito v1 accepts only fixed-width (0x00) or compact (COMPACT_LEN) per-value prefixes.
+const NORITO_SUPPORTED_HEADER_FLAGS = COMPACT_LEN_FLAG;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const BASE58_ALPHABET = BASE58_ALPHABET_TEXT;
@@ -1920,9 +1914,6 @@ export function noritoDecodeBlockProofs(bytes) {
     expectedTypeName: BLOCK_PROOFS_TYPE_NAME,
     requireNonEmptyPayload: true,
   });
-  if ((frame.flags & (NORITO_PACKED_SEQ_FLAG | NORITO_PACKED_STRUCT_FLAG | NORITO_FIELD_BITSET_FLAG)) !== 0) {
-    rejectError(("BlockProofs uses an " + TEXT_UNSUPPORTED + "packed Norito layout"));
-  }
   return withNoritoLengthFlags(frame.flags & COMPACT_LEN_FLAG, () => {
     const fields = decodeStructFields(frame.payload, "BlockProofs", [
       "block_height",
@@ -4401,13 +4392,6 @@ export function validateNoritoFrame(bytes, options = {}) {
   const flags = buffer[39];
   if ((flags & ~NORITO_SUPPORTED_HEADER_FLAGS) !== 0) {
     rejectError(`${context}${TEXT_USES_UNSUPPORTED}Norito header flags 0x${flags.toString(16)}`);
-  }
-  if (
-    (flags & NORITO_FIELD_BITSET_FLAG) !== 0 &&
-    (flags & (NORITO_PACKED_STRUCT_FLAG | COMPACT_LEN_FLAG)) !==
-      (NORITO_PACKED_STRUCT_FLAG | COMPACT_LEN_FLAG)
-  ) {
-    rejectError(`${context} uses an invalid Norito header flag combination`);
   }
 
   const paddingLength = buffer.length - NORITO_FRAME_HEADER_LENGTH - payloadLength;

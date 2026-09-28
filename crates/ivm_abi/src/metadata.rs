@@ -1984,34 +1984,38 @@ mod tests {
                 })
                 .collect(),
         };
-        let packed_flags =
-            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_SEQ;
-        let _packed = norito::core::DecodeFlagsGuard::enter(packed_flags);
-        let payload =
-            encode_embedded_state_type_payload(&value).expect("encode packed embedded state type");
-        assert_eq!(
-            decode_embedded_state_type_payload(&payload)
-                .expect("decode packed tuple and struct children"),
-            value
-        );
-        let tight = norito::DecodeLimits::new(256, payload.len(), 512, payload.len(), 256);
-        assert!(matches!(
-            norito::with_decode_limits(tight, || { decode_embedded_state_type_payload(&payload) }),
-            Err(NoritoError::TotalAllocationExceeded { .. })
-        ));
-        let generous_allocation = payload
-            .len()
-            .checked_mul(64)
-            .and_then(|bytes| bytes.checked_add(64 * 1024))
-            .expect("test allocation limit fits usize");
-        let generous = norito::DecodeLimits::new(256, payload.len(), 512, generous_allocation, 256);
-        assert_eq!(
-            norito::with_decode_limits(generous, || {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            let payload =
+                encode_embedded_state_type_payload(&value).expect("encode embedded state type");
+            assert_eq!(
                 decode_embedded_state_type_payload(&payload)
-            })
-            .expect("budgeted packed decoder accepts a sufficient allocation limit"),
-            value
-        );
+                    .expect("decode tuple and struct children"),
+                value
+            );
+            let tight = norito::DecodeLimits::new(256, payload.len(), 512, payload.len(), 256);
+            assert!(matches!(
+                norito::with_decode_limits(tight, || {
+                    decode_embedded_state_type_payload(&payload)
+                }),
+                Err(NoritoError::TotalAllocationExceeded { .. })
+            ));
+            let generous_allocation = payload
+                .len()
+                .checked_mul(64)
+                .and_then(|bytes| bytes.checked_add(64 * 1024))
+                .expect("test allocation limit fits usize");
+            let generous =
+                norito::DecodeLimits::new(256, payload.len(), 512, generous_allocation, 256);
+            assert_eq!(
+                norito::with_decode_limits(generous, || {
+                    decode_embedded_state_type_payload(&payload)
+                })
+                .expect("budgeted decoder accepts a sufficient allocation limit"),
+                value
+            );
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+        }
     }
     #[test]
     fn embedded_decode_push_charges_only_geometric_capacity_growth() {

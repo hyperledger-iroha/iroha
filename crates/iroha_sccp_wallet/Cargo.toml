@@ -19,7 +19,7 @@ iroha_config = { workspace = true }
 # `#[derive(ReadConfig)]` of the client-config `[sccp]` table expands to `::iroha_config_base` paths.
 iroha_config_base = { workspace = true }
 iroha_wallet = { workspace = true }
-norito = { workspace = true, features = ["base-codec"] }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 tiny-keccak = { workspace = true, features = ["keccak"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 hex = { workspace = true, features = ["std"] }

@@ -18,15 +18,17 @@ use crate::provider_ingest_outbox::{
 use crate::store::AdmittedPayloadReadLeaseV1;
 use iroha_config::parameters::is_production_runtime_handle;
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
+#[cfg(test)]
+use iroha_data_model::musubi::MUSUBI_REGISTRY_VERSION_V1;
+#[cfg(test)]
+use iroha_data_model::musubi::MusubiProviderBundleVerificationBindingV1;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     musubi::{
-        ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
-        MusubiArtifactDescriptorV1, MusubiContentDigestV1,
-        MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
-        MusubiReplicationOrderArchiveBindingV1, MusubiSemanticReleaseDigestV1,
-        MusubiVerificationLockDigestV1,
+        ArchiveId, MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1, MusubiContentDigestV1,
+        MusubiProviderBundleVerificationPayloadV1, MusubiReplicationOrderArchiveBindingV1,
+        MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
     },
     sorafs::{
         capacity::ProviderId,
@@ -47,10 +49,13 @@ use norito::{
     decode_canonical_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
-use sorafs_car::{
-    CarBuildPlan, compute_chunk_plan_digest_sha3,
-    musubi::{MusubiBundleVerifierV1, VerifiedMusubiBundleV1},
-};
+#[cfg(test)]
+use sorafs_car::CarBuildPlan;
+#[cfg(test)]
+use sorafs_car::compute_chunk_plan_digest_sha3;
+#[cfg(test)]
+use sorafs_car::musubi::MusubiBundleVerifierV1;
+use sorafs_car::musubi::VerifiedMusubiBundleV1;
 use sorafs_manifest::capacity::{
     MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
 };
@@ -80,8 +85,10 @@ const PROVIDER_INGEST_COMPLETED_MUSUBI_CAPTURE_TRANSCRIPT_DOMAIN_V1: &[u8] =
 const PROVIDER_INGEST_COMPLETED_MUSUBI_CAPTURE_TRANSCRIPT_MAX_CANONICAL_BYTES_V1: usize =
     16 * 1024 * 1024;
 const PROVIDER_INGEST_COMPLETED_MUSUBI_CAPTURE_ROW_MAX_CANONICAL_BYTES_V1: usize = 512 * 1024;
+#[cfg(test)]
 const PROVIDER_INGEST_MUSUBI_COMPLETION_CLAIM_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.provider-ingest.musubi-completion-claim.v1\0";
+#[cfg(test)]
 const MUSUBI_ARTIFACT_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] = b"musubi-artifact-descriptor-v1\0";
 /// Maximum canonical bytes for one persisted pre-completion Musubi verification receipt.
 pub const PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 8 * 1024;
@@ -378,6 +385,7 @@ impl ProviderIngestFinalizedMusubiCompletionClaimV1 {
     pub const fn completion(&self) -> &ReplicationOrderCompletionRecord {
         &self.completion
     }
+    #[cfg(test)]
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
@@ -495,6 +503,7 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
     ///
     /// Rejects noncanonical or substituted claim fields, completion authority, archive
     /// commitment, CAR statistics, descriptor, semantic release, or verification lock evidence.
+    #[cfg(test)]
     fn from_verified_completion(
         claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
         verified: &VerifiedMusubiBundleV1,
@@ -635,6 +644,7 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
     pub const fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         self.signer_policy
     }
+    #[cfg(test)]
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
@@ -657,6 +667,7 @@ impl AdmittedPayloadReadLeaseV1<'_> {
     /// Returns [`ProviderIngestLocalStorageErrorV1::Permanent`] for an identity, cursor, plan,
     /// commitment, payload, or semantic-integrity mismatch. Transient admitted-storage reader
     /// failures return [`ProviderIngestLocalStorageErrorV1::Retryable`].
+    #[cfg(test)]
     pub(crate) fn verify_completed_musubi_bundle(
         &self,
         expected_store_instance: &CompletedMusubiStoreInstanceV1,
@@ -711,6 +722,7 @@ impl AdmittedPayloadReadLeaseV1<'_> {
         }
     }
 }
+#[cfg(test)]
 struct ProviderIngestObservedAdmittedPayloadReaderV1<'observation, R> {
     inner: R,
     first_error_kind: &'observation Cell<Option<io::ErrorKind>>,
@@ -724,6 +736,7 @@ impl<R: Read> Read for ProviderIngestObservedAdmittedPayloadReaderV1<'_, R> {
         })
     }
 }
+#[cfg(test)]
 const fn provider_ingest_admitted_payload_read_error_is_retryable(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
@@ -744,6 +757,7 @@ struct ProviderIngestMusubiCompletionClaimDigestPreimageV1 {
     binding: MusubiReplicationOrderArchiveBindingV1,
     completion: ReplicationOrderCompletionRecord,
 }
+#[cfg(test)]
 fn provider_ingest_musubi_completion_claim_digest_v1(
     claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
 ) -> Option<[u8; 32]> {
@@ -761,6 +775,7 @@ fn provider_ingest_musubi_completion_claim_digest_v1(
     hasher.update(&canonical);
     Some(*hasher.finalize().as_bytes())
 }
+#[cfg(test)]
 fn musubi_artifact_descriptor_digest_v1(
     descriptor: &MusubiArtifactDescriptorV1,
 ) -> Option<MusubiContentDigestV1> {
@@ -803,6 +818,7 @@ impl ProviderIngestFinalizedClaimFactoryV1 {
             completed_musubi_store_instance: None,
         }
     }
+    #[cfg(test)]
     fn new_completed_musubi_capture(
         network_id: NetworkId,
         provider_id: [u8; 32],

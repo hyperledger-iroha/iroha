@@ -56,27 +56,10 @@ pub fn instructions_to_value(instructions: &[InstructionBox]) -> Value {
 }
 /// Convert an instruction into a structured JSON value, falling back to base64 if JSON conversion fails.
 pub fn instruction_value(instruction: &InstructionBox) -> Value {
-    instruction_value_inner(instruction, None)
-}
-#[cfg(test)]
-#[allow(dead_code)]
-fn instruction_value_with_override(
-    instruction: &InstructionBox,
-    override_value: Option<Result<Value, json::Error>>,
-) -> Value {
-    instruction_value_inner(instruction, override_value)
-}
-fn instruction_value_inner(
-    instruction: &InstructionBox,
-    override_value: Option<Result<Value, json::Error>>,
-) -> Value {
     if let Some(value) = instruction_to_value(instruction) {
         return value;
     }
-    let value_result = override_value
-        .unwrap_or_else(|| norito::json::value::to_value(instruction))
-        .expect("serialize genesis instruction to JSON");
-    value_result
+    norito::json::value::to_value(instruction).expect("serialize genesis instruction to JSON")
 }
 /// Deserialize a sequence of genesis instructions from a JSON parser.
 ///

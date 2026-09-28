@@ -186,9 +186,15 @@ fn executed_genesis_and_successor_publish_real_finality_and_witnesses() {
         .chain(0, state.view().latest_block().as_deref())
         .sign(keys().unwrap()[0].private_key())
         .unpack(|_| {});
-    let mut staged = state.block(new_block.header());
-    let committed = new_block
-        .validate_and_record_transactions(&mut staged)
+    let source: SignedBlock = new_block.into();
+    let (mut staged, recorder) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .expect("successor retains its original prepaid membership and recorder");
+    let committed = ValidBlock::validate_recorded_unchecked(source, &mut staged, recorder)
         .unpack(|_| {})
         .commit_unchecked()
         .unpack(|_| {});
@@ -200,7 +206,7 @@ fn executed_genesis_and_successor_publish_real_finality_and_witnesses() {
     )
     .unwrap();
     state
-        .commit_executed_block_for_testing(staged, committed)
+        .commit_executed_block_for_testing(*staged, committed)
         .unwrap();
     assert_eq!(state.committed_height(), 2);
     let finality = state.kura.v2_finality_artifact(2).unwrap().unwrap();

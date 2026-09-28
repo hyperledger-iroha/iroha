@@ -3689,6 +3689,7 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
 }
 
 /// The stopped Inrou boundary also applies to occupied releases and derived beacon units.
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn require_stopped_owner_absence(admitted: &HostAdmission) -> Result<()> {
     let HostTarget::Validator(validator) = &admitted.target else {
         return require_vacant_unit(admitted, true);
@@ -13262,6 +13263,7 @@ fn inherited_candidate_client_config_args(
 }
 
 /// Build the exact convergence child with independent account and operator credentials.
+#[cfg(test)]
 fn inherited_candidate_operator_status_args(
     client_config: &super::PinnedInput,
     operator_key: Option<&super::PinnedInput>,

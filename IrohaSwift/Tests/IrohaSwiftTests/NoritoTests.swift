@@ -21,7 +21,7 @@ final class NoritoTests: XCTestCase {
     func testNoritoDecodeFrameExtractsPayloadWithPadding() {
         let typeName = "iroha_data_model::transaction::signed::SignedTransaction"
         let payload = Data([0x01, 0x02, 0x03, 0x04])
-        let framed = noritoEncode(typeName: typeName, payload: payload, flags: 0x04)
+        let framed = noritoEncode(typeName: typeName, payload: payload, flags: NoritoHeader.compactLen)
         var padded = framed
         let padding = [UInt8](repeating: 0, count: 8)
         padded.insert(contentsOf: padding, at: NoritoHeader.encodedLength)
@@ -32,7 +32,7 @@ final class NoritoTests: XCTestCase {
 
         XCTAssertEqual(frame.payload, payload)
         XCTAssertEqual(frame.paddingLength, padding.count)
-        XCTAssertEqual(frame.header.flags, 0x04)
+        XCTAssertEqual(frame.header.flags, NoritoHeader.compactLen)
         XCTAssertEqual(frame.header.schema, noritoSchemaHash(forTypeName: typeName))
     }
 
@@ -104,27 +104,43 @@ final class NoritoTests: XCTestCase {
         XCTAssertNil(noritoDecodeFrame(nonzeroPadding))
     }
 
-    func testNoritoDecodeFrameRejectsReservedFlags() {
+    func testNoritoHeaderAcceptsOnlyFixedWidthAndCompactLengthLayouts() {
         let payload = Data([0x01])
-        for flags in [
-            NoritoHeader.varintOffsets,
-            NoritoHeader.compactSeqLen,
-            NoritoHeader.varintOffsets | NoritoHeader.compactSeqLen,
-        ] {
-            let framed = noritoEncodeUnchecked(typeName: "test.ReservedFlags", payload: payload, flags: flags)
-            XCTAssertNil(noritoDecodeFrame(framed), "reserved flags should be rejected: \(flags)")
+        for flags in UInt8.min...UInt8.max {
+            let accepted = flags == 0 || flags == NoritoHeader.compactLen
+            XCTAssertEqual(NoritoHeader.isSupported(flags: flags), accepted, "flags=\(flags)")
+            let framed = noritoEncodeUnchecked(typeName: "test.LayoutFlags", payload: payload, flags: flags)
+            XCTAssertEqual(noritoDecodeFrame(framed) != nil, accepted, "flags=\(flags)")
         }
     }
 
-    func testNoritoDecodeFrameRejectsInvalidFieldBitsetFlags() {
-        let payload = Data([0x01])
-        for flags in [
-            NoritoHeader.fieldBitset,
-            NoritoHeader.fieldBitset | NoritoHeader.compactLen,
-            NoritoHeader.fieldBitset | NoritoHeader.packedStruct,
-        ] {
-            let framed = noritoEncodeUnchecked(typeName: "test.FieldBitset", payload: payload, flags: flags)
-            XCTAssertNil(noritoDecodeFrame(framed), "invalid FIELD_BITSET flags should be rejected: \(flags)")
+    func testConfidentialPayloadEnvelopeDefaultsToCompactLength() throws {
+        let payload = try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x11, count: 32),
+                                                       nonce: Data(repeating: 0x22, count: 24),
+                                                       ciphertext: Data([0xAA, 0xBB, 0xCC]))
+        let envelope = try payload.noritoEnvelope()
+        let frame = try XCTUnwrap(noritoDecodeFrame(envelope))
+        XCTAssertEqual(frame.header.flags, NoritoHeader.compactLen)
+        XCTAssertEqual(frame.payload, try payload.serializedPayload())
+    }
+
+    func testConnectJournalRecordRejectsNonZeroHeaderFlags() throws {
+        let record = try ConnectJournalRecord(direction: .appToWallet,
+                                              sequence: 7,
+                                              payloadHash: Data(repeating: 0x5A, count: 32),
+                                              ciphertext: Data([0x01, 0x02]),
+                                              receivedAtMs: 10,
+                                              expiresAtMs: 20)
+        let envelope = try record.encodeEnvelope()
+        XCTAssertEqual(envelope[NoritoHeader.encodedLength - 1], 0)
+        let decoded = try ConnectJournalRecord.decode(from: envelope, offset: 0)
+        XCTAssertEqual(decoded.record, record)
+        XCTAssertEqual(decoded.bytes, envelope.count)
+
+        for flags: UInt8 in [0x01, NoritoHeader.compactLen, 0x04, 0x20, 0xFF] {
+            var tampered = envelope
+            tampered[NoritoHeader.encodedLength - 1] = flags
+            XCTAssertThrowsError(try ConnectJournalRecord.decode(from: tampered, offset: 0), "flags=\(flags)")
         }
     }
 

@@ -24,19 +24,6 @@ const LAYOUT_CANDIDATES: &[LayoutCandidate] = &[
         name: "compact_len",
         requested_flags: header_flags::COMPACT_LEN,
     },
-    LayoutCandidate {
-        name: "packed_struct",
-        requested_flags: header_flags::COMPACT_LEN
-            | header_flags::PACKED_STRUCT
-            | header_flags::FIELD_BITSET,
-    },
-    LayoutCandidate {
-        name: "packed_all",
-        requested_flags: header_flags::COMPACT_LEN
-            | header_flags::PACKED_STRUCT
-            | header_flags::FIELD_BITSET
-            | header_flags::PACKED_SEQ,
-    },
 ];
 const MIXED_BLOCK_INSTRUCTION_COUNTS: &[usize] = &[0, 1, 4, 8, 16, 32];
 fn fixed_public_key() -> PublicKey {
@@ -143,15 +130,9 @@ where
     assert_eq!(default, compact, "{label} default frame must be compact");
     let flags = header_flags_from(&default);
     assert_eq!(
-        flags & header_flags::COMPACT_LEN,
+        flags,
         header_flags::COMPACT_LEN,
-        "{label} default frame must advertise compact lengths"
-    );
-    assert_eq!(
-        flags
-            & (header_flags::PACKED_STRUCT | header_flags::FIELD_BITSET | header_flags::PACKED_SEQ),
-        0,
-        "{label} default frame must not advertise experimental packed layouts"
+        "{label} default frame must advertise exactly compact lengths"
     );
     let decoded: T = norito::decode_from_bytes(&default).expect("decode default framed payload");
     assert_eq!(decoded, *value, "{label} default frame roundtrip");
@@ -206,24 +187,6 @@ where
     assert!(
         T::decode_all_versioned(&canonical).is_err(),
         "{label} headerless canonical payload decoded despite compact version mapping"
-    );
-}
-fn assert_wrong_header_rejects_packed_payload<T>(label: &str, value: &T)
-where
-    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
-{
-    let (packed_payload, packed_flags) =
-        layout_payload_with_flags(value, candidate_by_name("packed_all"));
-    assert_eq!(
-        packed_flags & header_flags::PACKED_SEQ,
-        header_flags::PACKED_SEQ,
-        "{label} packed payload must advertise packed sequences before the rejection check"
-    );
-    let wrong_frame = frame_bare_with_header_flags::<T>(&packed_payload, header_flags::COMPACT_LEN)
-        .expect("frame packed payload");
-    assert!(
-        norito::decode_from_bytes::<T>(&wrong_frame).is_err(),
-        "{label} packed payload decoded despite missing packed-layout header flags"
     );
 }
 fn assert_truncated_layout_candidates_reject<T>(label: &str, value: &T)
@@ -382,15 +345,6 @@ fn compact_lengths_reduce_chain_payload_sizes() {
         &TransactionEntrypoint::from(sample_transaction(8)),
     );
     assert_compact_payload_is_smaller("signed_block", &sample_block(4, 4));
-}
-#[test]
-fn wrong_header_flags_reject_packed_chain_payloads() {
-    assert_wrong_header_rejects_packed_payload("signed_transaction", &sample_transaction(8));
-    assert_wrong_header_rejects_packed_payload(
-        "transaction_entrypoint",
-        &TransactionEntrypoint::from(sample_transaction(8)),
-    );
-    assert_wrong_header_rejects_packed_payload("signed_block", &sample_block(4, 4));
 }
 #[test]
 fn truncated_chain_layout_frames_reject() {

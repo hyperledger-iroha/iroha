@@ -350,11 +350,12 @@ pub fn decode_transport_items(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proof_stream::{ProofKind, ProofStreamItem};
+    use crate::proof_stream::ProofStreamItem;
     use flate2::{
         Compression,
         write::{DeflateEncoder, GzEncoder},
     };
+    use sorafs_manifest::ProofStreamKind;
     use sorafs_manifest::ProofStreamRequestV1;
     use std::io::Write;
     fn sample_por_fixture(
@@ -388,7 +389,7 @@ mod tests {
         ProofStreamRequestV1 {
             manifest_digest: [0xaa; 32],
             provider_id: [0xbb; 32],
-            proof_kind: ProofKind::Por,
+            proof_kind: ProofStreamKind::Por,
             challenge_id: None,
             sample_count: Some(sample_count),
             deadline_ms: None,

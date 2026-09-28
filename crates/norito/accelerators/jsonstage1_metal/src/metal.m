@@ -89,28 +89,6 @@ static NSString* kMSLSource = @"\n"
 "    }\n"
 "    return false;\n"
 "}\n"
-"kernel void sequence_fixed_offsets(\n"
-"    device const uchar* in [[buffer(0)]],\n"
-"    constant ulong& n [[buffer(1)]],\n"
-"    constant ulong& count [[buffer(2)]],\n"
-"    constant ulong& dataStart [[buffer(3)]],\n"
-"    constant ulong& dataLen [[buffer(4)]],\n"
-"    device SequenceSpan* spans [[buffer(5)]],\n"
-"    device atomic_uint* status [[buffer(6)]],\n"
-"    uint gid [[thread_position_in_grid]]) {\n"
-"    ulong idx = (ulong)gid;\n"
-"    if (idx >= count || atomic_load_explicit(status, memory_order_relaxed) != 0u) { return; }\n"
-"    ulong prev = 0ul;\n"
-"    ulong next = 0ul;\n"
-"    ulong table = 8ul;\n"
-"    if (!read_u64_le(in, n, table + idx * 8ul, prev) || !read_u64_le(in, n, table + (idx + 1ul) * 8ul, next) || next < prev || next > dataLen) {\n"
-"        atomic_store_explicit(status, 1u, memory_order_relaxed);\n"
-"        return;\n"
-"    }\n"
-"    spans[idx].start = dataStart + prev;\n"
-"    spans[idx].end = dataStart + next;\n"
-"}\n"
-"\n"
 "kernel void sequence_length_prefixed(\n"
 "    device const uchar* in [[buffer(0)]],\n"
 "    constant ulong& n [[buffer(1)]],\n"
@@ -141,8 +119,6 @@ static const uint64_t CRC64_POLY = 0xC96C5795D7870F42ULL;
 static const uint64_t CRC64_INIT = 0xFFFFFFFFFFFFFFFFULL;
 static const uint64_t CRC64_XOR_OUT = 0xFFFFFFFFFFFFFFFFULL;
 static const size_t CRC64_CHUNK_SIZE = 16ULL * 1024ULL;
-static const uint32_t LAYOUT_LENGTH_PREFIXED_HOST = 0U;
-static const uint32_t LAYOUT_FIXED_OFFSETS_HOST = 1U;
 
 typedef struct {
     size_t start;
@@ -345,7 +321,6 @@ int json_stage1_build_tape_metal_impl(const uint8_t* input_ptr,
 int norito_sequence_plan_metal_impl(const uint8_t* input_ptr,
                                     size_t input_len,
                                     uint8_t flags,
-                                    uint32_t layout_kind,
                                     NoritoSequenceSpanMetal* out_spans,
                                     size_t out_capacity,
                                     size_t* out_count,
@@ -363,39 +338,9 @@ int norito_sequence_plan_metal_impl(const uint8_t* input_ptr,
     if (count > out_capacity) {
         return 2;
     }
-
-    size_t data_start = 0;
-    size_t data_len = 0;
-    size_t fixed_used = 0;
-    if (layout_kind == LAYOUT_FIXED_OFFSETS_HOST) {
-        if (count > (SIZE_MAX / 8ULL) - 1ULL) { return 1; }
-        size_t table_len = (count + 1ULL) * 8ULL;
-        if (input_len < 8ULL || table_len > input_len - 8ULL) { return 1; }
-        size_t table_start = 8ULL;
-        size_t table_end = table_start + table_len;
-        uint64_t first = 0;
-        uint64_t last = 0;
-        if (!read_u64_le_host(input_ptr, input_len, table_start, &first)
-            || !read_u64_le_host(input_ptr, input_len, table_start + count * 8ULL, &last)
-            || first != 0
-            || last > (uint64_t)SIZE_MAX) {
-            return 1;
-        }
-        data_start = table_end;
-        data_len = (size_t)last;
-        if (data_len > input_len - data_start) { return 1; }
-        fixed_used = data_start + data_len;
-        *out_used = fixed_used;
-        if (count == 0) {
-            return data_len == 0 ? 0 : 1;
-        }
-    } else if (layout_kind == LAYOUT_LENGTH_PREFIXED_HOST) {
-        if (count == 0) {
-            *out_used = 8ULL;
-            return 0;
-        }
-    } else {
-        return 3;
+    if (count == 0) {
+        *out_used = 8ULL;
+        return 0;
     }
 
     @autoreleasepool {
@@ -404,10 +349,7 @@ int norito_sequence_plan_metal_impl(const uint8_t* input_ptr,
         NSError* err = nil;
         id<MTLLibrary> lib = [dev newLibraryWithSource:kMSLSource options:nil error:&err];
         if (!lib) { return 4; }
-        NSString* functionName = layout_kind == LAYOUT_FIXED_OFFSETS_HOST
-            ? @"sequence_fixed_offsets"
-            : @"sequence_length_prefixed";
-        id<MTLFunction> fn = [lib newFunctionWithName:functionName];
+        id<MTLFunction> fn = [lib newFunctionWithName:@"sequence_length_prefixed"];
         if (!fn) { return 4; }
         id<MTLComputePipelineState> pso = [dev newComputePipelineStateWithFunction:fn error:&err];
         if (!pso) { return 4; }
@@ -423,11 +365,13 @@ int norito_sequence_plan_metal_impl(const uint8_t* input_ptr,
         id<MTLBuffer> spanBuf = [dev newBufferWithLength:count * sizeof(NoritoSequenceSpanMetal) options:opts];
         id<MTLBuffer> statusBuf = [dev newBufferWithLength:sizeof(uint32_t) options:opts];
         id<MTLBuffer> usedBuf = [dev newBufferWithLength:sizeof(uint64_t) options:opts];
-        if (!nBuf || !countBuf || !spanBuf || !statusBuf || !usedBuf) { return 4; }
+        id<MTLBuffer> flagsBuf = [dev newBufferWithLength:sizeof(uint8_t) options:opts];
+        if (!nBuf || !countBuf || !spanBuf || !statusBuf || !usedBuf || !flagsBuf) { return 4; }
         *(uint64_t*)[nBuf contents] = (uint64_t)input_len;
         *(uint64_t*)[countBuf contents] = (uint64_t)count;
         *(uint32_t*)[statusBuf contents] = 0;
-        *(uint64_t*)[usedBuf contents] = (uint64_t)*out_used;
+        *(uint64_t*)[usedBuf contents] = 0;
+        *(uint8_t*)[flagsBuf contents] = flags;
 
         id<MTLCommandBuffer> cb = [queue commandBuffer];
         id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
@@ -435,44 +379,21 @@ int norito_sequence_plan_metal_impl(const uint8_t* input_ptr,
         [enc setBuffer:inbuf offset:0 atIndex:0];
         [enc setBuffer:nBuf offset:0 atIndex:1];
         [enc setBuffer:countBuf offset:0 atIndex:2];
-        if (layout_kind == LAYOUT_FIXED_OFFSETS_HOST) {
-            id<MTLBuffer> dataStartBuf = [dev newBufferWithLength:sizeof(uint64_t) options:opts];
-            id<MTLBuffer> dataLenBuf = [dev newBufferWithLength:sizeof(uint64_t) options:opts];
-            if (!dataStartBuf || !dataLenBuf) { return 4; }
-            *(uint64_t*)[dataStartBuf contents] = (uint64_t)data_start;
-            *(uint64_t*)[dataLenBuf contents] = (uint64_t)data_len;
-            [enc setBuffer:dataStartBuf offset:0 atIndex:3];
-            [enc setBuffer:dataLenBuf offset:0 atIndex:4];
-            [enc setBuffer:spanBuf offset:0 atIndex:5];
-            [enc setBuffer:statusBuf offset:0 atIndex:6];
-            NSUInteger tg = MIN((NSUInteger)pso.maxTotalThreadsPerThreadgroup, 256u);
-            if (tg == 0) tg = 64u;
-            [enc dispatchThreads:MTLSizeMake((NSUInteger)count, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
-        } else {
-            id<MTLBuffer> flagsBuf = [dev newBufferWithLength:sizeof(uint8_t) options:opts];
-            if (!flagsBuf) { return 4; }
-            *(uint8_t*)[flagsBuf contents] = flags;
-            [enc setBuffer:flagsBuf offset:0 atIndex:3];
-            [enc setBuffer:spanBuf offset:0 atIndex:4];
-            [enc setBuffer:usedBuf offset:0 atIndex:5];
-            [enc setBuffer:statusBuf offset:0 atIndex:6];
-            [enc dispatchThreads:MTLSizeMake(1, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
-        }
+        [enc setBuffer:flagsBuf offset:0 atIndex:3];
+        [enc setBuffer:spanBuf offset:0 atIndex:4];
+        [enc setBuffer:usedBuf offset:0 atIndex:5];
+        [enc setBuffer:statusBuf offset:0 atIndex:6];
+        [enc dispatchThreads:MTLSizeMake(1, 1, 1)
+        threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
         [enc endEncoding];
         [cb commit];
         if (!wait_for_command_buffer(cb)) { return 4; }
 
         uint32_t status = *(uint32_t*)[statusBuf contents];
         if (status != 0) { return 1; }
-        if (layout_kind == LAYOUT_LENGTH_PREFIXED_HOST) {
-            uint64_t used64 = *(uint64_t*)[usedBuf contents];
-            if (used64 > (uint64_t)SIZE_MAX) { return 1; }
-            *out_used = (size_t)used64;
-        } else {
-            *out_used = fixed_used;
-        }
+        uint64_t used64 = *(uint64_t*)[usedBuf contents];
+        if (used64 > (uint64_t)SIZE_MAX) { return 1; }
+        *out_used = (size_t)used64;
         memcpy(out_spans, [spanBuf contents], count * sizeof(NoritoSequenceSpanMetal));
         return 0;
     }

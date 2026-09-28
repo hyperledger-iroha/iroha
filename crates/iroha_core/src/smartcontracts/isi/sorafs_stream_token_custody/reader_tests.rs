@@ -383,10 +383,8 @@ fn unknown_provider_and_bad_time_or_oversized_action_cannot_create_state() {
 }
 
 #[test]
-fn canonical_control_frames_and_native_digest_ignore_all_ten_ambient_layouts() {
-    use norito::core::header_flags::{
-        COMPACT_LEN as C, FIELD_BITSET as F, PACKED_SEQ as Q, PACKED_STRUCT as S,
-    };
+fn canonical_control_frames_and_native_digest_ignore_both_v1_ambient_layouts() {
+    use norito::core::header_flags::COMPACT_LEN as C;
     let mut f = fixture();
     configure(&mut f);
     let record = read_active(&f.state.world_view(), f.provider)
@@ -400,18 +398,7 @@ fn canonical_control_frames_and_native_digest_ignore_all_ten_ambient_layouts() {
             .to_vec();
     preimage.extend_from_slice(&frame);
     assert_eq!(digest, *Hash::new(preimage).as_ref());
-    for flags in [
-        0,
-        C,
-        Q,
-        Q | C,
-        S,
-        S | C,
-        Q | S,
-        Q | S | C,
-        S | C | F,
-        Q | S | C | F,
-    ] {
+    for flags in [0, C] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(encode(&record).expect("ambient canonical encoding"), frame);
         assert_eq!(

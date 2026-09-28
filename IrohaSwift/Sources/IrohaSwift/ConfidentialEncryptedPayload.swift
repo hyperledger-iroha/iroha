@@ -97,7 +97,7 @@ public struct ConfidentialEncryptedPayload: Equatable, Sendable {
         return payload
     }
 
-    public func noritoEnvelope(flags: UInt8 = 0x04) throws -> Data {
+    public func noritoEnvelope(flags: UInt8 = NoritoHeader.compactLen) throws -> Data {
         let payload = try serializedPayload()
         return noritoEncode(typeName: Self.typeName, payload: payload, flags: flags)
     }

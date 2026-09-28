@@ -352,11 +352,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
             "lane privacy audit path depth must be between 1 and "
                 + LanePrivacyMerkleWitness.MAX_DEPTH);
       }
-      final int count = (int) countValue;
-      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-        return decodePacked(decoder, count);
-      }
-      return decodeDelimited(decoder, count);
+      return decodeDelimited(decoder, (int) countValue);
     }
 
     @Override
@@ -374,36 +370,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
               "lane privacy sibling " + index + " payload is oversized");
         }
         siblings.add(decodeSibling(decoder.readBytes((int) length), decoder, index));
-      }
-      return siblings;
-    }
-
-    private static List<byte[]> decodePacked(final NoritoDecoder decoder, final int count) {
-      long previous = decoder.readUInt(64);
-      if (previous != 0L) {
-        throw new IllegalArgumentException("packed lane privacy offsets must start at zero");
-      }
-      final List<Integer> sizes = new ArrayList<>(count);
-      for (int index = 0; index < count; index++) {
-        final long current = decoder.readUInt(64);
-        if (current < previous) {
-          throw new IllegalArgumentException("packed lane privacy offsets must be monotonic");
-        }
-        final long size = current - previous;
-        if (size < 1L || size > LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES) {
-          throw new IllegalArgumentException(
-              "lane privacy sibling " + index + " payload is oversized");
-        }
-        sizes.add((int) size);
-        previous = current;
-      }
-      if (previous != decoder.remaining()) {
-        throw new IllegalArgumentException(
-            "packed lane privacy offsets must cover the complete path payload");
-      }
-      final List<byte[]> siblings = new ArrayList<>(count);
-      for (int index = 0; index < count; index++) {
-        siblings.add(decodeSibling(decoder.readBytes(sizes.get(index)), decoder, index));
       }
       return siblings;
     }

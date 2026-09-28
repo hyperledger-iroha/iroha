@@ -103,7 +103,6 @@ mod model {
     }
     /// An event filter for [`crate::sccp::events::SccpEvent`] values (`specs/sccp.md` §4.17).
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::SccpEventFilter")]
     pub struct SccpEventFilter {

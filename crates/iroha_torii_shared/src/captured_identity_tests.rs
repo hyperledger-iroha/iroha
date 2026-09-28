@@ -15,7 +15,7 @@ fn fixture() -> &'static Value {
     })
 }
 
-pub(crate) fn assert_bidirectional<T>(nominal: &str)
+pub fn assert_bidirectional<T>(nominal: &str)
 where
     T: NoritoSerialize + for<'a> NoritoDeserialize<'a>,
 {
@@ -76,7 +76,7 @@ where
     decoded
 }
 
-pub(crate) fn assert_manual<T>(case: &str)
+pub fn assert_manual<T>(case: &str)
 where
     T: NoritoSerialize
         + for<'a> NoritoDeserialize<'a>

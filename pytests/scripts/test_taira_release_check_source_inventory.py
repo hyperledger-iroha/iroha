@@ -184,15 +184,12 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         root = SCRIPT.parents[1]
         self.assertIn('include!("executor_contract_owner_permission_tests.rs");',
                       (root / "crates/iroha_core/src/executor.rs").read_text())
-        self.assertRegex((root / "crates/iroha_executor/src/default/mod.rs").read_text(),
-                         r"#\[cfg\(test\)\]\s*mod contract_deployment_permission_tests;")
         core_source = root / "crates/iroha_core/src/executor_contract_owner_permission_tests.rs"
         core_names = tuple("executor::tests::" + name for name in re.findall(
             r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(", core_source.read_text()))
         self.assertEqual(len(core_names), 3)
         groups = {
             "core": core_names,
-            "executor": tuple(name for _, names in gate.EXECUTOR_STAGES for name in names),
             "schema": tuple(name for _, names in gate.SCHEMA_STAGES for name in names),
         }
         for scope in gate.QUALIFICATION_SCOPES:
@@ -210,8 +207,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                         listing = "\n".join(case + ": test" for case in names if case != name)
                         with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
                             gate.require_tests(listing, selected[harness])
-        for harness, package in (("executor", "iroha_executor"), ("schema", "iroha_schema_gen")):
-            self.assertEqual(gate.HARNESS_TARGETS[harness][3], ["-p", package, "--lib"])
+        self.assertEqual(gate.HARNESS_TARGETS["schema"][3], ["-p", "iroha_schema_gen", "--lib"])
 
     def test_current_per_seat_bootstrap_suite_is_selected_once_with_real_test_bodies(self):
         root = SCRIPT.parents[1]

@@ -37,6 +37,7 @@
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 #![allow(clippy::needless_lifetimes)]
+#![allow(clippy::type_complexity)]
 #![cfg_attr(feature = "simd", feature(portable_simd))]
 
 #[cfg(all(test, feature = "dhat-heap"))]

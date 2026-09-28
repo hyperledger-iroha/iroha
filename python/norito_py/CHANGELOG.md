@@ -1,6 +1,12 @@
 # Changelog
 
 ## v0.1.0 (unreleased)
+- Removed the packed Norito layouts to match Rust: the header flags byte is now
+  `0x00` or `COMPACT_LEN` (`0x02`) and every other bit is rejected on encode and
+  decode. The `PACKED_SEQ`, `PACKED_STRUCT`, `FIELD_BITSET`, `VARINT_OFFSETS`
+  and `COMPACT_SEQ_LEN` constants, the `SUPPORTED_FLAGS` set, the packed
+  sequence/struct codec paths and `NoritoEncoder.child_encoder` are gone.
+  `iroha_torii_client` frame validation uses the same `0x02` mask.
 - Revalidated parity after the Rust Norito accelerator-output hardening now
   rejects malformed Stage-1 structural tapes and invalid GPU zstd output
   lengths before consuming helper results; Python bindings required no

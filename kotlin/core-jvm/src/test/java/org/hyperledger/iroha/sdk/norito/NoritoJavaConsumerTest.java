@@ -197,16 +197,21 @@ public final class NoritoJavaConsumerTest {
   }
 
   @Test
-  void testHeaderRejectsReservedFlags() {
-    byte[] schemaHash = SchemaHash.hash16("iroha.test.ReservedFlags");
+  void testHeaderAcceptsOnlyDefaultAndCompactLenFlags() {
+    byte[] schemaHash = SchemaHash.hash16("iroha.test.HeaderFlags");
     byte[] payload = new byte[] {1};
     long checksum = CRC64.compute(payload);
-    int[] cases = {
-      NoritoHeader.VARINT_OFFSETS,
-      NoritoHeader.COMPACT_SEQ_LEN,
-      NoritoHeader.VARINT_OFFSETS | NoritoHeader.COMPACT_SEQ_LEN
-    };
-    for (int flags : cases) {
+    for (int flags = 0; flags <= 0xFF; flags++) {
+      boolean supported = flags == 0 || flags == NoritoHeader.COMPACT_LEN;
+      byte[] combined = frameWithUncheckedFlags(schemaHash, payload, checksum, flags);
+      if (supported) {
+        NoritoHeader header =
+            new NoritoHeader(schemaHash, payload.length, checksum, flags, NoritoHeader.COMPRESSION_NONE, NoritoHeader.MINOR_VERSION);
+        assert header.flags == flags : "Supported flags must round-trip at construction: " + flags;
+        NoritoHeader.DecodeResult result = NoritoHeader.decode(combined, schemaHash);
+        assert result.getHeader().flags == flags : "Supported flags must decode: " + flags;
+        continue;
+      }
       boolean constructionFailed = false;
       try {
         new NoritoHeader(schemaHash, payload.length, checksum, flags, NoritoHeader.COMPRESSION_NONE, NoritoHeader.MINOR_VERSION);
@@ -215,7 +220,6 @@ public final class NoritoJavaConsumerTest {
       }
       assert constructionFailed : "Expected reserved flags to be rejected at construction: " + flags;
 
-      byte[] combined = frameWithUncheckedFlags(schemaHash, payload, checksum, flags);
       boolean failed = false;
       try {
         NoritoHeader.decode(combined, schemaHash);
@@ -223,36 +227,6 @@ public final class NoritoJavaConsumerTest {
         failed = true;
       }
       assert failed : "Expected reserved flags to be rejected: " + flags;
-    }
-  }
-
-  @Test
-  void testHeaderRejectsInvalidFieldBitsetFlags() {
-    byte[] schemaHash = SchemaHash.hash16("iroha.test.FieldBitsetFlags");
-    byte[] payload = new byte[] {1};
-    long checksum = CRC64.compute(payload);
-    int[] cases = {
-      NoritoHeader.FIELD_BITSET,
-      NoritoHeader.FIELD_BITSET | NoritoHeader.COMPACT_LEN,
-      NoritoHeader.FIELD_BITSET | NoritoHeader.PACKED_STRUCT
-    };
-    for (int flags : cases) {
-      boolean constructionFailed = false;
-      try {
-        new NoritoHeader(schemaHash, payload.length, checksum, flags, NoritoHeader.COMPRESSION_NONE, NoritoHeader.MINOR_VERSION);
-      } catch (IllegalArgumentException ex) {
-        constructionFailed = true;
-      }
-      assert constructionFailed : "Expected invalid FIELD_BITSET flags to be rejected at construction: " + flags;
-
-      byte[] combined = frameWithUncheckedFlags(schemaHash, payload, checksum, flags);
-      boolean failed = false;
-      try {
-        NoritoHeader.decode(combined, schemaHash);
-      } catch (IllegalArgumentException ex) {
-        failed = true;
-      }
-      assert failed : "Expected invalid FIELD_BITSET flags to be rejected: " + flags;
     }
   }
 
@@ -370,28 +344,6 @@ public final class NoritoJavaConsumerTest {
   }
 
   @Test
-  void testByteVecAdapterPackedEncoding() {
-    TypeAdapter<byte[]> adapter = NoritoAdapters.byteVecAdapter();
-    byte[] value = new byte[] {0x05, (byte) 0xFF};
-    int flags = NoritoHeader.PACKED_SEQ;
-    NoritoEncoder encoder = new NoritoEncoder(flags);
-    adapter.encode(encoder, value);
-    byte[] encoded = encoder.toByteArray();
-    byte[] expected = new byte[] {
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x05, (byte) 0xFF
-    };
-    assert Arrays.equals(encoded, expected) : "packed byte vec encoding mismatch";
-    NoritoDecoder decoder = new NoritoDecoder(encoded, flags);
-    byte[] decoded = adapter.decode(decoder);
-    assert Arrays.equals(decoded, value) : "packed byte vec roundtrip mismatch";
-    assert decoder.remaining() == 0 : "decoder should consume packed payload";
-  }
-
-  @Test
   void testRawByteVecAdapterRoundtrip() {
     TypeAdapter<byte[]> adapter = NoritoAdapters.rawByteVecAdapter();
     byte[] value = new byte[] {0x05, (byte) 0xFF};
@@ -406,45 +358,6 @@ public final class NoritoJavaConsumerTest {
     byte[] decoded = adapter.decode(decoder);
     assert Arrays.equals(decoded, value) : "raw byte vec roundtrip mismatch";
     assert decoder.remaining() == 0 : "decoder should consume raw payload";
-  }
-
-  @Test
-  void testSequenceAcceptsEmptyPackedTail() {
-    byte[] len = new byte[Long.BYTES];
-    byte[] tail = new byte[Long.BYTES];
-    byte[] payload = new byte[len.length + tail.length];
-    System.arraycopy(len, 0, payload, 0, len.length);
-    System.arraycopy(tail, 0, payload, len.length, tail.length);
-
-    int flags = NoritoHeader.PACKED_SEQ;
-    NoritoDecoder decoder = new NoritoDecoder(payload, flags);
-    TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
-    List<byte[]> decoded = adapter.decode(decoder);
-    assert decoded.isEmpty() : "Expected empty sequence";
-    assert decoder.remaining() == 0 : "Decoder should consume canonical empty packed tail";
-  }
-
-  @Test
-  void testSequenceAcceptsEmptyPackedTailWithFollowingData() {
-    byte[] len = new byte[Long.BYTES];
-    byte[] tail = new byte[Long.BYTES];
-    byte[] trailing = new byte[] {(byte) 0x12, (byte) 0x34, (byte) 0x56};
-    byte[] payload = new byte[len.length + tail.length + trailing.length];
-    System.arraycopy(len, 0, payload, 0, len.length);
-    System.arraycopy(tail, 0, payload, len.length, tail.length);
-    System.arraycopy(trailing, 0, payload, len.length + tail.length, trailing.length);
-
-    int flags = NoritoHeader.PACKED_SEQ;
-    NoritoDecoder decoder = new NoritoDecoder(payload, flags);
-    TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
-    List<byte[]> decoded = adapter.decode(decoder);
-    assert decoded.isEmpty() : "Expected empty sequence";
-    assert decoder.remaining() == trailing.length : "Decoder should leave trailing bytes";
-    int first = decoder.readByte();
-    int second = decoder.readByte();
-    int third = decoder.readByte();
-    assert first == 0x12 && second == 0x34 && third == 0x56 : "Trailing bytes mismatch";
-    assert decoder.remaining() == 0 : "All trailing bytes should be consumed";
   }
 
   @Test
@@ -602,38 +515,6 @@ public final class NoritoJavaConsumerTest {
     Map<Long, Long> decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.MapOrder");
     List<Long> keys = new ArrayList<>(decoded.keySet());
     assert keys.equals(Arrays.asList(1L, 3L)) : "Map keys must encode in sorted order";
-  }
-
-  @Test
-  void testPackedMapLayout() {
-    TypeAdapter<Map<Long, Long>> adapter =
-        NoritoAdapters.map(NoritoAdapters.uint(8), NoritoAdapters.uint(8));
-    Map<Long, Long> value = new java.util.HashMap<>();
-    value.put(3L, 4L);
-    value.put(1L, 2L);
-    int flags = NoritoHeader.PACKED_SEQ;
-    String schema = "iroha.test.PackedMap";
-    byte[] encoded = NoritoCodec.encode(value, schema, adapter, flags);
-    NoritoHeader.DecodeResult result =
-        NoritoHeader.decode(encoded, SchemaHash.hash16(schema));
-    ByteBuffer expected = ByteBuffer.allocate(60).order(ByteOrder.LITTLE_ENDIAN);
-    expected.putLong(2);
-    expected.putLong(0);
-    expected.putLong(1);
-    expected.putLong(2);
-    expected.putLong(0);
-    expected.putLong(1);
-    expected.putLong(2);
-    expected.put((byte) 0x01);
-    expected.put((byte) 0x03);
-    expected.put((byte) 0x02);
-    expected.put((byte) 0x04);
-    assert Arrays.equals(result.getPayload(), expected.array()) : "Packed map payload mismatch";
-
-    Map<Long, Long> decoded = NoritoCodec.decode(encoded, adapter, schema);
-    assert decoded.equals(mapOf(1L, 2L, 3L, 4L)) : "Packed map roundtrip mismatch";
-    List<Long> keys = new ArrayList<>(decoded.keySet());
-    assert keys.equals(Arrays.asList(1L, 3L)) : "Packed map keys must be sorted";
   }
 
   @Test
@@ -965,10 +846,11 @@ public final class NoritoJavaConsumerTest {
   @Test
   void testEffectiveDecodeFlagsGuard() {
     NoritoCodec.resetDecodeState();
-    try (NoritoCodec.DecodeFlagsGuard guard = NoritoCodec.DecodeFlagsGuard.enter(0x12)) {
+    try (NoritoCodec.DecodeFlagsGuard guard =
+        NoritoCodec.DecodeFlagsGuard.enter(NoritoHeader.COMPACT_LEN)) {
       Integer effective = NoritoCodec.effectiveDecodeFlags();
       assert effective != null;
-      assert effective == 0x12 : "Guard effective flags mismatch";
+      assert effective == NoritoHeader.COMPACT_LEN : "Guard effective flags mismatch";
     }
     assert NoritoCodec.effectiveDecodeFlags() == null : "Effective flags should clear after guard";
   }
@@ -992,8 +874,7 @@ public final class NoritoJavaConsumerTest {
     byte[] encoded =
         NoritoCodec.encode(17L, "iroha.test.FlagAware", adapter, NoritoHeader.COMPACT_LEN);
     try (NoritoCodec.DecodeFlagsGuard guard =
-        NoritoCodec.DecodeFlagsGuard.enter(
-            NoritoHeader.PACKED_SEQ)) {
+        NoritoCodec.DecodeFlagsGuard.enter(0)) {
       long decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.FlagAware");
       assert decoded == 17L;
     }
@@ -1020,14 +901,14 @@ public final class NoritoJavaConsumerTest {
   void testPublicKeyCanonicalArchive() {
     String hex =
         "4e5254300000b6b01d0a3d2b9cfe06ff97af6ba0f62200470000000000000096a36ea041b651ec"
-            + "274665643031323045444636443742353243373033324430334145433639364632303638424435"
+            + "024665643031323045444636443742353243373033324430334145433639364632303638424435"
             + "333130313532384633433742363038314246463035413136363244374643323435";
     byte[] archive = fromHex(hex);
     byte[] schemaHash = SchemaHash.hash16("iroha_crypto::PublicKey");
     NoritoHeader.DecodeResult result = NoritoHeader.decode(archive, schemaHash);
     NoritoHeader header = result.getHeader();
     byte[] payload = result.getPayload();
-    assert header.flags == 0x27 : "Unexpected layout flags";
+    assert header.flags == NoritoHeader.COMPACT_LEN : "Unexpected layout flags";
     assert header.payloadLength == payload.length : "Payload length mismatch";
     assert header.checksum == 0xEC51B641A06EA396L : "Checksum mismatch";
     NoritoDecoder decoder = new NoritoDecoder(payload, header.flags);

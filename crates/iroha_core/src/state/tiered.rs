@@ -237,6 +237,7 @@ impl TieredStateBackend {
         backend
     }
     /// Attach a telemetry sink for DA-backed cold storage activity.
+    #[cfg(any(test, feature = "telemetry"))]
     pub fn attach_telemetry(&mut self, telemetry: StateTelemetry) {
         self.telemetry = Some(telemetry);
     }
@@ -1175,11 +1176,13 @@ impl TieredStateBackend {
         Ok(())
     }
     /// Returns the currently configured hot byte retention limit.
+    #[cfg(any(test, feature = "telemetry"))]
     #[must_use]
     pub fn hot_retained_bytes(&self) -> u64 {
         self.hot_retained_bytes
     }
     /// Returns the currently configured cold snapshot byte budget.
+    #[cfg(any(test, feature = "telemetry"))]
     #[must_use]
     pub fn max_cold_bytes(&self) -> u64 {
         self.max_cold_bytes
@@ -1217,6 +1220,7 @@ impl TieredStateBackend {
         self.snapshot_baseline_ready
     }
     /// Returns the cached manifest of the latest snapshot, if any.
+    #[cfg(any(test, feature = "telemetry"))]
     #[must_use]
     pub fn last_manifest(&self) -> Option<&TieredSnapshotManifest> {
         self.last_manifest.as_ref()

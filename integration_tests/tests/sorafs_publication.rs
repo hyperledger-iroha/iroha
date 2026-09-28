@@ -273,27 +273,28 @@ async fn refresh_network_adverts(
     authority: &PublicationAuthorityFixture,
 ) -> Result<()> {
     timeout(wire::DEADLINE, async {
-    for provider in 0..3 {
-        let advert = authority.advert(provider, network.network_id(), now()?)?;
-        for peer in network.peers().iter().take(3) {
-            let response = http
-                .post(format!(
-                    "{}/v1/sorafs/provider/advert",
-                    peer.torii_url().trim_end_matches('/')
-                ))
-                .header("Content-Type", "application/x-norito")
-                .body(norito::encode_canonical(&advert)?)
-                .send()
-                .await?;
-            ensure!(
-                response.status().is_success(),
-                "actual signed provider advert rejected: {}",
-                response.status()
-            );
+        for provider in 0..3 {
+            let advert = authority.advert(provider, network.network_id(), now()?)?;
+            for peer in network.peers().iter().take(3) {
+                let response = http
+                    .post(format!(
+                        "{}/v1/sorafs/provider/advert",
+                        peer.torii_url().trim_end_matches('/')
+                    ))
+                    .header("Content-Type", "application/x-norito")
+                    .body(norito::encode_canonical(&advert)?)
+                    .send()
+                    .await?;
+                ensure!(
+                    response.status().is_success(),
+                    "actual signed provider advert rejected: {}",
+                    response.status()
+                );
+            }
         }
-    }
-    Ok::<_, eyre::Report>(())
-    }).await?
+        Ok::<_, eyre::Report>(())
+    })
+    .await?
 }
 
 /// Build an actual network and return only after all three production workers finalize completion.
@@ -677,7 +678,7 @@ pub(super) async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> R
         .ok_or_else(|| eyre!("native producer created no chunk files"))?;
     let chunk_length = fs::metadata(path)?.len();
     ensure!(
-        chunk_length > 0 && chunk_length <= sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES,
+        chunk_length > 0 && chunk_length <= u64::from(sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES),
         "corruption fixture must modify exactly one bounded persisted chunk"
     );
     let mut corrupted = fs::read(path)?;

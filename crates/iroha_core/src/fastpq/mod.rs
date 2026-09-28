@@ -74,7 +74,7 @@ pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// Metadata key storing the transcript count embedded in a batch.
 pub const TRANSCRIPT_COUNT_METADATA_KEY: &str = "transcript_count";
 /// Canonical FASTPQ parameter name used across the host and CLI helpers.
-pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = fastpq_prover::fastpq_isi_v1::FASTPQ_FINAL_V1_ID;
+pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = fastpq_isi::FASTPQ_FINAL_V1_ID;
 /// Production rejection shared by host and block admission for unanchored remote spends.
 pub(crate) const AXT_UNANCHORED_REMOTE_SPEND_REJECTION: &str = "handle-backed FASTPQ remote spend is unavailable until authoritative finalized source roots and transaction set, and fresh issuer authorization of the exact intent, proof, and effective amount, are authenticated";
 const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;

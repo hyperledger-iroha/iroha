@@ -5358,10 +5358,7 @@ async fn dispatch_iroha_vpn_sessions_get(
     )?;
     let canonical_headers = vpn_canonical_auth_headers(arguments)?;
     let session_id = extract_vpn_session_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("session_id".into(), Value::String(session_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/vpn/sessions/{session_id}", Some(&path_value))?;
+    let route = single_path_route("/v1/vpn/sessions/{session_id}", "session_id", session_id)?;
     dispatch_vpn_route_with_canonical_auth(
         app,
         inbound_headers,
@@ -5445,10 +5442,10 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
         .get("resource")
         .and_then(Value::as_str)
         .ok_or_else(|| "`resource` is required".to_owned())?;
-    let path_value = norito::json!({ "resource": resource });
-    let route = fill_path_template(
+    let route = single_path_route(
         "/v1/node/query/projection/catalog/{resource}",
-        Some(&path_value),
+        "resource",
+        resource.to_owned(),
     )?;
     let route = append_named_query_fields(route, arguments, QUERY_PROJECTION_SHARD_CATALOG_FIELDS)?;
     dispatch_route(
@@ -5499,10 +5496,7 @@ async fn dispatch_iroha_runtime_upgrades_action(
     route_template: &str,
 ) -> Result<Value, String> {
     let upgrade_id = extract_runtime_upgrade_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("id".into(), Value::String(upgrade_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(route_template, Some(&path_value))?;
+    let route = single_path_route(route_template, "id", upgrade_id)?;
     let body = build_required_object_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
@@ -6049,12 +6043,10 @@ async fn dispatch_iroha_account_transactions_query(
     arguments: &Map,
 ) -> Result<Value, String> {
     let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(
+    let route = single_path_route(
         "/v1/accounts/{account_id}/transactions/query",
-        Some(&path_value),
+        "account_id",
+        account_id,
     )?;
     let body = build_query_envelope_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
@@ -6115,10 +6107,11 @@ async fn dispatch_iroha_account_assets_query(
     arguments: &Map,
 ) -> Result<Value, String> {
     let account_id = extract_account_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("account_id".into(), Value::String(account_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/assets/query", Some(&path_value))?;
+    let route = single_path_route(
+        "/v1/accounts/{account_id}/assets/query",
+        "account_id",
+        account_id,
+    )?;
     let body = build_query_envelope_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
@@ -6286,12 +6279,10 @@ async fn dispatch_iroha_subscription_draft_action(
         "subscription action draft",
     )?;
     let subscription_id = extract_exact_subscription_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("subscription_id".into(), Value::String(subscription_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(
+    let route = single_path_route(
         format!("/v1/subscriptions/{{subscription_id}}/{action}").as_str(),
-        Some(&path_value),
+        "subscription_id",
+        subscription_id,
     )?;
     let (body_fields, required_fields): (&[&str], &[&str]) = match action {
         "pause" | "keep" => (&["authority"], &["authority"]),
@@ -6328,12 +6319,10 @@ async fn dispatch_iroha_subscription_action(
     action: &str,
 ) -> Result<Value, String> {
     let subscription_id = extract_subscription_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("subscription_id".into(), Value::String(subscription_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(
+    let route = single_path_route(
         format!("/v1/subscriptions/{{subscription_id}}/{action}").as_str(),
-        Some(&path_value),
+        "subscription_id",
+        subscription_id,
     )?;
     let body = build_object_body_or_default(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
@@ -6358,12 +6347,10 @@ async fn dispatch_iroha_asset_definitions_get(
     arguments: &Map,
 ) -> Result<Value, String> {
     let definition_id = extract_definition_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("definition_id".into(), Value::String(definition_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(
+    let route = single_path_route(
         "/v1/explorer/asset-definitions/{definition_id}",
-        Some(&path_value),
+        "definition_id",
+        definition_id,
     )?;
     dispatch_route(
         app,
@@ -6386,12 +6373,10 @@ async fn dispatch_iroha_asset_holders_query(
     arguments: &Map,
 ) -> Result<Value, String> {
     let definition_id = extract_definition_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("definition_id".into(), Value::String(definition_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(
+    let route = single_path_route(
         "/v1/assets/{definition_id}/holders/query",
-        Some(&path_value),
+        "definition_id",
+        definition_id,
     )?;
     let body = build_query_envelope_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
@@ -6764,10 +6749,7 @@ async fn dispatch_iroha_iso20022_status_get(
     )?;
     let headers = iso20022_operator_auth_headers(arguments)?;
     let msg_id = extract_iso20022_message_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("msg_id".into(), Value::String(msg_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/iso20022/messages/{msg_id}", Some(&path_value))?;
+    let route = single_path_route("/v1/iso20022/messages/{msg_id}", "msg_id", msg_id)?;
     dispatch_route(
         app,
         inbound_headers,

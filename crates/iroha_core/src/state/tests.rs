@@ -25483,6 +25483,10 @@ fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
         }
         peers.apply();
     }
+    seed_consensus_key_records_with_pops(&mut world_block, keypairs);
+    world_block.commit();
+}
+fn seed_consensus_key_records_with_pops(world_block: &mut WorldBlock<'_>, keypairs: &[KeyPair]) {
     for keypair in keypairs {
         let_row! { pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key()) .expect("generate pop for consensus key") };
         // Shared fixtures use each peer on the global and participant routes.
@@ -25509,7 +25513,6 @@ fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
             }
         }
     }
-    world_block.commit();
 }
 fn remove_world_peer_for_test(state: &State, peer: &PeerId) {
     let mut world_block = state.world.block();

@@ -5,7 +5,7 @@
   codec that mirrors the Rust implementation semantics and the Python port.
 - Target JDK 21 with one pinned, direct `zstd-jni` dependency for the release compression codec.
 - Offer composable adapters for encoding/decoding common types (primitives,
-  strings, byte slices, options, sequences, packed structs) and expose
+  strings, byte slices, options, sequences, structs) and expose
   high-level helpers for typical usage.
 - Maintain deterministic behaviour and identical header/CRC handling to Rust and
   Python implementations.
@@ -17,9 +17,11 @@
 - Compression: support `COMPRESSION_NONE` and Zstandard through the direct, pinned
   `com.github.luben.zstd.Zstd` dependency. The encoder and decoder have no reflective discovery or
   optional-backend branch.
-- Flag support: `PACKED_SEQ`, `COMPACT_LEN`, `PACKED_STRUCT`, and `FIELD_BITSET`
-  mirroring the Rust flag byte values. Reserved layout bits are rejected. The
-  Java defaults mirror Rust by enabling compact per-value lengths
+- Flag support: Norito v1 defines only `0x00` (fixed-width u64 length
+  prefixes) and `COMPACT_LEN` (`0x02`, varint length prefixes), mirroring the
+  Rust flag byte. Every other bit is reserved and rejected by `NoritoHeader`,
+  `NoritoCodec.encodeAdaptive` and `NoritoCodec.DecodeFlagsGuard`. The Java
+  defaults mirror Rust by enabling compact per-value lengths
   (`DEFAULT_FLAGS = COMPACT_LEN`, `0x02`); callers may explicitly select the
   fixed-width V1 layout with flags `0x00`.
 - CRC64 implementation: table-driven CRC64-XZ (reflected ECMA polynomial) matching Rust/Python.
@@ -27,11 +29,11 @@
 - Type adapters: generic interface `TypeAdapter<T>` with concrete adapters for
   unsigned/signed integers (8–64 bit), booleans, UTF-8 strings, byte arrays
   (variable and fixed-length), optional values, sequences
-  (packed/delimited layouts), maps (sequence of key-value tuples), and packed
-  structs using the hybrid bitset layout.
+  (length-delimited elements), maps (sequence of key-value tuples), and
+  structs (fields in declaration order).
 - Struct support: `StructAdapter` encodes exact Map-backed values and supports typed decode
-  factories. Missing fields and object-property discovery are rejected; size calculations follow
-  the Python implementation (bitset + varint sizes for non-self-delimiting fields).
+  factories. Missing fields and object-property discovery are rejected; fields are encoded in
+  declaration order without a presence bitset or size table.
 - High-level API: `NoritoCodec.encode(value, schema, adapter, flags)` and
   `NoritoCodec.decode(bytes, adapter, schema)` with builder helpers exposed via
   `NoritoAdapters` (static factory methods).
@@ -48,7 +50,7 @@
 - CLI utility: `NoritoDump` prints header fields for inspection.
 - Tests: standalone harness under `src/test/java` covering header roundtrips,
   encode/decode for primitives, sequences, options, struct adapters,
-  checksum mismatch, packed sequence layout, streaming telemetry, and control
+  checksum mismatch, sequence layout, streaming telemetry, and control
   frame roundtrips.
 
 ## Directory Layout

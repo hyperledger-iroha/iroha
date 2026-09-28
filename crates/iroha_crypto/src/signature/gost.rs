@@ -15,7 +15,6 @@ use streebog::{Digest, Streebog256, Streebog512};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 #[cfg(feature = "gost")]
 mod constant_time {
-    #![allow(dead_code)]
     //! Constant-time arithmetic for the TC26 curves.
     //!
     //! This module provides field operations backed by `crypto-bigint`’s constant-time
@@ -81,11 +80,6 @@ mod constant_time {
         }
         fn triple(&self) -> Self {
             self.double().add(self)
-        }
-        fn negate(&self) -> Self {
-            Self {
-                residue: self.residue.neg(),
-            }
         }
         fn is_zero(&self) -> Choice {
             self.residue.retrieve().ct_eq(&Uint::<LIMBS>::ZERO)
@@ -238,16 +232,11 @@ mod constant_time {
     struct CurveParameters<const LIMBS: usize> {
         field_params: MontyParams<LIMBS>,
         a: FieldElement<LIMBS>,
-        b: FieldElement<LIMBS>,
         generator: AffinePoint<LIMBS>,
-        scalar_modulus: Uint<LIMBS>,
     }
     impl<const LIMBS: usize> CurveParameters<LIMBS> {
         fn generator(&self) -> JacobianPoint<LIMBS> {
             JacobianPoint::from_affine(&self.generator, self.field_params)
-        }
-        fn scalar_modulus(&self) -> Uint<LIMBS> {
-            self.scalar_modulus
         }
         fn field_params(&self) -> MontyParams<LIMBS> {
             self.field_params
@@ -265,50 +254,38 @@ mod constant_time {
     }
     fn curve_from_constants_256(
         p_hex: &str,
-        q_hex: &str,
         a_hex: &str,
-        b_hex: &str,
         generator_hex: (&str, &str),
     ) -> CurveParameters<{ U256::LIMBS }> {
         let field_params = params_from_hex::<{ U256::LIMBS }>(p_hex);
-        let scalar_modulus = U256::from_be_hex(q_hex);
         CurveParameters {
             field_params,
             a: fe_from_hex(a_hex, field_params),
-            b: fe_from_hex(b_hex, field_params),
             generator: AffinePoint {
                 x: fe_from_hex(generator_hex.0, field_params),
                 y: fe_from_hex(generator_hex.1, field_params),
             },
-            scalar_modulus,
         }
     }
     fn curve_from_constants_512(
         p_hex: &str,
-        q_hex: &str,
         a_hex: &str,
-        b_hex: &str,
         generator_hex: (&str, &str),
     ) -> CurveParameters<{ U512::LIMBS }> {
         let field_params = params_from_hex::<{ U512::LIMBS }>(p_hex);
-        let scalar_modulus = U512::from_be_hex(q_hex);
         CurveParameters {
             field_params,
             a: fe_from_hex(a_hex, field_params),
-            b: fe_from_hex(b_hex, field_params),
             generator: AffinePoint {
                 x: fe_from_hex(generator_hex.0, field_params),
                 y: fe_from_hex(generator_hex.1, field_params),
             },
-            scalar_modulus,
         }
     }
     static CURVE_256_A: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_256(
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFE6C611070995AD10045841B09B761B893",
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD94",
-            "00000000000000000000000000000000000000000000000000000000000000A6",
             (
                 "0000000000000000000000000000000000000000000000000000000000000001",
                 "8D91E471E0989CDA27DF505A453F2B7635294F2DDF23E3B122ACC99C9E9F1E14",
@@ -318,9 +295,7 @@ mod constant_time {
     static CURVE_256_B: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_256(
             "8000000000000000000000000000000000000000000000000000000000000C99",
-            "800000000000000000000000000000015F700CFFF1A624E5E497161BCC8A198F",
             "8000000000000000000000000000000000000000000000000000000000000C96",
-            "3E1AF419A269A5F866A7D3C25C3DF80AE979259373FF2B182F49D4CE7E1BBC8B",
             (
                 "0000000000000000000000000000000000000000000000000000000000000001",
                 "3FA8124359F96680B83D1C3EB2C070E5C545C9858D03ECFB744BF8D717717EFC",
@@ -330,9 +305,7 @@ mod constant_time {
     static CURVE_256_C: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_256(
             "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D759B",
-            "9B9F605F5A858107AB1EC85E6B41C8AA582CA3511EDDFB74F02F3A6598980BB9",
             "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D7598",
-            "000000000000000000000000000000000000000000000000000000000000805A",
             (
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "41ECE55743711A8C3CBF3783CD08C0EE4D4DC440D4641A8F366E550DFDB3BB67",
@@ -342,9 +315,7 @@ mod constant_time {
     static CURVE_512_A: LazyLock<CurveParameters<{ U512::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_512(
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFE27E69532F48D89116FF22B8D4E0560609B4B38ABFAD2B85DCACDB1411F10B275",
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC4",
-            "E8C2505DEDFC86DDC1BD0B2B6667F1DA34B82574761CB0E879BD081CFD0B6265EE3CB090F30D27614CB4574010DA90DD862EF9D4EBEE4761503190785A71C760",
             (
                 "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
                 "7503CFE87A836AE3A61B8816E25450E6CE5E1C93ACF1ABC1778064FDCBEFA921DF1626BE4FD036E93D75E6A50E3A41E98028FE5FC235F5B889A589CB5215F2A4",
@@ -354,9 +325,7 @@ mod constant_time {
     static CURVE_512_B: LazyLock<CurveParameters<{ U512::LIMBS }>> = LazyLock::new(|| {
         curve_from_constants_512(
             "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006F",
-            "800000000000000000000000000000000000000000000000000000000000000149A1EC142565A545ACFDB77BD9D40CFA8B996712101BEA0EC6346C54374F25BD",
             "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006C",
-            "687D1B459DC841457E3E06CF6F5E2517B97C7D614AF138BCBF85DC806C4B289F3E965D2DB1416D217F8B276FAD1AB69C50F78BEE1FA3106EFB8CCBC7C5140116",
             (
                 "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
                 "1A8F7EDA389B094C2C071E3647A8940F3C123B697578C213BE6DD9E6C8EC7335DCB228FD1EDF4A39152CBCAAF8C0398828041055F94CEEEC7E21340780FE41BD",
@@ -477,6 +446,7 @@ mod constant_time {
             uint_to_biguint(&affine.y.as_uint()),
         ))
     }
+    #[cfg(test)]
     fn point_add_impl<const LIMBS: usize>(
         curve: &CurveParameters<LIMBS>,
         p: &OuterAffinePoint,
@@ -577,6 +547,7 @@ mod constant_time {
             CurveSelection::Bits512(curve) => mul_add_impl(curve, scalar_g, scalar_q, point_q),
         })
     }
+    #[cfg(test)]
     pub(super) fn point_add(
         params: &OuterCurveParams,
         p: &OuterAffinePoint,
@@ -670,8 +641,7 @@ mod constant_time {
             let mut rng = rng_from_seed(b"ct-scalar-test".to_vec());
             let mut scalar_bytes = vec![0u8; params.scalar_len];
             rng.fill_bytes(&mut scalar_bytes);
-            let modulus_bytes = curve.scalar_modulus().to_le_bytes();
-            let modulus_big = BigUint::from_bytes_le(&modulus_bytes);
+            let modulus_big = params.q.clone();
             let mut scalar_big = BigUint::from_bytes_le(&scalar_bytes);
             scalar_big %= &modulus_big;
             if scalar_big.is_zero() {
@@ -1206,7 +1176,7 @@ fn is_on_curve(params: &CurveParams, point: &AffinePoint) -> bool {
     let rhs = mod_add(&mod_add(&x3, &ax, &params.p), &params.b, &params.p);
     lhs == rhs
 }
-#[allow(dead_code)]
+#[cfg(test)]
 fn point_add(params: &CurveParams, p: &AffinePoint, q: &AffinePoint) -> Option<AffinePoint> {
     constant_time::point_add(params, p, q)
 }
@@ -1216,7 +1186,6 @@ fn scalar_mul(params: &CurveParams, scalar: &BigUint, point: &AffinePoint) -> Op
     }
     constant_time::scalar_mul(params, scalar, point)
 }
-#[allow(dead_code)]
 fn mul_add(
     params: &CurveParams,
     scalar_g: &BigUint,

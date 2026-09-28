@@ -87,16 +87,8 @@ impl<T: iroha_schema::IntoSchema> iroha_schema::IntoSchema for FramedVariant<T> 
     }
 }
 
-fn layouts() -> [u8; 4] {
-    [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT
-            | header_flags::PACKED_SEQ
-            | header_flags::FIELD_BITSET
-            | header_flags::COMPACT_LEN,
-    ]
+fn layouts() -> [u8; 2] {
+    [0, header_flags::COMPACT_LEN]
 }
 
 fn assert_same_payload(payload: &dyn SerializePayload, typed: &dyn SerializePayload) {

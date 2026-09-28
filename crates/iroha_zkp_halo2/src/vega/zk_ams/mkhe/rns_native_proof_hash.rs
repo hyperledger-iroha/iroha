@@ -207,11 +207,11 @@ impl RnsNativeProofHashPhaseV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeProofHashErrorV1 {
     /// The current native parameter owner failed reconstruction.
-    InvalidProfile,
+    Profile,
     /// The shared canonical frame exceeds its fixed framing limit.
-    InvalidFrame,
+    Frame,
     /// The input has another digest length or a noncanonical field word.
-    InvalidDigest,
+    Digest,
 }
 
 /// Arithmetic work of the current shared dense-MDS canonical hash frame.
@@ -247,21 +247,21 @@ impl RnsNativeProofHashWorkV1 {
         let multiplications_per_permutation = 4 * s_boxes + rounds * width * width;
         let additions_per_permutation = rounds * (width + width * width) + rate;
         if words == 0 || !words.is_multiple_of(rate) {
-            return Err(RnsNativeProofHashErrorV1::InvalidFrame);
+            return Err(RnsNativeProofHashErrorV1::Frame);
         }
         let Some(lane_permutations) = (words / rate).checked_mul(lanes) else {
-            return Err(RnsNativeProofHashErrorV1::InvalidFrame);
+            return Err(RnsNativeProofHashErrorV1::Frame);
         };
         let Some(poseidon_rounds) = lane_permutations.checked_mul(rounds) else {
-            return Err(RnsNativeProofHashErrorV1::InvalidFrame);
+            return Err(RnsNativeProofHashErrorV1::Frame);
         };
         let Some(field_multiplications) =
             lane_permutations.checked_mul(multiplications_per_permutation)
         else {
-            return Err(RnsNativeProofHashErrorV1::InvalidFrame);
+            return Err(RnsNativeProofHashErrorV1::Frame);
         };
         let Some(field_additions) = lane_permutations.checked_mul(additions_per_permutation) else {
-            return Err(RnsNativeProofHashErrorV1::InvalidFrame);
+            return Err(RnsNativeProofHashErrorV1::Frame);
         };
         Ok(Self {
             words_per_lane: words,
@@ -304,10 +304,10 @@ impl RnsNativeProofHashContextV1 {
     }
 
     fn reconstruct() -> Result<Self, RnsNativeProofHashErrorV1> {
-        let parameter_digest = canonical_parameter_digest_v1()
-            .map_err(|_| RnsNativeProofHashErrorV1::InvalidProfile)?;
+        let parameter_digest =
+            canonical_parameter_digest_v1().map_err(|_| RnsNativeProofHashErrorV1::Profile)?;
         let catalog = GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
-            .ok_or(RnsNativeProofHashErrorV1::InvalidProfile)?
+            .ok_or(RnsNativeProofHashErrorV1::Profile)?
             .to_le_bytes();
         Ok(Self {
             parameter_digest,
@@ -347,7 +347,7 @@ impl RnsNativeProofHashContextV1 {
         fields: &'a [&'a [u8]],
     ) -> Result<GoldilocksDigest384FrameV1<'a>, RnsNativeProofHashErrorV1> {
         GoldilocksDigest384FrameV1::new(self.domain(role, phase, position), fields)
-            .ok_or(RnsNativeProofHashErrorV1::InvalidFrame)
+            .ok_or(RnsNativeProofHashErrorV1::Frame)
     }
 
     /// Stream the exact last field of that same canonical shared frame.
@@ -366,7 +366,7 @@ impl RnsNativeProofHashContextV1 {
             prefix_fields,
             final_field_len,
         )
-        .map_err(|_| RnsNativeProofHashErrorV1::InvalidFrame)
+        .map_err(|_| RnsNativeProofHashErrorV1::Frame)
     }
 
     /// Hash complete, separately length-framed fields under one exact proof role.
@@ -389,8 +389,8 @@ pub(super) fn decode_proof_digest_v1(
 ) -> Result<RnsNativeProofDigestV1, RnsNativeProofHashErrorV1> {
     let bytes = bytes
         .try_into()
-        .map_err(|_| RnsNativeProofHashErrorV1::InvalidDigest)?;
-    RnsNativeProofDigestV1::from_le_bytes(bytes).ok_or(RnsNativeProofHashErrorV1::InvalidDigest)
+        .map_err(|_| RnsNativeProofHashErrorV1::Digest)?;
+    RnsNativeProofDigestV1::from_le_bytes(bytes).ok_or(RnsNativeProofHashErrorV1::Digest)
 }
 
 /// Deterministic test-only label commitment through the actual canonical owner.
@@ -581,7 +581,7 @@ mod tests {
             if length != GOLDILOCKS_DIGEST384_BYTES_V1 {
                 assert_eq!(
                     decode_proof_digest_v1(&vec![0; length]),
-                    Err(RnsNativeProofHashErrorV1::InvalidDigest)
+                    Err(RnsNativeProofHashErrorV1::Digest)
                 );
             }
         }
@@ -592,7 +592,7 @@ mod tests {
                 .copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
             assert_eq!(
                 decode_proof_digest_v1(&bytes),
-                Err(RnsNativeProofHashErrorV1::InvalidDigest)
+                Err(RnsNativeProofHashErrorV1::Digest)
             );
         }
         assert_eq!(

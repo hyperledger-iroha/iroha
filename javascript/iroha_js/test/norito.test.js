@@ -17,6 +17,7 @@ import {
   noritoEncodeMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
+  validateNoritoFrame,
   verifyBlockMerkleProof,
   verifyBlockProofs,
 } from "../src/norito.js";
@@ -39,8 +40,10 @@ const UNAVAILABLE_NATIVE_BINDING = Object.freeze({
 const UNAVAILABLE_NORITO_API = _createNoritoInstructionApi(
   createNativeRuntime(UNAVAILABLE_NATIVE_BINDING),
 );
+// Without a loadable native binding, fall back to the verified-loader runtime so
+// the hermetic tests still run and native-gated tests report the load failure.
 const NATIVE_NORITO_API = _createNoritoInstructionApi(
-  createNativeRuntime(nativeBinding),
+  createNativeRuntime(nativeBinding ?? undefined),
 );
 const {
   noritoDecodeInstruction: boundNoritoDecodeInstruction,
@@ -355,6 +358,32 @@ baseTest("Norito BlockProofs decoder rejects misaligned entry/result counts", ()
     () => noritoDecodeBlockProofs(blockProofFixture({ resultLeafCount: 2 })),
     /entry\/result commitment leaf counts must match/u,
   );
+});
+
+baseTest("validateNoritoFrame accepts only 0x00 and COMPACT_LEN header flags", () => {
+  const payload = Buffer.from([1]);
+  for (let flags = 0; flags <= 0xff; flags += 1) {
+    const frame = Buffer.alloc(41);
+    frame.write("NRT0", 0, "ascii");
+    frame.fill(0x11, 6, 22);
+    frame.writeBigUInt64LE(1n, 23);
+    frame.writeBigUInt64LE(testCrc64Ecma(payload), 31);
+    frame[39] = flags;
+    payload.copy(frame, 40);
+    if (flags === 0x00 || flags === 0x02) {
+      assert.equal(validateNoritoFrame(frame).flags, flags);
+    } else {
+      assert.throws(() => validateNoritoFrame(frame), /Norito header flags/u);
+    }
+  }
+});
+
+baseTest("Norito BlockProofs decoder rejects packed header flags", () => {
+  for (const flags of [0x01, 0x04, 0x06, 0x20, 0x26]) {
+    const frame = blockProofFixture();
+    frame[39] = flags;
+    assert.throws(() => noritoDecodeBlockProofs(frame), /Norito header flags/u);
+  }
 });
 
 baseTest("block proof verification rejects direction, root, and result-pair mismatches", () => {

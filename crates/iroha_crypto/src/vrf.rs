@@ -35,7 +35,6 @@ use core::convert::TryInto;
 use group::{Curve, prime::PrimeCurveAffine};
 #[cfg(test)]
 use std::vec::Vec;
-#[allow(unused_imports)]
 use w3f_bls::SerializableToBytes as _;
 // Domain separation tags (DST) for VRF hash_to_curve operations
 const DST_G2: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";

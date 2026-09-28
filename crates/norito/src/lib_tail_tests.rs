@@ -57,17 +57,16 @@ mod stream_map_iter_tests {
         iter.finish().expect("finish");
     }
     #[test]
-    fn stream_map_packed_rejects_nonzero_first_offset() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-        payload.push(0u8);
-        let bytes = frame_hashmap_payload(&payload, core::header_flags::PACKED_SEQ);
+    fn stream_map_rejects_reserved_layout_flag_byte() {
+        let payload = 0u64.to_le_bytes().to_vec();
+        let mut bytes = frame_hashmap_payload(&payload, 0);
+        assert_eq!(bytes[core::Header::SIZE - 1], 0, "header flags byte");
+        bytes[core::Header::SIZE - 1] = 0x01;
         let result = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes));
-        assert!(matches!(result, Err(Error::LengthMismatch)));
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedFeature("layout flag"))
+        ));
     }
 }
 mod json_string_allocation_tests {

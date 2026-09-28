@@ -1,11 +1,7 @@
 // Canonical PoR publisher frames paired with existing strict readers.
 
-fn por_publisher_layouts() -> Vec<u8> {
-    let layouts: Vec<_> = (0..=u8::MAX)
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-        .collect();
-    assert_eq!(layouts.len(), 10, "exercise every valid V1 layout");
-    layouts
+fn por_publisher_layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 
 fn assert_por_pending<T: norito::NoritoSerialize + Clone>(

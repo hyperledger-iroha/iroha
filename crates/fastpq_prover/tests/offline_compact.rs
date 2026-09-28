@@ -482,7 +482,7 @@ fn public_verifier_preserves_raw_and_enclosing_decode_limits() {
 #[test]
 fn public_quantity_profile_and_route_are_fixed_and_codec_context_is_restored() {
     let expected_profile = quantity_profile_id();
-    for flags in [0, 1, 2, 3, norito::core::default_encode_flags()] {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(quantity_profile_id(), expected_profile);
         assert_eq!(norito::core::effective_decode_flags(), Some(flags));

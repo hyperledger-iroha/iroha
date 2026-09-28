@@ -128,7 +128,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "ec3f4e4fa4eb081a97017eabaf3f6524c6e1e964ef98e4290bb4cfcefd4e611e"
+    "33d77d17dadfaf648452bc56a06566829a9249ca6752c64b34cd6e74d078dd7a"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {

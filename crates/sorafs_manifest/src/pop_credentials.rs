@@ -1927,18 +1927,8 @@ mod tests {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         norito::to_bytes(value).expect("encode explicit-layout PoP frame")
     }
-    fn supported_layouts() -> [u8; 8] {
-        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-        [
-            0,
-            COMPACT_LEN,
-            PACKED_SEQ,
-            PACKED_SEQ | COMPACT_LEN,
-            PACKED_STRUCT,
-            PACKED_STRUCT | COMPACT_LEN,
-            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        ]
+    fn supported_layouts() -> [u8; 2] {
+        [0, norito::core::header_flags::COMPACT_LEN]
     }
     fn canonical_owned_signature_digest<T: norito::core::NoritoSerialize>(
         domain: &[u8],

@@ -201,14 +201,14 @@ impl Shape {
             results: self
                 .results
                 .iter()
-                .filter_map(|path| under(path, prefix).then(|| path[prefix.len()..].to_vec()))
+                .filter(|path| under(path, prefix))
+                .map(|path| path[prefix.len()..].to_vec())
                 .collect(),
             lengths: self
                 .lengths
                 .iter()
-                .filter_map(|(path, len)| {
-                    under(path, prefix).then(|| (path[prefix.len()..].to_vec(), *len))
-                })
+                .filter(|(path, _)| under(path, prefix))
+                .map(|(path, len)| (path[prefix.len()..].to_vec(), *len))
                 .collect(),
         }
     }
@@ -384,15 +384,15 @@ impl Flow {
         }
     }
     fn stored_shape(&self, value: &TypedExpr) -> Shape {
-        if let Some(selected) = place(value) {
-            if let Some(shape) = self.shapes.get(&selected.name) {
-                if shape.escaped_lists && contains_list(&value.ty) {
-                    let mut unknown = Shape::typed(&value.ty);
-                    unknown.escaped_lists = true;
-                    return unknown;
-                }
-                return shape.project(&selected.path);
+        if let Some(selected) = place(value)
+            && let Some(shape) = self.shapes.get(&selected.name)
+        {
+            if shape.escaped_lists && contains_list(&value.ty) {
+                let mut unknown = Shape::typed(&value.ty);
+                unknown.escaped_lists = true;
+                return unknown;
             }
+            return shape.project(&selected.path);
         }
         Shape::typed(&value.ty)
     }
@@ -400,10 +400,10 @@ impl Flow {
     /// escaped, including through aggregate fields; unrelated fresh lists retain
     /// their proven shape. Unknown alias correlations are intentionally widened.
     fn escape_lists(&mut self, value: &TypedExpr) {
-        if let Some(selected) = place(value) {
-            if let Some(shape) = self.shapes.get_mut(&selected.name) {
-                shape.escaped_lists = true;
-            }
+        if let Some(selected) = place(value)
+            && let Some(shape) = self.shapes.get_mut(&selected.name)
+        {
+            shape.escaped_lists = true;
         }
     }
     /// Evaluate a receiver once without interpreting observation as consuming
@@ -628,17 +628,17 @@ impl Flow {
                 None => (0..usize::from(capacity)).collect(),
             };
             if setting {
-                if shape.escaped_lists && !indices.is_empty() {
-                    if let Some(old) = self
+                if shape.escaped_lists
+                    && !indices.is_empty()
+                    && let Some(old) = self
                         .pending
                         .iter()
                         .find(|old| old.path.iter().any(|part| matches!(part, Part::Slots(_))))
-                    {
-                        return Err(failure(
-                            &old.name,
-                            "possibly overwritten through a shared List handle before being consumed",
-                        ));
-                    }
+                {
+                    return Err(failure(
+                        &old.name,
+                        "possibly overwritten through a shared List handle before being consumed",
+                    ));
                 }
                 for index in &indices {
                     let mut selected = base.clone();
@@ -668,12 +668,10 @@ impl Flow {
                     }));
                 }
             }
-            if !setting {
-                if let Some(length) = length {
-                    shape
-                        .lengths
-                        .insert(Vec::new(), (length + 1).min(usize::from(capacity)));
-                }
+            if !setting && let Some(length) = length {
+                shape
+                    .lengths
+                    .insert(Vec::new(), (length + 1).min(usize::from(capacity)));
             }
         }
         // Mutable list receivers are plain local identifiers in typed lowering.
@@ -794,10 +792,10 @@ impl Flow {
             let outer = a.names.clone();
             a.pattern(pattern)?;
             left_shape = a.block(left, tail_used)?;
-            if !a.returned {
-                if let Some(name) = a.pending.iter().find(|name| !outer.contains(&name.name)) {
-                    return Err(failure(&name.name, "unread in this pattern arm"));
-                }
+            if !a.returned
+                && let Some(name) = a.pending.iter().find(|name| !outer.contains(&name.name))
+            {
+                return Err(failure(&name.name, "unread in this pattern arm"));
             }
             a.names = outer;
         } else {

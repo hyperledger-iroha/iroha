@@ -1,18 +1,8 @@
 //! Feature-independent fixtures for rejecting noncanonical archive headers.
 
-/// Representative supported layouts used to test fixed V1 boundaries.
-pub(crate) fn supported_layouts() -> [u8; 8] {
-    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-    [
-        0,
-        COMPACT_LEN,
-        PACKED_SEQ,
-        PACKED_SEQ | COMPACT_LEN,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT_LEN,
-        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-    ]
+/// Both supported V1 layouts used to test fixed V1 boundaries.
+pub(crate) fn supported_layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 
 /// Change only the compression tag of a canonical frame.

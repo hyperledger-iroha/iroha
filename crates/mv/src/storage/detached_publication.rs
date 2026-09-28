@@ -5,7 +5,7 @@ use concread::{bptree::BptreeMapOwnedAcquisition, release::DeferredReleaseBatch}
 enum Role<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> {
     Owned(BptreeMapOwned<K, V, M>),
     Acquired(ReleaseGuard<'a, BptreeMapOwnedAcquisition<'a, K, V, M>>),
-    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>),
+    Writer(MapWriter<'a, K, V, M>),
     Abandoned {
         _original: BptreeMapAbandonment<K, V, M>,
     },
@@ -98,7 +98,7 @@ impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> Role<'a, K, V, M> {
             _ => panic!("terminal map abandonment is not a journal"),
         }
     }
-    fn into_writer(self) -> ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>> {
+    fn into_writer(self) -> MapWriter<'a, K, V, M> {
         let Self::Writer(writer) = self else {
             panic!("original acquired map")
         };
@@ -106,6 +106,10 @@ impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> Role<'a, K, V, M> {
     }
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "phases change in place; boxing a variant would allocate on the allocation-free path"
+)]
 enum Phase<'a, K: Key, V: Value, A, I, M: StorageMode<K, V>> {
     Original(Detached<K, V, A, M>),
     Acquiring {

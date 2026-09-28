@@ -2,20 +2,8 @@
 use super::signer_test_support::{PROVIDER, SignedFixture, TestSignerMode};
 use super::*;
 
-fn layouts() -> [u8; 10] {
-    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-    [
-        0,
-        COMPACT_LEN,
-        PACKED_SEQ,
-        PACKED_SEQ | COMPACT_LEN,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT_LEN,
-        PACKED_SEQ | PACKED_STRUCT,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-    ]
+fn layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 fn issued() -> StreamTokenV1 {
     let fixture = SignedFixture::new(1, TestSignerMode::Sign);
@@ -37,7 +25,7 @@ fn issued() -> StreamTokenV1 {
         .token
 }
 #[test]
-fn signed_token_transport_is_canonical_in_all_ten_layouts() {
+fn signed_token_transport_is_canonical_in_both_layouts() {
     let token = issued();
     let canonical = norito::encode_canonical(&token).unwrap();
     let expected = base64::engine::general_purpose::STANDARD.encode(&canonical);

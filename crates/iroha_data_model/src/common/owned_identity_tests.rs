@@ -142,17 +142,7 @@ where
         + Clone,
 {
     let mut layouts = Vec::new();
-    for requested in [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT
-            | header_flags::PACKED_SEQ
-            | header_flags::COMPACT_LEN
-            | header_flags::FIELD_BITSET,
-    ] {
+    for requested in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(requested);
         let inner = frames(value);
         let owned = frames(&Owned::new(value.clone()));
@@ -255,7 +245,7 @@ fn owned_storage_identities_preserve_captured_frames() {
     let source = include_str!("../../tests/fixtures/owned_storage_identity_frames.json");
     assert_eq!(
         hex(&Sha256::digest(source.as_bytes())),
-        "93a70352e47926baf33b0e64b016d20fa17c1a94885095394acb526ea964b156",
+        "3d291812d99e26e8e85860f0521a2790d201af1dfc3e2e04d10b7d6f92204f53",
         "storage identity capture digest drift"
     );
     let expected: Value = json::from_str(source).expect("immutable storage identity fixture");

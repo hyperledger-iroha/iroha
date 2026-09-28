@@ -30,6 +30,11 @@ pub struct AccountCapabilitiesV1 {
 
 impl AccountCapabilitiesV1 {
     /// Build the bounded projection; reject inconsistent admission instead of inventing a default.
+    ///
+    /// # Errors
+    ///
+    /// Returns a static explanation when the admitted algorithms omit Ed25519,
+    /// the required V1 bootstrap default.
     pub fn from_admission(
         network_id: NetworkId,
         network_prefix: u16,

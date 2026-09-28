@@ -2002,11 +2002,7 @@ fn evidence_viewer_grant_nonce_is_required_by_canonical_broker_requests() {
         claims: claims.clone(),
     };
     let canonical = encode_canonical(&request, MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1).unwrap();
-    let layouts = (0..=u8::MAX)
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-        .collect::<Vec<_>>();
-    assert_eq!(layouts.len(), 10);
-    for flags in layouts {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
             encode_canonical(&request, MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1).unwrap(),

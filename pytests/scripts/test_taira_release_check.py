@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1716 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1881 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1715 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1880 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -3744,7 +3744,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_complete_regression_census_tracks_every_native_stage_group(self):
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
-        for group in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "STAGES", "CONFIG_STAGES", "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "EXECUTOR_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CURRENT_CONSENSUS_STAGES",
+        for group in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "STAGES", "CONFIG_STAGES", "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CURRENT_CONSENSUS_STAGES",
                       "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
                       "PROOF_FLOW_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "CLIENT_STAGES", "WALLET_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES", "KAGAMI_STAGES"):
             original_count = sum(len(names) for _, names in getattr(gate, group))
@@ -3792,7 +3792,6 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
             stack.enter_context(patch.object(gate, "SCHEMA_STAGES", ()))
-            stack.enter_context(patch.object(gate, "EXECUTOR_STAGES", ()))
             stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
             stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
             stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
@@ -3831,7 +3830,6 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
             stack.enter_context(patch.object(gate, "SCHEMA_STAGES", ()))
-            stack.enter_context(patch.object(gate, "EXECUTOR_STAGES", ()))
             stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
             stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
             stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
@@ -3872,7 +3870,6 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
             stack.enter_context(patch.object(gate, "SCHEMA_STAGES", ()))
-            stack.enter_context(patch.object(gate, "EXECUTOR_STAGES", ()))
             stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
             stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
             stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
@@ -3918,7 +3915,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)
         network.assert_not_called()
-        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "proof", "proof-flows", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")})
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "proof", "proof-flows", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")})
         self.assertEqual([call.args[0] for call in run.call_args_list],
                          ["/warm/core", "/warm/core", "/warm/torii-unit", "/warm/daemon", "/warm/cli"])
         priority_cli, _ = gate.partition_priority_stages(
@@ -3929,7 +3926,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_network_failure_does_not_trigger_separate_harness_builds(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         with patch.object(gate, "run_network_checks", side_effect=gate.CheckError("consensus stalled")) as network, \
              patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
                  name: "/warm/" + name for name in names})) as batch, \
@@ -3958,7 +3955,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_deferred_transport_or_fixture_failure_stops_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         for failed, target in (("crypto", "crypto"), ("p2p", "p2p"),
                                ("fixture", "test-network")):
             output = io.StringIO()
@@ -3985,7 +3982,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_public_contract_library_failures_block_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         for failed in ("client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle"):
             def run(harness, *args, **_kwargs):
                 if harness == "/warm/" + failed:
@@ -4449,7 +4446,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
 
     def test_one_batch_runs_configuration_first_after_source_audits(self):
         events = []
-        libraries = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        libraries = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
 
         def run_stage(harness, root, env, stages, lock_fds, **kwargs):
             self.assertIn(harness, kwargs.pop("inventories"))
@@ -4514,7 +4511,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
         for config_fails in (False, True):
             with self.subTest(config_fails=config_fails), contextlib.ExitStack() as stack:
                 for name in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES",
-                             "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "EXECUTOR_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CURRENT_CONSENSUS_STAGES", "TEST_NETWORK_STAGES",
+                             "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CURRENT_CONSENSUS_STAGES", "TEST_NETWORK_STAGES",
                              "CLIENT_STAGES", "WALLET_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES",
                              "PROOF_STAGES", "PROOF_FLOW_STAGES"):
                     stack.enter_context(patch.object(gate, name, ()))
@@ -4794,7 +4791,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
 
-    names = ("crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network")
+    names = ("crypto", "p2p", "core", "sumeragi", "schema", "test-network")
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
 
     @staticmethod
@@ -4897,14 +4894,14 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_count, 1)
         self.assertEqual(spawn.call_args.args[0], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml",
             "test", "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
-            "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_sumeragi", "-p", "iroha_executor", "-p", "iroha_schema_gen", "-p", "iroha_test_network",
+            "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_sumeragi", "-p", "iroha_schema_gen", "-p", "iroha_test_network",
             "--lib", "--no-run", "--message-format=json-render-diagnostics"])
         self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
         self.assertIs(spawn.call_args.kwargs["env"], self.env)
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
 
     def test_mixed_batch_includes_configuration_in_one_graph_and_requires_every_artifact(self):
-        names = ("config", "config-unit", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "network")
+        names = ("config", "config-unit", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "network")
         lines = "".join(self.artifact(name) for name in reversed(names))
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
              patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: {name: row["executable"] for name, row in rows.items()}), \
@@ -4914,7 +4911,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_count, 1)
         self.assertEqual(spawn.call_args.args[0], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml",
             "test", "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
-        "-p", "iroha_config", "-p", "iroha_data_model", "-p", "fastpq_prover", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_sumeragi", "-p", "iroha_executor", "-p", "iroha_schema_gen", "-p", "iroha_test_network",
+        "-p", "iroha_config", "-p", "iroha_data_model", "-p", "fastpq_prover", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_sumeragi", "-p", "iroha_schema_gen", "-p", "iroha_test_network",
             "-p", "iroha", "-p", "iroha_wallet", "-p", "iroha_torii", "-p", "iroha_torii_shared", "--test", "taira_config_contracts", "--lib", "--test", "fastpq_integration", "--test", "taira_app_contracts",
             "--test", "torii_nexus_sorafs", "--test", "taira_consensus_contracts", "--features", "iroha_data_model/transparent_api", "--no-run", "--message-format=json-render-diagnostics"])
         for missing in ("config", "torii", "torii-shared", "torii-lifecycle", "network"):
@@ -5056,7 +5053,7 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
             self.assertEqual(names, (
                 "config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model",
                 "kagami", "proof", "proof-flows", "crypto", "p2p", "core",
-                "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared",
+                "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared",
                 "torii-lifecycle", "daemon", "network", "cli", "taira-launcher",
                 "sorafs-bin",
             ))
@@ -5903,7 +5900,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         self.assert_profile_unlocked()
 
     def test_batched_libraries_and_integrations_copy_every_accepted_artifact_before_returning(self):
-        selections = ("crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "network")
+        selections = ("crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "network")
         events = [self.artifact(selection)[2] for selection in selections]
         with patch.object(gate.subprocess, "Popen", return_value=self.process(events)) as cargo:
             copies = gate.compile_test_harnesses(self.source, self.env,

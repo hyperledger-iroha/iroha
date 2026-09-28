@@ -3,17 +3,7 @@
 use super::*;
 use norito::core::{DecodeFlagsGuard, header_flags};
 
-const LAYOUTS: [u8; 6] = [
-    0,
-    header_flags::COMPACT_LEN,
-    header_flags::PACKED_SEQ,
-    header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-    header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-    header_flags::PACKED_STRUCT
-        | header_flags::PACKED_SEQ
-        | header_flags::COMPACT_LEN
-        | header_flags::FIELD_BITSET,
-];
+const LAYOUTS: [u8; 2] = [0, header_flags::COMPACT_LEN];
 
 fn manifest() -> ComputeManifest {
     norito::json::from_str(include_str!(

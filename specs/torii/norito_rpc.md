@@ -51,19 +51,19 @@ SoraNet handshake guide (`specs/soranet_handshake.md`).
 ### 4. Norito Envelope
 
 Each payload begins with the Norito header defined in
-`crates/norito/src/core.rs`. The header is 39 bytes long and encodes integrity
+`crates/norito/src/core.rs`. The header is 40 bytes long and encodes integrity
 and layout metadata as shown below:
 
 | Offset | Field        | Type     | Notes                                     |
 | ------ | ----------- | -------- | ----------------------------------------- |
 | 0      | Magic       | `[u8;4]` | ASCII `NRT0`; rejects malformed payloads. |
-| 4      | Major       | `u8`     | Currently `1`; mismatches return 400.     |
-| 5      | Minor       | `u8`     | Bitmask of negotiated layout flags.       |
+| 4      | Major       | `u8`     | Current value `0`; mismatches return 400. |
+| 5      | Minor       | `u8`     | Fixed `0`; any other value is rejected.   |
 | 6      | Schema hash | `[u8;16]`| Deterministic hash of the message type.   |
 | 22     | Compression | `u8`     | `0 = none`, `1 = zstd`.                   |
 | 23     | Length      | `u64`    | Uncompressed payload length in bytes.     |
 | 31     | CRC64       | `u64`    | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the payload. |
-| 39     | Flags       | `u8`     | Layout flags: packed sequences, compact lengths, field bitset (`crates/norito/src/core.rs:2460`,`crates/norito/src/core.rs:2474`,`crates/norito/src/core.rs:267`). |
+| 39     | Flags       | `u8`     | Layout bits: `0x00` (fixed-width per-value prefixes) or `0x02` (`COMPACT_LEN`); every other bit is rejected. |
 
 Torii validates the header before decoding:
 

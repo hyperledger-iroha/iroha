@@ -93,13 +93,6 @@ struct SparseChallengeTermV1 {
 /// This is deliberately distinct from the native-residency certificate. It
 /// remains zero until the complete bounded release worker has been measured.
 pub const ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1: [u8; 32] = [0; 32];
-/// Missing implementation boundary that keeps streaming decryption fail-closed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ZkAmsMkheDecryptionStreamingBlockerV1 {
-    /// Canonical empty blocker slot. Only slots at or above `blocker_count` may contain this value.
-    NoBlocker = 0,
-}
 /// Phase-specific source accounting for the bounded verifier topology.
 ///
 /// These are exact enumerated large-buffer payloads, not a peak-RSS claim. Allocator metadata,
@@ -313,10 +306,6 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// nine-polynomial statement. This is not an RSS claim for arbitrary CAS
     /// trait implementations; the runtime certificate remains decisive.
     pub bounded_compact_authority_construction_implemented: bool,
-    /// Number of active entries in `implementation_blockers`.
-    pub implementation_blocker_count: u8,
-    /// Fixed canonical slots for independently actionable blockers.
-    pub implementation_blockers: [ZkAmsMkheDecryptionStreamingBlockerV1; 2],
     /// Authenticated runtime peak certificate; zero remains absent.
     pub authenticated_peak_residency_digest: [u8; 32],
     /// Always false until the authenticated peak run exists.
@@ -345,12 +334,6 @@ impl ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
             || !self.staged_prover_output_implemented
             || self.staged_prover_release_kat_digest != [0; 32]
             || !self.bounded_compact_authority_construction_implemented
-            || self.implementation_blocker_count != 0
-            || self.implementation_blockers
-                != [
-                    ZkAmsMkheDecryptionStreamingBlockerV1::NoBlocker,
-                    ZkAmsMkheDecryptionStreamingBlockerV1::NoBlocker,
-                ]
             || self.authenticated_peak_residency_digest != [0; 32]
             || self.release_certified
         {
@@ -914,11 +897,6 @@ fn derive_streaming_residency_evidence_v1()
         staged_prover_output_implemented,
         staged_prover_release_kat_digest: ZK_AMS_MKHE_DECRYPTION_STAGED_RELEASE_KAT_DIGEST_V1,
         bounded_compact_authority_construction_implemented,
-        implementation_blocker_count: 0,
-        implementation_blockers: [
-            ZkAmsMkheDecryptionStreamingBlockerV1::NoBlocker,
-            ZkAmsMkheDecryptionStreamingBlockerV1::NoBlocker,
-        ],
         authenticated_peak_residency_digest,
         release_certified,
         evidence_digest: [0; 32],
@@ -1041,9 +1019,6 @@ fn streaming_residency_evidence_digest(
         evidence
             .bounded_compact_authority_construction_implemented
             .into(),
-        evidence.implementation_blocker_count,
-        evidence.implementation_blockers[0] as u8,
-        evidence.implementation_blockers[1] as u8,
     ]);
     hash.update(&evidence.staged_prover_release_kat_digest);
     hash.update(&evidence.authenticated_peak_residency_digest);

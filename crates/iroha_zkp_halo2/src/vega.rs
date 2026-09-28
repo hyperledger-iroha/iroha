@@ -88,6 +88,7 @@ pub(super) use wire::{VegaPointWireV1, VegaScalarWireV1};
 pub use zk_ams::RnsNativeProofDigestV1;
 #[cfg(test)]
 pub use zk_ams::ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1;
+#[cfg(test)]
 pub use zk_ams::ZkAmsMkheDirectObjectKindV1;
 pub use zk_ams::ZkAmsMkheRnsNativeTerminalRootsV1;
 pub use zk_ams::{
@@ -168,11 +169,10 @@ pub use zk_ams::{
     ZkAmsMkheCpkCeremonyV1, ZkAmsMkheCpkPartyInputV1, ZkAmsMkheCpkRuntimeV1,
     ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1,
     ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionResourceEvidenceV1,
-    ZkAmsMkheDecryptionStreamingBlockerV1, ZkAmsMkheDecryptionStreamingResidencyEvidenceV1,
-    ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkheDecryptionTransportComponentKindV1,
-    ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheDecryptionTransportPointerV1,
-    ZkAmsMkheDirectAdmittedContributionSetV1, ZkAmsMkheDirectCeremonyContextV1,
-    ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectCoordinatorV1,
+    ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
+    ZkAmsMkheDecryptionTransportComponentKindV1, ZkAmsMkheDecryptionTransportManifestV1,
+    ZkAmsMkheDecryptionTransportPointerV1, ZkAmsMkheDirectAdmittedContributionSetV1,
+    ZkAmsMkheDirectCeremonyContextV1, ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectCoordinatorV1,
     ZkAmsMkheDirectEvaluatedKeySetAdmissionV1, ZkAmsMkheDirectEvaluatedKeyTargetV1,
     ZkAmsMkheDirectNoiseCertificateV1, ZkAmsMkheDirectNoiseIntegrationCertificateV1,
     ZkAmsMkheDirectPolynomialRoleV1, ZkAmsMkheDirectPolynomialStreamReceiptV1,

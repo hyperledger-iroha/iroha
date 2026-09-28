@@ -40,11 +40,7 @@ mod tests {
         ));
         let canonical_bytes = core::to_bytes(&batch.transitions).unwrap();
         let expected = ordering_hash(&batch).unwrap();
-        for flags in [
-            0,
-            core::header_flags::PACKED_SEQ,
-            core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
-        ] {
+        for flags in [0, core::header_flags::COMPACT_LEN] {
             let _ambient = core::DecodeFlagsGuard::enter(flags);
             let before = core::to_bytes(&batch.transitions).unwrap();
             if flags == 0 {

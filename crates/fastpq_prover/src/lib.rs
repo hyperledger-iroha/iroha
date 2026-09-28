@@ -97,6 +97,8 @@ pub use digest_executor::{
     DigestExecutionV1, MAX_DIGEST384_BATCH_FRAMES_V1, MAX_DIGEST384_BATCH_WORDS_V1,
     execute_digest384_frames_v1, hash_digest384_pairs_v1,
 };
+#[cfg(feature = "fastpq-gpu")]
+pub use digest384_batch::preflight_digest384_continuation_v1;
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
 pub use digest384_benchmark::{
@@ -104,15 +106,11 @@ pub use digest384_benchmark::{
     benchmark_digest384_v1,
 };
 #[cfg(feature = "fastpq-gpu")]
-pub use digest384_batch::preflight_digest384_continuation_v1;
-#[cfg(feature = "fastpq-gpu")]
 pub use digest384_gpu::{Digest384GpuBackendV1, Digest384GpuErrorV1, try_hash_digest384_frames_v1};
 pub use error::{Error, Result};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
 pub use fastpq_cuda::{CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde};
-/// Canonical FASTPQ parameter and six-lane native-STARK digest API.
-pub use fastpq_isi as fastpq_isi_v1;
 pub use fft::Planner;
 pub use field::{GOLDILOCKS_MODULUS_V1, GoldilocksFp4V1};
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]

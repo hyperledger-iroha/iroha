@@ -1166,6 +1166,7 @@ pub fn negotiate_json_only_response(accept: Option<&HeaderValue>) -> Result<(), 
 ///
 /// The most-specific matching range wins, so an explicit `application/x-norito;q=0`
 /// cannot be overridden by a positive wildcard.
+#[cfg(test)]
 #[allow(clippy::result_large_err)] // callers bubble the full HTTP response on negotiation failure
 pub fn negotiate_norito_only_response(accept: Option<&HeaderValue>) -> Result<(), Response> {
     negotiate_single_typed_response(accept, ResponseFormat::Norito)

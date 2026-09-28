@@ -80,6 +80,10 @@ pub enum RetailActivationProofError {
 /// # Errors
 /// Refuses incomplete finality, failed execution, hidden batch/VM effects, or
 /// any mismatch to the independently supplied release coordinates.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each expected coordinate comes from a separate signed authority"
+)]
 pub fn verify_finalized_retail_activation_v1(
     block: &SignedBlock,
     artifact: &V2FinalityArtifact,

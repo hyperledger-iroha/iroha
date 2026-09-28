@@ -145,9 +145,6 @@ class NoritoEncoder:
         else:
             self.buffer.extend(value.to_bytes(8, "little"))
 
-    def child_encoder(self) -> "NoritoEncoder":
-        return NoritoEncoder(self.flags)
-
     def extend(self, data: bytes) -> None:
         self.buffer.extend(data)
 
@@ -386,62 +383,12 @@ class SequenceAdapter(Generic[T], TypeAdapter[List[T]]):
         elements = list(value)
         length = len(elements)
         encoder.write_length(length, compact=False)
-
-        if encoder.flags & header.PACKED_SEQ:
-            self._encode_packed(encoder, elements)
-        else:
-            for element in elements:
-                self.element.encode(encoder, element)
-
-    def _encode_packed(self, encoder: NoritoEncoder, elements: List[T]) -> None:
-        chunks = [encoder.child_encoder() for _ in elements]
-        encoded_parts: List[bytes] = []
-        for child, element in zip(chunks, elements):
-            self.element.encode(child, element)
-            encoded_parts.append(child.finish())
-
-        offsets = [0]
-        total = 0
-        for chunk in encoded_parts:
-            total += len(chunk)
-            offsets.append(total)
-        for offset in offsets:
-            encoder.extend(offset.to_bytes(8, "little"))
-        for chunk in encoded_parts:
-            encoder.extend(chunk)
+        for element in elements:
+            self.element.encode(encoder, element)
 
     def decode(self, decoder: NoritoDecoder) -> List[T]:
         length = decoder.read_length(compact=False)
-
-        if decoder.flags & header.PACKED_SEQ:
-            return self._decode_packed(decoder, length)
-
         return [self.element.decode(decoder) for _ in range(length)]
-
-    def _decode_packed(self, decoder: NoritoDecoder, length: int) -> List[T]:
-        if length == 0:
-            # Compat Rust encoders appended a single zero offset tail even when the
-            # sequence contained no elements. Accept and skip those bytes so older
-            # payloads continue to decode.
-            tail = decoder.data[decoder.offset :]
-            if not tail:
-                return []
-            if len(tail) >= 8 and all(b == 0 for b in tail[:8]):
-                decoder.offset += 8
-                return []
-            raise DecodeError("packed sequence declared zero length but carried trailing data")
-
-        offsets = [decoder.read_uint(64) for _ in range(length + 1)]
-        element_sizes = [b - a for a, b in zip(offsets, offsets[1:])]
-
-        outputs: List[T] = []
-        for size in element_sizes:
-            chunk = decoder.read_bytes(size)
-            child = NoritoDecoder(chunk, decoder.flags)
-            outputs.append(self.element.decode(child))
-            if child.remaining() != 0:
-                raise DecodeError("packed element decode did not consume all bytes")
-        return outputs
 
     def fixed_size(self) -> Optional[int]:
         return None
@@ -494,7 +441,7 @@ class TupleAdapter(TypeAdapter[Tuple[Any, ...]]):
 
 
 # ---------------------------------------------------------------------------
-# Struct support (hybrid bitset layout)
+# Struct support
 # ---------------------------------------------------------------------------
 
 
@@ -505,7 +452,7 @@ class StructField:
 
 
 class StructAdapter(TypeAdapter[Any]):
-    """Adapter for struct-like layouts honoring PACKED_STRUCT semantics."""
+    """Adapter for struct-like layouts."""
 
     def __init__(
         self,
@@ -517,74 +464,15 @@ class StructAdapter(TypeAdapter[Any]):
         self.factory = factory
 
     def encode(self, encoder: NoritoEncoder, value: Any) -> None:
-        if encoder.flags & header.PACKED_STRUCT and encoder.flags & header.FIELD_BITSET:
-            self._encode_packed(encoder, value)
-            return
         for field in self.fields:
             field_value = self._extract_field_value(value, field.name)
             field.adapter.encode(encoder, field_value)
 
-    def _encode_packed(self, encoder: NoritoEncoder, value: Any) -> None:
-        field_payloads: List[bytes] = []
-        needs_size: List[bool] = []
-        bitset = 0
-
-        for idx, field in enumerate(self.fields):
-            field_value = self._extract_field_value(value, field.name)
-            child = encoder.child_encoder()
-            field.adapter.encode(child, field_value)
-            data = child.finish()
-            field_payloads.append(data)
-            size_required = self._needs_size(field.adapter)
-            needs_size.append(size_required)
-            if size_required:
-                bitset |= 1 << idx
-
-        bitset_bytes = (len(self.fields) + 7) // 8
-        encoder.extend(bitset.to_bytes(bitset_bytes, "little"))
-
-        for idx, data in enumerate(field_payloads):
-            if needs_size[idx]:
-                encoder.extend(encode_varint(len(data)))
-
-        for data in field_payloads:
-            encoder.extend(data)
-
     def decode(self, decoder: NoritoDecoder) -> Any:
-        if decoder.flags & header.PACKED_STRUCT and decoder.flags & header.FIELD_BITSET:
-            values = self._decode_packed(decoder)
-        else:
-            values: Dict[str, Any] = {}
-            for field in self.fields:
-                values[field.name] = field.adapter.decode(decoder)
-        return self._build_instance(values)
-
-    def _decode_packed(self, decoder: NoritoDecoder) -> Dict[str, Any]:
-        bitset_bytes = (len(self.fields) + 7) // 8
-        bitset_data = decoder.read_exact(bitset_bytes)
-        bitset = int.from_bytes(bitset_data, "little")
-
-        needs_size = [bool((bitset >> idx) & 1) for idx in range(len(self.fields))]
-        dynamic_sizes: List[int] = []
-        for need in needs_size:
-            if need:
-                size, decoder.offset = decode_varint(decoder.data, decoder.offset)
-                dynamic_sizes.append(size)
-
-        size_iter = iter(dynamic_sizes)
         values: Dict[str, Any] = {}
-        for idx, field in enumerate(self.fields):
-            if needs_size[idx]:
-                size = next(size_iter)
-                chunk = decoder.read_bytes(size)
-                child = NoritoDecoder(chunk, decoder.flags)
-                value = field.adapter.decode(child)
-                if child.remaining() != 0:
-                    raise DecodeError("packed struct field did not fully decode")
-            else:
-                value = field.adapter.decode(decoder)
-            values[field.name] = value
-        return values
+        for field in self.fields:
+            values[field.name] = field.adapter.decode(decoder)
+        return self._build_instance(values)
 
     def fixed_size(self) -> Optional[int]:
         return None
@@ -596,14 +484,6 @@ class StructAdapter(TypeAdapter[Any]):
         if self.factory is None:
             return values
         return self.factory(**values)
-
-    @staticmethod
-    def _needs_size(adapter: TypeAdapter[Any]) -> bool:
-        if adapter.fixed_size() is not None:
-            return False
-        if adapter.is_self_delimiting():
-            return False
-        return True
 
     @staticmethod
     def _extract_field_value(value: Any, name: str) -> Any:

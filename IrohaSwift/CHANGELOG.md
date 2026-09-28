@@ -4,6 +4,13 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Pinned Norito v1 headers to the fixed-width (`0x00`) and compact
+  (`COMPACT_LEN`, `0x02`) layouts. `NoritoHeader.packedSeq`, `packedStruct`,
+  `fieldBitset`, `varintOffsets`, and `compactSeqLen` were removed, and headers
+  carrying any flag other than `COMPACT_LEN` (or none) are rejected.
+  `ConfidentialEncryptedPayload.noritoEnvelope()` now defaults to
+  `COMPACT_LEN` (payload bytes are unchanged), and the Connect queue journal
+  rejects records whose header flag byte is non-zero.
 - Replaced Explorer instruction, transaction, and transfer-history page-number
   pagination with snapshot-bound `cursor`/`limit` APIs and strict continuation
   metadata. The async, completion-handler, `IrohaSDK`, and Combine surfaces now

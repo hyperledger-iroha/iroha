@@ -7,12 +7,9 @@ use norito::{
         read_seq_len_slice, reset_decode_state,
     },
 };
-use std::{
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
-    convert::TryInto,
-};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 fn encode_payload<T: NoritoSerialize>(value: &T) -> (u8, Vec<u8>) {
-    let flags = header_flags::PACKED_SEQ | header_flags::COMPACT_LEN;
+    let flags = header_flags::COMPACT_LEN;
     (flags, encode_payload_with_flags(value, flags))
 }
 fn expect_len_mismatch<'a, T>(flags: u8, payload: &'a [u8])
@@ -38,7 +35,7 @@ fn encode_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8
     payload
 }
 #[test]
-fn vec_packed_truncated_yields_length_mismatch() {
+fn vec_compact_truncated_yields_length_mismatch() {
     let (flags, mut payload) = encode_payload(&vec![1u32, 2, 3]);
     assert!(payload.pop().is_some());
     expect_len_mismatch::<Vec<u32>>(flags, &payload);
@@ -80,7 +77,7 @@ fn binary_heap_truncated_yields_length_mismatch() {
     expect_len_mismatch::<BinaryHeap<u32>>(flags, &payload);
 }
 #[test]
-fn btree_set_offsets_tampered_yields_length_mismatch() {
+fn btree_set_prefix_tampered_yields_length_mismatch() {
     let mut set = BTreeSet::new();
     set.insert(1u32);
     set.insert(2u32);
@@ -97,7 +94,7 @@ fn btree_set_offsets_tampered_yields_length_mismatch() {
     expect_len_mismatch::<BTreeSet<u32>>(flags, &payload);
 }
 #[test]
-fn hash_set_offsets_tampered_yields_length_mismatch() {
+fn hash_set_prefix_tampered_yields_length_mismatch() {
     let mut set = HashSet::new();
     set.insert(1u32);
     set.insert(2u32);
@@ -114,7 +111,7 @@ fn hash_set_offsets_tampered_yields_length_mismatch() {
     expect_len_mismatch::<HashSet<u32>>(flags, &payload);
 }
 #[test]
-fn btree_map_offsets_tampered_yields_length_mismatch() {
+fn btree_map_prefix_tampered_yields_length_mismatch() {
     let map = BTreeMap::from([(1u32, 10u32), (2u32, 20u32)]);
     let (flags, mut payload) = encode_payload(&map);
     {
@@ -129,7 +126,7 @@ fn btree_map_offsets_tampered_yields_length_mismatch() {
     expect_len_mismatch::<BTreeMap<u32, u32>>(flags, &payload);
 }
 #[test]
-fn hash_map_offsets_tampered_yields_length_mismatch() {
+fn hash_map_prefix_tampered_yields_length_mismatch() {
     let map = HashMap::from([(1u32, 42u32), (2u32, 84u32)]);
     let (flags, mut payload) = encode_payload(&map);
     {
@@ -142,48 +139,6 @@ fn hash_map_offsets_tampered_yields_length_mismatch() {
         reset_decode_state();
     }
     expect_len_mismatch::<HashMap<u32, u32>>(flags, &payload);
-}
-#[test]
-fn btree_set_fixed_offsets_tampered_yields_length_mismatch() {
-    let mut set = BTreeSet::new();
-    set.insert(10u32);
-    set.insert(20u32);
-    set.insert(30u32);
-    let flags = header_flags::PACKED_SEQ;
-    let mut payload = encode_payload_with_flags(&set, flags);
-    let len = u64::from_le_bytes(payload[0..8].try_into().expect("len bytes")) as usize;
-    assert_eq!(len, set.len());
-    let offsets_start = 8;
-    let offsets_end = offsets_start + (len + 1) * 8;
-    assert!(offsets_end <= payload.len());
-    let bogus = (payload.len() as u64).saturating_add(16);
-    payload[offsets_start + 8..offsets_start + 16].copy_from_slice(&bogus.to_le_bytes());
-    expect_len_mismatch::<BTreeSet<u32>>(flags, &payload);
-}
-#[test]
-fn btree_map_fixed_offsets_tampered_yields_length_mismatch() {
-    let map = BTreeMap::from([(1u32, 100u32), (2u32, 200u32)]);
-    let flags = header_flags::PACKED_SEQ;
-    let mut payload = encode_payload_with_flags(&map, flags);
-    let len = u64::from_le_bytes(payload[0..8].try_into().expect("len bytes")) as usize;
-    assert_eq!(len, map.len());
-    let key_offsets_start = 8;
-    let key_offsets_end = key_offsets_start + (len + 1) * 8;
-    assert!(key_offsets_end <= payload.len());
-    let bogus_key = (payload.len() as u64).saturating_add(32);
-    payload[key_offsets_start + 8..key_offsets_start + 16]
-        .copy_from_slice(&bogus_key.to_le_bytes());
-    expect_len_mismatch::<BTreeMap<u32, u32>>(flags, &payload);
-    let mut payload_val = encode_payload_with_flags(&map, flags);
-    let len_val = u64::from_le_bytes(payload_val[0..8].try_into().expect("len bytes")) as usize;
-    assert_eq!(len_val, map.len());
-    let value_offsets_start = 8 + (len_val + 1) * 8;
-    let value_offsets_end = value_offsets_start + (len_val + 1) * 8;
-    assert!(value_offsets_end <= payload_val.len());
-    let bogus_val = (payload_val.len() as u64).saturating_add(48);
-    payload_val[value_offsets_start + 8..value_offsets_start + 16]
-        .copy_from_slice(&bogus_val.to_le_bytes());
-    expect_len_mismatch::<BTreeMap<u32, u32>>(flags, &payload_val);
 }
 #[test]
 fn pointer_truncated_varint_errors() {

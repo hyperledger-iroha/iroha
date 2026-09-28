@@ -86,15 +86,11 @@ class NoritoHeader(
 
         const val MAJOR_VERSION = 0
 
-        const val PACKED_SEQ = 0x01
+        /** Compact (varint) length prefixes; the only layout flag Norito v1 defines. */
         const val COMPACT_LEN = 0x02
-        const val PACKED_STRUCT = 0x04
-        const val VARINT_OFFSETS = 0x08
-        const val COMPACT_SEQ_LEN = 0x10
-        const val FIELD_BITSET = 0x20
 
-        private const val SUPPORTED_FLAGS_MASK =
-            PACKED_SEQ or COMPACT_LEN or PACKED_STRUCT or FIELD_BITSET
+        /** Every other flag bit is reserved and rejected. */
+        private const val SUPPORTED_FLAGS_MASK = COMPACT_LEN
 
         /** Minor version is fixed for v1; layout flags are declared in the header flag byte. */
         const val MINOR_VERSION = 0
@@ -111,12 +107,6 @@ class NoritoHeader(
             val unsupportedFlags = normalizedFlags and SUPPORTED_FLAGS_MASK.inv()
             require(unsupportedFlags == 0) {
                 "Unsupported Norito layout flags: 0x${"%02x".format(unsupportedFlags)}"
-            }
-            if ((normalizedFlags and FIELD_BITSET) != 0) {
-                val required = PACKED_STRUCT or COMPACT_LEN
-                require((normalizedFlags and required) == required) {
-                    "Unsupported Norito layout flag combination: 0x${"%02x".format(normalizedFlags)}"
-                }
             }
         }
 

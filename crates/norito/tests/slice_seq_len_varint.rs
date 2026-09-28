@@ -1,16 +1,12 @@
 //! Tests for slice-based decoders with fixed u64 sequence headers.
 use norito::core::{self, DecodeFlagsGuard};
 use std::collections::{BinaryHeap, LinkedList, VecDeque};
-fn build_packed_seq(payloads: &[Vec<u8>]) -> Vec<u8> {
+fn build_len_prefixed_seq(payloads: &[Vec<u8>], flags: u8) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&(payloads.len() as u64).to_le_bytes());
-    let mut total = 0u64;
     for payload in payloads {
-        buf.extend_from_slice(&total.to_le_bytes());
-        total = total.saturating_add(payload.len() as u64);
-    }
-    buf.extend_from_slice(&total.to_le_bytes());
-    for payload in payloads {
+        core::write_len_with_flags(&mut buf, payload.len() as u64, flags)
+            .expect("write element length");
         buf.extend_from_slice(payload);
     }
     buf
@@ -27,8 +23,8 @@ fn vecdeque_decode_from_slice_fixed_seq_len() {
         elem_payloads.push(payload);
     }
     drop(_elem_guard);
-    let buf = build_packed_seq(&elem_payloads);
-    let flags = core::header_flags::PACKED_SEQ | core::header_flags::COMPACT_LEN;
+    let flags = core::header_flags::COMPACT_LEN;
+    let buf = build_len_prefixed_seq(&elem_payloads, flags);
     let _fg = DecodeFlagsGuard::enter(flags);
     let (out, used) = <VecDeque<String> as core::DecodeFromSlice>::decode_from_slice(&buf)
         .expect("vecdeque decode");
@@ -45,8 +41,8 @@ fn linkedlist_decode_from_slice_fixed_seq_len() {
         payload.extend_from_slice(&v.to_le_bytes());
         elem_payloads.push(payload);
     }
-    let buf = build_packed_seq(&elem_payloads);
-    let flags = core::header_flags::PACKED_SEQ;
+    let flags = 0;
+    let buf = build_len_prefixed_seq(&elem_payloads, flags);
     let _fg = DecodeFlagsGuard::enter(flags);
     let (out, used) = <LinkedList<u32> as core::DecodeFromSlice>::decode_from_slice(&buf)
         .expect("linkedlist decode");
@@ -63,8 +59,8 @@ fn binaryheap_decode_from_slice_fixed_seq_len() {
         payload.extend_from_slice(&v.to_le_bytes());
         elem_payloads.push(payload);
     }
-    let buf = build_packed_seq(&elem_payloads);
-    let flags = core::header_flags::PACKED_SEQ;
+    let flags = core::header_flags::COMPACT_LEN;
+    let buf = build_len_prefixed_seq(&elem_payloads, flags);
     let _fg = DecodeFlagsGuard::enter(flags);
     let (out, used) = <BinaryHeap<u32> as core::DecodeFromSlice>::decode_from_slice(&buf)
         .expect("binaryheap decode");
@@ -79,8 +75,9 @@ fn binaryheap_decode_from_slice_fixed_seq_len() {
 fn vecdeque_malformed_seq_len_returns_length_mismatch() {
     // Sequence headers are fixed-width in v1; a short header should fail.
     let buf = vec![0x80u8];
-    let flags = core::header_flags::PACKED_SEQ;
-    let _fg = DecodeFlagsGuard::enter(flags);
-    let err = <VecDeque<u32> as core::DecodeFromSlice>::decode_from_slice(&buf).unwrap_err();
-    assert!(matches!(err, core::Error::LengthMismatch));
+    for flags in [0, core::header_flags::COMPACT_LEN] {
+        let _fg = DecodeFlagsGuard::enter(flags);
+        let err = <VecDeque<u32> as core::DecodeFromSlice>::decode_from_slice(&buf).unwrap_err();
+        assert!(matches!(err, core::Error::LengthMismatch));
+    }
 }

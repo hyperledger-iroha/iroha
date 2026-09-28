@@ -11374,8 +11374,6 @@ mod tests {
     }
     #[cfg(feature = "telemetry")]
     mod metrics_bootstrap {
-        #[allow(unused_imports)]
-        use super::*;
         use serial_test::serial;
         use std::sync::Arc;
         #[test]

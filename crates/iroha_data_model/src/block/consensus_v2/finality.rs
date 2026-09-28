@@ -79,16 +79,15 @@ impl FinalizedNextEpochSnapshot {
         }
         let authority = &self.kagemusha_mint_finality_authority;
         let authorization = &self.kagemusha_mint_finality_authorization;
-        if let Some(preparation) = &self.committee_preparation {
-            if self.mode != ConsensusMode::Npos
+        if let Some(preparation) = &self.committee_preparation
+            && (self.mode != ConsensusMode::Npos
                 || preparation
                     .validate_against_preparing_authorization(authorization)
                     .is_err()
                 || preparation.selection_height != context.height
-                || preparation.selection_epoch != context.epoch
-            {
-                return Err(ValidationError::InvalidNextEpoch);
-            }
+                || preparation.selection_epoch != context.epoch)
+        {
+            return Err(ValidationError::InvalidNextEpoch);
         }
         if authorization.validate_against_authority(authority).is_err()
             || authorization

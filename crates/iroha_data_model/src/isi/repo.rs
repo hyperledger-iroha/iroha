@@ -625,32 +625,6 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[test]
-    fn boxed_repo_initiation_preserves_the_original_packed_wire() {
-        let instruction = repo_instruction();
-        let flags = norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::COMPACT_LEN
-            | norito::core::header_flags::FIELD_BITSET;
-        let (expected, expected_flags, actual, actual_flags) = {
-            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-            let (expected, expected_flags) = norito::codec::encode_with_header_flags(
-                &LegacyRepoInstructionBox::Initiate(instruction.clone()),
-            );
-            let (actual, actual_flags) = norito::codec::encode_with_header_flags(
-                &RepoInstructionBox::from(instruction.clone()),
-            );
-            (expected, expected_flags, actual, actual_flags)
-        };
-        assert_eq!(actual_flags & flags, flags);
-        assert_eq!(actual_flags, expected_flags);
-        assert_eq!(actual, expected);
-        let (decoded, used) = {
-            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-            RepoInstructionBox::decode_from_slice(&actual).expect("decode packed repo instruction")
-        };
-        assert_eq!(used, actual.len());
-        assert_eq!(decoded, RepoInstructionBox::from(instruction));
-    }
-    #[test]
     fn boxed_repo_initiation_preserves_the_original_schema_field_type() {
         let schema = <RepoInstructionBox as iroha_schema::IntoSchema>::schema();
         let metadata = schema

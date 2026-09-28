@@ -1355,10 +1355,10 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
             {
                 "rows": 153,
                 "forward_rows": 61,
-                "source_lines": 11_770,
+                "source_lines": 11_771,
                 "provider_lines": 26,
-                "governed_lines": 11_796,
-                "net_reduction": 2_462,
+                "governed_lines": 11_797,
+                "net_reduction": 2_461,
             },
         )
         self.assertEqual(PREIMAGE_LINES - MAX_GOVERNED_LINES, 951)

@@ -200,7 +200,7 @@ fn signing_view_frames_match_captured_identities() {
                 .as_array()
                 .expect("explicit layout rows")
                 .len(),
-            8
+            2
         );
     }
     let actual = norito::json!({

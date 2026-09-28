@@ -99,7 +99,7 @@ pub struct FinalityValidator {
 pub struct SumeragiFinalityProof {
     /// Header, cross-checked against the complete canonical frame.
     pub block_header: BlockHeader,
-    /// Result-bearing canonical SignedBlockWire, including the embedded current certificate.
+    /// Result-bearing canonical `SignedBlockWire`, including the embedded current certificate.
     pub block_wire: Vec<u8>,
     /// Committee, admitted only against the signed genesis or an authenticated lag-2 digest.
     pub committee: Vec<FinalityValidator>,
@@ -441,6 +441,10 @@ impl SumeragiFinalityVerifier {
             executed_len: value.commitment.execution.executed_block_wire_len,
         }
     }
+    #[expect(
+        clippy::suspicious_operation_groupings,
+        reason = "the child header intentionally binds the parent's core hash and result"
+    )]
     fn check(&self, proof: &SumeragiFinalityProof) -> Result<DecodedSumeragiBlock, FinalityError> {
         let decoded = proof.decode_checked()?;
         let height = proof.height();
@@ -522,7 +526,7 @@ pub struct SumeragiFinalityAttestationBody {
     pub genesis_block_hash: HashOf<BlockHeader>,
     /// Current result-only genesis frame.
     pub genesis_finality_proof: SumeragiFinalityProof,
-    /// Live NodeHandle status captured for this tip.
+    /// Live `NodeHandle` status captured for this tip.
     pub status: SumeragiStatus,
     /// Current committed tip frame and certificate.
     pub finality_proof: SumeragiFinalityProof,

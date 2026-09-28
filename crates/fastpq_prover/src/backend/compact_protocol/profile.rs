@@ -144,10 +144,10 @@ impl Binding {
     ) -> Result<Digest> {
         let length = values
             .len()
-            .checked_mul(size_of::<u64>())
-            .ok_or_else(|| shape("compact row packing byte count overflow"))?;
+            .checked_mul(GoldilocksFp4V1::BYTES)
+            .ok_or_else(|| shape("compact FRI leaf packing byte count overflow"))?;
         let mut bytes = SecretPolynomial::<u8>::zeroed(length)?;
-        for (chunk, value) in bytes.chunks_exact_mut(size_of::<u64>()).zip(values) {
+        for (chunk, value) in bytes.chunks_exact_mut(GoldilocksFp4V1::BYTES).zip(values) {
             chunk.copy_from_slice(&value.to_le_bytes());
         }
         self.context

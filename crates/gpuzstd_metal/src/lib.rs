@@ -4,16 +4,12 @@
 //! - gpu_zstd_compress(src_ptr, src_len, level, dst_ptr, dst_len)
 //! - gpu_zstd_decompress(src_ptr, src_len, dst_ptr, dst_len)
 /// Shared little-endian bitstream helpers for zstd frame coding.
-#[allow(dead_code)]
 pub mod bitstream;
 /// Shared finite-state entropy helpers for zstd sequence coding.
-#[allow(dead_code)]
 pub mod fse;
 /// Shared Huffman helpers for zstd literal coding.
-#[allow(dead_code)]
 pub mod huffman;
 /// Shared deterministic zstd frame encoder/decoder.
-#[allow(dead_code)]
 pub mod zstd_frame;
 use std::{io::Cursor, ptr, slice};
 const RC_OK: i32 = 0;

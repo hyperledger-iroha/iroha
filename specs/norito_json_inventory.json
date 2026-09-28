@@ -1,19 +1,18 @@
 {
-  "generated_at": "2026-09-27T22:05:53Z",
+  "generated_at": "2026-09-28T10:13:18Z",
   "command": "python3 scripts/inventory_serde_usage.py --json specs/norito_json_inventory.json --md specs/norito_json_inventory.md",
   "root": "iroha",
   "allowlist": [],
   "summary": {
-    "total": 20,
+    "total": 18,
     "flagged": 0,
     "by_scope": {
       "test": 16,
-      "prod": 2,
-      "tool": 2
+      "prod": 2
     },
     "by_category": {
       "source": 16,
-      "dependency": 4
+      "dependency": 2
     }
   },
   "matches": [
@@ -196,26 +195,6 @@
       "allowed": true,
       "reason": "allowed scope",
       "context": "#[derive(Debug, Clone, norito::json::Deserialize)]"
-    },
-    {
-      "category": "dependency",
-      "kind": "dependencies:serde",
-      "path": "xtask/Cargo.toml",
-      "line": 98,
-      "scope": "tool",
-      "allowed": true,
-      "reason": "non-production scope",
-      "context": "serde = { version = \"1.0.228\", features = [\"derive\"] }"
-    },
-    {
-      "category": "dependency",
-      "kind": "dependencies:serde_json",
-      "path": "xtask/Cargo.toml",
-      "line": 99,
-      "scope": "tool",
-      "allowed": true,
-      "reason": "non-production scope",
-      "context": "serde_json = \"1.0.145\""
     }
   ]
 }

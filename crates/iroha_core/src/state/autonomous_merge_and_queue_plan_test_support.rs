@@ -1130,9 +1130,7 @@ fn autonomous_native_beacon_composition_fixture() -> (
         None,
         |_| {},
         |state, parent| {
-            let keys = (0xD3_u8..=0xD6)
-                .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
-                .collect::<Vec<_>>();
+            let keys = merge_carrier_finality_fixture_keypairs();
             let mut world = state.world.block();
             pulse = Some(install_exact_merge_beacon_fixture(
                 state, &mut world, &keys, parent,

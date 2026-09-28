@@ -327,7 +327,7 @@ fn actual_storage_joined_refusal_precedes_clone_and_exact_budget_retry_preserves
         let records = NEXT_RECORD.load(SeqCst);
         let base = budget.reserved_bytes();
         let blocker = budget.try_reserve_bytes(budget.limit_bytes() - base).unwrap();
-        let ((key, value), error) = without_allocations(|| block.try_insert_admitted(key, value).err().expect("full original pool must refuse"));
+        let ((key, value), error) = without_allocations(|| block.try_insert_admitted(key, value).expect_err("full original pool must refuse"));
         let AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. }) = error else { panic!("original joined capacity refusal"); };
         assert!(requested_bytes > 0);
         assert_eq!((key.pointer(), value.pointer()), pointers);
@@ -337,7 +337,7 @@ fn actual_storage_joined_refusal_precedes_clone_and_exact_budget_retry_preserves
         assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), counts);
         drop(blocker);
         let blocker = budget.try_reserve_bytes(budget.limit_bytes() - base - requested_bytes + 1).unwrap();
-        let ((key, value), error) = without_allocations(|| block.try_insert_admitted(key, value).err().expect("one byte below joined demand must refuse"));
+        let ((key, value), error) = without_allocations(|| block.try_insert_admitted(key, value).expect_err("one byte below joined demand must refuse"));
         assert!(matches!(error, AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes: bytes, .. }) if bytes == requested_bytes));
         assert_eq!((key.pointer(), value.pointer()), pointers);
         assert_eq!(NEXT_RECORD.load(SeqCst), records);
@@ -553,8 +553,7 @@ fn actual_storage_edit_rejects_foreign_and_short_policy_before_cloning_or_mutati
                 let ((key, value), error) = without_allocations(|| {
                     block
                         .try_insert_admitted(key, value)
-                        .err()
-                        .expect("changed original reservation must refuse before either edit")
+                        .expect_err("changed original reservation must refuse before either edit")
                 });
                 expect_factory_refusal(error, fault);
                 assert_eq!((key.pointer(), value.pointer()), pointers);
@@ -838,7 +837,7 @@ fn actual_transaction_joined_touch_and_pair_refusal_preserves_inputs_for_exact_r
             let records = NEXT_RECORD.load(SeqCst);
             let held = budget.reserved_bytes();
             let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held).unwrap();
-            let ((key, value), error) = without_allocations(|| transaction.try_insert_admitted(key, value).err().expect("complete pair plus first touch must refuse"));
+            let ((key, value), error) = without_allocations(|| transaction.try_insert_admitted(key, value).expect_err("complete pair plus first touch must refuse"));
             let AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. }) = error else { panic!("original joined capacity refusal"); };
             assert!(requested_bytes > 0);
             assert_eq!((key.pointer(), value.pointer()), input_pointers);
@@ -849,7 +848,7 @@ fn actual_transaction_joined_touch_and_pair_refusal_preserves_inputs_for_exact_r
             assert_eq!(transaction.get(&7).unwrap().pointer(), original);
             drop(blocker);
             let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes + 1).unwrap();
-            let ((key, value), error) = without_allocations(|| transaction.try_insert_admitted(key, value).err().expect("one byte below the joined touch and pair demand must refuse"));
+            let ((key, value), error) = without_allocations(|| transaction.try_insert_admitted(key, value).expect_err("one byte below the joined touch and pair demand must refuse"));
             assert!(matches!(error, AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes: actual, .. }) if actual == requested_bytes));
             assert_eq!((key.pointer(), value.pointer()), input_pointers);
             assert_eq!(transaction.touched_entries().len(), 0);
@@ -1569,7 +1568,7 @@ fn actual_block_removal_refusal_preserves_exact_query_for_complete_budget_retry(
             let records = NEXT_RECORD.load(SeqCst);
             let held = budget.reserved_bytes();
             let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held).unwrap();
-            let (key, error) = without_allocations(|| block.try_remove_admitted(key).err().expect("whole original remove pair must refuse"));
+            let (key, error) = without_allocations(|| block.try_remove_admitted(key).expect_err("whole original remove pair must refuse"));
             let AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. }) = error else { panic!("original remove capacity refusal"); };
             assert!(requested_bytes > 0);
             assert_eq!((key.pointer(), key.id()), query);
@@ -1579,7 +1578,7 @@ fn actual_block_removal_refusal_preserves_exact_query_for_complete_budget_retry(
             assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), copies);
             drop(blocker);
             let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes + 1).unwrap();
-            let (key, error) = without_allocations(|| block.try_remove_admitted(key).err().expect("one byte below complete remove demand"));
+            let (key, error) = without_allocations(|| block.try_remove_admitted(key).expect_err("one byte below complete remove demand"));
             assert!(matches!(error, AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes: n, .. }) if n == requested_bytes));
             assert_eq!((key.pointer(), key.id()), query);
             assert_eq!(NEXT_RECORD.load(SeqCst), records);
@@ -1631,7 +1630,7 @@ fn actual_transaction_removal_refusal_joins_touch_and_pair_before_exact_query_re
             let records = NEXT_RECORD.load(SeqCst);
             let held = budget.reserved_bytes();
             let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held).unwrap();
-            let (key, error) = without_allocations(|| transaction.try_remove_admitted(key).err().expect("joined remove plus touch demand must refuse"));
+            let (key, error) = without_allocations(|| transaction.try_remove_admitted(key).expect_err("joined remove plus touch demand must refuse"));
             let AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. }) = error else { panic!("original remove plus touch capacity refusal"); };
             assert!(requested_bytes > 0);
             assert_eq!((key.pointer(), key.id()), query);
@@ -1642,7 +1641,7 @@ fn actual_transaction_removal_refusal_joins_touch_and_pair_before_exact_query_re
             assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), copies);
             drop(blocker);
             let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes + 1).unwrap();
-            let (key, error) = without_allocations(|| transaction.try_remove_admitted(key).err().expect("one byte below joined remove plus touch demand"));
+            let (key, error) = without_allocations(|| transaction.try_remove_admitted(key).expect_err("one byte below joined remove plus touch demand"));
             assert!(matches!(error, AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes: n, .. }) if n == requested_bytes));
             assert_eq!((key.pointer(), key.id()), query);
             assert_eq!(transaction.touched_entries().len(), 0);

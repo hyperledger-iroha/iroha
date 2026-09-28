@@ -23439,7 +23439,7 @@ pub mod tests {
             )],
         );
         let expected = synthetic_queue_plan_admission_context(&plan);
-        for flags in [0, norito::core::header_flags::PACKED_STRUCT] {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(synthetic_queue_plan_admission_context(&plan), expected);
         }
@@ -27372,7 +27372,7 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([sample_unregister_instruction()])
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary);
         let fee_intent = {
             let view = state.view();
             let quote = crate::executor::quote_nexus_fee_admission_draft(
@@ -27405,8 +27405,8 @@ pub mod tests {
             .expect("fixture route");
         assert_eq!(
             transaction.entrypoint().admission_intent(),
-            TransactionAdmissionIntent::QueuePlanSynced,
-            "retirement fixture must bind its queued work to the retiring route"
+            TransactionAdmissionIntent::Ordinary,
+            "retirement fixture uses current signed admission on the retiring route"
         );
         assert_eq!(route.coordinator_route().lane_id, LaneId::new(1));
         queue

@@ -344,7 +344,6 @@ fn initial_permission_capability_root_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
-    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
 ) -> Result<Option<bool>, ValidationFail> {
     validate_initial_permission_payload_constraints(permission)?;
     macro_rules! decode {
@@ -721,12 +720,8 @@ fn initial_permission_delegation_allowed(
     }
     // Resolve and validate known payloads before consulting stored state. Otherwise a malformed
     // built-in token already present in state could be copied without ever decoding its scope.
-    let capability_root = initial_permission_capability_root_authority(
-        state_transaction,
-        authority,
-        permission,
-        contract_runtime_context,
-    )?;
+    let capability_root =
+        initial_permission_capability_root_authority(state_transaction, authority, permission)?;
     let holder_delegable = if permission.name() == "CanManageAssetDefinitionAlias" {
         let token = executor_permission::asset_definition::CanManageAssetDefinitionAlias::try_from(
             permission,

@@ -6378,7 +6378,7 @@ pub(crate) struct QueryAdmissionPermit {
     _body: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 impl QueryAdmissionPermit {
-    #[cfg(feature = "app_api")]
+    #[cfg(all(test, feature = "app_api"))]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
         self

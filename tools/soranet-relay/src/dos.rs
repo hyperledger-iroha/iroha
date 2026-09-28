@@ -932,8 +932,8 @@ impl SlowlorisDetector {
             // Reclaim scores whose complete observation window has elapsed before
             // rejecting an unseen source. Clock regression retains state fail closed.
             guard.retain(|_, entry| {
-                !now.checked_duration_since(entry.window_start)
-                    .is_some_and(|elapsed| elapsed >= window)
+                now.checked_duration_since(entry.window_start)
+                    .is_none_or(|elapsed| elapsed < window)
             });
         }
         if guard.len() >= self.max_entries || guard.try_reserve(1).is_err() {

@@ -183,7 +183,7 @@ pub struct SubscriptionListParams {
     pub owned_by: Option<String>,
     /// Optional provider filter using a canonical I105 id or on-chain alias.
     pub provider: Option<String>,
-    /// Optional status filter (active, paused, past_due, canceled, suspended).
+    /// Optional status filter (`active`, `paused`, `past_due`, `canceled`, `suspended`).
     pub status: Option<String>,
     /// Optional limit for pagination.
     pub limit: Option<u64>,

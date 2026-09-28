@@ -560,7 +560,7 @@ mod tests {
             Error::Encode(norito::Error::NonCanonicalEncoding)
         ));
         let mut reserved_flags = baseline.clone();
-        reserved_flags[39] |= norito::core::header_flags::VARINT_OFFSETS;
+        reserved_flags[39] |= 0x08; // reserved header bit
         assert_before_transcript(&reserved_flags, diagnostic_limits());
         for length in [0, 1, 39, 40, baseline.len() - 1] {
             assert_before_transcript(&baseline[..length], diagnostic_limits());

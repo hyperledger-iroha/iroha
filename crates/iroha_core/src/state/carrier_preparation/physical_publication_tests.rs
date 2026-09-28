@@ -2498,6 +2498,7 @@ fn retained_publication_facade_refuses_foreign_authority_before_io_and_retries_o
     );
     let source = service.carrier_queue_source();
     let budget = AllocationBudget::new(64 << 20);
+    let mut completion_admission_bytes = 0;
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("actual original execution: {error}"))
         .prepare_journals(
@@ -2507,12 +2508,14 @@ fn retained_publication_facade_refuses_foreign_authority_before_io_and_retries_o
                     .world_journal_shell_bytes()?
                     .checked_add(inputs.retained_effects_layout.size())
                     .ok_or(AllocationRefusal::DemandOverflow)?;
+                completion_admission_bytes = bytes;
                 budget.try_reserve_bytes(bytes)
             },
         )
         .unwrap();
     let reserved = budget.reserved_bytes();
-    assert!(reserved > 0);
+    assert!(completion_admission_bytes > 0);
+    assert!(reserved > completion_admission_bytes);
     let finality = signed_finality(
         context.clone(),
         subject(journals.valid.as_ref()),
@@ -2616,7 +2619,9 @@ fn retained_publication_facade_refuses_foreign_authority_before_io_and_retries_o
         state.kura.v2_finality_artifact(1).unwrap().as_ref(),
         Some(finality.artifact())
     );
-    assert_eq!(budget.reserved_bytes(), reserved);
+    // Publication retires the structural journal shells and effects Box; the
+    // original completion admission remains attached to the published carrier.
+    assert_eq!(budget.reserved_bytes(), completion_admission_bytes);
     assert_fences_free_except(&state, "");
     drop(published);
     assert_eq!(budget.reserved_bytes(), 0);

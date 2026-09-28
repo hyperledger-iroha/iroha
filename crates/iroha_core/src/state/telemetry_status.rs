@@ -1,6 +1,7 @@
 //! Bounded, generation-consistent journal witnesses for classified status.
 
 use super::{BlockHeader, Hash, HashOf, State, is_stable_state_view_generation};
+#[cfg(any(test, feature = "telemetry"))]
 use iroha_config::parameters::actual::LaneRoutingPolicy;
 
 /// Internal scheduling quantum; never a second memory pool or runtime mode.
@@ -12,6 +13,7 @@ const JOURNAL_DOMAIN: &[u8] = b"iroha:telemetry:classified-journal:v1\0";
 pub(crate) struct TelemetryStatusTarget {
     pub(crate) height: usize,
     pub(crate) tip: Option<HashOf<BlockHeader>>,
+    #[cfg(any(test, feature = "telemetry"))]
     pub(crate) routing_policy: LaneRoutingPolicy,
 }
 
@@ -96,6 +98,7 @@ impl State {
             let target = TelemetryStatusTarget {
                 height: hashes.len(),
                 tip: hashes.last().copied(),
+                #[cfg(any(test, feature = "telemetry"))]
                 routing_policy: nexus.routing_policy.clone(),
             };
             let after = self.state_view_generation();

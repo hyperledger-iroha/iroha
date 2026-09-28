@@ -1960,7 +1960,7 @@ mod tests {
         let canonical_wire =
             norito::encode_canonical(&envelope).expect("encode canonical relay envelope");
         let alternate_flags =
-            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let (alternate_wire, alternate) = {
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             (
@@ -2317,7 +2317,7 @@ mod tests {
         let original = fee_sponsor_vault_allocation_claim_digest(&claim);
         let ambient = {
             let alternate_flags =
-                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             fee_sponsor_vault_allocation_claim_digest(&claim)
         };
@@ -2373,7 +2373,7 @@ mod tests {
         );
         let ambient = {
             let alternate_flags =
-                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             fee_sponsor_vault_source_state_root(
                 &program_id,

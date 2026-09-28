@@ -1569,7 +1569,6 @@ HARNESS_TARGETS = {
     "torii-lifecycle": ("native Torii lifecycle endpoint", "torii_nexus_sorafs", "test", ["-p", "iroha_torii", "--test", "torii_nexus_sorafs"]),
     "client": ("native Rust SDK", "iroha", "lib", ["-p", "iroha", "--lib"]),
     "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
-    "executor": ("native default executor policy", "iroha_executor", "lib", ["-p", "iroha_executor", "--lib"]),
     "schema": ("native public schema closure", "iroha_schema_gen", "lib", ["-p", "iroha_schema_gen", "--lib"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
     "sumeragi": ("native current consensus", "iroha_sumeragi", "lib", ["-p", "iroha_sumeragi", "--lib"]),
@@ -1711,9 +1710,6 @@ CORE_CONTRACT_OWNER_STAGES = (("exact contract lifecycle owner delegation and in
 CORE_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_ADMISSION_STARTUP_STAGES
 CORE_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_STAGES
-EXECUTOR_STAGES = (("default executor delegates exact entrypoint authority to Core", (
-    'default::contract_deployment_permission_tests::exact_entrypoint_grant_and_revoke_reach_shared_core_authority_boundary',
-)),)
 SCHEMA_STAGES = (("current portable finality schema closure", (
     'tests::current_finality_http_contracts_have_complete_schema_entries',
     'tests::no_extra_or_missing_schemas',
@@ -2894,7 +2890,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
-        "sumeragi": CURRENT_CONSENSUS_STAGES, "executor": EXECUTOR_STAGES, "schema": SCHEMA_STAGES,
+        "sumeragi": CURRENT_CONSENSUS_STAGES, "schema": SCHEMA_STAGES,
         "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES, "wallet": WALLET_STAGES,
         "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
         "torii-shared": TORII_SHARED_STAGES, "torii-lifecycle": TORII_LIFECYCLE_STAGES,

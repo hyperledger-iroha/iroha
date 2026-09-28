@@ -15,7 +15,7 @@ impl SerializePayload for Bytes {
 }
 
 fn layouts() -> impl Iterator<Item = u8> {
-    (0..=u8::MAX).filter(|flags| validate_header_flags(*flags).is_ok())
+    [0, header_flags::COMPACT_LEN].into_iter()
 }
 
 fn assert_prefixes<T: SerializePayload + Clone>(values: &[T], flags: u8) {
@@ -80,13 +80,12 @@ fn nested_layout_sensitive_elements_match_every_real_prefix() {
 fn zero_length_elements_still_add_their_required_framing() {
     for flags in layouts() {
         let mut measured = SequencePayloadLength::new(flags).unwrap();
-        let packed = flags & header_flags::PACKED_SEQ != 0;
-        let framing = if packed || flags & header_flags::COMPACT_LEN == 0 {
+        let framing = if flags & header_flags::COMPACT_LEN == 0 {
             8
         } else {
             1
         };
-        assert_eq!(measured.len(), if packed { 16 } else { 8 });
+        assert_eq!(measured.len(), 8);
         for count in 1..=4 {
             let before = measured.len();
             measured.push(&Bytes(vec![])).unwrap();
@@ -242,9 +241,9 @@ fn success_and_serializer_failure_restore_enclosing_flags_and_encode_tracking() 
         }
     }
     let payload = [1, 2, 3];
-    let _payload = codec::PayloadCtxGuard::enter_with_flags(&payload, header_flags::PACKED_SEQ);
+    let _payload = codec::PayloadCtxGuard::enter_with_flags(&payload, header_flags::COMPACT_LEN);
     let payload_context = codec::payload_ctx();
-    let _outer_flags = DecodeFlagsGuard::enter(header_flags::PACKED_STRUCT);
+    let _outer_flags = DecodeFlagsGuard::enter(0);
     let _encode = codec::EncodeContextGuard::enter();
     codec::note_fixed_offsets_emitted();
     for flags in layouts() {
@@ -261,7 +260,7 @@ fn success_and_serializer_failure_restore_enclosing_flags_and_encode_tracking() 
             } else {
                 result.unwrap();
             }
-            assert_eq!(codec::effective_layout_flags(), header_flags::PACKED_STRUCT);
+            assert_eq!(codec::effective_layout_flags(), 0);
             assert_eq!(codec::payload_ctx(), payload_context);
             assert!(codec::fixed_offsets_used());
             assert!(!codec::field_bitset_used());
@@ -389,11 +388,7 @@ fn stateful_serialization_is_an_observation_not_a_later_byte_certificate() {
 fn checked_arithmetic_accepts_the_last_representable_length_then_rejects() {
     for flags in layouts() {
         let initial = SequencePayloadLength::new(flags).unwrap();
-        let framing = if flags & header_flags::PACKED_SEQ != 0 {
-            24
-        } else {
-            8 + codec::len_prefix_len_with_flags(usize::MAX - 32, flags)
-        };
+        let framing = 8 + codec::len_prefix_len_with_flags(usize::MAX - 32, flags);
         // Synthetic arithmetic boundaries are private test inputs, never public measured evidence.
         let last = initial.checked_append(usize::MAX - framing).unwrap();
         assert_eq!(last.len(), usize::MAX);

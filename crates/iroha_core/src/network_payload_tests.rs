@@ -84,11 +84,7 @@ fn core_block_payload_prefix_preserves_live_message_boundaries() {
 
 #[test]
 fn core_block_payload_prefix_rejects_unsupported_versions_without_losing_context() {
-    for flags in [
-        0,
-        ncore::header_flags::COMPACT_LEN,
-        ncore::header_flags::PACKED_STRUCT,
-    ] {
+    for flags in [0, ncore::header_flags::COMPACT_LEN] {
         let _flags = ncore::DecodeFlagsGuard::enter(flags);
         let mut bad = block_message();
         let BlockMessage::V2(ref mut message) = bad else {

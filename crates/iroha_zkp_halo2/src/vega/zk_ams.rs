@@ -33,6 +33,7 @@ mod mkhe;
 pub use mkhe::RnsNativeProofDigestV1;
 #[cfg(test)]
 pub use mkhe::ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1;
+#[cfg(test)]
 pub use mkhe::ZkAmsMkheDirectObjectKindV1;
 pub use mkhe::ZkAmsMkheRnsNativeTerminalRootsV1;
 #[cfg(test)]
@@ -181,13 +182,12 @@ pub use mkhe::{
 #[cfg(test)]
 pub use mkhe::{
     ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
-    ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionStreamingBlockerV1,
-    ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
-    ZkAmsMkhePreparedCollectivePublicAV1, ZkAmsMkheStagedDecryptionShareV1,
-    ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
-    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1, ZkAmsMkheStreamingDecryptionStatementV1,
-    ZkAmsMkheStreamingFullRosterDecryptionResultV1, ZkAmsMkheTrustedSourceContextV1,
-    ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
+    ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionStreamingResidencyEvidenceV1,
+    ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkhePreparedCollectivePublicAV1,
+    ZkAmsMkheStagedDecryptionShareV1, ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1,
+    ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
+    ZkAmsMkheTrustedSourceContextV1, ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
     ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
     automorphism_switch_zk_ams_mkhe_collective_streaming_v1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_v1, prepare_zk_ams_mkhe_collective_public_a_v1,

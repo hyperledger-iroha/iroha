@@ -175,12 +175,7 @@ internal class TransactionPayloadAdapter private constructor(
             require(countValue in 1L..LanePrivacyMerkleWitness.MAX_DEPTH.toLong()) {
                 "lane privacy audit path depth must be between 1 and ${LanePrivacyMerkleWitness.MAX_DEPTH}"
             }
-            val count = countValue.toInt()
-            return if ((decoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                decodePacked(decoder, count)
-            } else {
-                decodeDelimited(decoder, count)
-            }
+            return decodeDelimited(decoder, countValue.toInt())
         }
 
         override fun isSelfDelimiting(): Boolean = true
@@ -195,28 +190,6 @@ internal class TransactionPayloadAdapter private constructor(
                 siblings.add(decodeSibling(decoder.readBytes(length.toInt()), decoder, index))
             }
             return siblings
-        }
-
-        private fun decodePacked(decoder: NoritoDecoder, count: Int): List<ByteArray> {
-            var previous = decoder.readUInt(64)
-            require(previous == 0L) { "packed lane privacy offsets must start at zero" }
-            val sizes = ArrayList<Int>(count)
-            repeat(count) { index ->
-                val current = decoder.readUInt(64)
-                require(current >= previous) { "packed lane privacy offsets must be monotonic" }
-                val size = current - previous
-                require(size in 1L..LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES) {
-                    "lane privacy sibling $index payload is oversized"
-                }
-                sizes.add(size.toInt())
-                previous = current
-            }
-            require(previous == decoder.remaining().toLong()) {
-                "packed lane privacy offsets must cover the complete path payload"
-            }
-            return sizes.mapIndexedTo(ArrayList(count)) { index, size ->
-                decodeSibling(decoder.readBytes(size), decoder, index)
-            }
         }
 
         private fun decodeSibling(

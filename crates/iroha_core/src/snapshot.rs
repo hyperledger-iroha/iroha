@@ -5093,7 +5093,7 @@ fn ensure_snapshot_identity_is_backed_by_kura(
     Ok(())
 }
 /// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
     json::to_json(&canonical_state_snapshot_value(state))
         .expect("state snapshot serialization must succeed")
@@ -5196,7 +5196,7 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn canonical_state_snapshot_value(state: &State) -> json::Value {
     let captured = CapturedStateSnapshot::capture(state)
         .expect("State fixture must have one stable valid snapshot cut");
@@ -5207,7 +5207,7 @@ fn canonical_state_snapshot_value(state: &State) -> json::Value {
     redact_consensus_sidecars_from_state_value(&mut value);
     value
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn normalize_mv_cell_fields_in_state_value(value: &mut json::Value) {
     let Some(state) = value.as_object_mut() else {
         return;
@@ -5233,7 +5233,7 @@ fn normalize_mv_cell_fields_in_state_value(value: &mut json::Value) {
         normalize_serialized_cell_field(world, key);
     }
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn normalize_serialized_cell_field(map: &mut json::Map, key: &str) {
     let Some(value) = map.get_mut(key) else {
         return;
@@ -5247,7 +5247,7 @@ fn normalize_serialized_cell_field(map: &mut json::Map, key: &str) {
         *value = current_value;
     }
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {
     let Some(sumeragi) = value
         .get_mut("world")
@@ -5259,7 +5259,7 @@ fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {
     };
     sort_dedup_json_array_field(sumeragi, "key_allowed_algorithms");
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn sort_dedup_json_array_field(map: &mut json::Map, key: &str) {
     let Some(values) = map.get_mut(key).and_then(json::Value::as_array_mut) else {
         return;
@@ -5267,13 +5267,13 @@ fn sort_dedup_json_array_field(map: &mut json::Map, key: &str) {
     values.sort_by_cached_key(canonical_json_sort_key);
     values.dedup();
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn canonical_json_sort_key(value: &json::Value) -> String {
     let mut out = String::new();
     json::JsonSerialize::json_serialize(value, &mut out);
     out
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     let Some(state) = value.as_object_mut() else {
         return;
@@ -5289,8 +5289,7 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     state.remove("prev_commit_topology");
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
-#[cfg(any(test, feature = "iroha-core-tests"))]
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
 }

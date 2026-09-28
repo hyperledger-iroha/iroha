@@ -3687,9 +3687,9 @@ sign|submit` and `bridge-key register` commands. None may be added.
   (§4.13.4).
 - **Executor:** `CanManageSccpGovernance` with its grant rules and deny
   visitors. `CanProposeSccpRouteGovernance` is kept, and its grant and revoke
-  rule, which today requires `CanManageSccpGovernance`, becomes
-  `impl_validate_grant_revoke_via!(OnlyGenesis::from => …)` in
-  `crates/iroha_executor/src/permission.rs`. The executor-level
+  rule, which today requires `CanManageSccpGovernance`, becomes genesis-only
+  in Core (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
+  `crates/iroha_core/src/executor_initial_permission_authority.rs`). The executor-level
   `SetParameter` deny for the old SCCP registry parameter is replaced by a
   core rule that no `SetParameter` touches SCCP state.
 - **`iroha` client and `iroha_cli`:** the proof-request and submit methods;

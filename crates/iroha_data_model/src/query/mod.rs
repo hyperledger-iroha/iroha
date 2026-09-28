@@ -4442,12 +4442,7 @@ mod trait_object_tests {
                 .to_owned(),
             query.encode_bytes(),
         );
-        for flags in [
-            0,
-            norito::core::header_flags::COMPACT_LEN,
-            norito::core::header_flags::PACKED_SEQ,
-            norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN,
-        ] {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
             let actual = bare_bytes_with_flags(&query, flags);
             assert_eq!(actual, bare_bytes_with_flags(&expected, flags));
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
@@ -4529,62 +4524,6 @@ mod trait_object_tests {
         );
     }
 
-    #[test]
-    fn query_box_rejects_retired_packed_struct_layout() {
-        let erased = ErasedIterQuery::<Domain>::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            domain::FindDomains.encode(),
-        );
-        let query: QueryBox<QueryOutputBatchBox> = Box::new(erased);
-        let packed_flags =
-            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
-        let error = try_bare_bytes_with_flags(&query, packed_flags)
-            .expect_err("packed-struct QueryBox encoding must be rejected");
-        assert!(matches!(
-            error,
-            norito::core::Error::UnsupportedFeature(message)
-                if message == model::QUERY_BOX_PACKED_STRUCT_ERROR
-        ));
-        let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
-        assert_eq!(
-            norito::core::SerializePayload::encoded_len_exact(&query),
-            None
-        );
-    }
-
-    #[test]
-    fn query_box_rejects_retired_packed_struct_decode() {
-        let erased = ErasedIterQuery::<Domain>::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            domain::FindDomains.encode(),
-        );
-        let query: QueryBox<QueryOutputBatchBox> = Box::new(erased);
-        let historical = (
-            query_wire_id(query.type_name_key())
-                .expect("domain query wire identifier")
-                .to_owned(),
-            query.encode_bytes(),
-        );
-        let packed_flags =
-            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
-        let payload = bare_bytes_with_flags(&historical, packed_flags);
-        let frame = norito::core::frame_bare_with_header_flags::<QueryBox<QueryOutputBatchBox>>(
-            &payload,
-            packed_flags,
-        )
-        .expect("frame historical packed query");
-        let error = match norito::decode_from_bytes::<QueryBox<QueryOutputBatchBox>>(&frame) {
-            Ok(_) => panic!("packed-struct QueryBox decoding must be rejected"),
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error,
-            norito::core::Error::UnsupportedFeature(message)
-                if message == model::QUERY_BOX_PACKED_STRUCT_ERROR
-        ));
-    }
     #[test]
     fn query_dyn_encode_matches_encode() {
         let q = domain::FindDomains;

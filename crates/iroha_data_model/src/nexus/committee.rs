@@ -411,6 +411,10 @@ pub struct AdmitValidatorCommitteeSeatV1 {
 )]
 #[norito_schema(name = "iroha_data_model::nexus::ValidatorCommitteeOperationV1")]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a variant would change the reviewed Norito operation layout"
+)]
 pub enum ValidatorCommitteeOperationV1 {
     /// Publish generation keys after proving possession of both keys.
     PublishCandidate(ValidatorCandidateKeysV1),
@@ -516,6 +520,10 @@ impl ValidatorCommitteeTransitionV1 {
     ///
     /// # Errors
     /// Rejects replaced credentials, repeated seats, inconsistent terminal decisions or incomplete activation.
+    #[expect(
+        clippy::suspicious_operation_groupings,
+        reason = "the outcome epoch intentionally binds the preparation target epoch"
+    )]
     pub fn validate(&self) -> Result<(), String> {
         self.preparation.validate()?;
         let invalid = || "invalid validator committee transition progress".to_owned();

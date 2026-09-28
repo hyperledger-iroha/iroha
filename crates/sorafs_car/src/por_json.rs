@@ -8,7 +8,7 @@ const POR_PROOF_MAX_CHUNK_SEGMENTS: usize =
 #[must_use]
 pub fn tree_to_value(tree: &PorMerkleTree) -> Value {
     let mut root = Map::new();
-    root.insert("root_hex".into(), Value::from(to_hex(tree.root())));
+    root.insert("root_hex".into(), Value::from(hex::encode(tree.root())));
     root.insert(
         "chunk_count".into(),
         Value::from(tree.chunks().len() as u64),
@@ -37,11 +37,11 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
     );
     map.insert(
         "chunk_digest_hex".into(),
-        Value::from(to_hex(&proof.chunk_digest)),
+        Value::from(hex::encode(&proof.chunk_digest)),
     );
     map.insert(
         "chunk_root_hex".into(),
-        Value::from(to_hex(&proof.chunk_root)),
+        Value::from(hex::encode(&proof.chunk_root)),
     );
     map.insert(
         "segment_index".into(),
@@ -54,18 +54,18 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
     );
     map.insert(
         "segment_digest_hex".into(),
-        Value::from(to_hex(&proof.segment_digest)),
+        Value::from(hex::encode(&proof.segment_digest)),
     );
     map.insert("leaf_index".into(), Value::from(proof.leaf_index as u64));
     map.insert("leaf_offset".into(), Value::from(proof.leaf_offset));
     map.insert("leaf_length".into(), Value::from(proof.leaf_length as u64));
     map.insert(
         "leaf_bytes_hex".into(),
-        Value::from(to_hex(&proof.leaf_bytes)),
+        Value::from(hex::encode(&proof.leaf_bytes)),
     );
     map.insert(
         "leaf_digest_hex".into(),
-        Value::from(to_hex(&proof.leaf_digest)),
+        Value::from(hex::encode(&proof.leaf_digest)),
     );
     map.insert(
         "segment_leaves_hex".into(),
@@ -73,7 +73,7 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
             proof
                 .segment_leaves
                 .iter()
-                .map(|digest| Value::from(to_hex(digest)))
+                .map(|digest| Value::from(hex::encode(digest)))
                 .collect(),
         ),
     );
@@ -83,7 +83,7 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
             proof
                 .chunk_segments
                 .iter()
-                .map(|digest| Value::from(to_hex(digest)))
+                .map(|digest| Value::from(hex::encode(digest)))
                 .collect(),
         ),
     );
@@ -93,7 +93,7 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
             proof
                 .chunk_merkle_path
                 .iter()
-                .map(|digest| Value::from(to_hex(digest)))
+                .map(|digest| Value::from(hex::encode(digest)))
                 .collect(),
         ),
     );
@@ -291,9 +291,9 @@ fn chunk_to_map(chunk: &PorChunkTree) -> Map {
     obj.insert("length".into(), Value::from(chunk.length as u64));
     obj.insert(
         "chunk_digest_hex".into(),
-        Value::from(to_hex(&chunk.chunk_digest)),
+        Value::from(hex::encode(&chunk.chunk_digest)),
     );
-    obj.insert("root_hex".into(), Value::from(to_hex(&chunk.root)));
+    obj.insert("root_hex".into(), Value::from(hex::encode(&chunk.root)));
     let mut segments = Vec::with_capacity(chunk.segments.len());
     for segment in &chunk.segments {
         segments.push(Value::Object(segment_to_map(segment)));
@@ -305,7 +305,10 @@ fn segment_to_map(segment: &PorSegment) -> Map {
     let mut obj = Map::new();
     obj.insert("offset".into(), Value::from(segment.offset));
     obj.insert("length".into(), Value::from(segment.length as u64));
-    obj.insert("digest_hex".into(), Value::from(to_hex(&segment.digest)));
+    obj.insert(
+        "digest_hex".into(),
+        Value::from(hex::encode(&segment.digest)),
+    );
     let mut leaves = Vec::with_capacity(segment.leaves.len());
     for leaf in &segment.leaves {
         leaves.push(Value::Object(leaf_to_map(leaf)));
@@ -318,7 +321,7 @@ fn leaf_to_map(leaf: &PorLeaf) -> Map {
     obj.insert("leaf_index_flat".into(), Value::from(leaf.flat_index));
     obj.insert("offset".into(), Value::from(leaf.offset));
     obj.insert("length".into(), Value::from(leaf.length as u64));
-    obj.insert("digest_hex".into(), Value::from(to_hex(&leaf.digest)));
+    obj.insert("digest_hex".into(), Value::from(hex::encode(&leaf.digest)));
     obj
 }
 fn expect_u64(map: &Map, key: &str) -> Result<u64, String> {
@@ -399,15 +402,6 @@ fn from_hex_digit(byte: u8) -> Result<u8, String> {
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         _ => Err(format!("invalid hex digit: {byte}")),
     }
-}
-fn to_hex(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 #[cfg(test)]
 mod tests {

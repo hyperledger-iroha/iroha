@@ -53,20 +53,8 @@ mod tests {
         TwoSlotStoreConfigV1::try_new(name, [0x51; 32], [0xa7; 32], 512)
             .expect("valid bounded two-slot test config")
     }
-    fn two_slot_caller_layouts() -> [u8; 10] {
-        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-        [
-            0,
-            COMPACT_LEN,
-            PACKED_SEQ,
-            PACKED_SEQ | COMPACT_LEN,
-            PACKED_STRUCT,
-            PACKED_STRUCT | COMPACT_LEN,
-            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-            PACKED_SEQ | PACKED_STRUCT,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        ]
+    fn two_slot_caller_layouts() -> [u8; 2] {
+        [0, norito::core::header_flags::COMPACT_LEN]
     }
     #[test]
     fn two_slot_binding_and_record_frames_ignore_caller_layout() {

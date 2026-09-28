@@ -371,7 +371,7 @@ fn participant_routes(plan: &RoutingPlan) -> BTreeSet<(LaneId, DataSpaceId)> {
 }
 #[test]
 fn domain_retirement_rejects_governed_fx_corridor_backing_atomically() {
-    let mut fixture = fixture(None);
+    let fixture = fixture(None);
     let domain_id = DomainId::try_new("cbuae", "universal").expect("FX source asset domain");
     let definition_id = fixture.corridor.source_asset_definition_id.clone();
     let header = BlockHeader::new(

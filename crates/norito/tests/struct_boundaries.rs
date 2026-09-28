@@ -1,4 +1,4 @@
-//! Packed structures enforce their declared byte boundary and report exact prefixes.
+//! Derived structures enforce their declared byte boundary and report exact prefixes.
 
 use norito::{
     NoritoDeserialize, NoritoSerialize,
@@ -7,7 +7,7 @@ use norito::{
 };
 
 #[derive(Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "norito.test.packed_struct_boundaries.Named")]
+#[norito_schema(name = "norito.test.struct_boundaries.Named")]
 struct Named {
     counter: u32,
     label: String,
@@ -16,27 +16,19 @@ struct Named {
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "norito.test.packed_struct_boundaries.Tuple")]
+#[norito_schema(name = "norito.test.struct_boundaries.Tuple")]
 struct Tuple(u32, String);
 
 #[derive(Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "norito.test.packed_struct_boundaries.EmptyNamed")]
+#[norito_schema(name = "norito.test.struct_boundaries.EmptyNamed")]
 struct EmptyNamed {}
 
 #[derive(Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "norito.test.packed_struct_boundaries.EmptyTuple")]
+#[norito_schema(name = "norito.test.struct_boundaries.EmptyTuple")]
 struct EmptyTuple();
 
-fn layouts() -> [u8; 4] {
-    [
-        header_flags::PACKED_STRUCT,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET,
-        header_flags::PACKED_STRUCT
-            | header_flags::PACKED_SEQ
-            | header_flags::COMPACT_LEN
-            | header_flags::FIELD_BITSET,
-    ]
+fn layouts() -> [u8; 2] {
+    [0, header_flags::COMPACT_LEN]
 }
 
 fn assert_boundaries<T>(value: &T)
@@ -49,9 +41,9 @@ where
             norito::codec::encode_with_header_flags(value)
         };
         let frame = norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
-            .expect("frame declared packed structure");
+            .expect("frame declared structure");
         assert_eq!(
-            &norito::decode_from_bytes::<T>(&frame).expect("decode packed structure"),
+            &norito::decode_from_bytes::<T>(&frame).expect("decode structure"),
             value
         );
 
@@ -61,7 +53,7 @@ where
             .expect("frame trailing payload with a valid checksum");
         assert!(
             norito::decode_from_bytes::<T>(&forged).is_err(),
-            "accepted trailing packed structure for layout {flags:#x}"
+            "accepted trailing structure bytes for layout {flags:#x}"
         );
 
         let _flags = DecodeFlagsGuard::enter(flags);
@@ -72,33 +64,46 @@ where
         for end in 0..payload.len() {
             assert!(
                 norito::core::decode_field_canonical::<T>(&payload[..end]).is_err(),
-                "accepted truncated packed structure at {end}, layout {flags:#x}"
+                "accepted truncated structure at {end}, layout {flags:#x}"
             );
         }
     }
 }
 
 #[test]
-fn named_packed_struct_enforces_boundary() {
+fn named_struct_enforces_boundary() {
     assert_boundaries(&Named {
         counter: 0x1234_5678,
-        label: "bounded packed payload".into(),
+        label: "bounded payload".into(),
     });
 }
 
 #[test]
-fn tuple_packed_struct_enforces_boundary() {
-    assert_boundaries(&Tuple(0x1234_5678, "bounded packed payload".into()));
+fn tuple_struct_enforces_boundary() {
+    assert_boundaries(&Tuple(0x1234_5678, "bounded payload".into()));
 }
 
 #[test]
-fn empty_packed_structs_consume_the_declared_header() {
+fn empty_structs_encode_an_empty_payload_in_every_layout() {
+    for requested in layouts() {
+        let _flags = DecodeFlagsGuard::enter(requested);
+        assert!(
+            norito::codec::encode_with_header_flags(&EmptyNamed {})
+                .0
+                .is_empty()
+        );
+        assert!(
+            norito::codec::encode_with_header_flags(&EmptyTuple())
+                .0
+                .is_empty()
+        );
+    }
     assert_boundaries(&EmptyNamed {});
     assert_boundaries(&EmptyTuple());
 }
 
 #[test]
-fn tuple_slice_decoder_rejects_trailing_packed_bytes() {
+fn tuple_slice_decoder_rejects_trailing_bytes() {
     use norito::core::DecodeFromSlice;
 
     let value = Tuple(7, "tuple slice".into());
@@ -124,22 +129,12 @@ fn unit_struct_size_hints_match_serialization_for_every_advertised_layout() {
     use norito::SerializePayload as _;
 
     let value = EmptyUnit;
-    for flags in (0..=norito::core::supported_header_flags())
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-    {
+    for flags in layouts() {
         let _flags = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
         norito::core::serialize_to_buffer(&value, &mut payload).unwrap();
-        let expected: &[u8] = if flags & header_flags::PACKED_STRUCT != 0
-            && flags & header_flags::FIELD_BITSET == 0
-        {
-            // The existing zero-field packed record has one zero offset.
-            &[0; 8]
-        } else {
-            &[]
-        };
-        assert_eq!(
-            payload, expected,
+        assert!(
+            payload.is_empty(),
             "unit bytes changed for flags {flags:#04x}"
         );
         assert_eq!(
@@ -195,9 +190,7 @@ fn named_slice_decoder_obeys_layout_prefix_validation_and_canonical_boundaries()
         values: vec![3, 5, 11],
         tag: Some(9),
     };
-    for requested in (0..=norito::core::supported_header_flags())
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-    {
+    for requested in layouts() {
         let (payload, flags) = {
             let _requested = DecodeFlagsGuard::enter(requested);
             norito::codec::encode_with_header_flags(&value)
@@ -260,9 +253,7 @@ fn named_slice_decoder_requires_no_serializer_or_frame_identity() {
         values: vec![3, 5, 11],
         tag: Some(9),
     };
-    for requested in (0..=norito::core::supported_header_flags())
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-    {
+    for requested in layouts() {
         let (mut payload, flags) = {
             let _requested = DecodeFlagsGuard::enter(requested);
             norito::codec::encode_with_header_flags(&value)

@@ -123,7 +123,9 @@ fn registration_monetary_plan_rejects_every_changed_effect_before_custody_writes
 fn reward_claim_rejects_skips_forged_records_accruals_payouts_and_oversized_prefixes() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+        b"reward_claim_rejects_skips_forged_records_accruals_payouts_and_oversized_prefixes",
+    ));
     let lane = LaneId::SINGLE;
     let (sink, recipient, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -179,8 +181,7 @@ fn reward_claim_rejects_skips_forged_records_accruals_payouts_and_oversized_pref
 fn reward_claim_processes_more_than_sixty_four_dust_records_without_forfeiture() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xE2);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xE2; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, recipient, asset, definition) = configure_reward_fixture(&mut stx, lane, 200);
     stx.nexus.staking.reward_dust_threshold = 100_u64.into();
@@ -257,7 +258,9 @@ fn reward_claim_processes_more_than_sixty_four_dust_records_without_forfeiture()
 fn reward_claim_zero_entitlements_advance_without_creating_accrual() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+        b"reward_claim_zero_entitlements_advance_without_creating_accrual",
+    ));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     reward_distribution(lane, 0, &asset, &validator, 10)

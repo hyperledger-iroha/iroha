@@ -65,6 +65,7 @@ pub(crate) enum Family {
 pub(crate) const FAMILY_COUNT: usize = Family::StorageBytes as usize + 1;
 const ALL_MASK: u32 = (1_u32 << FAMILY_COUNT) - 1;
 /// Every required family in the fixed serialization and observation order.
+#[cfg(any(test, feature = "telemetry"))]
 pub(crate) const ALL_FAMILIES: [Family; FAMILY_COUNT] = [
     Family::ResidentCanonical,
     Family::ResidentTransaction,
@@ -185,6 +186,7 @@ struct State {
 }
 
 /// A coherent complete fixed-size resource observation.
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Snapshot {
     /// Generation of this complete observation.
@@ -368,6 +370,7 @@ impl Inventory {
     }
 
     /// Return one complete coherent snapshot immediately, or explicit unavailability.
+    #[cfg(any(test, feature = "telemetry"))]
     pub(crate) fn try_snapshot(&self) -> Result<Snapshot, Unavailable> {
         let state = self.state.try_lock().ok_or(Unavailable::Busy)?;
         if let Some(error) = state.fatal {

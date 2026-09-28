@@ -1,4 +1,4 @@
-//! Relay incentive scoring and payout helpers for SoraNet (SNNet-7).
+//! Relay incentive scoring and payout helpers for `SoraNet` (SNNet-7).
 //!
 //! This module evaluates relay performance metrics, applies staking and compliance policy checks,
 //! and emits deterministic reward instructions destined for the XOR treasury. The scoring model
@@ -27,6 +27,10 @@ use std::{collections::BTreeMap, str::FromStr};
 use thiserror::Error;
 /// Weight distribution (basis points) applied to each reward component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the shared suffix names each field's unit"
+)]
 pub struct RewardWeights {
     /// Weight applied to the relay availability ratio.
     pub availability_bps: u16,
@@ -60,6 +64,10 @@ impl RewardWeights {
 }
 /// Normalised reward components expressed in per-mille (0‒1000).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the shared suffix names each field's unit"
+)]
 pub struct RewardComponents {
     /// Availability ratio (0‒1000).
     pub availability_per_mille: u16,
@@ -361,9 +369,7 @@ impl RelayPayoutLedger {
     }
     /// Create a dispute record linked to the original payout instruction.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
     pub fn open_dispute(
-        &self,
         instruction: RelayRewardInstructionV1,
         requested_amount: Quantity,
         submitted_by: AccountId,
@@ -406,6 +412,11 @@ pub struct RelayEarningsAccumulator {
 }
 impl RelayEarningsAccumulator {
     /// Record a non-zero payout for aggregation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEarningsError`] when the relay's aggregated payout count
+    /// or amount would overflow.
     pub fn record(
         &mut self,
         instruction: &RelayRewardInstructionV1,
@@ -777,7 +788,7 @@ mod tests {
         };
         assert_eq!(asset_transfer.source.account(), &treasury);
         assert_eq!(asset_transfer.destination, instruction.beneficiary);
-        let dispute = ledger.open_dispute(
+        let dispute = RelayPayoutLedger::open_dispute(
             instruction.clone(),
             scaled_quantity(12_500, 3),
             treasury.clone(),

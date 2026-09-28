@@ -484,11 +484,7 @@ mod byte_tests {
         let instructions = instructions();
         let expected: Vec<_> = instructions.iter().map(Encode::encode).collect();
         let original_flags = ncore::get_decode_flags();
-        for flags in [
-            ncore::default_encode_flags(),
-            ncore::default_encode_flags() ^ header_flags::COMPACT_LEN,
-            header_flags::PACKED_STRUCT | header_flags::FIELD_BITSET | header_flags::COMPACT_LEN,
-        ] {
+        for flags in [0, header_flags::COMPACT_LEN] {
             let _ambient = ncore::DecodeFlagsGuard::enter(flags);
             assert_eq!(ncore::get_decode_flags(), flags);
             for (instruction, bytes) in instructions.iter().zip(&expected) {

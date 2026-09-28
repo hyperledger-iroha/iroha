@@ -596,13 +596,9 @@ class ProofAttachmentTest {
     }
 
     @Test
-    fun `lane privacy roundtrips under every supported Norito sequence layout`() {
+    fun `lane privacy roundtrips under both supported Norito length layouts`() {
         val attachment = sampleAttachment()
-        for (flags in listOf(
-            NoritoHeader.COMPACT_LEN,
-            NoritoHeader.PACKED_SEQ,
-            NoritoHeader.COMPACT_LEN or NoritoHeader.PACKED_SEQ,
-        )) {
+        for (flags in listOf(0, NoritoHeader.COMPACT_LEN)) {
             val encoded = TransactionPayloadAdapter.encodeProofAttachmentPayload(attachment, flags)
             assertEquals(
                 attachment,

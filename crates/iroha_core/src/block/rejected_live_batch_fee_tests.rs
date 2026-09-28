@@ -1,17 +1,4 @@
 #[test]
-fn overlay_limit_rejection_is_fee_exempt_but_gas_accountable() {
-    let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-        "overlay exceeds max instructions: 2 > 1".to_owned(),
-    ));
-    assert!(super::valid::rejected_live_batch_gas_is_accountable(
-        7, &rejection
-    ));
-    assert!(!super::valid::rejected_live_batch_fees_are_chargeable(
-        7, &rejection
-    ));
-}
-
-#[test]
 fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     let _guard = crate::status::nexus_fee_test_lock()
         .lock()
@@ -435,13 +422,16 @@ fn successful_live_batches_accumulate_parent_block_gas() {
                 .expect("batch must pass stateless admission")
             })
             .collect::<Vec<_>>();
-        state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
+        state
+            .seed_genesis_for_testing()
+            .expect("authenticate ordinary fixture predecessor");
         let block = BlockBuilder::new_with_time_source(
-            transactions, TimeSource::new_fixed(Duration::from_millis(10)),
+            transactions,
+            TimeSource::new_fixed(Duration::from_millis(10)),
         )
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(keypair.private_key())
-            .unpack(|_| {});
+        .chain(0, state.view().latest_block().as_deref())
+        .sign(keypair.private_key())
+        .unpack(|_| {});
         let mut state_block = state.block(block.header());
         state_block.gas_limit_per_block = expected_gas;
         let valid = block

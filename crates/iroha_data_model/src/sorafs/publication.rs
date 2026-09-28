@@ -99,6 +99,9 @@ pub struct SorafsPublicationProofErrorV1;
 /// chain using `SumeragiFinalityVerifier::from_trusted_checkpoint`. A proof response cannot supply
 /// its own trust root. The caller must start a monotonic deadline before generating its challenge
 /// and reject verification after that deadline.
+///
+/// # Errors
+/// Rejects a proof that fails finality, binding or freshness verification.
 pub fn verify_sorafs_publication_v1(
     network: &NetworkId,
     checkpoint: &SumeragiFinalityCheckpoint,

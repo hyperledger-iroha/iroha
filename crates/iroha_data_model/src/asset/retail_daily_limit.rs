@@ -248,6 +248,9 @@ pub struct RetailDailyActivationV1 {
 
 impl RetailDailyLimitPolicyV1 {
     /// Reject zero, fractional or nonphysical first-release policy claims.
+    ///
+    /// # Errors
+    /// Returns the violated policy-shape rule.
     pub fn validate_shape(&self) -> Result<(), &'static str> {
         if self.physical_dataspace == DataSpaceId::UNIVERSAL {
             return Err("retail daily limit requires a physical dataspace");
@@ -328,6 +331,9 @@ pub struct RetailIdentityAttestationV1 {
 
 impl RetailIdentityAttestationV1 {
     /// Authenticate this exact account and policy revision under the installed issuer key.
+    ///
+    /// # Errors
+    /// Rejects a mismatched account, policy revision or issuer signature.
     pub fn verify_for(
         &self,
         policy: &RetailDailyLimitPolicyV1,

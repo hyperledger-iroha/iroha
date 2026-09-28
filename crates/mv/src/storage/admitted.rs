@@ -912,19 +912,34 @@ where
     }
 }
 
+/// A foreign-scope refusal returning the original journal unchanged.
+type ScopeRefusal<Journal> = (Journal, PublicationPreparationError<AdmittedStorageError>);
+
+/// A refused admitted preparation: the original journal, its refusal and the
+/// scoped cleanup that must outlive every enclosing participant.
+type AdmittedPreparationRefusal<'scope, Journal> = (
+    Journal,
+    PublicationPreparationError<AdmittedStorageError>,
+    AdmittedAbortedPublication<'scope>,
+);
+
 impl<K: Key, V: Value, Admission, P> Detached<K, V, Admission, Prepaid<P>>
 where
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Install original retained custody within its authentic allocation scope.
     /// A foreign scope refuses before any physical acquisition or callback.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+    )]
     pub fn try_publication_slot<'scope, 'target>(
         self,
         scope: &'scope AllocationScope<'scope>,
         target: &'target Storage<K, V, Prepaid<P>>,
     ) -> Result<
         AdmittedDetachedPublicationSlot<'scope, 'target, K, V, Admission, P>,
-        (Self, PublicationPreparationError<AdmittedStorageError>),
+        ScopeRefusal<Self>,
     > {
         if !scope.belongs_to(
             target
@@ -949,13 +964,17 @@ where
     /// original scope custodian instead of a borrowed stack boundary. It stays
     /// on the original thread. A foreign pool refuses before touching a writer;
     /// a clone neither allocates a new control nor grants more pool capacity.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+    )]
     pub fn try_publication_slot_owned<'target>(
         self,
         scope: &crate::allocation::OwnedAllocationScope,
         target: &'target Storage<K, V, Prepaid<P>>,
     ) -> Result<
         AdmittedDetachedPublicationSlot<'target, 'target, K, V, Admission, P>,
-        (Self, PublicationPreparationError<AdmittedStorageError>),
+        ScopeRefusal<Self>,
     > {
         if !scope.belongs_to(target.allocation_budget()) {
             return Err((
@@ -976,17 +995,17 @@ where
     /// The original pool scope must enclose every participating writer. Foreign,
     /// busy, poisoned and changed targets return this same journal. Only detached
     /// owners can leave the scope; a prepared physical owner cannot escape it.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+    )]
     pub fn try_prepare_admitted<'scope, 'target>(
         self,
         scope: &'scope AllocationScope<'scope>,
         target: &'target Storage<K, V, Prepaid<P>>,
     ) -> Result<
         AdmittedPreparedPublication<'scope, 'target, K, V, Admission, P>,
-        (
-            Self,
-            PublicationPreparationError<AdmittedStorageError>,
-            AdmittedAbortedPublication<'scope>,
-        ),
+        AdmittedPreparationRefusal<'scope, Self>,
     > {
         let mut slot = self
             .try_publication_slot(scope, target)

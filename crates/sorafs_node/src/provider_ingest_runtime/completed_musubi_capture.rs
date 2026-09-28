@@ -684,6 +684,7 @@ pub fn provider_ingest_completed_musubi_capture_transcript_digest_v1(
 /// semantic and excludes the private process-local authority marker; reconciliation performs a
 /// separate exact-instance check.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub(crate) struct ProviderIngestCompletedMusubiCaptureCandidateV1 {
     authorization: FinalizedProviderIngestAuthorizationV1,
     completed_claim: ProviderIngestFinalizedMusubiCompletionClaimV1,
@@ -698,14 +699,17 @@ impl Eq for ProviderIngestCompletedMusubiCaptureCandidateV1 {}
 impl ProviderIngestCompletedMusubiCaptureCandidateV1 {
     /// Borrow the exact finalized provider-ingest authorization.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn authorization(&self) -> &FinalizedProviderIngestAuthorizationV1 {
         &self.authorization
     }
     /// Borrow the opaque local-provider completed-row claim.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn completed_claim(&self) -> &ProviderIngestFinalizedMusubiCompletionClaimV1 {
         &self.completed_claim
     }
+    #[cfg(test)]
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
@@ -723,6 +727,7 @@ impl ProviderIngestCompletedMusubiCaptureCandidateV1 {
 /// resolves to the last completely scanned head, every bounded row is revalidated but candidates
 /// are suppressed and an empty terminal page is returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ProviderIngestCompletedMusubiCapturePageV1 {
     finalized_cursor: ProviderIngestFinalizedCursorV1,
     candidates: Vec<ProviderIngestCompletedMusubiCaptureCandidateV1>,
@@ -731,22 +736,26 @@ pub(crate) struct ProviderIngestCompletedMusubiCapturePageV1 {
 impl ProviderIngestCompletedMusubiCapturePageV1 {
     /// Return the exact finalized cursor shared by every validated source row.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.finalized_cursor
     }
     /// Borrow the completed-Musubi candidates selected from this page.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn candidates(&self) -> &[ProviderIngestCompletedMusubiCaptureCandidateV1] {
         &self.candidates
     }
     /// Return whether this page exhausted the pinned finalized snapshot.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn scan_complete(&self) -> bool {
         self.scan_complete
     }
 }
 /// Result of verifying and durably enqueuing one bounded capture page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ProviderIngestCompletedMusubiReconcileOutcomeV1 {
     /// Exact finalized cursor shared by the reconciled source rows.
     pub finalized_cursor: ProviderIngestFinalizedCursorV1,
@@ -763,6 +772,7 @@ pub(crate) struct ProviderIngestCompletedMusubiReconcileOutcomeV1 {
 }
 /// Path-free failure while reconciling one completed-Musubi capture page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[cfg(test)]
 pub(crate) enum ProviderIngestCompletedMusubiReconcileErrorV1 {
     /// The replay-safe scanner could not reach its finalized reader.
     #[error("completed-Musubi finalized capture is unavailable")]
@@ -864,13 +874,10 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
     /// Unavailability leaves the exact pending reader and all static identity material in place for
     /// a later retry. This method remains crate-private until the qualified journal/inventory
     /// coordinator can consume scanner output without exposing claims or requests.
-    // The opaque attestation driver is the sole production caller and invokes
-    // this after binding its journal, signer, and inventory. Stock daemon
-    // startup retains that driver inert until supervision is qualified.
-    #[allow(
-        dead_code,
-        reason = "activation stays closed until the qualified effect coordinator is complete"
-    )]
+    // TODO: compile outside tests once the opaque attestation driver is
+    // supervised; that driver is the sole caller and stock daemon startup
+    // retains it inert, so activation stays closed until then.
+    #[cfg(test)]
     pub(crate) fn try_activate(&mut self) -> Result<(), ProviderIngestRuntimeErrorV1> {
         let ProviderIngestCompletedMusubiCaptureCoordinatorStateV1::Pending(pending) = &self.state
         else {
@@ -886,6 +893,7 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
         self.state = ProviderIngestCompletedMusubiCaptureCoordinatorStateV1::Active(scanner);
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn active_scanner_mut(
         &mut self,
     ) -> Option<
@@ -960,6 +968,7 @@ where
     last_completed_cursor: Option<ProviderIngestFinalizedCursorV1>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ProviderIngestCompletedMusubiCaptureProgressV1 {
     request_generation: u64,
     scan_cursor: Option<ProviderIngestFinalizedCursorV1>,
@@ -974,6 +983,7 @@ pub(crate) struct ProviderIngestCompletedMusubiCaptureProgressV1 {
 /// whenever the reconciliation future is dropped or returns early. Call [`Self::commit`] only after
 /// every candidate has been durably reconciled.
 #[must_use = "dropping the guard restores the scanner's prior progress"]
+#[cfg(test)]
 pub(crate) struct ProviderIngestCompletedMusubiCaptureProgressRollbackV1<'a, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -986,6 +996,7 @@ where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
 {
     /// Keep the scanner's newly committed page progress.
+    #[cfg(test)]
     pub(crate) fn commit(mut self) {
         self.scanner = None;
     }
@@ -1000,6 +1011,7 @@ where
         }
     }
 }
+#[cfg(test)]
 struct ValidatedCompletedMusubiCaptureScanPageV1 {
     finalized_cursor: ProviderIngestFinalizedCursorV1,
     candidates: Option<Vec<ProviderIngestCompletedMusubiCaptureCandidateV1>>,
@@ -1245,6 +1257,7 @@ where
         })
     }
 }
+#[cfg(test)]
 fn verify_completed_musubi_signed_capture_page(
     signed: ProviderIngestCompletedMusubiSignedCapturePageV1,
     expected_request: &ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -1270,6 +1283,7 @@ fn verify_completed_musubi_signed_capture_page(
         .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
     Ok(signed.source_page)
 }
+#[cfg(test)]
 fn validate_completed_musubi_capture_source_page(
     page: &ProviderIngestCompletedMusubiCaptureSourcePageV1,
     after_order_id: Option<[u8; 32]>,
@@ -1350,6 +1364,7 @@ fn validate_completed_musubi_capture_source_page(
     }
     Ok(())
 }
+#[cfg(test)]
 fn seal_completed_musubi_capture_source_page(
     source: ProviderIngestCompletedMusubiCaptureSourcePageV1,
     claim_factory: &ProviderIngestFinalizedClaimFactoryV1,
@@ -1418,6 +1433,7 @@ fn seal_completed_musubi_capture_source_page(
         next_after_order_id: source.next_after_order_id,
     })
 }
+#[cfg(test)]
 fn map_capture_ledger_error(
     error: ProviderIngestFinalizedLedgerErrorV1,
 ) -> ProviderIngestRuntimeErrorV1 {
@@ -1440,6 +1456,7 @@ use crate::provider_attestation_journal::{
     MusubiProviderAttestationPreEnqueueProbeV1, MusubiProviderAttestationRetryOutcomeV1,
     MusubiProviderAttestationSignerV1, musubi_provider_attestation_approval_id_v1,
 };
+#[cfg(test)]
 struct ProviderIngestCompletedMusubiPreparedApprovalV1 {
     approval_id: MusubiProviderAttestationApprovalIdV1,
     request: ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -1448,6 +1465,7 @@ struct ProviderIngestCompletedMusubiPreparedApprovalV1 {
 ///
 /// The guard remains live through approval signing and its durable CAS. It may commit scanner
 /// progress only after every retained request is approved or is already in a post-approval state.
+#[cfg(test)]
 struct ProviderIngestCompletedMusubiPreparedPageV1<'a, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1460,6 +1478,7 @@ impl<Ledger> ProviderIngestCompletedMusubiPreparedPageV1<'_, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
 {
+    #[cfg(test)]
     fn commit(self) -> ProviderIngestCompletedMusubiReconcileOutcomeV1 {
         let Self {
             rollback, outcome, ..
@@ -1469,6 +1488,7 @@ where
     }
 }
 impl crate::NodeHandle {
+    #[cfg(test)]
     async fn prepare_provider_ingest_completed_musubi_capture_page<'scanner, Ledger, Inventory>(
         &self,
         scanner: &'scanner mut ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>,
@@ -1610,6 +1630,7 @@ impl crate::NodeHandle {
             .commit())
     }
 }
+#[cfg(test)]
 fn map_completed_musubi_admission_error(
     error: MusubiProviderAttestationJournalErrorV1,
 ) -> ProviderIngestCompletedMusubiReconcileErrorV1 {
@@ -1780,6 +1801,9 @@ impl crate::NodeHandle {
         })
     }
 }
+// TODO: compile the drive loop outside tests once irohad supervises the bound driver; until then
+// the daemon only composes it inert and the loop is exercised by this crate's tests.
+#[cfg(test)]
 impl ProviderIngestCompletedMusubiAttestationDriverV1 {
     /// Drain one bounded handoff page, then prepare/sign one capture page.
     ///
@@ -1974,6 +1998,7 @@ impl ProviderIngestCompletedMusubiAttestationDriverV1 {
         Ok(outcome)
     }
 }
+#[cfg(test)]
 fn map_completed_musubi_driver_capture_error(
     error: ProviderIngestRuntimeErrorV1,
 ) -> ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
@@ -1984,6 +2009,7 @@ fn map_completed_musubi_driver_capture_error(
         _ => ProviderIngestCompletedMusubiAttestationDriveErrorV1::IntegrityRejected,
     }
 }
+#[cfg(test)]
 fn map_completed_musubi_driver_reconcile_error(
     error: ProviderIngestCompletedMusubiReconcileErrorV1,
 ) -> ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
@@ -2010,6 +2036,7 @@ fn map_completed_musubi_driver_reconcile_error(
         }
     }
 }
+#[cfg(test)]
 fn map_completed_musubi_driver_journal_error(
     error: MusubiProviderAttestationJournalErrorV1,
 ) -> ProviderIngestCompletedMusubiAttestationDriveErrorV1 {

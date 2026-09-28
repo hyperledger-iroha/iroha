@@ -157,7 +157,7 @@ impl<K: Clone + Ord + Debug, V: Clone, C> Node<K, V, C> {
             nid: alloc_nid(),
             charge: ManuallyDrop::new(charge),
         });
-        x.into_raw() as *mut Leaf<K, V, C>
+        x.into_raw()
     }
 
     fn new_leaf_ins(
@@ -210,7 +210,7 @@ impl<K: Clone + Ord + Debug, V: Clone, C> Node<K, V, C> {
             nid: alloc_nid(),
             charge: ManuallyDrop::new(charge),
         });
-        x.into_raw() as *mut Leaf<K, V, C>
+        x.into_raw()
     }
 
     pub(crate) fn new_branch(

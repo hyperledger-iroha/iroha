@@ -78,9 +78,9 @@ fn empty_vec_struct_roundtrip() {
     let bytes = norito::core::to_bytes(&value).unwrap();
     let flags = bytes[Header::SIZE - 1];
     assert_eq!(
-        flags & header_flags::FIELD_BITSET,
+        flags & !header_flags::COMPACT_LEN,
         0,
-        "sequential layout must not set FIELD_BITSET"
+        "only COMPACT_LEN may be advertised"
     );
     assert_eq!(
         flags & header_flags::COMPACT_LEN,

@@ -22848,6 +22848,7 @@ pub mod isi {
         include!("world_parliament_due_effect_tests.rs");
         include!("world_parliament_initial_sortition_tests.rs");
         include!("world_sccp_governance_tests.rs");
+        include!("world_permission_association_tests.rs");
         world_test!(set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate {
             use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
             blank_test_state_transaction!(checked state, block, stx);

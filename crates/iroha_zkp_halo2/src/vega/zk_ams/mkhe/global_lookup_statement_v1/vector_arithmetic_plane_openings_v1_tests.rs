@@ -387,7 +387,7 @@ fn every_permit_is_one_shot_and_full_consumption_releases_no_authority() {
     }
     let consumed = owner.finish_v1().unwrap();
     assert_ne!(consumed.binding_digest, [0; 32]);
-    assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) >= before + 1);
+    assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) > before);
     assert!(!AUTHORITY_MINTED_V1 && !RELEASE_READY_V1);
 }
 

@@ -142,7 +142,8 @@ fn canonical_state_rejects_compression_and_invalid_layout_headers_before_allocat
         norito::Compression::Zstd
     );
     let mut invalid_layout = canonical;
-    invalid_layout[norito::core::Header::SIZE - 1] = norito::core::header_flags::FIELD_BITSET;
+    // Retired FIELD_BITSET bit; rejected like every other reserved layout bit.
+    invalid_layout[norito::core::Header::SIZE - 1] = 0x20;
     assert!(norito::core::Header::read(invalid_layout.as_slice()).is_err());
     for flags in valid_caller_layouts() {
         let _caller = norito::core::DecodeFlagsGuard::enter(flags);

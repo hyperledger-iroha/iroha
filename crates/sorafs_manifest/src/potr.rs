@@ -813,18 +813,8 @@ mod tests {
             signature: signature.payload().to_vec(),
         }
     }
-    fn supported_layouts() -> [u8; 8] {
-        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-        [
-            0,
-            COMPACT_LEN,
-            PACKED_SEQ,
-            PACKED_SEQ | COMPACT_LEN,
-            PACKED_STRUCT,
-            PACKED_STRUCT | COMPACT_LEN,
-            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        ]
+    fn supported_layouts() -> [u8; 2] {
+        [0, norito::core::header_flags::COMPACT_LEN]
     }
     fn canonical_owned_signing_payload(receipt: &PotrReceiptV1) -> Vec<u8> {
         let mut unsigned = receipt.clone();

@@ -165,8 +165,8 @@ mod tests {
     use super::*;
     use crate::core::{
         LengthCountingWriter, encoded_payload_len, frame_bare_with_header_flags, header_flags,
-        note_fixed_offsets_emitted, serialize_to_buffer, supported_header_flags, to_bytes,
-        write_len_header,
+        note_compact_len_emitted, note_fixed_offsets_emitted, serialize_to_buffer,
+        supported_header_flags, to_bytes, write_len_header,
     };
 
     #[derive(crate::NoritoSchema)]
@@ -293,7 +293,9 @@ mod tests {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let first = self.visits.replace(self.visits.get() + 1) == 0;
             if self.flag_drift && first {
-                note_fixed_offsets_emitted();
+                // Only the first pass claims a compact length prefix, so the
+                // advertised COMPACT_LEN bit drifts between the two passes.
+                note_compact_len_emitted();
             }
             writer.write_all(if first { self.first } else { self.second })?;
             Ok(())

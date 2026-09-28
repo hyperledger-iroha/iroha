@@ -4492,10 +4492,10 @@ mod streaming;
 #[cfg(test)]
 pub use streaming::{
     ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
-    ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionStreamingBlockerV1,
-    ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
-    ZkAmsMkheStagedDecryptionShareV1, ZkAmsMkheStreamingDecryptionStatementV1,
-    ZkAmsMkheStreamingFullRosterDecryptionResultV1, prove_zk_ams_mkhe_decryption_share_staged_v1,
+    ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionStreamingResidencyEvidenceV1,
+    ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkheStagedDecryptionShareV1,
+    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
+    prove_zk_ams_mkhe_decryption_share_staged_v1,
     verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
     zk_ams_mkhe_decryption_streaming_residency_evidence_v1,
 };

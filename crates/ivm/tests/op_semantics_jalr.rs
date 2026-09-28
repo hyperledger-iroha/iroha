@@ -4,22 +4,6 @@ const CLASSIC_ARITH_IMM: u8 = 0x13;
 fn encode_li16(op: u8, rd: u8, imm8: i8) -> u16 {
     ((op & 0xF) as u16) << 12 | ((rd & 0xF) as u16) << 8 | (imm8 as u8 as u16)
 }
-#[allow(dead_code)]
-fn program_with(instrs: &[u32]) -> Vec<u8> {
-    let meta = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 0,
-        max_cycles: 0,
-        abi_version: 1,
-    };
-    let mut bytes = meta.encode();
-    for w in instrs {
-        bytes.extend_from_slice(&w.to_le_bytes());
-    }
-    bytes
-}
 #[test]
 fn jalr_alignment_word_aligns_target() {
     // x1 (RA) <- pc+4; pc <- (x2 + imm) & !3
