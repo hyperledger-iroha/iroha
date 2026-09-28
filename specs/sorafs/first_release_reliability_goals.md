@@ -204,3 +204,18 @@ goals have implementation and regression evidence.
   with regressions for exponential delay/cap, failed re-prepare and reset on the
   next block. The restart fixture now joins its executor and releases all archive
   owners before reopening, and tests partial startup capture followed by exact retry.
+- Production stream-token execution passes all 11 selected native tests, including
+  usable token issuance, recovery, current permissions and live revocation. The
+  broader daemon run passes 189 tests and exposes two stale test expectations,
+  now corrected. Torii's first broad SoraFS run passes 789 and fails 87; shared
+  fixture roots include unsigned manifests, noncanonical CIDs, macOS temporary
+  path aliases, missing bounded asset-lock invocation owners and changed route
+  guards. These fixtures are corrected while retaining production refusals.
+  The same run identifies real admission inventory-ordering and routing error
+  classification issues; both now preserve their canonical capacity limits.
+- The carrier suite exposes an ordinary-stack overflow in world journal field
+  conversion. Per-field conversion now has an isolated call frame without new
+  allocation or a larger test stack. Native recompilation and execution of all
+  corrected regressions are underway. The codec guard and 79 capacity, provider
+  ingestion and TLS contract tests pass again. Four-validator qualification and
+  current compact-checkpoint schema regeneration remain outstanding.

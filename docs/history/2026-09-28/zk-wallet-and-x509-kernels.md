@@ -41,6 +41,8 @@ before the finalizer's later check. Its assertion now checks that exact decoder
 failure, retaining the independent retired-admission and signature controls. The
 fresh retry passes (1 check, 0.05 seconds after a 3m56s build), recorded in
 `/tmp/iroha_js_finalizer_20260928_retry2.log`.
+The same freshly rebuilt host binary then passes all nine wallet controls again
+in 32.81 seconds (`/tmp/iroha_js_wallet_20260928_current.log`).
 
 ## Source and geometry contracts
 
@@ -109,6 +111,15 @@ fresh pinned assertions remain pending. Log:
 | --- | --- | --- |
 | I/O | `7e283b62798b5a626a71fad660a19a455e6fb389dd268e320a0841e83af5f94d` | `d7d747959c5632f147be02cbaae61e8f1f5dd04691477058ce1b758c13e506aa` |
 | Projection | `94f29e8e0b3f9cc444794905125f5b36c03fe4b9e36e095c74aec10a10344261` | `33a900ac3f49acbf3cb92e292525fcd2c7f3d069f6f71cf365a5cf9c0f13f78d` |
+
+The complete broad run finishes with 466 passes, ten failures and three ignored
+checks in 999.67 seconds. Its ten failures are the three old-profile-pin cases,
+two old protocol KAT literals, one stale 65-block expectation where the exact
+framed CRL requires 66, and four positive fixture relabels using a retired
+circuit-ID shorthand. Those sources are repaired; a fresh targeted run is
+pending. Full-capacity one-input proofs, regenerated key goldens, the three
+wallet relations, relation-confusion negatives and the complete 49-family OODS
+differential test pass. This is a scoped Core result, not a passing workspace.
 
 The separate native wallet build found one normal-library error: proved-IVM
 execution called `TxOverlay::from_queued_execution`, which was incorrectly

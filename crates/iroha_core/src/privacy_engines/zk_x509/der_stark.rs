@@ -565,10 +565,16 @@ pub(crate) struct ZkX509DerStarkNodeEventV1<A = F> {
 /// Challenge-dependent strict-DER trace. Only active rows are materialized;
 /// aggregate padding rows are reconstructed from the final accumulators.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkTraceV1 {
     pub(crate) base: ZkX509DerStarkBaseV1,
     pub(crate) aux_rows: Vec<[F; ZK_X509_DER_STARK_AUX_WIDTH_V1]>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for ZkX509DerStarkTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509DerStarkTraceV1 { <private material redacted> }")
+    }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZkX509DerStarkTraceV1 {

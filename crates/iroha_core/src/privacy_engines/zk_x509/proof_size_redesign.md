@@ -126,5 +126,8 @@ assembly capacities and construction time, and checks unchanged source admission
 hashing with the full column widths and a smaller public row sample, comparing
 one-column and eight-column batches under fixed worker counts. Its linear timing
 estimate excludes source replay, FFTs, quotient/DEEP/FRI and CA work, and differs in
-cache residency from a full proof. Neither diagnostic establishes release readiness;
-run the assembly test in its own process with `/usr/bin/time -l` for measured RSS.
+cache residency from a full proof. `maximum_profile_replay_fft_cost_diagnostic`
+measures eight actual masked log19-to-log22 transforms, validates sampled outputs
+by Horner evaluation, and reports the commitment-only transform scaling. These
+diagnostics do not establish release readiness; run the assembly test in its own
+process with `/usr/bin/time -l` for measured RSS.

@@ -413,7 +413,7 @@ pub(crate) struct ShaWordPhysicalContinuationV1 {
     pub(crate) sorted_product_start: [F; SHA_WORD_COPY_LANES_V1],
     pub(crate) sorted_product_end: [F; SHA_WORD_COPY_LANES_V1],
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct ZkX509ShaWordStarkBaseV1 {
     #[cfg(test)]
     pub(crate) statement: ZkX509ShaWordStarkStatementV1,
@@ -427,6 +427,11 @@ pub(crate) struct ZkX509ShaWordStarkBaseV1 {
     pub(crate) segment_rows: usize,
     #[cfg(test)]
     pub(crate) active_rows_per_segment: Vec<usize>,
+}
+impl core::fmt::Debug for ZkX509ShaWordStarkBaseV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509ShaWordStarkBaseV1 { <private material redacted> }")
+    }
 }
 fn zeroize_sha_word_events_v1(events: &mut [WordMemoryAccessV1]) {
     for event in events {
@@ -3993,6 +3998,10 @@ mod tests {
             })
         };
         let mut raw = fixture().base.clone();
+        assert_eq!(
+            format!("{raw:?}"),
+            "ZkX509ShaWordStarkBaseV1 { <private material redacted> }"
+        );
         let raw_rows = raw.base_rows.len();
         raw.zeroize_private_cells_v1();
         assert_eq!(raw.base_rows.len(), raw_rows);

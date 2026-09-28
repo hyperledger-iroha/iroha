@@ -1018,6 +1018,8 @@ fn build_sha256_word_circuit_unchecked_v1(
 ) -> Result<ZkX509Sha256WordCircuitV1, ZkX509Sha256WordAirErrorV1> {
     let padded = sha256_padding_v1(message)?;
     let mut builder = WordBuilderV1::new(padded.len() / 64)?;
+    #[cfg(test)]
+    let private_allocations = (builder.words.as_ptr(), builder.operations.as_ptr());
     let mut state = SHA256_INITIAL_STATE_V1.map(|word| builder.allocate(word));
     for block in padded.chunks_exact(64) {
         let mut schedule = Vec::with_capacity(64);
@@ -1061,6 +1063,12 @@ fn build_sha256_word_circuit_unchecked_v1(
     }
     let digest = digest_from_words_v1(&builder.words, &state)?;
     let memory = build_word_memory_trace_v1(&builder.words, &builder.operations, &state)?;
+    #[cfg(test)]
+    assert_eq!(
+        private_allocations,
+        (builder.words.as_ptr(), builder.operations.as_ptr()),
+        "private word and carry buffers must not reallocate"
+    );
     Ok(ZkX509Sha256WordCircuitV1 {
         words: core::mem::take(&mut builder.words),
         input_words: core::mem::take(&mut builder.input_words),
@@ -1422,16 +1430,22 @@ fn sha256_padding_v1(message: &[u8]) -> Result<Zeroizing<Vec<u8>>, ZkX509Sha256W
 }
 
 fn zeroize_word_rows_v1(words: &mut [U32RangeAirRowV1]) {
-    for word in words {
+    for word in words.iter_mut() {
         word.value.zeroize_v1();
         for bit in &mut word.bits {
             bit.zeroize_v1();
         }
     }
+    #[cfg(test)]
+    tests::record_raw_erasure_v1(words.len() * 33, || {
+        words
+            .iter()
+            .all(|word| word.value == F::ZERO && word.bits.iter().all(|bit| *bit == F::ZERO))
+    });
 }
 
 fn zeroize_word_operations_v1(operations: &mut [WordOperationV1]) {
-    for operation in operations {
+    for operation in operations.iter_mut() {
         if let WordOperationV1::Add {
             carry, carry_bits, ..
         } = operation
@@ -1442,14 +1456,27 @@ fn zeroize_word_operations_v1(operations: &mut [WordOperationV1]) {
             }
         }
     }
+    #[cfg(test)]
+    tests::record_raw_erasure_v1(operations.len(), || {
+        operations.iter().all(|operation| {
+            !matches!(operation, WordOperationV1::Add { carry, carry_bits, .. }
+            if *carry != 0 || carry_bits.iter().any(|bit| *bit != F::ZERO))
+        })
+    });
 }
 
 fn zeroize_word_accesses_v1(accesses: &mut [WordMemoryAccessV1]) {
-    for access in accesses {
+    for access in accesses.iter_mut() {
         access.address.zeroize_v1();
         access.value.zeroize_v1();
         access.is_write.zeroize_v1();
     }
+    #[cfg(test)]
+    tests::record_raw_erasure_v1(accesses.len() * 3, || {
+        accesses.iter().all(|access| {
+            access.address == F::ZERO && access.value == F::ZERO && access.is_write == F::ZERO
+        })
+    });
 }
 #[cfg(test)]
 mod tests {
@@ -1462,6 +1489,107 @@ mod tests {
         ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_TARGET_SOUNDNESS_BITS_V1,
     };
     use sha2::{Digest as _, Sha256};
+    thread_local! {
+        static RAW_ERASURE: core::cell::Cell<Option<(usize, bool)>> = const { core::cell::Cell::new(None) };
+    }
+    pub(super) fn record_raw_erasure_v1(cells: usize, cleared: impl FnOnce() -> bool) {
+        RAW_ERASURE.with(|observed| {
+            if let Some((previous, all_cleared)) = observed.get() {
+                observed.set(Some((previous + cells, all_cleared && cleared())));
+            }
+        });
+    }
+    fn observe_raw_erasure_v1(operation: impl FnOnce()) -> (usize, bool) {
+        struct Scope;
+        impl Drop for Scope {
+            fn drop(&mut self) {
+                RAW_ERASURE.set(None);
+            }
+        }
+        RAW_ERASURE.set(Some((0, true)));
+        let _scope = Scope;
+        operation();
+        RAW_ERASURE.get().unwrap()
+    }
+
+    #[test]
+    fn raw_word_private_owners_clear_on_success_partial_error_and_unwind() {
+        let caller = b"private SHA words remain caller-owned";
+        let circuit = build_sha256_word_circuit_v1(caller).unwrap();
+        let expected_digest: [u8; 32] = Sha256::digest(caller).into();
+        assert_eq!(circuit.digest(), expected_digest);
+        assert_eq!(
+            format!("{circuit:?}"),
+            "ZkX509Sha256WordCircuitV1 { private_witness: [REDACTED] }"
+        );
+        assert_eq!(
+            format!("{:?}", circuit.memory),
+            "WordMemoryTraceV1 { private_words: [REDACTED] }"
+        );
+        let expected = circuit.words.len() * 33
+            + circuit.operations.len()
+            + (circuit.memory.execution.len() + circuit.memory.sorted.len()) * 3;
+        assert_eq!(
+            observe_raw_erasure_v1(|| drop(circuit.clone())),
+            (expected, true)
+        );
+        assert!(circuit.words.iter().any(|word| word.value != F::ZERO));
+        let unwound = observe_raw_erasure_v1(|| {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    let _owned = circuit.clone();
+                    panic!("test-only private word owner unwind");
+                })
+                .is_err()
+            );
+        });
+        assert_eq!(unwound, (expected, true));
+        // Definitions have already populated the guarded table before this
+        // malformed operand fails. Observe those actual cells before free.
+        let operations = [WordOperationV1::Sigma {
+            input: WordIdV1(usize::MAX),
+            rotate_first: 7,
+            rotate_second: 18,
+            third: SigmaThirdV1::Shift(3),
+            output: WordIdV1(0),
+        }];
+        let partial = observe_raw_erasure_v1(|| {
+            assert!(
+                word_memory_execution_v1(&circuit.words, &operations, &circuit.output_words)
+                    .is_err()
+            );
+        });
+        assert_eq!(partial, (circuit.words.len() * 3, true));
+        let builder = observe_raw_erasure_v1(|| {
+            let mut builder = WordBuilderV1::new(1).unwrap();
+            let first = builder.allocate(u32::MAX);
+            builder.add(&[first, first], u32::MAX);
+        });
+        assert_eq!(builder, (2 * 33 + 1, true));
+        assert_eq!(caller, b"private SHA words remain caller-owned");
+    }
+
+    #[test]
+    fn raw_word_allocation_and_in_place_sort_preserve_digest_and_tie_bytes() {
+        for length in [0, 1, 55, 56, 63, 64, 65, 129] {
+            let message = vec![0x91; length];
+            let circuit = build_sha256_word_circuit_v1(&message).unwrap();
+            let blocks = sha256_padded_len_v1(length).unwrap() / 64;
+            assert_eq!(circuit.words.len(), 8 + blocks * 680);
+            assert_eq!(circuit.operations.len(), blocks * 664);
+            assert_eq!(circuit.input_words.len(), blocks * 16);
+            let expected_digest: [u8; 32] = Sha256::digest(&message).into();
+            assert_eq!(circuit.digest(), expected_digest);
+            let mut reference = circuit.memory.execution.clone();
+            reference.sort_by_key(|access| (access.address.0, u8::from(access.is_write != F::ONE)));
+            assert_eq!(circuit.memory.sorted, reference);
+            assert!(reference.windows(2).any(|pair| pair[0] == pair[1]));
+            zeroize_word_accesses_v1(&mut reference);
+            let bytes: Zeroizing<Vec<u8>> = circuit.input_bytes().unwrap();
+            assert_eq!(&bytes[..length], message);
+        }
+        assert!(WordBuilderV1::new(usize::MAX).is_err());
+    }
     fn test_digest_v1(value: u64) -> PrivacyOuterDigestV1 {
         PrivacyOuterDigestV1::from_bytes(
             value
