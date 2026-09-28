@@ -496,14 +496,18 @@ impl CertifiedTestChain {
             .cloned()
             .expect("the schedule covers the next height");
         let transaction_parameters = view.world().parameters().transaction();
+        // The leader merges the lane blocks its lane stores have committed; they may raise the
+        // block time (the merge time floor).
+        let merges = crate::sumeragi::lanes::merge::propose(&view, &*self.lane_blocks, height);
         drop(view);
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
         let parent_time = parent.header().creation_time();
+        let floor = Duration::from_millis(merges.time_floor_ms);
         let inputs_time = |transactions: &[SignedTransaction]| {
             transactions
                 .iter()
                 .map(|tx| tx.creation_time() + Duration::from_millis(1))
-                .fold(parent_time + cadence, Duration::max)
+                .fold((parent_time + cadence).max(floor), Duration::max)
         };
         if let Some(time_ms) = time_ms
             && inputs_time(&transactions) < Duration::from_millis(time_ms)
@@ -541,9 +545,6 @@ impl CertifiedTestChain {
             view: 0,
             cadence,
         };
-        // The leader merges the lane blocks its lane stores have committed.
-        let (merges, _) =
-            crate::sumeragi::lanes::merge::propose(&self.state.view(), &*self.lane_blocks, height);
         let proposal =
             payload::assemble_with_merges(&self.state, assembly, &accepted, &merges, pulse)
                 .expect("assembly");

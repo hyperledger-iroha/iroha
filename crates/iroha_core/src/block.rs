@@ -8396,7 +8396,17 @@ pub(crate) mod valid {
             let minimum = parent_creation_time
                 .checked_add(block_cadence)
                 .ok_or(BlockValidationError::V2BlockTimeOverflow)?;
-            creation_time_after_inputs(minimum, block.network_entrypoints())
+            // Merged lane transactions do not set the time: the merge section's floor does
+            // (`specs/sumeragi_lanes.md` §4.2), so the proposal alone fixes its time.
+            let floor = Duration::from_millis(
+                block
+                    .lane_merge()
+                    .map_or(0, |section| section.time_floor_ms),
+            );
+            let external = block.external_entrypoints_slice();
+            let own = &external[..external.len() - block.merged_entrypoint_count()];
+            let natives = block.network_entrypoints().skip(external.len());
+            creation_time_after_inputs(minimum.max(floor), own.iter().chain(natives))
                 .ok_or(BlockValidationError::V2BlockTimeOverflow)
         }
         #[allow(

@@ -688,16 +688,15 @@ impl Worker<'_> {
         let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
         // Certified lane blocks come first: they reserve their share of the block's capacity
         // (`specs/sumeragi_lanes.md` §4.2).
-        let (merges, reserved) =
-            lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height);
+        let merges = lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height);
         let mut selected = payload::select(
             self.state,
             queue,
             max_bytes.saturating_sub(PAYLOAD_OVERHEAD),
-            reserved,
+            merges.transactions,
         );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
-        if selected.is_empty() && merges.is_empty() {
+        if selected.is_empty() && merges.merges.is_empty() {
             return (Vec::new(), false);
         }
         let pulse = match self.pulse_for_height(height) {
@@ -712,7 +711,7 @@ impl Worker<'_> {
             view,
             cadence: Duration::from_millis(scheduled.params.block_time_ms),
         };
-        while !selected.is_empty() || !merges.is_empty() {
+        while !selected.is_empty() || !merges.merges.is_empty() {
             let block = match payload::assemble_with_merges(
                 self.state, assembly, &selected, &merges, pulse,
             ) {

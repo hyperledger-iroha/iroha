@@ -141,7 +141,58 @@ pub struct LaneInstance {
     pub instance: Hash32,
 }
 
+/// A cheap, cloneable handle of the node's lane instances.
+#[derive(Clone)]
+pub struct LaneRunnerHandle {
+    inner: Arc<Inner>,
+}
+
+impl core::fmt::Debug for LaneRunnerHandle {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("LaneRunnerHandle")
+            .finish_non_exhaustive()
+    }
+}
+
+impl LaneRunnerHandle {
+    /// Tell every lane driver that the queue has new transactions.
+    pub fn transactions_available(&self) {
+        for lane in self.inner.running.lock().values() {
+            lane.driver.handle().transactions_available();
+        }
+    }
+
+    /// The running lane instances with their cores' latest diagnostics.
+    #[must_use]
+    pub fn statuses(&self) -> Vec<(LaneInstance, Option<iroha_sumeragi::api::CoreStatus>)> {
+        self.inner
+            .running
+            .lock()
+            .iter()
+            .map(|((lane, incarnation), running)| {
+                (
+                    LaneInstance {
+                        lane: *lane,
+                        incarnation: *incarnation,
+                        instance: running.instance,
+                    },
+                    running.driver.handle().status(),
+                )
+            })
+            .collect()
+    }
+}
+
 impl LaneRunner {
+    /// A handle of the lane instances.
+    #[must_use]
+    pub fn handle(&self) -> LaneRunnerHandle {
+        LaneRunnerHandle {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
     /// Start the lanes the applied state has activated and the thread that follows the global
     /// chain.
     ///

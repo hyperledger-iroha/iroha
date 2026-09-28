@@ -196,13 +196,15 @@ impl SumeragiLaneMerge {
     }
 }
 
-/// The lane merge of a global block (`specs/sumeragi_lanes.md` §4): the merged lane ranges and,
-/// in the executed block, how many trailing entrypoints came from them.
+/// The lane merge of a global block (`specs/sumeragi_lanes.md` §4): the merged lane ranges, the
+/// time floor they impose on the block and, in the executed block, how many trailing entrypoints
+/// came from them.
 ///
 /// A proposal carries `merged_count = 0`; execution appends the admitted transactions of the
 /// merged lane blocks to the block's entrypoints and records their number, so the executed block
 /// runs through the ordinary execution pipeline and the proposal is recovered by removing that
-/// suffix.
+/// suffix. The block's canonical time is at least `time_floor_ms`, so every merged transaction
+/// precedes the block that executes it.
 #[derive(
     Clone,
     Debug,
@@ -221,6 +223,9 @@ impl SumeragiLaneMerge {
 pub struct SumeragiLaneMergeSection {
     /// Merged lane ranges, lanes ascending.
     pub merges: Vec<SumeragiLaneMerge>,
+    /// One millisecond after the latest creation time among the transactions of the fresh
+    /// merged lane blocks (`0` when they carry none).
+    pub time_floor_ms: u64,
     /// Number of trailing block entrypoints that come from the merged lane blocks.
     pub merged_count: u32,
 }

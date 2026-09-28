@@ -184,6 +184,12 @@ The leader reserves capacity for lane blocks first, lanes taking turns (rotating
 none starves, and fills the rest with lane-0 transactions. A block with merges and no
 transactions of its own is work: lanes never wait for lane-0 traffic.
 
+The section also declares a **time floor**: one millisecond after the latest creation time among
+the transactions of its fresh merged blocks. The block's canonical time is at least the floor
+(besides the parent-plus-cadence rule and its own transactions), so every merged transaction
+precedes the block that executes it, and the proposal alone still fixes the time. Execution
+recomputes the floor from the lane blocks; a different declaration makes the block `Invalid`.
+
 ### 4.3 Merge execution
 
 `G`'s executor, for a `G` block at height `h`, after its ordinary preamble:
@@ -257,10 +263,13 @@ them and pruned with those `G` blocks.
 
 ### 5.1 Routing function
 
-`route(tx, state) -> LaneId` uses only committed state: the policy's explicit routes first (an
-account matcher and/or an instruction matcher; the target is lane `0` or a fixed lane, and a
-target that is not admitted at the height sends the transaction to lane `0`); otherwise the
-default route is sharded over lane 0 and the **active, non-closing** elastic lanes by
+`route(tx, state) -> LaneId` at global height `h` uses only committed state. A lane is
+*admitted* at `h` when its record admits blocks anchored at `h − 1`, the tip a block at `h` is
+built on — so a lane receives traffic only once the global chain has applied its activation
+height (and its instances run), and none from the height after its closing height. The policy's
+explicit routes come first (an account matcher and/or an instruction matcher; the target is lane
+`0` or a fixed lane, and a target that is not admitted sends the transaction to lane `0`);
+otherwise the default route is sharded over lane 0 and the admitted elastic lanes by
 `H(tx.authority) mod k` (authority-based sharding keeps one account's transactions in one lane,
 preserving their order). A node routes new transactions with its latest applied `G` state; `G`
 re-evaluates the route at merge (§4.3 step 3), so a transaction routed just before a lane opened

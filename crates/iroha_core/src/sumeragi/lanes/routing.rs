@@ -48,14 +48,16 @@ impl<W> Copy for RoutingInputs<'_, W> {}
 
 impl<W: WorldReadOnly> RoutingInputs<'_, W> {
     /// Whether `lane` receives transactions at global height `height`: lane `0` always, any
-    /// other lane while its record admits the height.
+    /// other lane while its record admits blocks anchored at `height - 1`, the tip a block at
+    /// `height` is built on (a lane carries nothing before the global chain has applied its
+    /// activation height, and nothing anchored from its closing height).
     #[must_use]
     pub fn admitted(&self, lane: LaneId, height: u64) -> bool {
         lane == GLOBAL_LANE
             || self
                 .lanes
                 .lane(lane)
-                .is_some_and(|record| record.admits_anchor(height))
+                .is_some_and(|record| record.admits_anchor(height.saturating_sub(1)))
     }
 
     /// The default-route lanes at `height`: lane `0` and the admitted elastic lanes, ascending.
@@ -67,7 +69,10 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                 self.lanes
                     .lanes
                     .iter()
-                    .filter(|record| policy.is_elastic(record.lane) && record.admits_anchor(height))
+                    .filter(|record| {
+                        policy.is_elastic(record.lane)
+                            && record.admits_anchor(height.saturating_sub(1))
+                    })
                     .map(|record| record.lane),
             );
         }
@@ -279,11 +284,17 @@ mod tests {
             inputs.route(&transactions[2], 20),
             inputs.route(&transactions[2], 20)
         );
-        // Before activation and from closing, a lane receives nothing.
+        // Until the global chain has applied the activation height, and from the height after
+        // closing, a lane receives nothing.
         assert!(
             transactions
                 .iter()
-                .all(|tx| inputs.route(tx, 9) == GLOBAL_LANE)
+                .all(|tx| inputs.route(tx, 10) == GLOBAL_LANE)
+        );
+        assert!(
+            transactions
+                .iter()
+                .any(|tx| inputs.route(tx, 11) != GLOBAL_LANE)
         );
         let closing = lanes(vec![record(16, 10, Some(15)), record(17, 10, Some(15))]);
         let inputs = RoutingInputs {
@@ -293,7 +304,12 @@ mod tests {
         assert!(
             transactions
                 .iter()
-                .all(|tx| inputs.route(tx, 15) == GLOBAL_LANE)
+                .any(|tx| inputs.route(tx, 15) != GLOBAL_LANE)
+        );
+        assert!(
+            transactions
+                .iter()
+                .all(|tx| inputs.route(tx, 16) == GLOBAL_LANE)
         );
         // Without a policy every transaction belongs to lane 0.
         let inputs = RoutingInputs {
@@ -332,7 +348,7 @@ mod tests {
         };
         assert_eq!(with_policy(&policy(vec![to(3, "Log")]), 6), LaneId::new(3));
         // A fixed lane that is not admitted at the height falls back to the global lane.
-        assert_eq!(with_policy(&policy(vec![to(3, "Log")]), 4), GLOBAL_LANE);
+        assert_eq!(with_policy(&policy(vec![to(3, "Log")]), 5), GLOBAL_LANE);
         // A route whose matcher does not match leaves the default route (lane 0 only here).
         assert_eq!(with_policy(&policy(vec![to(3, "Mint")]), 6), GLOBAL_LANE);
     }

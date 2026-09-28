@@ -81,7 +81,24 @@ pub fn assemble_with_pulse(
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
     pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
-    assemble_with_merges(state, assembly, transactions, &[], pulse)
+    assemble_with_merges(
+        state,
+        assembly,
+        transactions,
+        &MergeProposal::default(),
+        pulse,
+    )
+}
+
+/// The lane merges a leader proposes (`specs/sumeragi_lanes.md` §4.2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MergeProposal {
+    /// The merged ranges, lanes ascending.
+    pub merges: Vec<SumeragiLaneMerge>,
+    /// Transactions of the fresh merged blocks (the block capacity they reserve).
+    pub transactions: usize,
+    /// One millisecond after the latest creation time among those transactions.
+    pub time_floor_ms: u64,
 }
 
 /// Assemble the block's own transactions and its lane merges (`specs/sumeragi_lanes.md` §4.2)
@@ -94,10 +111,10 @@ pub fn assemble_with_merges(
     state: &State,
     assembly: Assembly<'_>,
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
-    merges: &[SumeragiLaneMerge],
+    merges: &MergeProposal,
     pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
-    if transactions.is_empty() && merges.is_empty() {
+    if transactions.is_empty() && merges.merges.is_empty() {
         return Err(PayloadError::EmptyBlock);
     }
     let parent_time = assembly.parent.header().creation_time();
@@ -121,7 +138,7 @@ fn build_at(
     state: &State,
     assembly: Assembly<'_>,
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
-    merges: &[SumeragiLaneMerge],
+    merges: &MergeProposal,
     time: Duration,
     pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> Result<SignedBlock, PayloadError> {
@@ -140,9 +157,10 @@ fn build_at(
         .map(|(tx, plan)| execution_context_for_routing_plan(tx.hash_as_entrypoint(), plan))
         .collect::<Vec<_>>();
     let mut execution_context = BlockExecutionContextBundle::new(contexts);
-    if !merges.is_empty() {
+    if !merges.merges.is_empty() {
         execution_context.lane_merge = Some(SumeragiLaneMergeSection {
-            merges: merges.to_vec(),
+            merges: merges.merges.clone(),
+            time_floor_ms: merges.time_floor_ms,
             merged_count: 0,
         });
     }

@@ -145,7 +145,7 @@ impl TransactionCheck for StatelessChecks {
 }
 
 /// A lane's share of the node's transaction queue: pending transactions whose route at the
-/// global height is the lane.
+/// given global height is the lane.
 pub struct QueueLaneTransactions {
     lane: LaneId,
     queue: Arc<Queue>,

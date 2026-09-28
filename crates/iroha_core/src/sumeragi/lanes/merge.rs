@@ -24,6 +24,7 @@ use iroha_model_base::topology::LaneId;
 use iroha_sumeragi::types::Hash32;
 
 use super::{LaneBatch, lane_policy, routing::GLOBAL_LANE};
+pub use crate::sumeragi::payload::MergeProposal;
 use crate::{
     queue::{
         evaluate_policy_plan_with_nexus_and_world_at_block_height,
@@ -226,6 +227,17 @@ pub fn expand<V: StateReadOnlyWithTransactions>(
             "the merged transactions exceed the block's capacity".into(),
         ));
     }
+    let floor = candidates
+        .iter()
+        .map(|(_, tx)| time_floor(std::slice::from_ref(tx)))
+        .max()
+        .unwrap_or(0);
+    if floor != section.time_floor_ms {
+        return Err(MergeError::Invalid(format!(
+            "the merge time floor is {} ms, not {floor} ms",
+            section.time_floor_ms
+        )));
+    }
     let mut seen = own
         .iter()
         .map(TransactionEntrypoint::hash)
@@ -275,9 +287,9 @@ pub fn propose<V: StateReadOnly>(
     view: &V,
     source: &dyn LaneBlockSource,
     height: u64,
-) -> (Vec<SumeragiLaneMerge>, usize) {
+) -> MergeProposal {
     let Some(policy) = lane_policy(view.world()) else {
-        return (Vec::new(), 0);
+        return MergeProposal::default();
     };
     let capacity = block_capacity(view.world());
     let lanes = view.world().sumeragi_lanes();
@@ -287,10 +299,11 @@ pub fn propose<V: StateReadOnly>(
         .filter(|record| height > record.active_from)
         .collect::<Vec<_>>();
     if active.is_empty() {
-        return (Vec::new(), 0);
+        return MergeProposal::default();
     }
     let start = usize::try_from(height % u64::try_from(active.len()).unwrap_or(1)).unwrap_or(0);
     let mut used = 0usize;
+    let mut time_floor_ms = 0u64;
     let mut merges = Vec::new();
     for offset in 0..active.len() {
         let record = active[(start + offset) % active.len()];
@@ -309,15 +322,16 @@ pub fn propose<V: StateReadOnly>(
             let Some(block) = source.block(record.lane, &record.incarnation, lane_height) else {
                 break;
             };
-            let count = block
+            let fresh = block
                 .batch
                 .as_ref()
                 .filter(|batch| !record.is_stale(batch.anchor_height, height))
-                .map_or(0, |batch| batch.transactions.len());
-            if used.saturating_add(count) > capacity {
+                .map_or(&[][..], |batch| batch.transactions.as_slice());
+            if used.saturating_add(fresh.len()) > capacity {
                 break;
             }
-            used = used.saturating_add(count);
+            used = used.saturating_add(fresh.len());
+            time_floor_ms = time_floor_ms.max(time_floor(fresh));
             end = Some((lane_height, block));
         }
         if let Some((to, block)) = end {
@@ -332,7 +346,24 @@ pub fn propose<V: StateReadOnly>(
         }
     }
     merges.sort_by_key(|merge| merge.lane);
-    (merges, used)
+    MergeProposal {
+        merges,
+        transactions: used,
+        time_floor_ms,
+    }
+}
+
+/// One millisecond after the latest creation time among `transactions` (`0` for none).
+fn time_floor(transactions: &[SignedTransaction]) -> u64 {
+    transactions
+        .iter()
+        .map(|tx| {
+            u64::try_from(tx.creation_time().as_millis())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1)
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Check each merge against the committed lane records and load its blocks from the node's lane

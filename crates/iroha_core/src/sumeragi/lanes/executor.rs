@@ -305,7 +305,8 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
         let budget = usize::try_from(max_bytes)
             .unwrap_or(usize::MAX)
             .saturating_sub(64);
-        let selected = transactions.candidates(anchor_height, budget, &skip);
+        // The batch merges after the anchor: route as of the next global height.
+        let selected = transactions.candidates(anchor_height.saturating_add(1), budget, &skip);
         if selected.is_empty() {
             return (Vec::new(), false);
         }

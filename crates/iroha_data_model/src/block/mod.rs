@@ -1909,6 +1909,7 @@ mod tests {
                 tip_hash: [2; 32],
                 tip_result: [3; 32],
             }],
+            time_floor_ms: 0,
             merged_count: 0,
         });
         let mut payload = BlockPayload {

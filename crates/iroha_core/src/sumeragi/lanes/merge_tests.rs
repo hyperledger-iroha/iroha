@@ -229,8 +229,8 @@ impl Fixture {
             .has_entrypoint(tx.hash_as_entrypoint())
     }
 
-    /// A merge-only proposal for the next height carrying `merges`.
-    fn proposal(&self, merges: &[SumeragiLaneMerge]) -> SignedBlock {
+    /// A merge-only proposal for the next height carrying `merges` with time floor `floor`.
+    fn proposal(&self, merges: &[SumeragiLaneMerge], floor: u64) -> SignedBlock {
         let view = self.chain.state().view();
         let parent = view.latest_block().expect("parent");
         drop(view);
@@ -242,7 +242,11 @@ impl Fixture {
                 cadence: Duration::from_millis(1),
             },
             &[],
-            merges,
+            &MergeProposal {
+                merges: merges.to_vec(),
+                transactions: 0,
+                time_floor_ms: floor,
+            },
             None,
         )
         .expect("a merge-only proposal")
@@ -317,7 +321,8 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
     let mut fixture = Fixture::start();
     fixture.chain.commit(Vec::new());
     fixture.chain.commit(Vec::new());
-    let tx = fixture.log(&lane_user(), "lane", GENESIS_MS - 10);
+    let created = GENESIS_MS - 10;
+    let tx = fixture.log(&lane_user(), "lane", created);
     let tip = fixture.certify(1, 3, vec![tx]);
     let record = fixture.record();
     let merge = SumeragiLaneMerge {
@@ -328,15 +333,21 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
         tip_hash: tip.0,
         tip_result: [1; 32],
     };
-    let expand_at = |merges: &[SumeragiLaneMerge]| {
+    let expand_with = |merges: &[SumeragiLaneMerge], floor: u64| {
         expand(
             &fixture.chain.state().view(),
-            &fixture.proposal(merges),
+            &fixture.proposal(merges, floor),
             &*fixture.stores,
             Duration::ZERO,
         )
     };
+    let expand_at = |merges: &[SumeragiLaneMerge]| expand_with(merges, created + 1);
     assert!(expand_at(&[merge]).is_ok());
+    // The time floor must be exactly one millisecond after the latest merged transaction.
+    assert!(matches!(
+        expand_with(&[merge], created + 2),
+        Err(MergeError::Invalid(_))
+    ));
     // A tip that is not the lane's committed block, a gap, another incarnation, a lane that
     // does not exist: invalid.
     for bad in [
@@ -365,11 +376,17 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
         Err(MergeError::Pending(_))
     ));
     // A leader's proposal merges what the store holds.
-    let (proposed, reserved) = propose(
+    let proposed = propose(
         &fixture.chain.state().view(),
         &*fixture.stores,
         fixture.chain.height() + 1,
     );
-    assert_eq!(proposed, vec![merge]);
-    assert_eq!(reserved, 1);
+    assert_eq!(
+        proposed,
+        MergeProposal {
+            merges: vec![merge],
+            transactions: 1,
+            time_floor_ms: created + 1,
+        }
+    );
 }
