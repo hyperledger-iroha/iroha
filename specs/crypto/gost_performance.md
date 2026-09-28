@@ -1,7 +1,7 @@
 # GOST Performance Workflow
 
 This note documents how we track and enforce the performance envelope for the
-TC26 GOST signing backend.
+GOST signing backend (CryptoPro 256-bit A/B/C and RFC 7836 512-bit A/B).
 
 ## Running locally
 

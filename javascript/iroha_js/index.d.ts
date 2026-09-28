@@ -2427,7 +2427,6 @@ export type ToriiVerifierBackendLabelV1 =
   | "halo2/ipa"
   | "halo2/pasta/kaigi-authorization-v1"
   | "halo2/pasta/kaigi-usage-v1"
-  | "halo2/pasta/ivm-replay-binding-v1"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -5228,6 +5227,316 @@ export interface ToriiGovernanceGlobalDataTriggerPermissionProposal {
   }>;
 }
 
+// Closed KAGEMUSHA release shapes projected from the Torii OpenAPI V1 schema.
+export type ToriiGovernanceKagemushaAcceptanceCaseEvidenceV1 = Readonly<{
+  readonly case: ToriiGovernanceKagemushaAcceptanceCaseV1;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly validator_count: number;
+}>;
+
+export type ToriiGovernanceKagemushaAcceptanceCaseV1 = Readonly<{
+  readonly case: "receiver_inbox_pressure" | "sender_outbox_capacity_exhaustion" | "crash_during_prepare" | "crash_after_prepare_before_proof" | "crash_during_proof" | "crash_after_proof_before_candidate_persistence" | "crash_during_candidate_persistence" | "crash_after_candidate_persistence_before_verification" | "crash_during_candidate_verification" | "crash_after_candidate_verification_before_hardware_commit" | "crash_during_hardware_commit" | "crash_after_hardware_commit_before_terminal_authorization" | "crash_during_terminal_authorization" | "crash_after_terminal_authorization_before_final_envelope_persistence" | "crash_during_final_envelope_persistence" | "crash_after_final_envelope_persistence_before_exposure" | "crash_during_exposure" | "crash_during_transport" | "crash_after_transport_before_inbox_stage" | "crash_during_inbox_stage" | "crash_after_inbox_stage_before_ack" | "crash_during_ack_persistence" | "crash_after_ack_persistence_before_exposure" | "crash_during_ack_exposure" | "crash_during_ack_recovery" | "ack_recovery_idempotence" | "crash_during_recovery" | "recovery_idempotence" | "missing_sender_authorization" | "forged_sender_authorization" | "replayed_sender_authorization" | "cross_release_sender_authorization" | "missing_mint_authorization" | "forged_mint_authorization" | "replayed_mint_authorization" | "cross_release_mint_authorization" | "shuffled_concurrent_requests" | "delayed_delivery_after_request_expiry" | "delayed_delivery_across_ordinary_suite_rotation" | "delayed_delivery_across_credential_rotation" | "positive_exact_request" | "recipient_key_binding" | "request_amount_mismatch_rejection" | "committed_payment_after_request_expiry" | "exact_amount_binding" | "distinct_payments_same_request" | "shuffled_concurrent_payments_same_request" | "invoice_deduplication_application_policy" | "duplicate_transport" | "exact_duplicate_durable_ack" | "conflicting_credit_id_bytes" | "same_credit_replay" | "stale_state" | "two_successors_from_one_predecessor" | "rollback" | "clock_rollback" | "monotonic_lease_expiry" | "counter_reuse_or_skip" | "forged_epoch_rotation" | "hardware_epoch_rollover" | "hardware_counter_rollover" | "ordinary_verifier_rotation" | "emergency_suspension_online_recovery" | "arithmetic_overflow" | "proof_output_substitution" | "transcript_unlinkability" | "x25519_low_order_public_key_rejection" | "x25519_zero_dh_rejection" | "aead_ciphertext_substitution" | "aead_associated_data_substitution" | "deterministic_encryption_injected_randomness_kat" | "receive_fold_single_credit" | "receive_fold_replay_atomicity" | "pending_credit_backlog_no_count_rejection" | "reserve_underflow" | "duplicate_redemption" | "concurrent_redemption" | "top_up_recovery" | "full_redemption" | "partial_redemption" | "zero_balance_continuation" | "animated_qr_loss_recovery" | "animated_qr_reordering_recovery" | "static_qr_size_guard" | "four_peer_activation_restart_replay" | "physical_airplane_mode" | "physical_restart" | "physical_power_loss" | "physical_clock_rollback" | "physical_backup_restore_rejection" | "physical_memory_and_latency" | "physical_thermal_folding" | "no_software_fallback" | "native_fixture_swift" | "native_fixture_kotlin" | "native_fixture_java" | "native_fixture_java_script" | "native_fixture_python" | "native_fixture_c_sharp" | "native_fixture_jni" | "native_fixture_qr" | "native_fixture_nfc";
+  readonly value: null;
+}>;
+
+export type ToriiGovernanceKagemushaAggregateBalanceQualificationV1 = Readonly<{
+  readonly folded_credits: number;
+  readonly independent_payments: number;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly spend_payments: number;
+}>;
+
+export type ToriiGovernanceKagemushaArtifactBindingV1 = Readonly<{
+  readonly byte_len: number;
+  readonly role: ToriiGovernanceKagemushaArtifactRoleV1;
+  readonly sha256: ToriiGovernanceKagemushaBytes32V1;
+}>;
+
+export type ToriiGovernanceKagemushaArtifactRoleV1 = Readonly<{
+  readonly role: "params_eq" | "params_ep" | "inner_state_pk_eq" | "inner_state_vk_eq" | "inner_state_pk_ep" | "inner_state_vk_ep" | "state_pk_eq" | "state_vk_eq" | "state_pk_ep" | "state_vk_ep" | "mint_authorization_pk_eq" | "mint_authorization_vk_eq" | "mint_authorization_pk_ep" | "mint_authorization_vk_ep" | "mint_credit_pk_eq" | "mint_credit_vk_eq" | "mint_credit_pk_ep" | "mint_credit_vk_ep" | "platform_credential_pk_eq" | "platform_credential_vk_eq" | "platform_credential_pk_ep" | "platform_credential_vk_ep" | "guard_bundle_pk_eq" | "guard_bundle_vk_eq" | "guard_bundle_pk_ep" | "guard_bundle_vk_ep" | "terminal_authorization_pk_eq" | "terminal_authorization_vk_eq" | "terminal_authorization_pk_ep" | "terminal_authorization_vk_ep" | "commit_wrapper_pk_eq" | "commit_wrapper_vk_eq" | "commit_wrapper_pk_ep" | "commit_wrapper_vk_ep" | "inner_mint_authorization_pk_eq" | "inner_mint_authorization_vk_eq" | "inner_mint_authorization_pk_ep" | "inner_mint_authorization_vk_ep" | "inner_mint_credit_pk_eq" | "inner_mint_credit_vk_eq" | "inner_mint_credit_pk_ep" | "inner_mint_credit_vk_ep" | "mint_hash_shard_pk_eq" | "mint_hash_shard_vk_eq" | "mint_hash_shard_pk_ep" | "mint_hash_shard_vk_ep" | "mint_hash_claim_pk_eq" | "mint_hash_claim_vk_eq" | "mint_hash_claim_pk_ep" | "mint_hash_claim_vk_ep";
+  readonly value: null;
+}>;
+
+export type ToriiGovernanceKagemushaBytes32V1 = Readonly<ReadonlyArray<number>>;
+
+export type ToriiGovernanceKagemushaDevicePublicKeyV1 = Readonly<ReadonlyArray<string>>;
+
+export type ToriiGovernanceKagemushaDeviceSignatureV1 = Readonly<ReadonlyArray<string>>;
+
+export type ToriiGovernanceKagemushaEnabledProfileV1 = Readonly<{
+  readonly hardware_profile: ToriiGovernanceKagemushaHardwareProfileV1;
+  readonly hardware_profile_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly policy_epoch: number;
+  readonly qualification_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly qualification_report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly suite_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly vk_digest: ToriiGovernanceKagemushaBytes32V1;
+}>;
+
+export type ToriiGovernanceKagemushaEnvelopeQualificationV1 = Readonly<{
+  readonly handoff_p95_ms: number;
+  readonly raw_complete_exchange_bytes: number;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly text_complete_exchange_bytes: number;
+}>;
+
+export type ToriiGovernanceKagemushaEvidenceClosureV1 = Readonly<{
+  readonly candidate_context_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly evidence_manifest: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly observer_policy: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly total_command_input_bytes: number;
+  readonly total_evidence_bytes: number;
+  readonly total_observed_cpu_ms: number;
+  readonly total_observed_duration_ms: number;
+  readonly total_transcript_bytes: number;
+  readonly verification_record_count: number;
+  readonly verification_records_digest: ToriiGovernanceKagemushaBytes32V1;
+}>;
+
+export type ToriiGovernanceKagemushaEvidenceFileV1 = Readonly<{
+  readonly byte_len: number;
+  readonly sha256: ToriiGovernanceKagemushaBytes32V1;
+}>;
+
+export type ToriiGovernanceKagemushaGovernedVerifierRegistryV1 = Readonly<{
+  readonly active_release_id: string | null;
+  readonly authority_policy: ToriiGovernanceKagemushaReleaseAuthorityPolicyV1 | null;
+  readonly releases: ReadonlyArray<ToriiGovernanceKagemushaGovernedVerifierReleaseV1>;
+  readonly version: 1;
+}>;
+
+export type ToriiGovernanceKagemushaGovernedVerifierReleaseV1 = Readonly<{
+  readonly artifact_manifest_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly attestation_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly authority_policy_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly hardware_policy_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly native_profile_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly profile_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly provider_policy_root: ToriiGovernanceKagemushaBytes32V1;
+  readonly receipt_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly release_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly status: 1 | 2 | 3;
+  readonly suite_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly vk_set_digest: ToriiGovernanceKagemushaBytes32V1;
+}>;
+
+export type ToriiGovernanceKagemushaHardwarePlatformClassV1 = Readonly<{
+  readonly class: "android_oem_service" | "apple_oem_service" | "dedicated_secure_element" | "other_qualified";
+  readonly value: null;
+}>;
+
+export type ToriiGovernanceKagemushaHardwareProfileV1 = Readonly<{
+  readonly allowed_suite_commitment: ToriiGovernanceKagemushaBytes32V1;
+  readonly attestation_trust_roots_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly capability_mask: number;
+  readonly enrollment_attestation_verifier_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly expires_at_ms: number;
+  readonly firmware_policy_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly governance_credential_public_key: ToriiGovernanceKagemushaDevicePublicKeyV1;
+  readonly hardware_profile_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly platform_class: ToriiGovernanceKagemushaHardwarePlatformClassV1;
+  readonly policy_epoch: number;
+  readonly product_class_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly protocol_version: 1;
+  readonly provider_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly qualification_report_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly valid_from_ms: number;
+  readonly version: 1;
+}>;
+
+export type ToriiGovernanceKagemushaHelperProtocolV1 = Readonly<{
+  readonly ep_proof_bytes: number;
+  readonly ep_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly eq_proof_bytes: number;
+  readonly eq_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly helper: ToriiGovernanceKagemushaQualifiedHelperCircuitV1;
+}>;
+
+export type ToriiGovernanceKagemushaHelperQualificationV1 = Readonly<{
+  readonly complete_proof_bytes: number;
+  readonly ep_circuit_rows: number;
+  readonly ep_proof_bytes: number;
+  readonly ep_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly ep_verifying_key: ToriiGovernanceKagemushaArtifactBindingV1;
+  readonly eq_circuit_rows: number;
+  readonly eq_proof_bytes: number;
+  readonly eq_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly eq_verifying_key: ToriiGovernanceKagemushaArtifactBindingV1;
+  readonly helper: ToriiGovernanceKagemushaQualifiedHelperCircuitV1;
+  readonly operation_energy_millijoules: number;
+  readonly process_rss_bytes: number;
+  readonly prove_p95_ms: number;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly verify_p95_ms: number;
+}>;
+
+export type ToriiGovernanceKagemushaInternalValidationReceiptV1 = Readonly<{
+  readonly artifact_set_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly cargo_lock_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly circuit_shape_report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly ep_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly eq_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly evidence_closure: ToriiGovernanceKagemushaEvidenceClosureV1;
+  readonly fuzz_cases: number;
+  readonly fuzz_report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly hardware_policy_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly helper_protocols: ReadonlyArray<ToriiGovernanceKagemushaHelperProtocolV1>;
+  readonly kat_report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly native_profile_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly profile_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly profile_qualifications: ReadonlyArray<ToriiGovernanceKagemushaProfileQualificationV1>;
+  readonly provider_policy: ReadonlyArray<ToriiGovernanceKagemushaProviderPolicyEntryV1>;
+  readonly provider_policy_root: ToriiGovernanceKagemushaBytes32V1;
+  readonly reproducible_builds: ReadonlyArray<ToriiGovernanceKagemushaReproducibleBuildV1>;
+  readonly resource_report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly security_review_report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly source_tree_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly version: 1;
+}>;
+
+export type ToriiGovernanceKagemushaProfileQualificationV1 = Readonly<{
+  readonly acceptance_cases: ReadonlyArray<ToriiGovernanceKagemushaAcceptanceCaseEvidenceV1>;
+  readonly aggregate_balance: ToriiGovernanceKagemushaAggregateBalanceQualificationV1;
+  readonly envelope: ToriiGovernanceKagemushaEnvelopeQualificationV1;
+  readonly helper_circuits: ReadonlyArray<ToriiGovernanceKagemushaHelperQualificationV1>;
+  readonly profile: ToriiGovernanceKagemushaEnabledProfileV1;
+  readonly recursive_depths: ReadonlyArray<ToriiGovernanceKagemushaRecursiveDepthQualificationV1>;
+  readonly relations: ReadonlyArray<ToriiGovernanceKagemushaRelationQualificationV1>;
+  readonly thermal: ToriiGovernanceKagemushaThermalQualificationV1;
+}>;
+
+export type ToriiGovernanceKagemushaProviderPolicyEntryV1 = Readonly<{
+  readonly hardware_profile_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly issuer_signature: ToriiGovernanceKagemushaDeviceSignatureV1;
+  readonly provider_authority_commitment: ToriiGovernanceKagemushaBytes32V1;
+  readonly provider_profile_index: number;
+}>;
+
+export type ToriiGovernanceKagemushaQualifiedHelperCircuitV1 = Readonly<{
+  readonly helper: "mint_authorization" | "mint_credit" | "platform_credential" | "guard_bundle" | "mint_hash_shard" | "mint_hash_claim";
+  readonly value: null;
+}>;
+
+export type ToriiGovernanceKagemushaQualifiedRelationV1 = Readonly<{
+  readonly relation: "bootstrap" | "mint_fold" | "send_split" | "receive_fold" | "redeem_split" | "rotate" | "terminal_authorization" | "commit_wrapper";
+  readonly value: null;
+}>;
+
+export type ToriiGovernanceKagemushaRecursiveDepthQualificationV1 = Readonly<{
+  readonly complete_proof_bytes: number;
+  readonly depth: number;
+  readonly raw_complete_exchange_bytes: number;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly text_complete_exchange_bytes: number;
+  readonly verified_handoffs: number;
+}>;
+
+export type ToriiGovernanceKagemushaRelationQualificationV1 = Readonly<{
+  readonly complete_proof_bytes: number;
+  readonly ep_circuit_rows: number;
+  readonly ep_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly ep_verifying_key: ToriiGovernanceKagemushaArtifactBindingV1;
+  readonly eq_circuit_rows: number;
+  readonly eq_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly eq_verifying_key: ToriiGovernanceKagemushaArtifactBindingV1;
+  readonly operation_energy_millijoules: number;
+  readonly process_rss_bytes: number;
+  readonly prove_p95_ms: number;
+  readonly relation: ToriiGovernanceKagemushaQualifiedRelationV1;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+  readonly verify_p95_ms: number;
+}>;
+
+export type ToriiGovernanceKagemushaReleaseApprovalV1 = Readonly<{
+  readonly public_key: string;
+  readonly signature: string;
+}>;
+
+export type ToriiGovernanceKagemushaReleaseAttestationSubjectV1 = Readonly<{
+  readonly artifact_set_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly authority_policy_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly manifest_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly release_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly validation_receipt_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly version: 1;
+}>;
+
+export type ToriiGovernanceKagemushaReleaseAttestationV1 = Readonly<{
+  readonly approvals: ReadonlyArray<ToriiGovernanceKagemushaReleaseApprovalV1>;
+  readonly subject: ToriiGovernanceKagemushaReleaseAttestationSubjectV1;
+  readonly version: 1;
+}>;
+
+export type ToriiGovernanceKagemushaReleaseAuthorityPolicyV1 = Readonly<{
+  readonly authority_set_id: ReadonlyArray<number>;
+  readonly authorized_signers: ReadonlyArray<string>;
+  readonly threshold: number;
+  readonly version: 1;
+}>;
+
+export type ToriiGovernanceKagemushaReleaseManifestV1 = Readonly<{
+  readonly artifacts: ReadonlyArray<ToriiGovernanceKagemushaArtifactBindingV1>;
+  readonly cargo_lock_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly enabled_profiles: ReadonlyArray<ToriiGovernanceKagemushaEnabledProfileV1>;
+  readonly ep_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly eq_protocol_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly halo2_k: number;
+  readonly hardware_policy_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly helper_protocols: ReadonlyArray<ToriiGovernanceKagemushaHelperProtocolV1>;
+  readonly profile_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly release_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly source_tree_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly validation_receipt_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly version: 1;
+}>;
+
+export type ToriiGovernanceKagemushaReproducibleBuildV1 = Readonly<{
+  readonly artifact_set_digest: ToriiGovernanceKagemushaBytes32V1;
+  readonly builder_id: ToriiGovernanceKagemushaBytes32V1;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+}>;
+
+export type ToriiGovernanceKagemushaThermalQualificationV1 = Readonly<{
+  readonly fold_p95_ms: number;
+  readonly folded_credits: number;
+  readonly operation_energy_millijoules: number;
+  readonly process_rss_bytes: number;
+  readonly report: ToriiGovernanceKagemushaEvidenceFileV1;
+}>;
+
+export interface ToriiGovernanceKagemushaVerifierReleaseInstallProposal {
+  proposal_operator: string;
+  network_id: string;
+  expected_predecessor: ToriiGovernanceKagemushaGovernedVerifierRegistryV1;
+  manifest: ToriiGovernanceKagemushaReleaseManifestV1;
+  receipt: ToriiGovernanceKagemushaInternalValidationReceiptV1;
+  attestation: ToriiGovernanceKagemushaReleaseAttestationV1;
+}
+
+export interface ToriiGovernanceKagemushaVerifierReleaseActivateProposal {
+  proposal_operator: string;
+  network_id: string;
+  expected_predecessor: ToriiGovernanceKagemushaGovernedVerifierRegistryV1;
+  successor_release_id: ToriiGovernanceKagemushaBytes32V1;
+}
+
+export interface ToriiGovernanceKagemushaVerifierPolicyInstallProposal {
+  proposal_operator: string;
+  network_id: string;
+  expected_predecessor: Readonly<{
+    version: 1;
+    authority_policy: null;
+    active_release_id: null;
+    releases: readonly [];
+  }>;
+  authority_policy: Readonly<{
+    version: 1;
+    authority_set_id: ReadonlyArray<number>;
+    threshold: number;
+    authorized_signers: ReadonlyArray<string>;
+  }>;
+}
+
 export interface ToriiGovernanceContractEmergencyHold {
   incident_digest_hex: string;
   proposal_content_id_hex: string;
@@ -5304,6 +5613,18 @@ export type ToriiGovernanceProposalKind =
   | Readonly<{
       variant: "GlobalDataTriggerPermissionGovernance";
       global_data_trigger_permission_governance: ToriiGovernanceGlobalDataTriggerPermissionProposal;
+    }>
+  | Readonly<{
+      variant: "KagemushaVerifierPolicyInstall";
+      kagemusha_verifier_policy_install: ToriiGovernanceKagemushaVerifierPolicyInstallProposal;
+    }>
+  | Readonly<{
+      variant: "KagemushaVerifierReleaseInstall";
+      kagemusha_verifier_release_install: ToriiGovernanceKagemushaVerifierReleaseInstallProposal;
+    }>
+  | Readonly<{
+      variant: "KagemushaVerifierReleaseActivate";
+      kagemusha_verifier_release_activate: ToriiGovernanceKagemushaVerifierReleaseActivateProposal;
     }>;
 
 export interface ToriiGovernanceProposalRecord {
@@ -5491,7 +5812,10 @@ export type ParliamentProposalTagV1 =
   | "SorafsProviderGovernance"
   | "ContractLifecycleGovernance"
   | "ContractEmergencyHold"
-  | "GlobalDataTriggerPermissionGovernance";
+  | "GlobalDataTriggerPermissionGovernance"
+  | "KagemushaVerifierPolicyInstall"
+  | "KagemushaVerifierReleaseInstall"
+  | "KagemushaVerifierReleaseActivate";
 
 export const PARLIAMENT_PROPOSAL_KINDS_V1: ReadonlyArray<ParliamentProposalTagV1>;
 
@@ -5709,6 +6033,18 @@ export type ParliamentProposalV1 =
   | Readonly<{
       kind: "GlobalDataTriggerPermissionGovernance";
       payload: ToriiGovernanceGlobalDataTriggerPermissionProposal;
+    }>
+  | Readonly<{
+      kind: "KagemushaVerifierPolicyInstall";
+      payload: ToriiGovernanceKagemushaVerifierPolicyInstallProposal;
+    }>
+  | Readonly<{
+      kind: "KagemushaVerifierReleaseInstall";
+      payload: ToriiGovernanceKagemushaVerifierReleaseInstallProposal;
+    }>
+  | Readonly<{
+      kind: "KagemushaVerifierReleaseActivate";
+      payload: ToriiGovernanceKagemushaVerifierReleaseActivateProposal;
     }>;
 
 export type ParliamentLifecycleTransitionV1 =
@@ -7666,73 +8002,6 @@ export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
   privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
-export interface RequiredIvmOverlayTransfer {
-  sourceAssetHoldingId: string;
-  quantity: QuantityInput;
-  destinationAccountId: string;
-}
-
-export interface IvmProvedContractCallInputBase {
-  networkPrefix: number;
-  authority: string;
-  entrypoint?: string | null;
-  payload?: JsonValue;
-  metadata?: MetadataLike;
-  nonce?: number | null;
-}
-
-type IvmContractTarget =
-  | { contractAddress: string; contractAlias?: never }
-  | { contractAlias: string; contractAddress?: never };
-
-/**
- * A proved deployed-contract call must carry an independently trusted code
- * hash and a SHA-256 digest of the complete artifact. The helper verifies
- * Torii's simulation, the ledger/Core body hash, and every header/body byte
- * against those values before deriving, proving, signing, or submitting.
- */
-export type IvmProvedContractCallInput = IvmProvedContractCallInputBase &
-  IvmContractTarget &
-  {
-    networkId: NetworkId;
-    chain?: never;
-    chainId?: never;
-    chain_id?: never;
-    privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-    privateKeyAlgorithm?: CryptoAlgorithm;
-    vkRef: IvmVerifyingKeyRef;
-    feePayment: BrowserFeePayment;
-    requiredOverlayTransfer?: RequiredIvmOverlayTransfer | null;
-    creationTimeMs?: number | null;
-    ttlMs?: number | null;
-    expectedCodeHashHex: string;
-    expectedArtifactSha256Hex: string;
-  };
-
-export interface IvmProvedContractCallOptions {
-  signal?: AbortSignal;
-  proofIntervalMs?: number;
-  proofTimeoutMs?: number | null;
-  waitForCommit?: boolean;
-  transactionIntervalMs?: number;
-  transactionTimeoutMs?: number | null;
-}
-
-export interface IvmProvedContractCallResult {
-  hash: string;
-  signedTransaction: Buffer;
-  submission: unknown;
-  status: ToriiAppliedTransactionStatus | null;
-  simulation: ContractCallSimulateResponse;
-  metadata: { [key: string]: JsonValue };
-  proved: IvmProvedPayload;
-  attachment: { [key: string]: JsonValue };
-  proofJobId: string;
-  feeQuoteDraft: IvmProvedTransactionPayloadDraftResult;
-  feeQuote: FeeQuoteResponse;
-  requiredOverlayTransfer: JsonValue | null;
-}
-
 export interface MintAssetInput {
   networkId: NetworkId;
   authority: string;
@@ -8840,62 +9109,6 @@ export interface ContractCallSimulateResponse {
   result: JsonValue | null;
   error: string | null;
   vm_diagnostic: JsonValue | null;
-}
-
-export interface IvmVerifyingKeyRef {
-  backend: string;
-  name: string;
-}
-
-export interface IvmProvedPayload {
-  bytecode: string;
-  overlay: JsonValue[];
-  events_commitment: string;
-  gas_policy_commitment: string;
-}
-
-export interface IvmCompactProofAttachment {
-  backend: string;
-  proof: {
-    backend: string;
-    bytes_b64: string;
-  };
-  vk_ref: IvmVerifyingKeyRef;
-  vk_commitment?: JsonValue;
-  envelope_hash?: JsonValue;
-  lane_privacy?: JsonValue;
-}
-
-export interface ZkIvmExecutionRequest {
-  vkRef?: IvmVerifyingKeyRef;
-  vk_ref?: IvmVerifyingKeyRef;
-  authority: string;
-  metadata?: { [key: string]: JsonValue };
-  bytecode: string | ArrayBufferView | ArrayBuffer | Buffer;
-  proved?: IvmProvedPayload | null;
-}
-
-export interface ZkIvmDeriveResponse {
-  proved: IvmProvedPayload;
-}
-
-export interface ZkIvmProveJobCreatedResponse {
-  job_id: string;
-}
-
-export interface ZkIvmProveJobResponse {
-  job_id: string;
-  status: "pending" | "running" | "done" | "error";
-  error: string | null;
-  proved: IvmProvedPayload | null;
-  attachment: IvmCompactProofAttachment | null;
-}
-
-export interface ZkIvmProveWaitOptions {
-  signal?: AbortSignal;
-  intervalMs?: number;
-  timeoutMs?: number | null;
-  canonicalAuth: CanonicalRequestAuth;
 }
 
 export interface ContractManifestRecord {
@@ -12308,30 +12521,6 @@ export declare class ToriiClient {
     request: ContractCallSimulateRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ContractCallSimulateResponse>;
-  deriveIvmProved(
-    request: ZkIvmExecutionRequest,
-    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
-  ): Promise<ZkIvmDeriveResponse>;
-  startIvmProve(
-    request: ZkIvmExecutionRequest,
-    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
-  ): Promise<ZkIvmProveJobCreatedResponse>;
-  getIvmProveJob(
-    jobId: string,
-    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
-  ): Promise<ZkIvmProveJobResponse>;
-  cancelIvmProveJob(
-    jobId: string,
-    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
-  ): Promise<ZkIvmProveJobCreatedResponse>;
-  waitForIvmProveJob(
-    jobId: string,
-    options: ZkIvmProveWaitOptions,
-  ): Promise<ZkIvmProveJobResponse>;
-  proveIvmAndWait(
-    request: ZkIvmExecutionRequest,
-    options: ZkIvmProveWaitOptions,
-  ): Promise<ZkIvmProveJobResponse>;
   proposeMultisig(
     request: MultisigProposeRequest,
     options?: { signal?: AbortSignal },
@@ -13285,13 +13474,6 @@ export function verifyValidationFeeHijiriQuoteResponseV1(
   requestNorito: Buffer | ArrayBuffer | ArrayBufferView,
   networkPrefix: number,
 ): ValidationFeeHijiriQuoteProjectionV1;
-
-/** Generic proof-bound submission helper. */
-export function submitIvmProvedContractCall(
-  client: ToriiClient,
-  input: IvmProvedContractCallInput,
-  options?: IvmProvedContractCallOptions,
-): Promise<IvmProvedContractCallResult>;
 
 export function buildMintAssetTransaction(
   input: MintAssetInput & FeePaymentRequired,

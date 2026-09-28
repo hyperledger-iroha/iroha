@@ -19,7 +19,7 @@ self‑test at runtime it is disabled automatically and execution continues on C
 
 - `enable_cuda` (default: true) – Use CUDA when compiled and available.
 - `enable_metal` (default: true) – Use Metal on macOS when available.
-- `max_gpus` (default: 0) – Maximum GPUs to initialize; `0` means auto/no cap.
+- `max_gpus` (optional) – IVM device-selection cap; omission uses the available qualified devices and `0` explicitly opts out.
 - `merkle_min_leaves_gpu` (default: 8192) – Minimum leaves to offload Merkle
   leaf hashing to GPU. Lower only for unusually fast GPUs.
 - Advanced (optional; usually inherit sensible defaults):
@@ -27,6 +27,8 @@ self‑test at runtime it is disabled automatically and execution continues on C
   - `merkle_min_leaves_cuda` (default: inherit `merkle_min_leaves_gpu`).
   - `prefer_cpu_sha2_max_leaves_aarch64` (default: 32768) – Prefer CPU SHA‑2 up to this many leaves on ARMv8 with SHA2.
   - `prefer_cpu_sha2_max_leaves_x86` (default: 32768) – Prefer CPU SHA‑NI up to this many leaves on x86/x86_64.
+  - Omitted optional thresholds inherit the stated default; explicit zero remains zero.
+- `[accel.resource_limits]` supplies finite process attempt limits. Defaults are 256 MiB ordinary host, 256 MiB pinned host, 1 GiB requested device backing, 16 concurrent work owners, 16 MiB variable metadata, 16 observed device records, 64 discovery probes, 304 modules, 16 streams, and 16 MiB per artifact. Zero denies admission of that resource. These limits are distinct from caller-owned State execution memory.
 
 Notes
 - Determinism first: acceleration never changes observable outputs; backends

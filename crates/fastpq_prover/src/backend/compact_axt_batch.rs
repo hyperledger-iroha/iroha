@@ -11,7 +11,9 @@
 //! TODO: Qualify aggregate security, resources and authenticated caller migration
 //! before production admission. This module leaves the existing profile intact.
 
-use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
+use iroha_data_model::nexus::{
+    AxtFastpqBinding, AxtRemoteSpendClaimV1, AxtSourceTransferOccurrenceV1,
+};
 use norito::{NoritoSerialize, codec::Encode};
 
 #[cfg(test)]
@@ -52,6 +54,7 @@ struct BoundAxtBatchContext {
     binding: AxtFastpqBinding,
     metadata: AxtProofContextMirrors,
     remote_spend_claims: Option<Vec<AxtRemoteSpendClaimV1>>,
+    source_transfer_occurrences: Vec<AxtSourceTransferOccurrenceV1>,
 }
 
 #[derive(NoritoSerialize, norito::NoritoSchema)]
@@ -129,6 +132,7 @@ impl AxtTransferBatch {
             intermediate_roots: intermediate_roots.to_vec(),
             binding: axt.binding.clone(),
             metadata: axt.mirrors,
+            source_transfer_occurrences: axt.metadata.source_transfer_occurrences.to_vec(),
             remote_spend_claims: axt
                 .remote_spend_claims
                 .map(<[AxtRemoteSpendClaimV1]>::to_vec),

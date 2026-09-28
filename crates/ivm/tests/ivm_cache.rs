@@ -1,5 +1,6 @@
+//! Decoded instruction cache retention and reuse.
+use ivm::cache_memory::SharedAllocation;
 use ivm::{IvmCache, encoding, instruction};
-use std::sync::Arc;
 #[test]
 fn cache_decodes_wide_stream() {
     let mut cache = IvmCache::new(4);
@@ -36,10 +37,10 @@ fn cache_hit_and_eviction_lru() {
     let a2 = cache.get_or_predecode(&s2).unwrap();
     // Access s1 again to make it most-recently used
     let a1b = cache.get_or_predecode(&s1).unwrap();
-    assert!(Arc::ptr_eq(&a1, &a1b));
+    assert!(SharedAllocation::ptr_eq(&a1, &a1b));
     // Insert s3 — should evict s2 (least recently used)
     let _a3 = cache.get_or_predecode(&s3).unwrap();
     // Re-inserting s2 decodes anew (not pointer-equal to previous a2 arc)
     let a2_new = cache.get_or_predecode(&s2).unwrap();
-    assert!(!Arc::ptr_eq(&a2, &a2_new));
+    assert!(!SharedAllocation::ptr_eq(&a2, &a2_new));
 }

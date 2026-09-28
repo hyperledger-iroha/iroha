@@ -776,8 +776,9 @@ be HTTP 200 with exact `application/json`, absent/identity content encoding, and
 consistent byte framing. Successful artifacts are bounded to the ledger's exact
 1 MiB post-header IVM code-memory limit and must carry canonical IVM 1.1/ABI-1
 metadata, a checksummed CNTR Norito interface whose identity/capabilities and
-collection counts match the manifest, fully framed ABI-1 indexed literals, and
-a non-empty word-aligned instruction stream. These JavaScript framing checks do
+collection counts match the manifest, ordered callable roots with bounded frames
+and exact role vectors for the 8,192-word tables, fully framed ABI-1 indexed
+literals, and a non-empty word-aligned instruction stream. These JavaScript framing checks do
 not replace Rust instruction decoding or its control-flow, syscall, entrypoint,
 access-claim, and other semantic admission checks. The service must therefore be
 a trusted canonical Rust compiler endpoint; the ledger remains the final
@@ -3303,40 +3304,14 @@ intent requirement whenever `signatureB64` is absent. For detached/local
 signing paths, use the explicit `/v1/fees/quote` flow described above instead of
 the app-route convenience.
 
-### Proof-carrying deployed contract calls
+### Validation-fee policy and IVM proof status
 
-`submitIvmProvedContractCall` is the generic deployed-router path for networks
-that reject opaque `Executable::ContractCall` effects. It simulates the selected
-entrypoint and requires caller-trusted identities for both the deployed code
-body and complete artifact. Before derivation it verifies Torii's simulation
-hash, the ledger/Core code hash (BLAKE2b-256 of the artifact after its 17-byte
-IVM header, with the final digest byte ORed with `1`), and SHA-256 of every
-artifact byte. It then account-signs `/v1/zk/ivm/derive` with the immutable exact
-NetworkId context, requires the derived bytecode to equal the fetched artifact,
-submits that exact payload to `/v1/zk/ivm/prove`,
-and binds the returned proof attachment and verifying-key reference to the
-requested key before signing. The resulting user signature covers the complete
-`IvmProved` executable, including every transfer in its overlay.
-Invalid polling options are rejected before any request. If proof polling later
-times out, aborts, or fails, the convenience path best-effort cancels the remote
-job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId,
-{ canonicalAuth })` is also available for explicit lifecycle control. Proof-job POST, GET, and
-derive, proof-job POST, GET, and DELETE calls require `canonicalAuth`; Torii
-binds the signed account to the compute request and job
-owner, applies per-owner count and byte quotas, and conceals foreign job IDs as
-missing. Each operation is signed independently with a fresh nonce and is never
-redirected or retried after dispatch:
-
-```js
-const canonicalAuth = {
-  accountId: AUTHORITY_ACCOUNT_ID,
-  privateKey: AUTHORITY_PRIVATE_KEY,
-};
-const derived = await torii.deriveIvmProved(proofRequest, { canonicalAuth });
-const created = await torii.startIvmProve(proofRequest, { canonicalAuth });
-const job = await torii.getIvmProveJob(created.job_id, { canonicalAuth });
-await torii.cancelIvmProveJob(created.job_id, { canonicalAuth });
-```
+The binding-only IVM proof-job and derivation routes were retired from Torii.
+The SDK no longer exposes their request, response, polling or deployed-call
+helpers. A new public preparation API depends on the complete authenticated
+State and native-STARK execution relation. Constructing an `IvmProved`
+transaction locally does not make it admissible: Core rejects private execution
+proofs while that relation remains incomplete.
 
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
@@ -3433,36 +3408,11 @@ The native bridge rejects a missing or non-canonical operator plus missing,
 extra, and non-canonical JSON fields before fingerprinting; these helpers do
 not provide a JavaScript hashing fallback.
 
-`submitIvmProvedContractCall` quotes the exact unsigned `IvmProved` payload,
-rebuilds its signature-bound fee intent from the quote, reattaches the proof,
-and signs only the rebuilt transaction. The helper requires exactly one of
-`expectedCodeHashHex` or `expected_code_hash_hex` and exactly one of
-`expectedArtifactSha256Hex` or `expected_artifact_sha256_hex`. Treat both as
-trust anchors: copying them from the same Torii simulation or code endpoint
-defeats substitution protection. Use
-`computeIvmArtifactHashes(trustedArtifactBytes)` (also available from the
-browser-safe `@iroha/iroha-js/ivm-artifact` export) to compute both values from
-independently obtained bytes. That subpath ships standalone DOM declarations
-and does not require ambient Node types. Complete artifacts are capped at 4 MiB
-(`IVM_ARTIFACT_MAX_BYTES`) before copying or hashing. ArrayBuffer inputs from
-other JavaScript realms are supported, but SharedArrayBuffer-backed inputs are
-rejected so concurrently mutable bytes cannot cross the identity boundary.
-Torii code-byte, simulation, derivation, proof-job, quote, and submission
-responses are read through endpoint-specific byte caps before UTF-8 decoding or
-JSON parsing; missing or dishonest `Content-Length` headers cannot bypass the
-streamed limit.
-
-The optional `requiredOverlayTransfer` value is only a caller assertion. It
-never appends or redirects an instruction: the deployed contract must emit that
-transfer exactly once inside the proved overlay.
-
-The deployed artifact must be compiled in ZK mode with `koto build --zk`; its
-manifest and bytecode must already be registered, and the
-node must have an active `halo2/pasta/ivm-replay-binding-v1` verifying-key record plus the
-matching proving key. A conventional non-ZK deployed artifact cannot be
-retrofitted by this client helper; it must be rebuilt and deployed by its owner.
-The helper is asset- and venue-neutral and does not create pools, choose asset
-pairs, or install official liquidity defaults.
+`computeIvmArtifactHashes(trustedArtifactBytes)` remains available from the
+browser-safe `@iroha/iroha-js/ivm-artifact` export for independently checking
+artifact identity. Its standalone DOM declarations do not require ambient Node
+types. Complete artifacts are capped at 4 MiB (`IVM_ARTIFACT_MAX_BYTES`) before
+copying or hashing; SharedArrayBuffer-backed inputs are rejected.
 
 ## Governance Proposal and Ballot Helpers
 
@@ -3628,7 +3578,7 @@ The codec is exported by the package root and the browser-safe `./norito` leaf.
 It is intentionally absent from the broad `./browser` facade so applications
 that do not inspect release fixtures do not retain the complete Exact12 codec.
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+Binding-only IVM verifier labels are retired and rejected. Production proof-backed IVM invocation remains closed until the complete native execution relation and finalized State authority are implemented and qualified.
 
 Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Read
 methods validate the canonical response before returning it; there is no parallel

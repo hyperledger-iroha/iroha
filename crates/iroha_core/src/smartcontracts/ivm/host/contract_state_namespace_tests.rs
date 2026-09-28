@@ -208,7 +208,7 @@ fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_markers() {
             entrypoint: "main".to_owned(),
         }));
         let mut vm = IVM::new(10_000);
-        let code = ivm::encoding::wide::encode_halt().to_le_bytes();
+        let code = [];
         vm.load_program(&build_authenticated_test_contract_program_with_states(
             &code,
             0,
@@ -305,6 +305,12 @@ fn state_syscalls_cannot_forge_delete_or_disclose_merge_lane_frontier() {
     host.set_local_contract_debug_execution();
     host.set_contract_runtime_context(Some(context));
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm::call::CallWordV1::Unit],
+            }],
         seiyaku_name: "AdversarialFrontier".to_owned(),
         compiler_fingerprint: "iroha-core-host-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -336,7 +342,14 @@ fn state_syscalls_cannot_forge_delete_or_disclose_merge_lane_frontier() {
     };
     let mut program = ivm::ProgramMetadata::default().encode();
     program.extend_from_slice(&interface.encode_section());
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        program.extend_from_slice(&instruction.to_le_bytes());
+    }
     let mut vm = IVM::new(10_000);
     vm.load_program(&program)
         .expect("load self-describing adversarial contract");

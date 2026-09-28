@@ -61,7 +61,7 @@ use iroha_data_model::{
         GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconDkgShareAcceptanceV1,
         GlobalThresholdBeaconDkgTranscriptV1, GlobalThresholdBeaconKeySessionV1,
         GlobalThresholdBeaconPartialSignatureProofV1, GlobalThresholdBeaconPartialSignatureV1,
-        GlobalThresholdBeaconPublicShareV1,
+        GlobalThresholdBeaconPublicShareV1, GlobalThresholdBeaconPulseContextV1,
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -81,11 +81,11 @@ use zeroize::Zeroizing;
 #[doc(hidden)]
 pub mod parliament_test_network_signer;
 
-const GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1: &[u8] =
-    b"iroha.global-threshold-beacon.pulse-payload.v1\0";
-const GLOBAL_BEACON_PULSE_ID_DOMAIN_V1: &[u8] = b"iroha.global-threshold-beacon.pulse-id.v1\0";
-const GLOBAL_BEACON_NPOS_SUCCESSOR_SEED_DOMAIN_V1: &[u8] =
-    b"iroha.global-threshold-beacon.npos-successor-seed.v1\0";
+use iroha_data_model::sumeragi_finality::GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1;
+pub use iroha_data_model::sumeragi_finality::global_threshold_beacon_npos_successor_seed_v1;
+pub use iroha_data_model::sumeragi_finality::{
+    global_threshold_beacon_pulse_id_v1, global_threshold_beacon_pulse_payload_v1,
+};
 const GLOBAL_BEACON_LANE_RELAY_SEED_DOMAIN_V1: &[u8] =
     b"iroha.global-threshold-beacon.lane-relay-seed.v1\0";
 const GLOBAL_BEACON_GOVERNANCE_SEED_DOMAIN_V1: &[u8] =
@@ -782,6 +782,9 @@ pub enum GlobalThresholdBeaconError {
     /// The pulse does not authenticate the expected finalized-chain point.
     #[error("global threshold-beacon finalized-chain anchor mismatch")]
     FinalizedAnchorMismatch,
+    /// The pulse changes its native instance, complete epoch or exact parent execution identity.
+    #[error("global threshold-beacon native signing context mismatch")]
+    PulseContextMismatch,
     /// The supplied seed is not the unique seed derived from the final signature.
     #[error("global threshold-beacon derived seed mismatch")]
     SeedMismatch,
@@ -2218,13 +2221,18 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
     ///
     /// The finalized-chain anchor must be the block immediately before the pulse
     /// height. Its hash is supplied by the consensus finalized-chain journal and
-    /// is covered by every partial signature.
+    /// is covered by every partial signature. The mandatory native context also binds the
+    /// complete epoch, consensus parent and original parent execution result.
     pub fn new(
         session: ValidatedGlobalThresholdBeaconSessionV1,
         height: u64,
         finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1,
+        context: GlobalThresholdBeaconPulseContextV1,
     ) -> Result<Self, GlobalThresholdBeaconError> {
         session.ensure_adaptive_protocol_ready()?;
+        context
+            .validate()
+            .map_err(|_| GlobalThresholdBeaconError::PulseContextMismatch)?;
         if height == 0 {
             return Err(GlobalThresholdBeaconError::NonMonotonicPosition);
         }
@@ -2241,6 +2249,7 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
             session_id: record.session_id,
             roster_hash: record.roster_hash,
             transcript_hash: record.transcript_hash,
+            context,
             height,
             round: GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1,
             finalized_chain_anchor,
@@ -2329,6 +2338,7 @@ impl GlobalThresholdBeaconPulseAggregatorV1 {
             &self.session,
             &pulse,
             self.pulse.finalized_chain_anchor,
+            &self.pulse.context,
         )?;
         Ok(pulse)
     }
@@ -2392,33 +2402,6 @@ pub fn decode_global_threshold_beacon_session_v1(
     validate_global_threshold_beacon_session_v1(record, expected)
 }
 
-/// Build the exact fully consuming payload signed by a finalized beacon pulse.
-///
-/// The signature, derived seed, and derived pulse ID are omitted because each
-/// depends on this payload. All integer fields are encoded big-endian and every
-/// remaining field has a fixed width. No earlier pulse identifier or seed is
-/// included: every `(session, height, fixed round, finalized parent)` slot is
-/// independently unique, so skipping an optional governance slot cannot alter
-/// a later mandatory NPoS pulse.
-#[must_use]
-pub fn global_threshold_beacon_pulse_payload_v1(
-    pulse: &FinalizedGlobalThresholdBeaconPulseV1,
-) -> Vec<u8> {
-    let mut payload =
-        Vec::with_capacity(GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1.len() + 2 + 32 * 5 + 8 * 3);
-    payload.extend_from_slice(GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1);
-    payload.extend_from_slice(&pulse.version.to_be_bytes());
-    payload.extend_from_slice(pulse.network_id.as_bytes());
-    payload.extend_from_slice(&pulse.session_id);
-    payload.extend_from_slice(&pulse.roster_hash);
-    payload.extend_from_slice(&pulse.transcript_hash);
-    payload.extend_from_slice(&pulse.height.to_be_bytes());
-    payload.extend_from_slice(&pulse.round.to_be_bytes());
-    payload.extend_from_slice(&pulse.finalized_chain_anchor.height.to_be_bytes());
-    payload.extend_from_slice(pulse.finalized_chain_anchor.block_hash.as_ref());
-    payload
-}
-
 /// Public slot recovered from one canonical threshold-beacon signing payload.
 ///
 /// This is the credential-free projection used when a runtime signer lives
@@ -2428,6 +2411,8 @@ pub fn global_threshold_beacon_pulse_payload_v1(
 pub struct GlobalThresholdBeaconPulseSigningSlotV1 {
     /// Exact finalized height whose pulse is being produced.
     pub height: u64,
+    /// Complete independently supplied native context covered by the signing payload.
+    pub context: GlobalThresholdBeaconPulseContextV1,
     /// Exact finalized parent authenticated by the pulse.
     pub finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1,
 }
@@ -2435,8 +2420,8 @@ pub struct GlobalThresholdBeaconPulseSigningSlotV1 {
 /// Recover and validate the exact public slot from a beacon signing payload.
 ///
 /// The parser accepts only the fixed V1 payload length, canonical fixed round,
-/// and a byte-for-byte payload reconstructed from `session`, `height`, and the
-/// finalized-chain anchor. This prevents a broker client from using the beacon
+/// and a byte-for-byte payload reconstructed from `session`, `height`, the complete native
+/// context and the finalized-chain anchor. This prevents a broker client from using the beacon
 /// provider as a generic threshold-BLS signing oracle.
 ///
 /// # Errors
@@ -2447,10 +2432,35 @@ pub fn global_threshold_beacon_pulse_signing_slot_v1(
     session: &ValidatedGlobalThresholdBeaconSessionV1,
     payload: &[u8],
 ) -> Result<GlobalThresholdBeaconPulseSigningSlotV1, GlobalThresholdBeaconError> {
-    let expected_len = GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1.len() + 2 + 32 * 5 + 8 * 3;
+    let expected_len = GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1.len() + 2 + 32 * 9 + 8 * 4;
     if payload.len() != expected_len {
         return Err(GlobalThresholdBeaconError::InvalidEncoding);
     }
+    let context_offset = GLOBAL_BEACON_PULSE_PAYLOAD_DOMAIN_V1.len() + 2 + 32 * 4;
+    let instance_end = context_offset + 32;
+    let epoch_end = instance_end + 8;
+    let epoch_context_end = epoch_end + 32;
+    let parent_hash_end = epoch_context_end + 32;
+    let parent_result_end = parent_hash_end + 32;
+    let context = GlobalThresholdBeaconPulseContextV1 {
+        instance: payload[context_offset..instance_end]
+            .try_into()
+            .map_err(|_| GlobalThresholdBeaconError::InvalidEncoding)?,
+        epoch: u64::from_be_bytes(
+            payload[instance_end..epoch_end]
+                .try_into()
+                .map_err(|_| GlobalThresholdBeaconError::InvalidEncoding)?,
+        ),
+        epoch_context_id: payload[epoch_end..epoch_context_end]
+            .try_into()
+            .map_err(|_| GlobalThresholdBeaconError::InvalidEncoding)?,
+        parent_consensus_hash: payload[epoch_context_end..parent_hash_end]
+            .try_into()
+            .map_err(|_| GlobalThresholdBeaconError::InvalidEncoding)?,
+        parent_result: payload[parent_hash_end..parent_result_end]
+            .try_into()
+            .map_err(|_| GlobalThresholdBeaconError::InvalidEncoding)?,
+    };
     let height_offset = payload.len() - (8 * 3 + 32);
     let round_offset = height_offset + 8;
     let anchor_height_offset = round_offset + 8;
@@ -2484,61 +2494,16 @@ pub fn global_threshold_beacon_pulse_signing_slot_v1(
         session.clone(),
         height,
         finalized_chain_anchor,
+        context,
     )?;
     if reconstructed.payload() != payload {
         return Err(GlobalThresholdBeaconError::InvalidEncoding);
     }
     Ok(GlobalThresholdBeaconPulseSigningSlotV1 {
         height,
+        context,
         finalized_chain_anchor,
     })
-}
-
-/// Derive the canonical pulse identifier after final-signature verification.
-#[must_use]
-pub fn global_threshold_beacon_pulse_id_v1(
-    pulse: &FinalizedGlobalThresholdBeaconPulseV1,
-    verified_seed: [u8; 32],
-) -> [u8; 32] {
-    let payload = global_threshold_beacon_pulse_payload_v1(pulse);
-    let mut preimage = Vec::with_capacity(
-        GLOBAL_BEACON_PULSE_ID_DOMAIN_V1.len() + 4 + payload.len() + pulse.signature.len() + 32,
-    );
-    preimage.extend_from_slice(GLOBAL_BEACON_PULSE_ID_DOMAIN_V1);
-    preimage.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    preimage.extend_from_slice(&payload);
-    preimage.extend_from_slice(&pulse.signature);
-    preimage.extend_from_slice(&verified_seed);
-    *Hash::new(&preimage).as_ref()
-}
-
-/// Derive the NPoS successor seed from one already-verified global beacon pulse.
-///
-/// The dedicated domain prevents a pulse seed consumed by Parliament or another
-/// protocol from being reused as the raw NPoS PRF key. The target boundary and
-/// successor epoch are explicit even though the pulse identifier already binds
-/// its signed position; this makes accidental cross-epoch reuse impossible at
-/// the consensus call site.
-#[must_use]
-pub fn global_threshold_beacon_npos_successor_seed_v1(
-    pulse: &FinalizedGlobalThresholdBeaconPulseV1,
-    boundary_height: u64,
-    successor_epoch: u64,
-) -> [u8; 32] {
-    let boundary_height = boundary_height.to_be_bytes();
-    let successor_epoch = successor_epoch.to_be_bytes();
-    *Hash::new_from_chunks(&[
-        GLOBAL_BEACON_NPOS_SUCCESSOR_SEED_DOMAIN_V1,
-        pulse.network_id.as_bytes(),
-        pulse.session_id.as_slice(),
-        pulse.pulse_id.as_slice(),
-        pulse.seed.as_slice(),
-        pulse.height.to_be_bytes().as_slice(),
-        pulse.finalized_chain_anchor.height.to_be_bytes().as_slice(),
-        boundary_height.as_slice(),
-        successor_epoch.as_slice(),
-    ])
-    .as_ref()
 }
 
 /// Derive one lane-relay committee seed from an already-verified global pulse.
@@ -2613,27 +2578,23 @@ pub(crate) fn verified_persisted_global_threshold_beacon_governance_seed_v1(
 pub(crate) fn validate_persisted_global_threshold_beacon_pulse_v1(
     pulse: &FinalizedGlobalThresholdBeaconPulseV1,
 ) -> Result<GlobalThresholdBeaconPulseLinkV1, GlobalThresholdBeaconError> {
-    if pulse.version != GLOBAL_THRESHOLD_BEACON_VERSION_V1 {
-        return Err(GlobalThresholdBeaconError::UnsupportedVersion {
-            actual: pulse.version,
-        });
-    }
-    if pulse.round != GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1 {
-        return Err(GlobalThresholdBeaconError::NonCanonicalRound);
-    }
-    if pulse.height == 0
-        || is_zero(&pulse.pulse_id)
-        || is_zero(&pulse.seed)
-        || is_zero(&pulse.roster_hash)
-        || is_zero(&pulse.transcript_hash)
-        || is_zero(pulse.finalized_chain_anchor.block_hash.as_ref())
-    {
-        return Err(GlobalThresholdBeaconError::ZeroPulse);
-    }
-    ThresholdBlsSignature::<BeaconPurpose>::from_bytes(pulse.session_id, &pulse.signature)?;
-    if global_threshold_beacon_pulse_id_v1(pulse, pulse.seed) != pulse.pulse_id {
-        return Err(GlobalThresholdBeaconError::PulseIdMismatch);
-    }
+    iroha_data_model::sumeragi_finality::validate_beacon_pulse_shape(pulse).map_err(|error| {
+        use iroha_data_model::sumeragi_finality::BeaconPulseShapeError;
+        match error {
+            BeaconPulseShapeError::PulseContextMismatch => {
+                GlobalThresholdBeaconError::PulseContextMismatch
+            }
+            BeaconPulseShapeError::UnsupportedVersion { actual } => {
+                GlobalThresholdBeaconError::UnsupportedVersion { actual }
+            }
+            BeaconPulseShapeError::NonCanonicalRound => {
+                GlobalThresholdBeaconError::NonCanonicalRound
+            }
+            BeaconPulseShapeError::ZeroPulse => GlobalThresholdBeaconError::ZeroPulse,
+            BeaconPulseShapeError::Signature(error) => error.into(),
+            BeaconPulseShapeError::PulseIdMismatch => GlobalThresholdBeaconError::PulseIdMismatch,
+        }
+    })?;
     Ok(GlobalThresholdBeaconPulseLinkV1 {
         pulse_id: pulse.pulse_id,
         seed: pulse.seed,
@@ -2653,7 +2614,14 @@ pub fn verify_finalized_global_threshold_beacon_pulse_v1(
     session: &ValidatedGlobalThresholdBeaconSessionV1,
     pulse: &FinalizedGlobalThresholdBeaconPulseV1,
     expected_anchor: GlobalThresholdBeaconChainAnchorV1,
+    expected_context: &GlobalThresholdBeaconPulseContextV1,
 ) -> Result<GlobalThresholdBeaconPulseLinkV1, GlobalThresholdBeaconError> {
+    expected_context
+        .validate()
+        .map_err(|_| GlobalThresholdBeaconError::PulseContextMismatch)?;
+    if &pulse.context != expected_context {
+        return Err(GlobalThresholdBeaconError::PulseContextMismatch);
+    }
     if pulse.version != GLOBAL_THRESHOLD_BEACON_VERSION_V1 {
         return Err(GlobalThresholdBeaconError::UnsupportedVersion {
             actual: pulse.version,
@@ -2741,6 +2709,9 @@ pub(crate) fn verified_persisted_global_threshold_beacon_pulse_v1(
         &session,
         &pulse,
         pulse.finalized_chain_anchor,
+        // The exact pulse row is already authenticated by this committed World. This helper
+        // rechecks crypto only; it does not confer authority on an external native source.
+        &pulse.context,
     )?;
     if validate_persisted_global_threshold_beacon_pulse_v1(&pulse)? != verified {
         return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
@@ -2830,6 +2801,7 @@ pub fn decode_finalized_global_threshold_beacon_pulse_v1(
     encoded: &[u8],
     session: &ValidatedGlobalThresholdBeaconSessionV1,
     expected_anchor: GlobalThresholdBeaconChainAnchorV1,
+    expected_context: &GlobalThresholdBeaconPulseContextV1,
 ) -> Result<GlobalThresholdBeaconPulseLinkV1, GlobalThresholdBeaconError> {
     let pulse: FinalizedGlobalThresholdBeaconPulseV1 = norito::decode_from_bytes(encoded)
         .map_err(|_| GlobalThresholdBeaconError::InvalidEncoding)?;
@@ -2838,7 +2810,12 @@ pub fn decode_finalized_global_threshold_beacon_pulse_v1(
     if canonical != encoded {
         return Err(GlobalThresholdBeaconError::NonCanonicalEncoding);
     }
-    verify_finalized_global_threshold_beacon_pulse_v1(session, &pulse, expected_anchor)
+    verify_finalized_global_threshold_beacon_pulse_v1(
+        session,
+        &pulse,
+        expected_anchor,
+        expected_context,
+    )
 }
 
 fn is_zero(bytes: &[u8]) -> bool {
@@ -2848,8 +2825,6 @@ fn is_zero(bytes: &[u8]) -> bool {
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod fixtures;
 #[cfg(any(test, feature = "iroha-core-tests"))]
-pub use fixtures::signed_persisted_pulse_fixture_for_world;
-#[cfg(any(test, feature = "iroha-core-tests"))]
 pub use fixtures::{
     complete_beacon_dkg_fixture_for_exact_session_v1, complete_beacon_dkg_fixture_for_seat_v1,
 };
@@ -2858,6 +2833,8 @@ pub(crate) use fixtures::{
     prepared_session_and_signers_fixture_for_keys_v1, prepared_session_and_signers_fixture_v1,
     signed_pulses_fixture_for_roster_and_anchors,
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use fixtures::{pulse_context_fixture_v1, signed_persisted_pulse_fixture_for_world};
 
 #[cfg(test)]
 pub(crate) mod tests;

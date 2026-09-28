@@ -142,83 +142,56 @@ fn helper_preserves_u64_max_json_int_through_option_match() {
     );
 }
 #[test]
-fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
+fn compiler_owned_test_callables_preserve_artifact_verification() {
     let compiled = compiled_suite_with_fixtures(Vec::new());
     let suite_program = compiled.suite.program.artifact();
     assert_eq!(
         compiled.suite.program.code_hash(),
         compiled.suite.report.artifact_hash
     );
-    let return_pc = compiled
-        .suite
-        .program
-        .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
-        .expect("compiler-owned suite return sentinel");
-    let sentinel = compiled
-        .suite
-        .program
-        .contract_interface()
-        .entrypoints
-        .iter()
-        .find(|entrypoint| entrypoint.name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
-        .unwrap();
-    assert_eq!(sentinel.return_type.as_deref(), Some("()"));
-    assert_eq!(
-        sentinel.return_schema.as_ref().unwrap().nodes,
-        vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit]
-    );
-    let parsed = ProgramMetadata::parse(suite_program).expect("parse compiled suite");
-    assert_eq!(
-        return_pc,
-        u64::try_from(suite_program.len() - parsed.header_len - 4)
-            .expect("suite return PC fits u64")
-    );
+    let interface = compiled.suite.program.contract_interface();
+    for test in &compiled.tests {
+        let parsed = ProgramMetadata::parse(suite_program).unwrap();
+        let relative = test.pc - parsed.prefix_len() as u64;
+        let callable = interface
+            .callables
+            .iter()
+            .find(|callable| callable.entry_pc == relative)
+            .expect("each private test root has an authenticated callable descriptor");
+        assert!(callable.argument_words.is_empty());
+        assert_eq!(callable.result_words, [ivm_abi::call::CallWordV1::Unit]);
+    }
     let mut vm = IVM::new(u64::MAX);
     vm.load_koto_test_prepared(&compiled.suite.program)
-        .expect("unmodified compiler-produced test artifact must load");
-    let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
-        .expect_err("production admission must reject the generic IVM 1.0 test harness");
+        .expect("authenticated test artifact loads");
+    let error =
+        crate::prepare_contract(Arc::from(suite_program)).expect_err("test image cannot deploy");
     assert!(
-        production_error
+        error
             .to_string()
-            .contains("expected IVM 1.1 contract artifact"),
-        "unexpected production-admission failure: {production_error}"
+            .contains("expected IVM 1.1 contract artifact")
     );
-    let mut post_compile_mutation = suite_program.to_vec();
-    post_compile_mutation.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-    let post_compile_mutation: Arc<[u8]> = Arc::from(post_compile_mutation);
-    let error = crate::contract_artifact::prepare_koto_test_contract(
-        Arc::clone(&post_compile_mutation),
-        compiled.suite.program.contract_interface().clone(),
+    let mut invalid_interface = interface.clone();
+    invalid_interface.callables[0].frame_bytes |= 1;
+    crate::contract_artifact::prepare_koto_test_contract(
+        Arc::from(suite_program),
+        invalid_interface,
     )
-    .expect_err("the compiler-owned sidecar must reject post-compile executable mutation");
-    assert!(
-        error.to_string().contains("must select the terminal HALT"),
-        "unexpected mutation failure: {error}"
-    );
-    let mut mutated_interface = compiled.suite.program.contract_interface().clone();
-    let terminal_return = mutated_interface
-        .entrypoints
-        .iter_mut()
-        .find(|entrypoint| entrypoint.name == ivm_abi::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
-        .expect("compiled suite exposes its compiler-owned return entrypoint");
-    terminal_return.entry_pc = terminal_return
-        .entry_pc
-        .checked_add(
-            u64::try_from(core::mem::size_of::<u32>()).expect("IVM instruction width fits u64"),
-        )
-        .expect("test return PC remains representable");
-    let mutated = crate::contract_artifact::prepare_koto_test_contract(
-        post_compile_mutation,
-        mutated_interface,
+    .expect_err("malformed test callable frame must fail admission");
+    let mut modified = suite_program.to_vec();
+    modified.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+    let changed = crate::contract_artifact::prepare_koto_test_contract(
+        Arc::from(modified),
+        interface.clone(),
     )
-    .expect("a structurally valid generic harness can still be prepared");
+    .expect("an unreachable generic opcode does not bypass hash identity");
     assert_ne!(
-        mutated.code_hash(),
+        changed.code_hash(),
         compiled.suite.report.artifact_hash,
-        "the compiler report hash must detect every post-compile executable mutation"
+        "every post-compile executable mutation changes the compiler-authenticated identity"
     );
 }
+
 #[test]
 fn parse_args_accepts_supported_subcommands() {
     let options = parse_args(vec![
@@ -828,14 +801,16 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "hajimari");
     put_json(&mut vm, 12, "{}");
-    vm.set_register(13, 0);
+    let result_table = vm.alloc_heap(8).expect("result table");
+    vm.set_register(13, result_table);
     vm.set_register(14, 1);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke hajimari");
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "increment");
     put_json(&mut vm, 12, "{}");
-    vm.set_register(13, 0);
+    let result_table = vm.alloc_heap(8).expect("result table");
+    vm.set_register(13, result_table);
     vm.set_register(14, 1);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke increment");
@@ -844,7 +819,8 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "remember_caller");
     put_json(&mut vm, 12, "{}");
-    vm.set_register(13, 0);
+    let result_table = vm.alloc_heap(8).expect("result table");
+    vm.set_register(13, result_table);
     vm.set_register(14, 1);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke remember_caller");
@@ -870,12 +846,18 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "pair");
     put_json(&mut vm, 12, "{}");
-    vm.set_register(13, 0b11);
+    let result_table = vm.alloc_heap(16).expect("result table");
+    vm.set_register(13, result_table);
     vm.set_register(14, 2);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke pair");
-    assert_eq!(decode_i64_word(&vm, vm.register(10)), 2);
-    assert_eq!(decode_i64_word(&vm, vm.register(11)), 3);
+    assert_eq!(vm.register(10), result_table);
+    assert_eq!(vm.register(11), 2);
+    assert_eq!(decode_i64_word(&vm, vm.load_u64(result_table).unwrap()), 2);
+    assert_eq!(
+        decode_i64_word(&vm, vm.load_u64(result_table + 8).unwrap()),
+        3
+    );
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "reject_me");
     put_json(&mut vm, 12, "{}");
@@ -988,7 +970,8 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
                 PointerType::Blob,
             );
         } else {
-            vm.set_register(13, 0);
+            let result_table = vm.alloc_heap(8).expect("result table");
+            vm.set_register(13, result_table);
         }
         vm.set_register(14, u64::from(expected.is_none()));
         vm.set_register(15, 0);
@@ -1383,10 +1366,11 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
         (1, 1),
         "nested contract calls must use a separately compiled deployable artifact"
     );
-    crate::prepare_contract(runtime.program.shared_artifact())
+    crate::prepare_contract(std::sync::Arc::from(runtime.program.artifact()))
         .expect("the nested runtime artifact must satisfy production admission");
-    let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
-        .expect_err("production admission must reject the generic IVM 1.0 test harness");
+    let production_error =
+        crate::prepare_contract(std::sync::Arc::from(compiled.suite.program.artifact()))
+            .expect_err("production admission must reject the generic IVM 1.0 test harness");
     assert!(
         production_error
             .to_string()
@@ -1490,11 +1474,15 @@ fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         compiled.suite.report.artifact_hash, runtime.report.artifact_hash,
         "the test-suite and deployable runtime artifacts must retain distinct identities"
     );
-    compiled
-        .suite
-        .program
-        .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
-        .expect("contract-backed suite must expose its validated return entrypoint");
+    assert!(
+        !compiled
+            .suite
+            .program
+            .contract_interface()
+            .callables
+            .is_empty(),
+        "contract-backed suite authenticates real function roots"
+    );
     let names = compiled
         .coverage_functions
         .iter()
@@ -2440,10 +2428,7 @@ fn render_failure_without_diagnostic_falls_back_to_debug_error() {
 }
 #[test]
 fn coverage_helper_functions_handle_internal_and_boundary_cases() {
-    assert_eq!(
-        normalize_user_function_name("__entrypoint_impl__run"),
-        Some("run")
-    );
+    assert_eq!(normalize_user_function_name("__entrypoint_impl__run"), None);
     assert_eq!(normalize_user_function_name("__lowered_internal"), None);
     assert_eq!(normalize_user_function_name("run"), Some("run"));
     let function = CoverageFunction {
@@ -2553,4 +2538,61 @@ fn current_caller_public_invocation_enforces_arguments_and_declared_permissions(
             results[0].failure
         );
     }
+}
+
+#[test]
+fn public_test_invocation_transfers_wide_results_through_owned_table() {
+    let temp = TestTempDir::new();
+    let types = std::iter::repeat_n("int", 80)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values = (0..80)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+seiyaku WideResults {{
+    view fn values() -> ({types}) {{ return ({values}); }}
+    #[test]
+    fn wide() {{
+        let result = test::invoke_kotoage(kotoage: "values", arguments: Json::parse("{{}}"));
+        test::assert_eq(actual: result.0, expected: 0);
+        test::assert_eq(actual: result.13, expected: 13);
+        test::assert_eq(actual: result.64, expected: 64);
+        test::assert_eq(actual: result.79, expected: 79);
+    }}
+}}
+"#
+    );
+    let path = temp.write("wide_results.ko", &source);
+    let suite = discover_suite(&path).expect("discover wide result test");
+    let compiled = compile_suite(&suite, false).expect("compile wide result test");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute wide result test");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn public_test_invocation_roundtrips_nominal_empty_products() {
+    let temp = TestTempDir::new();
+    let path = temp.write("empty_products.ko", r#"
+seiyaku EmptyProducts {
+    struct Empty {}
+    view fn echo(Empty value) -> Empty { value }
+    view fn list(List<Empty, 2> values) -> List<Empty, 2> { values }
+    #[test]
+    fn roundtrip() {
+        let value = test::invoke_kotoage(kotoage: "echo", arguments: Json::parse("{\"value\":{}}"));
+        test::assert(value == Empty {});
+        let values = test::invoke_kotoage(kotoage: "list", arguments: Json::parse("{\"values\":[{},{}]}"));
+        test::assert(values == [Empty {}, Empty {}]);
+    }
+}
+"#);
+    let suite = discover_suite(&path).expect("discover empty-product test");
+    let compiled = compile_suite(&suite, false).expect("compile empty-product test");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute empty-product test");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
 }

@@ -55,7 +55,7 @@ const ordinaryPayload = Buffer.concat(payloadFields.map(field));
 test("ordinary draft inspector retains the exact common envelope bindings", () => {
   assert.deepEqual(
     inspectOrdinaryDraft(ordinaryPayload, null, "ordinary"),
-    inspectCanonicalTransactionPayloadBindings(ordinaryPayload, null, "ordinary"),
+    inspectCanonicalTransactionPayloadBindings(ordinaryPayload, null, "ordinary", 753),
   );
   assert.throws(
     () => inspectOrdinaryDraft(Buffer.concat([ordinaryPayload, Buffer.of(0)]), null, "ordinary"),
@@ -64,7 +64,7 @@ test("ordinary draft inspector retains the exact common envelope bindings", () =
 });
 
 for (const [name, inspect] of [
-  ["general", inspectCanonicalTransactionPayloadBindings],
+  ["general", (payload, authority, intent) => inspectCanonicalTransactionPayloadBindings(payload, authority, intent, 753)],
   ["ordinary draft", inspectOrdinaryDraft],
 ]) {
   test(`${name} inspector requires an explicit canonical admission intent`, () => {
@@ -120,7 +120,7 @@ for (const name of ["VerifyExecutionProofV1", "SettleGameSessionV1"]) {
     assert.ok(payload.length <= 4 * 1024 * 1024);
     // This is wire admission and binding only, not verification of the opaque proof bytes.
     assert.deepEqual(
-      inspectCanonicalTransactionPayloadBindings(payload, null, "ordinary").executableArchive,
+      inspectCanonicalTransactionPayloadBindings(payload, null, "ordinary", 753).executableArchive,
       executable,
     );
     assert.throws(() => inspectOrdinaryDraft(payload, null, "ordinary"), (error) => {

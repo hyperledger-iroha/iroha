@@ -793,7 +793,8 @@ public final class IrohaSDK: @unchecked Sendable {
     private let toriiClient: ToriiTransactionSubmitting
     private let toriiRestClient: ToriiClient?
 
-    /// Current hardware acceleration settings. Setting this property applies the configuration immediately.
+    /// Requested hardware policy. Assignment attempts immediate native application.
+    /// Use `AccelerationSettings.currentAppliedSettings()` to inspect the native owner.
     public var accelerationSettings: AccelerationSettings {
         didSet { accelerationSettings.apply() }
     }
@@ -813,7 +814,7 @@ public final class IrohaSDK: @unchecked Sendable {
                 canonicalRequestAuth: ToriiCanonicalRequestAuth? = nil,
                 operatorSigningContext: ToriiOperatorSigningContext? = nil,
                 defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
-                accelerationSettings: AccelerationSettings = AccelerationSettings(),
+                accelerationSettings: AccelerationSettings? = nil,
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
@@ -829,7 +830,9 @@ public final class IrohaSDK: @unchecked Sendable {
         self.toriiClient = client
         self.toriiRestClient = client
         self.accelerationSettings = accelerationSettings
-        self.accelerationSettings.apply()
+            ?? NoritoNativeBridge.shared.currentAccelerationSettings()
+            ?? AccelerationSettings()
+        if let accelerationSettings { accelerationSettings.apply() }
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
         self.creationTimeProvider = creationTimeProvider ?? { client.recommendedCreationTimeMs() }
@@ -838,7 +841,7 @@ public final class IrohaSDK: @unchecked Sendable {
     public init(toriiClient: ToriiTransactionSubmitting,
                 baseURL: URL,
                 defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
-                accelerationSettings: AccelerationSettings = AccelerationSettings(),
+                accelerationSettings: AccelerationSettings? = nil,
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
@@ -847,7 +850,9 @@ public final class IrohaSDK: @unchecked Sendable {
         self.toriiClient = toriiClient
         self.toriiRestClient = toriiClient as? ToriiClient
         self.accelerationSettings = accelerationSettings
-        self.accelerationSettings.apply()
+            ?? NoritoNativeBridge.shared.currentAccelerationSettings()
+            ?? AccelerationSettings()
+        if let accelerationSettings { accelerationSettings.apply() }
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
         if let creationTimeProvider {
@@ -861,7 +866,7 @@ public final class IrohaSDK: @unchecked Sendable {
 
     public convenience init(toriiClient: ToriiClient,
                              defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
-                             accelerationSettings: AccelerationSettings = AccelerationSettings(),
+                             accelerationSettings: AccelerationSettings? = nil,
                              pipelineSubmitOptions: PipelineSubmitOptions = .default,
                              pipelinePollOptions: PipelineStatusPollOptions = .default,
                              creationTimeProvider: (@Sendable () -> UInt64)? = nil) {

@@ -39,7 +39,7 @@ class SumeragiHttpTransportContractTest {
 
         val status = transport.getSumeragiStatus().join()
 
-        assertEquals(4, status.protocolVersion)
+        assertEquals(8, status.protocolVersion)
         assertEquals("https://torii.example/api/v1/sumeragi/status", executor.request.uri.toString())
         assertEquals("GET", executor.request.method)
         assertTrue(executor.request.body.isEmpty())
@@ -50,28 +50,7 @@ class SumeragiHttpTransportContractTest {
     }
 
     @Test
-    fun `diagnostics uses one exact bounded JSON GET and returns the operational model`() {
-        val payload = diagnosticsJson().toByteArray(StandardCharsets.UTF_8)
-        val executor = FixedResponseExecutor(jsonResponse(payload))
-        val transport = transport(executor)
-
-        val diagnostics = transport.getSumeragiDiagnostics().join()
-
-        assertEquals(BigInteger.ONE, diagnostics.txQueueCapacity)
-        assertEquals(
-            "https://torii.example/api/v1/sumeragi/diagnostics",
-            executor.request.uri.toString(),
-        )
-        assertEquals("GET", executor.request.method)
-        assertTrue(executor.request.body.isEmpty())
-        assertEquals(listOf("application/json"), executor.request.headers["Accept"])
-        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
-        assertTrue(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
-        assertEquals(16L * 1024L * 1024L, executor.request.maximumResponseBytes)
-    }
-
-    @Test
-    fun `status and diagnostics accept parameters and reject malformed or ambiguous JSON content types`() {
+    fun `status accepts parameters and reject malformed or ambiguous JSON content types`() {
         val payload = statusJson().toByteArray(StandardCharsets.UTF_8)
         val diagnosticsPayload = diagnosticsJson().toByteArray(StandardCharsets.UTF_8)
         assertFails("status endpoint must reject a diagnostics-shaped payload") {
@@ -80,11 +59,6 @@ class SumeragiHttpTransportContractTest {
                     jsonResponse(diagnosticsPayload),
                 ),
             ).getSumeragiStatus().join()
-        }
-        assertFails("diagnostics endpoint must reject a status-shaped payload") {
-            transport(FixedResponseExecutor(jsonResponse(payload)))
-                .getSumeragiDiagnostics()
-                .join()
         }
         val validHeaders = listOf(
             mapOf("Content-Type" to listOf("Application/JSON; charset=utf-8")),
@@ -100,22 +74,11 @@ class SumeragiHttpTransportContractTest {
                 .setHeaders(headers)
                 .build()
             assertEquals(
-                4,
+                8,
                 transport(FixedResponseExecutor(statusResponse)).getSumeragiStatus().join().protocolVersion,
             )
 
-            val diagnosticsResponse = TransportResponse.builder()
-                .setStatusCode(200)
-                .setBody(diagnosticsPayload)
-                .setHeaders(headers)
-                .build()
-            assertEquals(
-                BigInteger.ONE,
-                transport(FixedResponseExecutor(diagnosticsResponse))
-                    .getSumeragiDiagnostics()
-                    .join()
-                    .txQueueCapacity,
-            )
+
         }
         val invalidHeaders = listOf(
             emptyMap(),
@@ -135,14 +98,7 @@ class SumeragiHttpTransportContractTest {
             assertFails {
                 transport(FixedResponseExecutor(statusResponse)).getSumeragiStatus().join()
             }
-            val diagnosticsResponse = TransportResponse.builder()
-                .setStatusCode(200)
-                .setBody(diagnosticsPayload)
-                .setHeaders(headers)
-                .build()
-            assertFails {
-                transport(FixedResponseExecutor(diagnosticsResponse)).getSumeragiDiagnostics().join()
-            }
+
         }
     }
 
@@ -368,55 +324,6 @@ class SumeragiHttpTransportContractTest {
             }
         """.trimIndent()
 
-        private fun statusJson(): String = """
-            {
-              "protocol_version": 4,
-              "node_fingerprint": "${hash(0x11)}",
-              "build_fingerprint": "${hash(0x12)}",
-              "config_fingerprint": "${hash(0x13)}",
-              "restart_required": false,
-              "height_context_id": ["${hash(0x14)}"],
-              "height": 1,
-              "view": 0,
-              "phase": {"phase": "awaiting_proposal", "details": null},
-              "leader": 0,
-              "locked_prepare_qc": null,
-              "highest_prepare_qc": null,
-              "last_timeout_certificate": null,
-              "body_state": {"state": "missing", "details": null},
-              "pending_persistence_id": null,
-              "last_committed_height": 0,
-              "last_committed_subject": null,
-              "height_context": {
-                "epoch": 0,
-                "epoch_end_height": 1,
-                "mode": {"mode": "permissioned", "details": null},
-                "epoch_seed": "${"00".repeat(32)}",
-                "validator_count": 4,
-                "quorum": {"min_signers": 3, "total_power": 4}
-              },
-              "last_commit_qc": null,
-              "liveness": {
-                "generation": 0,
-                "prepare_quorums": [],
-                "commit_quorums": [],
-                "timeout_quorums": [],
-                "outbound_intents": [],
-                "work": {
-                  "candidate": {"stage": "idle", "details": null},
-                  "body_recovery": {"stage": "idle", "details": null},
-                  "body_store": {"stage": "idle", "details": null},
-                  "validation": {"stage": "idle", "details": null},
-                  "application": {"stage": "idle", "details": null},
-                  "successor_height": {"stage": "idle", "details": null}
-                },
-                "queues": [],
-                "last_progress": null,
-                "no_progress_age_ms": 0,
-                "blocker": null,
-                "ignore_counts": []
-              }
-            }
-        """.trimIndent()
+        private fun statusJson(): String = org.hyperledger.iroha.sdk.consensus.NativeStatusFixtures.json("observer")
     }
 }

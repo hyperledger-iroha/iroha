@@ -137,7 +137,7 @@ def test_entire_plan_is_admitted_before_any_native_command(pipeline, kind):
     value = owner(p)
     with pytest.raises(sequence.ProofSequenceError): value.run(p.plan)
     assert p.c.commands.calls == [] and value._phase == 'failed'
-    assert sorted(path.name for path in p.outputs.directory.iterdir()) == ['facts.nrt', 'finality.nrt', 'queries.nrt']
+    assert sorted(path.name for path in p.outputs.directory.iterdir()) == ['carrier.nrt', 'facts.nrt', 'queries.nrt']
     with pytest.raises(sequence.ProofSequenceError): value.run(plan())
 
 

@@ -171,23 +171,20 @@ The current proof machinery cannot soundly remove the gate above:
 
 | Proof obligation | Required constrained relation | Current ABI V1 evidence | Release disposition |
 |---|---|---|---|
-| Invocation identity | Chain, authority, seiyaku address and complete code hash, selector, canonical public argument record, transaction gas ceiling, circuit id/version, and verifier-key commitment are one public statement. | `IvmReplayBindingV1` exposes only code, overlay, event, and gas-policy commitments. | Missing; reject. |
+| Invocation identity | Chain, authority, seiyaku address and complete code hash, selector, canonical public argument record, transaction gas ceiling, circuit id/version, and verifier-key commitment are one public statement. | `IvmExecutionStatementV1` and normalized signed intent define the canonical public claim, but its finalized anchor is not yet a Core-owned verified handle and no complete proof relation binds it. | Model complete; proof admission remains closed. |
 | Initial state and reads | The authenticated pre-state root and every host query result are proven, with exact dynamic read/write keys and authorization snapshots. | Deterministic replay authenticates these values only when it can execute the call. They are not circuit constraints. | Missing for witness-bearing calls; reject. |
-| IVM transition semantics | Every admitted opcode, register/tag transition, memory access, branch/call/return, syscall, and halt condition is constrained for every paid step. | `IvmReplayBindingV1` consists of sixteen advice-equals-instance constraints. IVM deliberately exposes no host-recomputation facade branded as a Halo2 circuit; the former incomplete `MockProver` stand-in was removed before ABI V1 release. | Missing; require a real proof relation with complete ISA coverage. |
+| IVM transition semantics | Every admitted opcode, register/tag transition, memory access, branch/call/return, syscall, and halt condition is constrained for every paid step. | Binding-only Halo2 and native-STARK IVM circuits and their production registrations have been retired. Ordinary Core admission rejects every `IvmProved` payload. | Missing; require the complete native STARK execution relation. |
 | Typed private witness | Each private index resolves to one bounded canonical `int`, `decimal`, or `quantity` frame of the requested nominal kind without revealing its bytes. | `DefaultHost` validates this relation for explicitly provisioned local tests/provers. Consensus `CoreHost` has no witness transport and rejects `GET_PRIVATE_INPUT`. | Host validation is not a proof; reject in consensus. |
-| `crypto::valcom` | The circuit constrains the complete canonical envelope projection, domain separation, scalar reduction, independent BLS12-381 generators, full Pedersen point, and canonical public `int` encoding. | The native local host computes this relation. Neither the Halo2 binding circuit nor the reserved STARK binding AIR constrains it. | Missing; a witness/output equality alone would be unsound. |
+| `crypto::valcom` | The circuit constrains the complete canonical envelope projection, domain separation, scalar reduction, independent BLS12-381 generators, full Pedersen point, and canonical public `int` encoding. | The native local host computes this relation; no admitted IVM proof relation constrains it. | Missing; a witness/output equality alone would be unsound. |
 | Noninterference | Private data influences only approved commitment/proof outputs, never control flow, public errors, logs, state keys/values, calls, queries, or ledger effects. | The typed compiler pass and VM taint checks enforce local execution policy, but those checks are not part of the proof statement. | Keep as defense in depth; still require proof. |
-| Outputs and effects | Public return values, ordered host effects, durable-state writes, events, and exact access metadata are derived from the proven terminal state. | `IvmProved` binds supplied commitments and validators compare them with deterministic replay. Replay cannot obtain a private witness by design. | Missing for witness-bearing calls; reject. |
-| Gas and termination | The trace proves a valid halt within the artifact ceiling under the hash-bound gas schedule, with exact charged host work. | Replay recomputes gas for public execution; the binding proof does not prove the trace or gas accounting. | Missing for witness-bearing calls; reject. |
+| Outputs and effects | Public return values, ordered host effects, durable-state writes, events, and exact access metadata are derived from the proven terminal state. | Ordinary public execution recomputes effects; `IvmProved` admission is closed until a complete execution proof can establish them from private execution. | Missing for witness-bearing calls; reject. |
+| Gas and termination | The trace proves a valid halt within the artifact ceiling under the hash-bound gas schedule, with exact charged host work. | Ordinary public execution charges exact gas; no IVM proof currently establishes a private trace or its gas. | Missing for witness-bearing calls; reject. |
 
-A sound restricted implementation may eventually prove a bounded transcript of
-typed `crypto::valcom` operations and replay the remaining public execution
-against those proven commitment outputs. That still requires a canonical
-proof-supplied commitment transcript, bytecode-derived operation ordering, a
-complete valcom circuit, and statement bindings for every row above. Merely
-adding private bytes to `IvmProved`, trusting compiler metadata, or wrapping a
-native computation in advice-equals-instance constraints is explicitly not an
-acceptable implementation.
+The final V1 private path requires one complete native STARK relation over the
+whole IVM execution and typed `crypto::valcom` calculation, backed by the
+verified complete State root. The public statement alone grants no execution
+authority. Merely adding private bytes to `IvmProved`, trusting compiler
+metadata, or comparing supplied commitments is unsound.
 
 ## Runtime and tooling
 

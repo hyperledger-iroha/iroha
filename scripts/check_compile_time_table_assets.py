@@ -43,6 +43,7 @@ CURRENT_INCLUDE_CONSUMER_MANIFESTS = frozenset(
         Path("crates/kotodama_lang/src/assets/diagnostics_v1/manifest.json"),
         Path("crates/iroha_cli/src/soracloud/assets/v1/template_manifest.json"),
         Path("crates/iroha_cli/src/soracloud/templates/v1/static/manifest.json"),
+        Path("crates/fastpq_isi/src/assets/manifest.json"),
     }
 )
 CONST_DECLARATION_RE = re.compile(

@@ -1,7 +1,6 @@
 //! Original genesis anchors derived by the fixed generator under retained file custody.
 use super::*;
-use iroha_core::sumeragi::GenesisMergeAuthority;
-use iroha_data_model::block::consensus_v2::HeightContextId;
+use crate::genesis::StagedNativeGenesis;
 
 pub(in crate::localnet) const RECEIPT_FILE: &str = "genesis-anchors.json";
 const MAX_RECEIPT_BYTES: usize = 32 * 1024;
@@ -14,7 +13,7 @@ pub(in crate::localnet) struct Inputs {
     manifest: usize,
     signed: usize,
     expected_hash: HashOf<BlockHeader>,
-    authority: Option<GenesisMergeAuthority>,
+    authority: Option<StagedNativeGenesis>,
     checked_peers: usize,
     primary_paths: Vec<(String, String)>,
     genesis_parameters: Option<(iroha_crypto::PublicKey, u16)>,
@@ -52,7 +51,7 @@ struct Receipt {
     chain_discriminant: u16,
     lane_count: u16,
     genesis_hash: HashOf<BlockHeader>,
-    context_id: HeightContextId,
+    genesis_epoch_context_id: Hash,
     network_id: NetworkId,
     peers: Vec<OriginalPeer>,
     accounts: Vec<OriginalAccount>,
@@ -125,7 +124,7 @@ impl Inputs {
             self.root.join("genesis.json"),
         )
         .map_err(|_| eyre!("retained final genesis manifest is invalid"))?;
-        let authority = crate::genesis::staged_signed_genesis_merge_authority(
+        let authority = crate::genesis::staged_signed_native_genesis(
             &manifest,
             self.files.bytes(self.signed)?,
             config,
@@ -136,8 +135,8 @@ impl Inputs {
             .map(|peer| PeerId::new(peer.public_key.clone()))
             .collect::<BTreeSet<_>>();
         let actual = authority
-            .context()
-            .roster
+            .epoch()
+            .committee
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<BTreeSet<_>>();
@@ -151,16 +150,15 @@ impl Inputs {
             "fixed anchor committee differs from the original four BLS peers"
         );
         ensure!(
-            authority.context().network_id == NetworkId::from_genesis_hash(self.expected_hash),
+            authority.epoch().network_id == NetworkId::from_genesis_hash(self.expected_hash),
             "fixed anchor context has a foreign genesis network"
         );
         if let Some(original) = &self.authority {
             ensure!(
-                authority.context() == original.context()
-                    && authority.proofs_of_possession() == original.proofs_of_possession()
-                    && authority.catalog_hash() == original.catalog_hash()
-                    && authority.active_lanes() == original.active_lanes()
-                    && authority.lane_authority_catalog() == original.lane_authority_catalog(),
+                authority.epoch() == original.epoch()
+                    && authority.genesis() == original.genesis()
+                    && authority.lanes() == original.lanes()
+                    && authority.lane_policy() == original.lane_policy(),
                 "original peer configs disagree on final genesis authority"
             );
         }
@@ -317,7 +315,7 @@ impl Inputs {
             .as_ref()
             .ok_or_else(|| eyre!("fixed anchors lack effective genesis parameters"))?;
         let receipt = Receipt {
-            schema: "iroha.sumeragi_v2.scaling.genesis_anchors.v1",
+            schema: "iroha.native_consensus.scaling.genesis_anchors.v1",
             version: 1,
             consensus_mode: "npos",
             chain_id: chain_id.to_owned(),
@@ -325,8 +323,13 @@ impl Inputs {
             chain_discriminant: *chain_discriminant,
             lane_count: layout.lane_count(),
             genesis_hash: self.expected_hash,
-            context_id: authority.context().id(),
-            network_id: authority.context().network_id,
+            genesis_epoch_context_id: Hash::prehashed(
+                authority
+                    .epoch()
+                    .context_id()
+                    .map_err(|error| eyre!(error))?,
+            ),
+            network_id: authority.epoch().network_id,
             peers: peers
                 .iter()
                 .enumerate()

@@ -100,14 +100,14 @@ impl AllocationPlan {
             .sum()
     }
 }
-/// Registers r10-r22 are used for argument passing.
-pub const ARG_REGS: [usize; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+/// Registers r10-r22 are clobbered by calls, syscalls, and fixed-register operations.
+pub const CALLER_CLOBBERED_REGS: [usize; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
 /// Maximum number of recursively flattened argument words in the V1 call ABI.
-pub const MAX_ARGUMENT_VALUES: usize = ARG_REGS.len();
-/// r10 also holds the first return value.
+pub const MAX_ARGUMENT_VALUES: usize = ivm_abi::call::MAX_CALL_WORDS_V1;
+/// r10 carries a syscall result or a completed call-table address.
 pub const RET_REG: usize = 10;
-/// ABI limit for multi-value returns carried in r10..r22.
-pub const MAX_RETURN_VALUES: usize = ARG_REGS.len();
+/// ABI limit for flattened values in a result table.
+pub const MAX_RETURN_VALUES: usize = ivm_abi::call::MAX_CALL_WORDS_V1;
 /// r31 acts as the stack pointer.
 pub const SP_REG: usize = 31;
 // Pool of allocatable registers (see policy above)
@@ -302,36 +302,6 @@ pub(crate) fn has_internal_calls(function: &Function) -> bool {
             .any(|instruction| matches!(instruction, Instr::Call { .. } | Instr::CallMulti { .. }))
     })
 }
-fn precolored_argument_temps(
-    function: &Function,
-    argument_register_temps: &HashSet<Temp>,
-) -> HashMap<Temp, usize> {
-    let Some(entry) = function
-        .blocks
-        .iter()
-        .find(|block| block.label == function.entry)
-    else {
-        return HashMap::new();
-    };
-    entry
-        .instrs
-        .iter()
-        .take_while(|instruction| matches!(instruction, Instr::LoadVar { .. }))
-        .filter_map(|instruction| {
-            let Instr::LoadVar { dest, name } = instruction else {
-                return None;
-            };
-            if !argument_register_temps.contains(dest) {
-                return None;
-            }
-            let index = function.params.iter().position(|param| param == name)?;
-            ARG_REGS
-                .get(index)
-                .copied()
-                .map(|register| (*dest, register))
-        })
-        .collect()
-}
 /// Allocate registers for a function using a single-pass linear scan.
 pub fn allocate(func: &Function) -> Allocation {
     let intervals = collect_live_intervals(func);
@@ -434,13 +404,14 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
     interval_list
 }
 fn register_allowed_for_interval(register: usize, can_use_argument_register: bool) -> bool {
-    ALLOC_POOL.contains(&register) || can_use_argument_register && ARG_REGS.contains(&register)
+    ALLOC_POOL.contains(&register)
+        || can_use_argument_register && CALLER_CLOBBERED_REGS.contains(&register)
 }
 fn take_preferred_free_register(
     free_registers: &mut Vec<usize>,
     can_use_argument_register: bool,
 ) -> Option<usize> {
-    let preferred = ARG_REGS
+    let preferred = CALLER_CLOBBERED_REGS
         .iter()
         .rev()
         .filter(|_| can_use_argument_register)
@@ -468,32 +439,15 @@ fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation
         .filter(|interval| interval_can_use_argument_registers(*interval, &clobbers))
         .map(|interval| interval.temp)
         .collect::<HashSet<_>>();
-    let precolored = precolored_argument_temps(func, &argument_register_temps);
     let mut active: Vec<(usize, Temp, usize)> = Vec::new();
     let mut free_regs = ALLOC_POOL
         .iter()
-        .chain(ARG_REGS.iter())
+        .chain(CALLER_CLOBBERED_REGS.iter())
         .copied()
         .collect::<Vec<_>>();
     let mut spilled = HashSet::new();
     for interval in interval_list.iter().copied() {
         expire_old_intervals(interval.start, &mut active, &mut free_regs);
-        if let Some(&register) = precolored.get(&interval.temp) {
-            if let Some(index) = free_regs.iter().position(|free| *free == register) {
-                free_regs.swap_remove(index);
-            } else if let Some(index) = active
-                .iter()
-                .position(|(_, _, active_register)| *active_register == register)
-            {
-                let (_, displaced, _) = active.remove(index);
-                allocation.regs.remove(&displaced);
-                spilled.insert(displaced);
-            }
-            allocation.regs.insert(interval.temp, register);
-            active.push((interval.end, interval.temp, register));
-            active.sort_by_key(|(end, _, _)| *end);
-            continue;
-        }
         let can_use_argument_register = argument_register_temps.contains(&interval.temp);
         if let Some(reg) = take_preferred_free_register(&mut free_regs, can_use_argument_register) {
             allocation.regs.insert(interval.temp, reg);
@@ -873,7 +827,7 @@ fn build_split_segments(
     for candidate in candidates {
         let can_use_argument_register =
             split_candidate_can_use_argument_registers(candidate, &clobbers);
-        let register_pool = ARG_REGS
+        let register_pool = CALLER_CLOBBERED_REGS
             .iter()
             .rev()
             .filter(|_| can_use_argument_register)
@@ -1629,7 +1583,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         StateHas { path, .. } | StateLen { path, .. } => f(*path),
         StateCount { prefix, .. } => f(*prefix),
-        DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
+        JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
         TlvLen { value, .. } => f(*value),
         JsonSetInt {
             json, key, value, ..
@@ -1655,7 +1609,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*schema);
             f(*blob);
         }
-        EncodeInt { value, .. } | PointerToNorito { value, .. } => f(*value),
+        EncodeBoolKey { value, .. } | PointerToNorito { value, .. } => f(*value),
         PointerFromNorito { blob, .. } => f(*blob),
         StatePathFromName { name, .. } => f(*name),
         PathMapKeyNorito { base, key_blob, .. } => {
@@ -1691,6 +1645,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         VrfVerify { request, .. } => f(*request),
         VrfVerifyBatch { batch, .. } => f(*batch),
         AxtBegin { descriptor } => f(*descriptor),
+        StageAnchoredSpend { spend } => f(*spend),
         AxtTouch { dsid, manifest } => {
             f(*dsid);
             if let Some(m) = manifest {
@@ -1699,17 +1654,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         VerifyDsProof { dsid, proof } => {
             f(*dsid);
-            if let Some(p) = proof {
-                f(*p);
-            }
-        }
-        UseAssetHandle {
-            handle,
-            intent,
-            proof,
-        } => {
-            f(*handle);
-            f(*intent);
             if let Some(p) = proof {
                 f(*p);
             }
@@ -1827,9 +1771,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::VrfVerify { dest, .. } => Some(*dest),
         Instr::VrfVerifyBatch { dest, .. } => Some(*dest),
         Instr::MapGet { dest, .. } => Some(*dest),
-        Instr::DecodeInt { dest, .. } => Some(*dest),
         Instr::TlvLen { dest, .. } => Some(*dest),
-        Instr::EncodeInt { dest, .. } => Some(*dest),
+        Instr::EncodeBoolKey { dest, .. } => Some(*dest),
         Instr::JsonObject { dest, .. } => Some(*dest),
         Instr::JsonSetInt { dest, .. } => Some(*dest),
         Instr::JsonSetAccountId { dest, .. } => Some(*dest),
@@ -1911,8 +1854,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::StateDel { .. }
         | Instr::AxtBegin { .. }
         | Instr::AxtTouch { .. }
+        | Instr::StageAnchoredSpend { .. }
         | Instr::VerifyDsProof { .. }
-        | Instr::UseAssetHandle { .. }
         | Instr::AxtCommit
         | Instr::TransferBatchBegin
         | Instr::TransferBatchEnd
@@ -2161,11 +2104,11 @@ mod tests {
         assert!(alloc.stack.is_empty());
         assert_eq!(alloc.frame_size, 0);
         for &reg in alloc.regs.values() {
-            assert!(ARG_REGS.contains(&reg));
+            assert!(CALLER_CLOBBERED_REGS.contains(&reg));
         }
     }
     #[test]
-    fn precolors_leaf_parameters_in_abi_argument_registers() {
+    fn table_parameters_use_ordinary_call_local_register_allocation() {
         let parameter = Temp(0);
         let func = Function {
             name: "identity".into(),
@@ -2182,7 +2125,7 @@ mod tests {
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
-        assert_eq!(alloc.regs.get(&parameter), Some(&RET_REG));
+        assert!(CALLER_CLOBBERED_REGS.contains(&alloc.regs[&parameter]));
         assert!(alloc.stack.is_empty());
         assert_eq!(alloc.frame_size, 0);
         assert!(!has_internal_calls(&func));
@@ -2226,12 +2169,12 @@ mod tests {
         };
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
-        assert!(ARG_REGS.contains(&allocation.regs[&argument]));
-        assert!(ARG_REGS.contains(&allocation.regs[&call_result]));
+        assert!(CALLER_CLOBBERED_REGS.contains(&allocation.regs[&argument]));
+        assert!(CALLER_CLOBBERED_REGS.contains(&allocation.regs[&call_result]));
         assert!(allocation.stack.is_empty());
     }
     #[test]
-    fn parameter_precolouring_is_kept_only_when_it_does_not_cross_a_call() {
+    fn table_parameters_use_preserved_registers_only_when_live_across_a_call() {
         let parameter = Temp(0);
         let call_result = Temp(1);
         let dead_at_call = Function {
@@ -2255,7 +2198,7 @@ mod tests {
             entry: Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-        assert_eq!(allocate(&dead_at_call).regs[&parameter], RET_REG);
+        assert!(CALLER_CLOBBERED_REGS.contains(&allocate(&dead_at_call).regs[&parameter]));
         let after_call = Temp(2);
         let live_across_call = Function {
             name: "live_across_call".into(),
@@ -2328,8 +2271,8 @@ mod tests {
         };
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
-        assert!(ARG_REGS.contains(&allocation.regs[&first_result]));
-        assert!(ARG_REGS.contains(&allocation.regs[&second_result]));
+        assert!(CALLER_CLOBBERED_REGS.contains(&allocation.regs[&first_result]));
+        assert!(CALLER_CLOBBERED_REGS.contains(&allocation.regs[&second_result]));
         assert_eq!(allocation, allocate(&function));
     }
     #[test]
@@ -2372,7 +2315,7 @@ mod tests {
         };
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
-        assert!(ARG_REGS.contains(&allocation.regs[&call_result]));
+        assert!(CALLER_CLOBBERED_REGS.contains(&allocation.regs[&call_result]));
     }
     #[test]
     fn join_live_value_uses_a_preserved_home_across_one_branch_call() {
@@ -2508,7 +2451,7 @@ mod tests {
         assert!(
             [branch_local, merged]
                 .iter()
-                .all(|temp| ARG_REGS.contains(&allocation.regs[temp])),
+                .all(|temp| CALLER_CLOBBERED_REGS.contains(&allocation.regs[temp])),
             "values that cannot reach the call must stay in caller-saved registers: {allocation:#?}"
         );
         assert!(allocation.stack.is_empty(), "{allocation:#?}");
@@ -2540,17 +2483,17 @@ mod tests {
         };
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&actor]));
-        assert!(ARG_REGS.contains(&allocation.regs[&account]));
+        assert!(CALLER_CLOBBERED_REGS.contains(&allocation.regs[&account]));
     }
     #[test]
     fn call_local_pressure_uses_the_full_caller_saved_window_without_spills() {
         let carried = Temp(0);
         let warmup = Temp(1);
-        let arguments = (0..ARG_REGS.len())
+        let arguments = (0..CALLER_CLOBBERED_REGS.len())
             .map(|index| Temp(index + 2))
             .collect::<Vec<_>>();
-        let call_result = Temp(ARG_REGS.len() + 2);
-        let result = Temp(ARG_REGS.len() + 3);
+        let call_result = Temp(CALLER_CLOBBERED_REGS.len() + 2);
+        let result = Temp(CALLER_CLOBBERED_REGS.len() + 3);
         let mut instructions = vec![
             Instr::Const {
                 dest: carried,
@@ -2599,13 +2542,13 @@ mod tests {
         assert!(
             arguments
                 .iter()
-                .all(|temp| ARG_REGS.contains(&allocation.regs[temp]))
+                .all(|temp| CALLER_CLOBBERED_REGS.contains(&allocation.regs[temp]))
         );
         assert_eq!(allocation, allocate(&function));
     }
     #[test]
     fn spills_when_live_set_exceeds_pool() {
-        let live = ALLOC_POOL.len() + ARG_REGS.len() + 4;
+        let live = ALLOC_POOL.len() + CALLER_CLOBBERED_REGS.len() + 4;
         let mut blocks = Vec::new();
         let mut instrs = Vec::new();
         for i in 0..live {
@@ -2695,7 +2638,7 @@ mod tests {
         assert_eq!(segments[0].end, first_use_position + 1);
         assert_eq!(segments[0].use_count, 4);
         assert!(
-            ARG_REGS.contains(&segments[0].register),
+            CALLER_CLOBBERED_REGS.contains(&segments[0].register),
             "a clobber-local split should reuse a caller-saved hole"
         );
         assert_eq!(plan.frame_size, baseline.frame_size);
@@ -2831,7 +2774,7 @@ mod tests {
         assert!(
             segments
                 .iter()
-                .all(|segment| ARG_REGS.contains(&segment.register))
+                .all(|segment| CALLER_CLOBBERED_REGS.contains(&segment.register))
         );
         assert!(
             segments
@@ -2914,8 +2857,10 @@ mod tests {
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
-        let expected_first = *ARG_REGS.last().expect("argument register pool");
-        let expected_second = ARG_REGS[ARG_REGS.len() - 2];
+        let expected_first = *CALLER_CLOBBERED_REGS
+            .last()
+            .expect("argument register pool");
+        let expected_second = CALLER_CLOBBERED_REGS[CALLER_CLOBBERED_REGS.len() - 2];
         assert_eq!(alloc.regs.get(&dest0), Some(&expected_first));
         assert_eq!(alloc.regs.get(&dest1), Some(&expected_second));
     }
@@ -2938,7 +2883,7 @@ mod tests {
                 items: (first..first + live).map(Temp).collect(),
             });
         }
-        let live = ALLOC_POOL.len() + ARG_REGS.len() + 4;
+        let live = ALLOC_POOL.len() + CALLER_CLOBBERED_REGS.len() + 4;
         let mut one_phase = Vec::new();
         let mut next_temp = 0;
         pressure_phase(&mut one_phase, &mut next_temp, live);

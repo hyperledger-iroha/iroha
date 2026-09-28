@@ -3507,6 +3507,8 @@ impl MaybeTelemetry {
                 blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
                 lane_history_retention:
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+                native_context_archive_max_bytes:
+                    iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
                 block_hash_history_bytes:
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
                 transaction_history_bytes:
@@ -3543,6 +3545,9 @@ impl MaybeTelemetry {
         let _ = peers.push(local_peer_id.clone());
         world_block.commit();
         let mut state = State::try_new(
+            iroha_core::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             world,
             kura.clone(),
             query,
@@ -15602,75 +15607,6 @@ fn normalize_contract_payload_after_authorization<E>(
     authorize()?;
     normalize_contract_payload(descriptor, payload).map_err(map_normalization_error)
 }
-pub(crate) fn normalize_contract_call_metadata_for_bytecode(
-    metadata: &mut Metadata,
-    bytecode: &[u8],
-) -> Result<()> {
-    let entrypoint = metadata
-        .get("contract_entrypoint")
-        .map(|raw| {
-            raw.try_into_any_norito::<String>().map_err(|err| {
-                conversion_error(format!("invalid contract_entrypoint metadata: {err}"))
-            })
-        })
-        .transpose()?
-        .map(|value| value.trim().to_owned());
-    if entrypoint.as_deref().is_some_and(str::is_empty) {
-        return Err(conversion_error(
-            "contract_entrypoint must not be empty".to_owned(),
-        ));
-    }
-    let Some(entrypoint) = entrypoint else {
-        if ivm::ProgramMetadata::parse(bytecode)
-            .ok()
-            .and_then(|parsed| parsed.contract_interface)
-            .is_some()
-        {
-            return Err(conversion_error(
-                "self-describing contract calls require explicit contract_entrypoint metadata"
-                    .to_owned(),
-            ));
-        }
-        return Ok(());
-    };
-    let parsed = ivm::ProgramMetadata::parse(bytecode)
-        .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))?;
-    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-        conversion_error(
-            "contract entrypoint metadata requires a self-describing contract artifact".to_owned(),
-        )
-    })?;
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == entrypoint)
-        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{entrypoint}`")))?;
-    match descriptor.kind {
-        manifest::EntryPointKind::View => {
-            return Err(conversion_error(format!(
-                "contract entrypoint `{entrypoint}` is read-only and cannot be invoked as a transaction"
-            )));
-        }
-        manifest::EntryPointKind::Hajimari | manifest::EntryPointKind::Kaizen => {
-            return Err(conversion_error(format!(
-                "`{entrypoint}` is a hajimari/始まり or kaizen/改善 entrypoint and requires a top-level deployed ContractCall"
-            )));
-        }
-        manifest::EntryPointKind::Kotoage => {}
-    }
-    let manifest_descriptor = descriptor.to_manifest_descriptor();
-    let payload = metadata.get("contract_payload").cloned();
-    let normalized = normalize_contract_payload(&manifest_descriptor, payload.as_ref())?;
-    if let Some(payload) = normalized {
-        metadata.insert(
-            "contract_payload"
-                .parse()
-                .expect("static metadata key `contract_payload`"),
-            payload,
-        );
-    }
-    Ok(())
-}
 fn resolve_contract_entrypoint_pc(
     prepared: &ivm::PreparedContract,
     selector: &str,
@@ -20372,11 +20308,11 @@ mod contract_payload_normalization_tests {
         }
     }
     #[test]
-    fn normalize_contract_call_metadata_for_bytecode_preserves_canonical_zk_ivm_payload() {
+    fn normalize_contract_payload_preserves_compiled_public_call_fields() {
         let code = ivm::KotodamaCompiler::new()
             .compile_source(
                 r#"
-seiyaku ZkIvmPayloadNormalizeTest {
+seiyaku PublicCallPayloadNormalizeTest {
 
   kotoage fn burn_and_record(
     AccountId sender,
@@ -20393,11 +20329,16 @@ seiyaku ZkIvmPayloadNormalizeTest {
                 .to_string();
         let settlement_asset =
             test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "contract_entrypoint".parse().expect("metadata key"),
-            IrohaJson::new("burn_and_record"),
-        );
+        let parsed = ivm::ProgramMetadata::parse(&code).expect("compiled contract metadata");
+        let interface = parsed
+            .contract_interface
+            .expect("compiled contract interface");
+        let descriptor = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "burn_and_record")
+            .expect("compiled public entrypoint")
+            .to_manifest_descriptor();
         let mut request_payload = Map::new();
         request_payload.insert("sender".into(), Value::from(sender.clone()));
         request_payload.insert(
@@ -20406,15 +20347,10 @@ seiyaku ZkIvmPayloadNormalizeTest {
         );
         request_payload.insert("amount".into(), Value::from("25000000000000000"));
         request_payload.insert("record_instruction".into(), Value::from("0xaabbcc"));
-        metadata.insert(
-            "contract_payload".parse().expect("metadata key"),
-            IrohaJson::new(Value::Object(request_payload)),
-        );
-        normalize_contract_call_metadata_for_bytecode(&mut metadata, &code)
-            .expect("canonical metadata payload should validate");
-        let payload = metadata
-            .get("contract_payload")
-            .expect("contract payload metadata");
+        let request_payload = IrohaJson::new(Value::Object(request_payload));
+        let payload = normalize_contract_payload(&descriptor, Some(&request_payload))
+            .expect("canonical public call payload should validate")
+            .expect("normalized payload");
         let value = json::parse_value(payload.get()).expect("normalized payload json");
         let mut expected = Map::new();
         expected.insert("sender".into(), Value::from(sender));
@@ -20878,6 +20814,7 @@ mod multisig_selector_tests {
         };
         let mut out = meta.encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -44855,6 +44792,7 @@ mod validation_fee_torii_ingress_tests {
             }],
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "ValidationFeePayout".to_owned(),
             compiler_fingerprint: "validation-fee-torii-ingress-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -44915,6 +44853,7 @@ mod validation_fee_torii_ingress_tests {
             triggers: Vec::new(),
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "ValidationFeePool".to_owned(),
             compiler_fingerprint: "validation-fee-pool-torii-ingress-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -45816,7 +45755,9 @@ mod validation_fee_torii_ingress_tests {
             .expect("queued transaction");
         let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
         let mut ivm_cache = IvmCache::new();
-        let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Ok(_) => "ok".to_string(),
             Err(error) => format!("{error:?}"),
@@ -54652,7 +54593,8 @@ mod prepared_transaction_signature_fixture_tests {
         )
         .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary)
         .with_metadata(metadata)
-        .with_instructions(instructions);
+        .with_instructions(instructions)
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
         builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
         builder.set_ttl(Duration::from_secs(3_600));
         builder.set_nonce(NonZeroU32::new(nonce).expect("non-zero fixture nonce"));

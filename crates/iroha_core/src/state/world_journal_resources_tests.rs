@@ -138,8 +138,14 @@ fn world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop() {
 #[test]
 fn world_shell_planning_never_reads_targets_or_acquires_held_writers() {
     let (retained, prepared) = field_layouts::<Cell<u64>>(|_| panic!("must not read target"));
-    assert_eq!(retained, Layout::new::<RetainedCell<u64>>());
-    assert_eq!(prepared, publication::cell_shell_layout::<u64>());
+    assert_eq!(
+        retained,
+        Layout::new::<RetainedCell<u64, concread::ebrcell::Untracked>>()
+    );
+    assert_eq!(
+        prepared,
+        publication::cell_shell_layout::<u64, concread::ebrcell::Untracked>()
+    );
     let expected = WorldJournalShellDemand::plan().unwrap();
     let world = World::default();
     let writers = world.block();

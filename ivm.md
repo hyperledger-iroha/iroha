@@ -22,11 +22,11 @@ Related docs:
 | 0x0009 | NoritoBytes | OK |
 | 0x000A | DataSpaceId | OK |
 | 0x000B | AxtDescriptor | OK |
-| 0x000C | AssetHandle | OK |
 | 0x000D | ProofBlob | OK |
 | 0x000E | SoracloudRequest | OK |
 | 0x000F | SoracloudResponse | OK |
 | 0x0010 | Quantity | OK |
 | 0x0011 | Int | OK |
 | 0x0012 | Decimal | OK |
+| 0x0013 | AxtAnchoredSpendV1 | OK |
 <!-- END GENERATED POINTER TYPES -->

@@ -596,15 +596,6 @@ fn active_lane_config_entry_at_height(
     lane_id: LaneId,
     block_height: Option<u64>,
 ) -> Result<&LaneConfigEntry, DaProofPolicyError> {
-    let expected_config = LaneConfig::from_catalog(&nexus.lane_catalog);
-    active_lane_config_entry_at_height_with_snapshot(nexus, &expected_config, lane_id, block_height)
-}
-fn active_lane_config_entry_at_height_with_snapshot<'a>(
-    nexus: &'a Nexus,
-    expected_config: &LaneConfig,
-    lane_id: LaneId,
-    block_height: Option<u64>,
-) -> Result<&'a LaneConfigEntry, DaProofPolicyError> {
     let Some(current) = nexus.lane_config.entry(lane_id) else {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     };
@@ -616,38 +607,31 @@ fn active_lane_config_entry_at_height_with_snapshot<'a>(
     if !catalog_lane_is_da_active(catalog_lane, nexus, block_height) {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     }
-    let Some(expected) = expected_config.entry(lane_id) else {
-        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
-    };
     if nexus
         .dataspace_catalog
-        .by_id(expected.dataspace_id)
+        .by_id(catalog_lane.dataspace_id)
         .is_none()
     {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     }
-    if !lane_config_entries_match_for_da(current, expected) {
+    if !current.matches_metadata(catalog_lane) {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     }
     Ok(current)
 }
 /// Reusable active-lane policy view over one immutable Nexus snapshot.
 ///
-/// Constructing the view derives catalog geometry once. Query paths that classify many historical
-/// records should reuse it instead of rebuilding the full lane configuration for every record.
+/// Construction borrows the original snapshot. Each lookup checks all runtime
+/// fields against their catalog metadata without cloning policy graphs or strings.
 #[derive(Debug)]
 pub struct ActiveLaneProofPolicyContext<'a> {
     nexus: &'a Nexus,
-    expected_config: LaneConfig,
 }
 impl<'a> ActiveLaneProofPolicyContext<'a> {
-    /// Derive a reusable policy view for `nexus`.
+    /// Borrow a reusable policy view for `nexus` without allocating.
     #[must_use]
     pub fn new(nexus: &'a Nexus) -> Self {
-        Self {
-            nexus,
-            expected_config: LaneConfig::from_catalog(&nexus.lane_catalog),
-        }
+        Self { nexus }
     }
     /// Return the active DA proof policy for a lane at a block height.
     ///
@@ -724,12 +708,7 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
         lane_id: LaneId,
         block_height: Option<u64>,
     ) -> Result<&LaneConfigEntry, DaProofPolicyError> {
-        active_lane_config_entry_at_height_with_snapshot(
-            self.nexus,
-            &self.expected_config,
-            lane_id,
-            block_height,
-        )
+        active_lane_config_entry_at_height(self.nexus, lane_id, block_height)
     }
 }
 fn catalog_lane_is_da_active(
@@ -761,23 +740,6 @@ fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> boo
     let max = nexus.autoscale.max_lane_id_exclusive.get();
     let lane_id = lane_id.as_u32();
     min < max && lane_id >= min && lane_id < max
-}
-fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry) -> bool {
-    lhs.lane_id == rhs.lane_id
-        && lhs.shard_id == rhs.shard_id
-        && lhs.dataspace_id == rhs.dataspace_id
-        && lhs.visibility == rhs.visibility
-        && lhs.storage_profile == rhs.storage_profile
-        && lhs.proof_scheme == rhs.proof_scheme
-        && lhs.alias == rhs.alias
-        && lhs.slug == rhs.slug
-        && lhs.kura_segment == rhs.kura_segment
-        && lhs.merge_segment == rhs.merge_segment
-        && lhs.key_prefix == rhs.key_prefix
-        && lhs.manifest_policy == rhs.manifest_policy
-        && lhs.confidential_compute == rhs.confidential_compute
-        && lhs.scheduler == rhs.scheduler
-        && lhs.settlement_buffer == rhs.settlement_buffer
 }
 #[cfg(test)]
 /// Return the active DA proof policy for a catalog-backed lane.
@@ -2867,6 +2829,40 @@ mod tests {
                 "reserved marker {marker} must not make a manual lane DA-active"
             );
         }
+    }
+    #[test]
+    fn borrowed_active_policy_keeps_the_original_snapshot_and_rejects_namespace_drift() {
+        let lane = LaneId::new(1);
+        let catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: lane,
+                alias: "Original Lane".into(),
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let nexus = nexus_with_catalog(catalog);
+        let context = ActiveLaneProofPolicyContext::new(&nexus);
+        assert!(std::ptr::eq(context.nexus, &nexus));
+        assert!(std::ptr::eq(
+            context.entry(lane, Some(1)).unwrap(),
+            nexus.lane_config.entry(lane).unwrap()
+        ));
+        context
+            .enforce_commitment_at_height(&merkle_record(1), 1)
+            .unwrap();
+        // This separate mutable runtime copy cannot replace the context's source.
+        let mut changed = nexus.clone();
+        let mut drifted_catalog = changed.lane_catalog.lanes().to_vec();
+        drifted_catalog[1].alias = "Replacement Lane".into();
+        changed.lane_config = LaneConfig::from_catalog(&lane_catalog_with(drifted_catalog));
+        assert!(matches!(
+            ActiveLaneProofPolicyContext::new(&changed).enforce_commitment_at_height(&merkle_record(1), 1),
+            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
+        ));
+        context
+            .enforce_commitment_at_height(&merkle_record(1), 1)
+            .unwrap();
     }
     #[test]
     fn active_proof_policy_rejects_catalog_geometry_drift() {

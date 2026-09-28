@@ -378,13 +378,25 @@ ivm_cache_decoded_streams	ivm_cache_decoded_streams	IVM opcode pre-decode decode
 ivm_cache_decoded_ops_total	ivm_cache_decoded_ops_total	IVM opcode pre-decode decoded operations (cumulative)	registered
 ivm_cache_decode_failures	ivm_cache_decode_failures	IVM opcode pre-decode decode failures (cumulative)	registered
 ivm_cache_decode_time_ns_total	ivm_cache_decode_time_ns_total	IVM opcode pre-decode total decode time in nanoseconds (cumulative)	registered
+ivm_cache_memory_resident_bytes	ivm_cache_memory_resident_bytes	Measured IVM cache allocation bytes whose owners remain live	registered
+ivm_cache_memory_active_bytes	ivm_cache_memory_active_bytes	Measured IVM cache allocation bytes outside retention	registered
+ivm_cache_memory_retained_bytes	ivm_cache_memory_retained_bytes	Measured IVM cache allocation bytes admitted to retention	registered
+ivm_cache_memory_shared_reclaimable_bytes	ivm_cache_memory_shared_reclaimable_bytes	Retained shared IVM cache bytes held only by cache entries	registered
+ivm_cache_memory_shared_borrowed_bytes	ivm_cache_memory_shared_borrowed_bytes	Retained shared IVM cache bytes held by both caches and borrowers	registered
+ivm_cache_memory_shared_evicted_live_bytes	ivm_cache_memory_shared_evicted_live_bytes	Retained shared IVM cache bytes still live after cache eviction	registered
+ivm_cache_memory_unclassified_retained_bytes	ivm_cache_memory_unclassified_retained_bytes	Retained IVM cache bytes without classified shared-owner custody	registered
+ivm_cache_memory_peak_bytes	ivm_cache_memory_peak_bytes	Peak measured IVM cache allocation bytes with live owners	registered
+ivm_cache_memory_unmeasured_owners	ivm_cache_memory_unmeasured_owners	Active IVM cache owners with unknown nested allocation footprints	registered
+ivm_execution_memory_reserved_bytes	ivm_execution_memory_reserved_bytes	Requested execution bytes still held by the State-owned allocation pool	registered
+ivm_execution_memory_peak_bytes	ivm_execution_memory_peak_bytes	Highest requested execution-byte reservation admitted by that pool	registered
+ivm_execution_memory_limit_bytes	ivm_execution_memory_limit_bytes	Current configured limit of the State-owned execution allocation pool	registered
 ivm_register_max_index	ivm_register_max_index	Maximum general-purpose register index touched per VM execution	registered
 ivm_register_unique_count	ivm_register_unique_count	Unique general-purpose registers touched per VM execution	registered
 merkle_root_gpu_total	merkle_root_gpu_total	Merkle root computations using GPU acceleration (cumulative)	registered
 merkle_root_cpu_total	merkle_root_cpu_total	Merkle root computations using CPU (cumulative)	registered
 ivm_memory_commit_ms	ivm_memory_commit_ms	IVM memory commit duration in milliseconds by commit path	registered
 ivm_memory_commit_dirty_chunks	ivm_memory_commit_dirty_chunks	IVM memory commit dirty chunk count by commit path	registered
-ivm_merkle_rebuild_total	ivm_merkle_rebuild_total	IVM Merkle cache full rebuilds	registered
+ivm_merkle_rebuild_total	ivm_merkle_rebuild_total	IVM completed in-place canonical Merkle node refreshes (excluding construction and copies)	registered
 ivm_merkle_incremental_leaf_updates_total	ivm_merkle_incremental_leaf_updates_total	IVM Merkle cache incremental leaf updates	registered
 pipeline_dag_vertices	pipeline_dag_vertices	DAG vertices (transactions) in the latest validated block	registered
 pipeline_dag_edges	pipeline_dag_edges	DAG edges (conflicts) in the latest validated block	registered
@@ -451,8 +463,6 @@ torii_zk_prover_latency_ms	torii_zk_prover_latency_ms	Background prover processi
 torii_zk_prover_gc_total	torii_zk_prover_gc_total	Background prover report records removed by retention GC	registered
 torii_zk_prover_inflight	torii_zk_prover_inflight	Background prover attachments currently being processed	registered
 torii_zk_prover_pending	torii_zk_prover_pending	Background prover attachments pending processing	registered
-torii_zk_ivm_prove_inflight	torii_zk_ivm_prove_inflight	Torii IVM prove helper jobs currently proving	registered
-torii_zk_ivm_prove_queued	torii_zk_ivm_prove_queued	Torii IVM prove helper jobs queued (waiting for inflight slot)	registered
 torii_zk_prover_last_scan_bytes	torii_zk_prover_last_scan_bytes	Background prover bytes processed during the most recent scan	registered
 torii_zk_prover_last_scan_ms	torii_zk_prover_last_scan_ms	Background prover wall-clock duration (ms) of the most recent scan	registered
 torii_zk_prover_budget_exhausted_total	torii_zk_prover_budget_exhausted_total	Background prover budget exhaustion events, labelled by reason	registered

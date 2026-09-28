@@ -5,12 +5,7 @@ use std::time::{Duration, Instant};
 
 use eyre::{Result, bail};
 use integration_tests::sandbox::{self, SerializedNetwork};
-use iroha::data_model::{
-    account::Account,
-    isi::Register,
-    prelude::*,
-    sumeragi::SumeragiStatus,
-};
+use iroha::data_model::{account::Account, isi::Register, prelude::*, sumeragi::SumeragiStatus};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_registry};
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;
@@ -175,7 +170,10 @@ fn validators_restart_one_and_all() -> Result<()> {
         register_account_everywhere(&network)?;
         for status in statuses(&network) {
             let status = status?;
-            assert!(status.is_signing(), "every validator signs again: {status:?}");
+            assert!(
+                status.is_signing(),
+                "every validator signs again: {status:?}"
+            );
         }
         Ok(())
     })();

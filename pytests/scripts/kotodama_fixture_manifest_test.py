@@ -56,7 +56,7 @@ def _copy_fixture_tree(destination: Path) -> Path:
 def test_checked_in_inventory_seals_current_consumers() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
     assert stats.fixtures == 301
-    assert stats.tests == 590
+    assert stats.tests == 591
 
 
 def test_payload_corruption_fails_closed(tmp_path: Path) -> None:
@@ -83,13 +83,14 @@ def test_included_test_inventory_drift_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
     included_source = (
         tmp_path
-        / "crates/kotodama_lang/src/compiler/tests/axt_remote_spend_access_tests.rs"
+        / "crates/kotodama_lang/src/compiler/tests/staged_mint_access_hints.rs"
     )
     source = included_source.read_text(encoding="utf-8")
+    assert "fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation()" in source
     included_source.write_text(
         source.replace(
-            "fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents()",
-            "fn changed_remote_spend_test_name()",
+            "fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation()",
+            "fn changed_staged_mint_test_name()",
             1,
         ),
         encoding="utf-8",

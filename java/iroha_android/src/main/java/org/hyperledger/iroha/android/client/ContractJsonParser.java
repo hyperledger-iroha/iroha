@@ -22,11 +22,6 @@ public final class ContractJsonParser {
 
   private ContractJsonParser() {}
 
-  /** Parses the complete `/v1/contracts/code/{code_hash}` manifest response. */
-  public static ContractManifestRecord parseManifestRecord(final byte[] payload) {
-    return ContractManifestJsonParser.parseRecord(payload);
-  }
-
   public static ContractCallResponse parseCallResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "contract call response"), "contract call response");

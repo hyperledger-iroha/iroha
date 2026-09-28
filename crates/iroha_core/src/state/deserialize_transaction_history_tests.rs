@@ -122,6 +122,9 @@ mod transaction_history_restore_tests {
         let budget = kura.transaction_history_budget();
         let full = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
         let result = State::try_new(
+            mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             World::default(),
             Arc::clone(&kura),
             crate::query::store::LiveQueryStore::start_test(),
@@ -135,6 +138,9 @@ mod transaction_history_restore_tests {
         assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
         drop(full);
         let state = State::try_new(
+            mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             World::default(),
             kura,
             crate::query::store::LiveQueryStore::start_test(),

@@ -66,6 +66,18 @@ impl ReleaseNotification {
         Self { state }
     }
 
+    /// Fallibly construct the same prepaid notification control allocation.
+    /// Refusal returns its unchanged charge; no observation or signal was created.
+    /// Native mutex internals and future waiter storage remain separate owners.
+    pub fn try_new_charged<Charge: Send + Sync + 'static>(
+        charge: Charge,
+    ) -> Result<Self, (Charge, crate::shared::ReservationError)> {
+        let state = ErasedShared::try_new(Mutex::new(State::default()), charge)
+            .map_err(|(_, charge, error)| (charge, error))?;
+        drop(state.lock().unwrap_or_else(|p| p.into_inner()));
+        Ok(Self { state })
+    }
+
     /// Observe releases before probing this notification's physical lock.
     pub fn observe(&self) -> ReleaseWait {
         let sequence = self
@@ -350,6 +362,22 @@ pub struct ReleaseGuard<'owner, T> {
 pub struct DeferredRelease {
     notification: ReleaseNotification,
     poisoned: bool,
+    armed: bool,
+}
+
+impl DeferredRelease {
+    /// Retain this actual release in a batch belonging to the same original source.
+    /// A foreign batch returns the unchanged notice. Success coalesces release and
+    /// poison without waking, allocating, or retiring any protected payload.
+    pub fn try_merge_into(mut self, batch: &mut DeferredReleaseBatch) -> Result<(), Self> {
+        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
+        }
+        batch.released = true;
+        batch.poisoned |= self.poisoned;
+        self.armed = false;
+        Ok(())
+    }
 }
 
 /// Bounded custody of actual releases from one original physical lock.
@@ -374,7 +402,9 @@ impl Drop for DeferredReleaseBatch {
 
 impl Drop for DeferredRelease {
     fn drop(&mut self) {
-        self.notification.released(self.poisoned);
+        if self.armed {
+            self.notification.released(self.poisoned);
+        }
     }
 }
 
@@ -429,6 +459,7 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
                 state: retirement.notification.state.clone(),
             },
             poisoned,
+            armed: true,
         };
         let retained = retirement.inner.take().expect("owned release retirement");
         let _transferred = std::mem::ManuallyDrop::new(retirement);

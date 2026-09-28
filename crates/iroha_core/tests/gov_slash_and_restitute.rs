@@ -116,7 +116,7 @@ fn configure_retained_governance_state(
             },
         )
         .collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
         std::collections::BTreeMap::from([(
             lane.id,
             crate::governance::manifest::LaneManifestStatus {

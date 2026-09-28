@@ -1,246 +1,67 @@
-## Acceleration & Norito Heuristics Reference
+# Acceleration configuration and resource custody
 
-The `[accel]` block in `iroha_config` threads through
-`crates/irohad/src/main.rs:1895` into `ivm::set_acceleration_config`. Every host
-applies the same knobs before instantiating the VM, so operators can deterministically
-pick which GPU backends are allowed while keeping scalar/SIMD fallbacks available.
-Swift, Android, and Python bindings load the same manifest via the bridge layer, so
-documenting these defaults unblocks WP6-C in the hardware-acceleration backlog.
+The first release has one file-owned `[accel]` policy. Production does not read
+`ACCEL_*` environment aliases. SIMD, Metal and CUDA default to enabled; actual
+availability requires compiled support, discovered capability and successful
+operation/artifact qualification. Hardware selection cannot change execution
+results, gas, effects or verification decisions.
 
-### `accel` (hardware acceleration)
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enable_simd`, `enable_metal`, `enable_cuda` | `true` | Permit the qualified backend. |
+| `max_gpus` | omitted | IVM device-selection cap. Zero explicitly opts out. |
+| `merkle_min_leaves_gpu` | 8192 | Generic GPU Merkle threshold. |
+| `merkle_min_leaves_metal`, `merkle_min_leaves_cuda` | omitted | Inherit the generic threshold. |
+| `prefer_cpu_sha2_max_leaves_aarch64`, `prefer_cpu_sha2_max_leaves_x86` | omitted | Inherit the compiled 32768-leaf CPU preference. |
 
-The table below mirrors `specs/references/peer.template.toml` and the
-`iroha_config::parameters::user::Acceleration` definition, exposing the environment
-variable that overrides each key.
+Optional counts distinguish omission from explicit zero. No zero-as-auto decoder
+or alternate production environment representation is retained. Thresholds are
+resource/selection policy, not evidence that a path is fastest for a workload.
 
-| Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | Enables SIMD/NEON/AVX execution. When `false`, the VM forces scalar backends for vector ops and Merkle hashing to ease deterministic parity captures. |
-| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | Enables the CUDA backend when it is compiled in and the runtime passes all golden-vector checks. |
-| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | Enables the Metal backend on macOS builds. Even when true, Metal self-tests can still disable the backend at runtime if parity mismatches occur. |
-| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (auto) | Caps how many physical GPUs the runtime initialises. `0` means “match hardware fan-out” and is clamped by `GpuManager`. |
-| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | Minimum leaves required before Merkle leaf hashing offloads to GPU. Values below this threshold keep hashing on the CPU to avoid PCIe overhead (`crates/ivm/src/byte_merkle_tree.rs:49`). |
-| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (inherit global) | Metal-specific override for the GPU threshold. When `0`, Metal inherits `merkle_min_leaves_gpu`. |
-| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (inherit global) | CUDA-specific override for the GPU threshold. When `0`, CUDA inherits `merkle_min_leaves_gpu`. |
-| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32 768 internally) | Caps the tree size where ARMv8 SHA-2 instructions should win over GPU hashing. `0` keeps the compiled-in default of `32_768` leaves (`crates/ivm/src/byte_merkle_tree.rs:59`). |
-| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32 768 internally) | Same as above but for x86/x86_64 hosts using SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`). |
+`[accel.resource_limits]` configures the separate process acceleration-attempt
+envelope. Its ordinary finite defaults do not require a performance profile:
 
-`enable_simd` also controls RS16 erasure coding (Torii DA ingest + tooling). Disable it to
-force scalar parity generation while keeping outputs deterministic across hardware.
+| Key | Default | Accounted scope |
+| --- | ---: | --- |
+| `host_bytes` | 268435456 | Ordinary host backing, including staged output. |
+| `pinned_bytes` | 268435456 | Requested pinned host backing. |
+| `device_bytes` | 1073741824 | Requested device backing across attempts. |
+| `in_flight` | 16 | Complete prepared, submitted or uncertain work owners. |
+| `metadata_bytes` | 16777216 | Variable registry and policy control backing. |
+| `observed_devices` | 16 | Lifetime-observed physical records, including quarantine. |
+| `discovery_ordinals` | 64 | Ordinals probed during a discovery pass. |
+| `modules` | 304 | Retained opaque native module owners. |
+| `streams` | 16 | Retained opaque native stream owners. |
+| `artifact_bytes` | 16777216 | Immutable artifact bytes, including terminal NUL. |
 
-Norito's Metal/CUDA helper libraries expose GPU availability directly: JSON
-Stage-1 and CRC64 helper exports return unavailable or backend errors when the
-backend cannot run instead of completing the request with hidden CPU work. The
-Norito wrapper owns the deterministic scalar/SIMD fallback and validates helper
-outputs before keeping a backend enabled.
+Zero denies admission of the specified resource. These are explicit policy
+ceilings, not free-memory fractions or measurements of allocator overhead or
+opaque driver-private storage. Native driver/context/module memory remains
+unmeasured and has finite owner-count bounds. Immutable device capabilities also
+bound admitted requested bytes and launch geometry. Per-device requested-byte
+permission does not charge the same allocation twice.
 
-Example configuration:
+One `iroha_accel::ProcessResources` holds the original process pools. Reload
+updates admission ceilings without refunding retained allocations or replacing
+physical device identity/quarantine. A registry cannot grow its original fixed
+record backing during reload. Capacity pressure selects local CPU fallback;
+execution never waits for another attempt or a parent execution to release
+capacity. Brief configuration/accounting synchronization remains.
 
-```toml
-[accel]
-enable_simd = true
-enable_cuda = true
-enable_metal = true
-max_gpus = 2
-merkle_min_leaves_gpu = 12288
-merkle_min_leaves_metal = 8192
-merkle_min_leaves_cuda = 16384
-prefer_cpu_sha2_max_leaves_aarch64 = 65536
-```
+Caller-owned output storage comes from its original `ExecutionMemoryLease`.
+The process envelope does not duplicate or recreate that State budget. Native
+attempts preserve original inputs and retain staged output charge until the full
+successful copy into the caller destination. Failure cannot expose partial GPU
+output; the caller recomputes from its original inputs.
 
-Zero values for the last five keys mean “keep the compiled default”. Hosts must not
-set conflicting overrides (e.g., disabling CUDA while forcing CUDA-only thresholds),
-otherwise the request is ignored and the backend continues to follow the global policy.
+The native bridge uses the single current C record in
+`crates/connect_norito_bridge/include/connect_norito_bridge.h`. It carries every
+resource limit and returns an error before mutation for malformed flags,
+noncanonical optional counts or values outside the native count width. A null
+setter input restores enabled defaults. A successful setter applies requested
+policy; runtime status/readback establishes backend availability.
 
-### Inspecting runtime state
-
-Run `cargo xtask acceleration-state [--format table|json]` to snapshot the applied
-configuration alongside the Metal/CUDA runtime health bits. The command pulls the
-current `ivm::acceleration_config`, parity status, and sticky error strings (if a
-backend was disabled) so operations can feed the result directly into parity
-dashboards or incident reviews.
-
-```
-$ cargo xtask acceleration-state
-Acceleration Configuration
---------------------------
-enable_simd: yes
-enable_metal: yes
-enable_cuda: no
-max_gpus: 1
-merkle_min_leaves_gpu: 8192
-merkle_min_leaves_metal: 8192
-merkle_min_leaves_cuda: auto
-prefer_cpu_sha2_max_leaves_aarch64: auto
-prefer_cpu_sha2_max_leaves_x86: auto
-
-Backend Status
---------------
-Backend Supported  Configured  Available  ParityOK  Last error
-SIMD    yes        yes         yes        yes       -
-Metal   yes        yes         yes        yes       -
-CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
-```
-
-Use `--format json` when the snapshot needs to be ingested by automation (the JSON
-contains the same fields shown in the table).
-
-`acceleration_runtime_errors()` now calls out why SIMD fell back to scalar:
-`disabled by config`, `forced scalar override`, `simd unsupported on hardware`, or
-`simd unavailable at runtime` when detection succeeds but execution still runs
-without vectors. Clearing the override or re-enabling the policy drops the message
-on hosts that support SIMD.
-
-### Parity checks
-
-Flip `AccelerationConfig` between CPU-only and accel-on to prove deterministic results.
-The `poseidon_instructions_match_across_acceleration_configs` regression runs the
-Poseidon2/6 opcodes twice—first with `enable_cuda`/`enable_metal` set to `false`, then
-with both enabled—and asserts identical outputs plus CUDA parity when GPUs are present.【crates/ivm/tests/crypto.rs:100】
-Capture `acceleration_runtime_status()` alongside the run to record whether backends
-were configured/available in lab logs.
-
-```rust
-let baseline = ivm::acceleration_config();
-ivm::set_acceleration_config(AccelerationConfig {
-    enable_cuda: false,
-    enable_metal: false,
-    ..baseline
-});
-// run CPU-only parity workload
-ivm::set_acceleration_config(AccelerationConfig {
-    enable_cuda: true,
-    enable_metal: true,
-    ..baseline
-});
-
-When isolating SIMD/NEON differences, set `enable_simd = false` to force scalar
-execution. The `disabling_simd_forces_scalar_and_preserves_outputs` regression
-forces the scalar backend and asserts vector ops stay bit-identical to the
-SIMD-enabled baseline on the same host while surfacing the `simd` status/error
-fields via `acceleration_runtime_status`/`acceleration_runtime_errors`.【crates/ivm/tests/acceleration_simd.rs:9】
-```
-
-### GPU defaults & heuristics
-
-`MerkleTree` GPU offload kicks in at `8192` leaves by default, and the CPU SHA-2
-preference thresholds stay at `32_768` leaves per architecture. When neither CUDA nor
-Metal is available or has been disabled by health checks, the VM automatically falls
-back to SIMD/scalar hashing and the above numbers do not affect determinism.
-
-`max_gpus` clamps the pool size fed into `GpuManager`. Setting `max_gpus = 1` on
-multi-GPU hosts keeps telemetry simple while still allowing acceleration. Operators can
-use this switch to reserve the remaining devices for FASTPQ or CUDA Poseidon jobs.
-
-### Next acceleration targets & budgets
-
-The latest FastPQ Metal trace (`fastpq_metal_bench_20k_latest.json`, 32 K rows × 16
-columns, 5 iters) shows Poseidon column hashing dominating ZK workloads:
-
-- `poseidon_hash_columns`: CPU mean **3.64 s** vs. GPU mean **3.55 s** (1.03×).
-- `lde`: CPU mean **1.75 s** vs. GPU mean **1.57 s** (1.12×).
-
-IVM/Crypto will target these two kernels in the next accel sweep. Baseline budgets:
-
-- Keep scalar/SIMD parity at or below the CPU means above, and capture
-  `acceleration_runtime_status()` alongside each run so Metal/CUDA availability is
-  logged with the budget numbers.
-- Target ≥1.3× speedup for `poseidon_hash_columns` and ≥1.2× for `lde` once tuned Metal
-  and CUDA kernels land, without changing outputs or telemetry labels.
-
-The latest FASTPQ CUDA sweep closed the obvious buildability/parity regressions on
-Linux: the `fastpq-gpu` feature path now compiles with CUDA 12.0 on a GCC 13 host
-by steering NVCC to a supported host compiler and disabling the conflicting
-device-debug flags, and the sole batched Poseidon column plus Merkle-pair path
-matches the CPU reference because its builders use the same trace-column and
-trace-node domains as the scalar sponge. The next tuning pass should therefore
-focus on device-resident workspaces and copy elimination rather than re-fighting
-basic parity issues. That work has advanced again: the native CUDA FFT/IFFT/LDE
-wrappers now stage through per-device workspaces on real device memory, take the
-planner's actual trace/LDE roots instead of assuming one fixed Goldilocks root,
-and apply LDE coset powers before the FFT on-device instead of relying on an
-oversized shared-memory scratch buffer. The planner-facing async path now submits
-those transforms through native pending handles too; each outstanding FFT/IFFT/LDE
-submission now borrows a reusable stream plus device/pinned staging bundle from
-a per-device CUDA pool, so concurrent callers no longer depend on an outer Rust
-serialization lane while also avoiding fresh allocation churn on every submit.
-The next missing CUDA feature was BN254; that first slice is now live too.
-FASTPQ now ships low-level `fastpq_bn254_fft(...)` / `fastpq_bn254_lde(...)`
-wrappers (compiled with the `dev-tools` feature for `fastpq_cuda_bench` and the
-parity tests) that stage canonical BN254 twiddles on the host, validate cosets, and
-drive matching CUDA kernels that convert limbs into Montgomery form on-device
-and match the scalar BN254 reference in focused parity tests. The remaining
-BN254 work is therefore higher-level integration and measurement, not basic
-kernel correctness.
-The next lab run should therefore measure whether the remaining break-even cost
-is dominated by host/device copies, by the current conservative kernels, or by
-the residual cost of staging through those pooled buffers, and then extend the
-same evidence flow to the new BN254 path.
-
-Attach the JSON trace and `cargo xtask acceleration-state --format json` snapshot to
-future lab runs so CI/regressions can assert both the budgets and backend health while
-comparing CPU-only vs. accel-on runs.
-
-### Norito heuristics (compile-time defaults)
-
-Norito’s layout and compression heuristics live in `crates/norito/src/core/heuristics.rs`
-and are compiled into every binary. They are not configurable at runtime; SDK and
-operator teams should treat the Norito profile as part of the release.
-GPU zstd remains an explicit platform acceleration selected with Norito's
-`gpu-compression` feature; runtime availability also depends on hardware, the helper
-backend and the `allow_gpu_compression` config flag. On Apple Silicon builds that
-select the feature, `gpuzstd_metal` is a target dependency of `norito`, so it is built
-automatically as part of that Cargo build (no separate helper build step). On
-Unix/Windows non-macOS hosts, the workspace now also ships a dedicated
-`gpuzstd_cuda` helper crate, so `cargo build -p gpuzstd_cuda` produces
-`libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree. Norito loads only the CUDA-named
-artifact for CUDA mode. The helper must pass startup self-tests before registration,
-and sampled compression output must be a single zstd frame that CPU-decodes to the
-original payload; failures disable the backend and fall back cleanly to CPU encode.
-Decode still uses the deterministic shared frame-decoder path with a CPU zstd
-fallback for unsupported frames.
-
-Daemon startup does not probe GPU zstd availability. CPU/SIMD capability detection stays
-cheap, and GPU helper loading is deferred until the compression path actually considers
-GPU offload. The startup banner therefore reports `gpu_backend_probe: deferred` when
-`allow_gpu_compression` is enabled; it is a policy/status hint, not proof that a helper
-has been loaded.
-
-| Field | Default | Purpose |
-|-------|---------|---------|
-| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
-| `max_archive_len` | `512 MiB` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon clamps it to at least `network.max_frame_bytes` so admitted network frames remain decodable. |
-| `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
-| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |
-| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | All delta transforms are enabled by default for well-behaved inputs. |
-| `combo_enable_name_dict` | `true` | Allows per-column dictionaries when hit ratios justify the memory overhead. |
-| `combo_dict_ratio_max` | `0.40` | Disable dictionaries when more than 40 % of rows are distinct. |
-| `combo_dict_avg_len_min` | `8.0` | Require average string length ≥8 before building dictionaries (short aliases stay inline). |
-| `combo_dict_max_entries` | `1024` | Hard cap on dictionary entries to guarantee bounded memory usage. |
-
-These canonical heuristics keep GPU-enabled hosts aligned with CPU-only peers: the
-selector never makes a decision that would change the wire format, and the thresholds
-are fixed per release. When profiling uncovers better break-even points, Norito
-updates the canonical `Heuristics::canonical` implementation and
-`specs/benchmarks.md` plus `status.md` record the change alongside the
-versioned evidence.
-
-The GPU zstd helper enforces Norito's compiled GPU cutoff even when called directly
-(for example via `norito::core::gpu_zstd::encode_all`), so small payloads always stay
-on the CPU path regardless of GPU availability.
-
-### Troubleshooting and parity checklist
-
-- Snapshot runtime state with `cargo xtask acceleration-state --format json` and keep
-  the output alongside any failing logs; the report shows configured/available backends
-  plus parity/last-error strings.
-- Re-run the accel parity regression locally to rule out drift:
-  `cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  (runs CPU-only then accel-on). Record `acceleration_runtime_status()` for the run.
-- If a backend fails self-tests, keep the node online in CPU-only mode (`enable_metal =
-  false`, `enable_cuda = false`) and open an incident with the captured parity output
-  instead of forcing the backend on. Results must remain deterministic across modes.
-- **CUDA parity smoke (lab NV hardware):** Run
-  `ACCEL_ENABLE_CUDA=1 cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  on sm_8x hardware, capture `cargo xtask acceleration-state --format json`, and attach
-  the status snapshot (GPU model/driver included) to the benchmark artefacts.
+CUDA vector consumers use the shared physical owner. Remaining CUDA/FASTPQ and
+Metal consumer custody, signed artifact provenance, profile selection, physical
+kernel parity/counters, and mixed-hardware network qualification remain explicit
+release gates until their corresponding implementations and evidence land.

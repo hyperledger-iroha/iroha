@@ -472,6 +472,11 @@ fn validate_axt_advertisement(
             advertised.manifest_root.as_slice() == expected.manifest_root,
         ),
         (
+            "compact_artifact_source_occurrences",
+            advertised.source_transfer_occurrences.as_slice()
+                == expected.source_transfer_occurrences,
+        ),
+        (
             "compact_artifact_da_bytes",
             advertised.da_commitment.as_slice() == expected.da_commitment,
         ),

@@ -11918,11 +11918,11 @@ mod state {
                 hex_bytes(&got.nexus_policy_digest),
             ));
         }
-        if expected.v2_config_fingerprint != got.v2_config_fingerprint {
+        if expected.native_config_fingerprint != got.native_config_fingerprint {
             return Some(format!(
-                "v2_config_fingerprint mismatch (expected 0x{}, got 0x{})",
-                hex_bytes(&expected.v2_config_fingerprint),
-                hex_bytes(&got.v2_config_fingerprint),
+                "native_config_fingerprint mismatch (expected 0x{}, got 0x{})",
+                hex_bytes(&expected.native_config_fingerprint),
+                hex_bytes(&got.native_config_fingerprint),
             ));
         }
         if expected.ivm_gas_schedule_hash != got.ivm_gas_schedule_hash {

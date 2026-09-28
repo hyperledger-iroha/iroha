@@ -175,7 +175,7 @@ fn startup_catalog_handoff_includes_additions_committed_during_replay() {
         let initial = state
             .lane_manifests_with_committed_catalog(&baseline, &effective)
             .expect("initial restored manifest");
-        state.install_lane_manifests(&initial);
+        state.install_lane_manifests_for_testing(&initial);
 
         effective.lane_catalog = effective
             .lane_catalog

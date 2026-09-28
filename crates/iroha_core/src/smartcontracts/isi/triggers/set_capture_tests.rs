@@ -61,7 +61,7 @@ impl Wake for ProbeActiveOnCapturedIds {
     }
 }
 
-fn standalone_capture(replacement: bool) {
+fn standalone_capture(replacement: bool, borrowed_extraction: bool) {
     let set = seeded_set();
     let before = images(&set);
     let ids = set.ids.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
@@ -70,7 +70,7 @@ fn standalone_capture(replacement: bool) {
         .block()
         .try_detach(|_| Ok::<_, ()>(()))
         .unwrap();
-    let original = if replacement {
+    let mut original = if replacement {
         set.block_and_revert()
     } else {
         set.block()
@@ -104,7 +104,25 @@ fn standalone_capture(replacement: bool) {
     let mut released = observation.wait_for_release();
     assert!(Pin::new(&mut released).poll(&mut context).is_pending());
     // Keep the genuine returned successor through all physical and image checks.
-    let captured = original.try_detach(|_| Ok::<(), ()>(())).unwrap();
+    let captured = if borrowed_extraction {
+        let identity = original.ids.publication_identity();
+        let mut pending = original.take_capture_slot();
+        drop(original);
+        assert_eq!(callback.calls.load(Ordering::SeqCst), 0);
+        assert!(Pin::new(&mut released).poll(&mut context).is_pending());
+        pending
+            .try_capture(|original| {
+                assert_eq!(original.ids.publication_identity(), identity);
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        let (captured, cleanup) = pending.into_detached();
+        assert_eq!(callback.calls.load(Ordering::SeqCst), 0);
+        drop(cleanup);
+        captured
+    } else {
+        original.try_detach(|_| Ok::<(), ()>(())).unwrap()
+    };
     drop(refused);
     let (active, cleanup) = {
         let mut probe = callback.original.lock().unwrap();
@@ -134,11 +152,20 @@ fn standalone_capture(replacement: bool) {
 
 #[test]
 fn ordinary_trigger_capture_unlocks_active_index_before_ids_notification() {
-    standalone_capture(false);
+    standalone_capture(false, false);
 }
 #[test]
 fn replacement_trigger_capture_unlocks_active_index_before_ids_notification() {
-    standalone_capture(true);
+    standalone_capture(true, false);
+}
+
+#[test]
+fn ordinary_trigger_borrowed_extraction_keeps_writers_and_notices_in_original_slot() {
+    standalone_capture(false, true);
+}
+#[test]
+fn replacement_trigger_borrowed_extraction_keeps_writers_and_notices_in_original_slot() {
+    standalone_capture(true, true);
 }
 
 struct LaterWorldProbe {

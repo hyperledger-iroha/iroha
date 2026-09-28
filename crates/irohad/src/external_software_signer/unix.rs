@@ -1369,3 +1369,40 @@ pub enum SoftwareSignerServerErrorV1 {
     /// Exact endpoint identity could not be safely removed.
     EndpointCleanup,
 }
+
+#[cfg(test)]
+mod musubi_socket_tests {
+    use super::*;
+    #[tokio::test]
+    async fn musubi_socket_rejects_service_uid_on_client_and_administrator_channels() {
+        use tokio::io::AsyncReadExt as _;
+        let (_directory, service, _payload) =
+            super::super::musubi_attestation::tests::service_fixture();
+        let binding = service.public_binding().unwrap();
+        let before = service.provenance().unwrap().audit_sequence;
+        for (expected_uid, administrator) in [
+            (binding.client_uid, false),
+            (binding.administrator_uid, true),
+        ] {
+            let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+            assert_eq!(server.peer_cred().unwrap().uid(), binding.service_uid);
+            let mut tasks = tokio::task::JoinSet::new();
+            admit_session(
+                server,
+                expected_uid,
+                administrator,
+                Arc::clone(&service),
+                Arc::new(tokio::sync::Semaphore::new(1)),
+                &mut tasks,
+            )
+            .unwrap();
+            assert!(
+                tasks.is_empty(),
+                "rejected peers cannot reach private-key or audit work"
+            );
+            let mut byte = [0];
+            assert_eq!(client.read(&mut byte).await.unwrap(), 0);
+            assert_eq!(service.provenance().unwrap().audit_sequence, before);
+        }
+    }
+}

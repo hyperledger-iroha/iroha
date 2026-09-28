@@ -5236,7 +5236,7 @@
     "crates/iroha_kagami/docs/kura.md": "0e98828ed5e81b9a285b3ef527960ee97585273122b1537be2ae15725e37bd6a",
     "crates/iroha_kagami/src/genesis.rs": "c95df915825059d60c19fc7af3c18a531020e15d12ecb8a2d00a06267289ced1",
     "crates/iroha_kagami/src/genesis/sign.rs": "7fe58496e392fa5ff05f8cfe34c971d4e4816374ec219730d46b71491d08c575",
-    "crates/iroha_kagami/src/kagemusha/derive_mint_finality_next_epoch_v1.rs": "32d5c45f3531e9e7cb5c3e46b3e8ff714bebc8d65c1d0b01070e4537e03f865b",
+    "crates/iroha_kagami/src/kagemusha/derive_mint_carrier_next_epoch_v1.rs": "32d5c45f3531e9e7cb5c3e46b3e8ff714bebc8d65c1d0b01070e4537e03f865b",
     "crates/iroha_kagami/src/kura.rs": "1db62d2e5c20b6e912838ece2fe4c55356d4e78707fd00512f89f74d956c56fa",
     "crates/iroha_kagami/src/kura/scaling_evidence.rs": "78f35b05b0f9627aea16bb78dbaffebf4f4449d933f66e52efb117140c18ee6d",
     "crates/iroha_kagami/src/kura/scaling_evidence/command.rs": "25f1fb8cb02c61a51a17c94f41c262960df1a995f9370897259d6e94cee2a412",

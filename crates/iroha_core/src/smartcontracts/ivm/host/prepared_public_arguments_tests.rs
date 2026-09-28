@@ -1,6 +1,6 @@
 #[test]
 #[cfg(debug_assertions)]
-fn prepared_public_arguments_decode_once_and_reject_pointer_substitution() {
+fn prepared_public_arguments_decode_once_ignore_guest_descriptors_and_require_precharge() {
     let compiler =
         ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
             mode: ivm::kotodama::compiler::CompilerMode::Production,
@@ -36,80 +36,32 @@ seiyaku PreparedArguments {
         ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), u64::MAX)
             .expect("prepare arguments");
     let authority: AccountId = fixture_account("alice");
-    let mut adversarial_host = CoreHost::with_accounts_and_argument_record(
+    let mut host = CoreHost::with_accounts_and_argument_record(
         authority.clone(),
         Arc::new(vec![authority.clone()]),
         Some(prepared.clone()),
     );
-    let name: Name = TRIGGER_EVENT_PUBLIC_INPUT_KEY.parse().expect("input name");
-    let mut adversarial_vm = IVM::new(100_000);
-    prepared
-        .precharge_vm(&mut adversarial_vm)
-        .expect("precharge prepared arguments");
-    let name_ptr = store_tlv(&mut adversarial_vm, PointerType::Name, &norito_blob(&name));
-    adversarial_vm.set_register(10, name_ptr);
-    adversarial_host
-        .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut adversarial_vm)
-        .expect("get host-bound argument capability");
-    let issued_record_pointer = adversarial_vm.register(10);
-    assert_eq!(
-        adversarial_vm
-            .memory
-            .validate_tlv(issued_record_pointer)
-            .expect("argument binding TLV")
-            .payload,
-        prepared.binding_bytes(),
-        "the signed record stays host-owned instead of consuming the VM input arena"
-    );
-    let substituted_record_pointer = store_tlv(
-        &mut adversarial_vm,
-        PointerType::NoritoBytes,
-        prepared.canonical_bytes(),
-    );
-    let schema_pointer = store_tlv(
-        &mut adversarial_vm,
-        PointerType::NoritoBytes,
-        prepared.schema_bytes(),
-    );
-    adversarial_vm.set_register(10, substituted_record_pointer);
-    adversarial_vm.set_register(11, schema_pointer);
-    assert!(matches!(
-        adversarial_host.prepare_syscall(ivm_sys::SYSCALL_DECODE_ARGUMENT_RECORD, &adversarial_vm),
-        Err(VMError::DecodeError)
-    ));
-    assert_ne!(issued_record_pointer, substituted_record_pointer);
-    let mut host = CoreHost::with_accounts_and_argument_record(
-        authority.clone(),
-        Arc::new(vec![authority]),
-        Some(prepared.clone()),
-    );
     let mut vm = IVM::new(100_000);
-    let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
-    let schema_pointer = store_tlv(&mut vm, PointerType::NoritoBytes, prepared.schema_bytes());
-    let code = [
-        encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_GET_PUBLIC_INPUT).expect("syscall id fits in u8"),
-        )
-        .to_le_bytes(),
-        encoding::wide::encode_syscallx(ivm_sys::SYSCALL_DECODE_ARGUMENT_RECORD).to_le_bytes(),
-        encoding::wide::encode_halt().to_le_bytes(),
-    ]
-    .concat();
-    vm.load_program(&build_program(&code, 0))
-        .expect("load argument wrapper program");
-    vm.set_register(10, name_ptr);
-    vm.set_register(11, schema_pointer);
-    prepared
-        .precharge_vm(&mut vm)
-        .expect("precharge prepared arguments");
-    vm.run_with_host(&mut host)
-        .expect("guest wrapper must use the prepared decode path");
+    vm.load_program(&program).expect("load table ABI contract");
+    let descriptor = metadata.contract_interface.as_ref().unwrap().entrypoints.iter()
+        .find(|entry| entry.name == "invoke").unwrap();
+    let entry_pc = metadata.prefix_len() as u64 + descriptor.entry_pc;
+    vm.set_program_counter(entry_pc).unwrap();
+    // Arbitrary guest-facing descriptors cannot substitute for the signed host record.
+    vm.set_register(10, u64::MAX);
+    vm.set_register(11, 8193);
+    vm.set_register(12, 1);
+    vm.set_register(13, 0);
+    prepared.precharge_vm(&mut vm).expect("precharge prepared arguments");
+    vm.run_with_host(&mut host).expect("host prepares the authenticated root tables");
     assert_eq!(ivm::argument_record_decode_count(), 1);
-    let table = vm
-        .memory
-        .validate_tlv(vm.register(10))
-        .expect("ABI word table");
-    assert_eq!(table.type_id, PointerType::Blob);
-    assert_eq!(table.payload.len(), 1 + 2 * core::mem::size_of::<u64>());
+    assert_eq!(vm.call_result_word_count().unwrap(), 1);
+    assert_eq!(vm.public_call_result_word(0).unwrap(), 0);
+
+    let mut unpaid = IVM::new(100_000);
+    unpaid.load_program(&program).unwrap();
+    unpaid.set_program_counter(entry_pc).unwrap();
+    assert_eq!(unpaid.run_with_host(&mut host), Err(VMError::DecodeError));
+    assert!(unpaid.call_result_word_count().is_err());
+    assert_eq!(ivm::argument_record_decode_count(), 1);
 }

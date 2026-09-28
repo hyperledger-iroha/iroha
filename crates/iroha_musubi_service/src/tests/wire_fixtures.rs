@@ -1,4 +1,4 @@
-//! Complete pre-extraction publication frames and signed transcript evidence.
+//! Complete V1 publication frames and signed transcript evidence.
 
 use super::*;
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
@@ -201,13 +201,34 @@ fn current_records() -> Vec<json::Value> {
 }
 
 #[test]
-fn publication_wire_frames_match_pre_extraction_goldens() {
+fn publication_wire_frames_match_v1_goldens() {
     let expected: Vec<json::Value> = json::from_str(include_str!(
         "../../tests/fixtures/musubi_publication_frames.json"
     ))
     .expect("publication frame fixtures");
     let actual = current_records();
-    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), expected.len(), "publication frame count");
+    for (actual, expected) in actual.iter().zip(&expected) {
+        let specimen = expected["specimen"].as_str().expect("fixture specimen");
+        assert_eq!(actual["specimen"], expected["specimen"], "{specimen}");
+        assert_eq!(actual, expected, "{specimen}");
+    }
+}
+
+#[test]
+#[ignore = "run explicitly to refresh the final V1 publication frame fixture"]
+fn regenerate_publication_wire_frames_v1() {
+    let records = json::Value::Array(current_records());
+    let mut bytes = json::to_vec_pretty(&records).expect("encode V1 publication frames");
+    bytes.push(b'\n');
+    std::fs::write(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/musubi_publication_frames.json"
+        ),
+        bytes,
+    )
+    .expect("write V1 publication frame fixture");
 }
 
 #[test]

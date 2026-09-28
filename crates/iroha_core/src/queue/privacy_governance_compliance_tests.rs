@@ -22,7 +22,7 @@ fn installing_manifests_populates_privacy_registry() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
     let registry = queue.lane_privacy_registry();
     assert!(
         registry
@@ -97,7 +97,7 @@ async fn governance_manifest_allows_multisig_propose_envelope_from_live_signer()
     statuses.insert(LaneId::SINGLE, status);
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
     queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
     let tx = accepted_tx_with(
         signer_id,
         &signer_key,
@@ -206,7 +206,12 @@ async fn lane_compliance_policy_blocks_transactions() {
         },
     );
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-    queue.install_lane_manifests(&manifests);
+    queue.install_lane_manifests_for_testing(&manifests);
+    *queue.lane_privacy_registry.write() = Arc::new(LanePrivacyRegistry::empty());
+    assert!(
+        queue.lane_privacy_registry().is_empty(),
+        "test uses a stale cache"
+    );
     let denied_tx = accepted_tx_by(denied_id.clone(), &denied_keypair, &time_source);
     let err = queue
         .push(denied_tx, state.view())
@@ -247,14 +252,48 @@ async fn lane_compliance_policy_blocks_transactions() {
     let attachments = ProofAttachmentList::try_from(vec![proof_attachment])
         .expect("one attachment is a valid bounded proof list");
     let confidential_tx = accepted_tx_with_attachments(
-        confidential_id,
+        confidential_id.clone(),
         &confidential_keypair,
         &time_source,
         vec![sample_unregister_instruction()],
         Metadata::default(),
-        Some(attachments),
+        Some(attachments.clone()),
     );
     queue
         .push(confidential_tx, state.view())
-        .expect("privacy proof should satisfy lane policy");
+        .expect("manifest-backed privacy proof should pass despite an empty local cache");
+
+    let mut revoked_status = manifests.status(LaneId::SINGLE).unwrap().clone();
+    revoked_status.privacy_commitments = vec![LanePrivacyCommitment::merkle(
+        LaneCommitmentId::new(10),
+        MerkleCommitment::new(merkle_root, 8),
+    )];
+    let revoked = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
+        LaneId::SINGLE,
+        revoked_status,
+    )])));
+    queue.install_lane_manifests_for_testing(&revoked);
+    *queue.lane_privacy_registry.write() =
+        Arc::new(LanePrivacyRegistry::from_manifest_registry(&manifests));
+    let mut revoked_metadata = Metadata::default();
+    revoked_metadata.insert(
+        "revoked_privacy_test".parse().expect("metadata key"),
+        iroha_primitives::json::Json::new(true),
+    );
+    let unregistered_proof = accepted_tx_with_attachments(
+        confidential_id,
+        &confidential_keypair,
+        &time_source,
+        vec![sample_unregister_instruction()],
+        revoked_metadata,
+        Some(attachments),
+    );
+    let err = queue
+        .push(unregistered_proof, state.view())
+        .expect_err("a forged local cache cannot authorize a revoked manifest commitment");
+    assert!(
+        matches!(&err.err, Error::LanePrivacyProofRejected { .. }),
+        "the old commitment must fail against the new manifest despite the stale cache: {:?}",
+        err.err
+    );
 }

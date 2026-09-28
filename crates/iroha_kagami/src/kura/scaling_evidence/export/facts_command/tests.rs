@@ -70,9 +70,9 @@ fn arguments() -> Vec<String> {
         ("journal", "/independent/journal.jsonl".to_owned()),
         ("journal-sha256", "05".repeat(32)),
         ("journal-max-bytes", "4096".to_owned()),
-        ("finality", "/independent/finality.norito".to_owned()),
-        ("finality-sha256", "06".repeat(32)),
-        ("finality-max-bytes", "4096".to_owned()),
+        ("carrier", "/independent/carrier.norito".to_owned()),
+        ("carrier-sha256", "06".repeat(32)),
+        ("carrier-max-bytes", "4096".to_owned()),
         ("queries", "/independent/queries.norito".to_owned()),
         ("queries-sha256", "07".repeat(32)),
         ("queries-max-bytes", "4096".to_owned()),
@@ -239,7 +239,7 @@ fn command_preserves_ten_independent_file_pins_in_original_order() {
     }
     assert_eq!(got.inputs.context.sha256, [4; 32]);
     assert_eq!(got.inputs.journal.sha256, [5; 32]);
-    assert_eq!(got.inputs.finality.sha256, [6; 32]);
+    assert_eq!(got.inputs.carrier.sha256, [6; 32]);
     assert_eq!(got.inputs.queries.sha256, [7; 32]);
     assert_eq!(got.genesis.network_id, network());
     assert_eq!(got.genesis.validators.as_slice(), keys().as_slice());
@@ -353,7 +353,7 @@ fn source_caps_include_all_four_configs_and_reject_overflow_before_file_access()
             2 => &mut wrong.originals.peer_config_max_bytes,
             3 => &mut wrong.originals.context_max_bytes,
             4 => &mut wrong.originals.journal_max_bytes,
-            5 => &mut wrong.originals.finality_max_bytes,
+            5 => &mut wrong.originals.carrier_max_bytes,
             _ => &mut wrong.originals.queries_max_bytes,
         };
         *selected = u64::MAX;

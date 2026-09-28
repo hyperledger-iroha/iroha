@@ -34,6 +34,8 @@ pub(crate) struct Args {
 
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
+    /// Collect complete native carriers and actual query proofs from a stopped store
+    Collect(Box<super::export::collect_command::Args>),
     /// Observe a stopped store's durable height under retained original genesis
     StoppedTip(Box<super::export::stopped_tip_command::Args>),
     /// Authenticate original launch inputs and publish canonical preparation facts
@@ -250,6 +252,7 @@ impl CommonArgs {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self.command {
+            Command::Collect(args) => (*args).run(writer)?,
             Command::StoppedTip(args) => (*args).run(writer)?,
             Command::Facts(args) => (*args).run(writer)?,
             Command::Prepare(args) => {

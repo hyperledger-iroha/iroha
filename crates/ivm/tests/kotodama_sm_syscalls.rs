@@ -82,7 +82,7 @@ fn kotodama_sm3_hash_returns_expected_digest() {
     let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(&mut vm, &code, "sm_hash", &[("msg", message)], &[]);
     vm.run().expect("vm run");
-    let out_ptr = vm.register(10);
+    let out_ptr = vm.public_call_result_word(0).expect("completed SM result");
     assert_ne!(out_ptr, 0, "crypto::sm3 should return a bytes pointer");
     let tlv = vm
         .memory
@@ -190,7 +190,11 @@ fn kotodama_sm2_verify_accepts_valid_signature() {
         &[],
     );
     vm.run().expect("vm run");
-    assert_eq!(vm.register(10), 1, "crypto::sm2::verify should succeed");
+    assert_eq!(
+        vm.public_call_result_word(0).expect("completed SM result"),
+        1,
+        "crypto::sm2::verify should succeed"
+    );
 }
 #[test]
 fn kotodama_sm2_verify_rejects_malformed_signature() {
@@ -213,7 +217,11 @@ fn kotodama_sm2_verify_rejects_malformed_signature() {
         &[],
     );
     vm.run().expect("vm run");
-    assert_eq!(vm.register(10), 0, "malformed signature must fail");
+    assert_eq!(
+        vm.public_call_result_word(0).expect("completed SM result"),
+        0,
+        "malformed signature must fail"
+    );
 }
 #[test]
 fn kotodama_sm2_verify_rejects_signature_for_other_message() {
@@ -237,7 +245,7 @@ fn kotodama_sm2_verify_rejects_signature_for_other_message() {
     );
     vm.run().expect("vm run");
     assert_eq!(
-        vm.register(10),
+        vm.public_call_result_word(0).expect("completed SM result"),
         0,
         "signature tied to different message must be rejected"
     );
@@ -269,7 +277,11 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
         &[],
     );
     vm.run().expect("vm run");
-    assert_eq!(vm.register(10), 1, "matching distid should verify");
+    assert_eq!(
+        vm.public_call_result_word(0).expect("completed SM result"),
+        1,
+        "matching distid should verify"
+    );
     // Failure with mismatched distid
     let mut vm_fail = IVM::new(u64::MAX);
     install_sm_entrypoint(
@@ -286,7 +298,9 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
     );
     vm_fail.run().expect("vm run");
     assert_eq!(
-        vm_fail.register(10),
+        vm_fail
+            .public_call_result_word(0)
+            .expect("completed SM result"),
         0,
         "mismatched distid must cause verification failure"
     );
@@ -314,7 +328,7 @@ fn kotodama_sm4_gcm_seal_matches_vector() {
         &[],
     );
     vm.run().expect("vm run");
-    let out_ptr = vm.register(10);
+    let out_ptr = vm.public_call_result_word(0).expect("completed SM result");
     assert_ne!(out_ptr, 0, "seal should produce output blob");
     let tlv = vm
         .memory
@@ -355,7 +369,7 @@ fn kotodama_sm4_gcm_open_returns_plaintext() {
         &[],
     );
     vm.run().expect("vm run");
-    let out_ptr = vm.register(10);
+    let out_ptr = vm.public_call_result_word(0).expect("completed SM result");
     assert_ne!(out_ptr, 0, "open should return plaintext blob");
     let tlv = vm
         .memory
@@ -388,8 +402,11 @@ fn kotodama_sm4_gcm_open_rejects_bad_tag() {
         ],
         &[],
     );
-    vm.run().expect("vm run");
-    assert_eq!(vm.register(10), 0, "open must fail for tampered tag");
+    assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+    assert!(
+        vm.call_result_word_count().is_err(),
+        "a failed open cannot return bytes"
+    );
 }
 #[test]
 fn kotodama_sm4_ccm_seal_matches_vector() {
@@ -417,7 +434,7 @@ fn kotodama_sm4_ccm_seal_matches_vector() {
         )],
     );
     vm.run().expect("vm run");
-    let out_ptr = vm.register(10);
+    let out_ptr = vm.public_call_result_word(0).expect("completed SM result");
     assert_ne!(out_ptr, 0, "seal should produce output blob");
     let tlv = vm
         .memory
@@ -461,7 +478,7 @@ fn kotodama_sm4_ccm_open_returns_plaintext() {
         )],
     );
     vm.run().expect("vm run");
-    let out_ptr = vm.register(10);
+    let out_ptr = vm.public_call_result_word(0).expect("completed SM result");
     assert_ne!(out_ptr, 0, "open should produce plaintext blob");
     let tlv = vm
         .memory
@@ -497,10 +514,9 @@ fn kotodama_sm4_ccm_open_rejects_bad_tag() {
             i64::try_from(tag.len()).expect("tag length fits i64"),
         )],
     );
-    vm.run().expect("vm run");
-    assert_eq!(
-        vm.register(10),
-        0,
-        "open must fail for tampered CCM authentication tag"
+    assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+    assert!(
+        vm.call_result_word_count().is_err(),
+        "a failed CCM open cannot return bytes"
     );
 }

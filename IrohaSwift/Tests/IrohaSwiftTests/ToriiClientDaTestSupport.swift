@@ -60,15 +60,27 @@ enum TcHelperError: Error {
     case invalidPayloadEncoding
 }
 
-func tcMakePipelineEnvelope(hashHex: String, marker: UInt8) throws -> SignedTransactionEnvelope {
-    guard let hashData = Data(hexString: hashHex) else {
-        throw TcHelperError.invalidHashEncoding
-    }
-    let payload = Data([marker, marker ^ 0xFF, 0xA5])
-    return SignedTransactionEnvelope(norito: payload,
-                                     signedTransaction: payload,
-                                     payload: nil,
-                                     transactionHash: hashData)
+func tcMakePipelineEnvelope(marker: UInt8) throws -> SignedTransactionEnvelope {
+    let seed = Data(repeating: marker, count: 32)
+    let signer = try SigningKey.ed25519(privateKey: seed)
+    let authority = try Keypair(privateKeyBytes: seed)
+        .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+    let payload = try CanonicalUnsignedTransactionTestSupport.genericPayload(
+        authority: authority,
+        creationTimeMs: UInt64(marker)
+    )
+    let signature = try signer.sign(IrohaHash.hash(payload))
+    let finalized = try ToriiCanonicalTransactionDraft.finalize(
+        transactionPayload: payload,
+        publicKey: signer.publicKey(),
+        signature: signature
+    )
+    return SignedTransactionEnvelope(
+        norito: finalized.signedTransaction,
+        signedTransaction: finalized.signedTransaction,
+        payload: nil,
+        transactionHash: finalized.finalization.transactionHash
+    )
 }
 
 func tcLoadDaProofFixture() throws -> (manifest: Data, payload: Data, blobHashHex: String) {

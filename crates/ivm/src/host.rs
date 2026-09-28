@@ -8,7 +8,7 @@
 //! helpers used by some tests.
 use crate::{
     SyscallPolicy,
-    axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
+    axt::{self, ProofBlob, TouchManifest},
     error::VMError,
     gas,
     ivm::IVM,
@@ -382,11 +382,6 @@ where
     }
     let _: T = decode_canonical_norito(tlv.payload)?;
     Ok(())
-}
-pub(crate) fn canonical_norito_bytes<T: norito::NoritoSerialize>(
-    value: &T,
-) -> Result<Vec<u8>, VMError> {
-    encode_canonical_norito(value)
 }
 /// Validate canonical `StateMap` key bytes against the loaded CNTR declaration.
 ///
@@ -1178,7 +1173,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_AXT_TOUCH
             | syscalls::SYSCALL_AXT_COMMIT
             | syscalls::SYSCALL_VERIFY_DS_PROOF
-            | syscalls::SYSCALL_USE_ASSET_HANDLE
+            | syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND
             | syscalls::SYSCALL_ESCROW_OPEN_OFFER
             | syscalls::SYSCALL_ESCROW_ACCEPT
             | syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT
@@ -1245,8 +1240,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_NAME_DECODE
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | syscalls::SYSCALL_STATE_PATH_FROM_NAME
-            | syscalls::SYSCALL_ENCODE_INT
-            | syscalls::SYSCALL_DECODE_INT
             | syscalls::SYSCALL_POINTER_TO_NORITO
             | syscalls::SYSCALL_POINTER_FROM_NORITO
             | syscalls::SYSCALL_TLV_EQ
@@ -1772,6 +1765,11 @@ pub(crate) fn normalize_norito_bytes(vm: &mut IVM) -> Result<u64, VMError> {
 }
 /// Trait for IVM host environment to handle syscalls (SCALL).
 pub trait IVMHost {
+    /// Return the authoritative, schema-bound prepared public arguments for this invocation.
+    /// Hosts without a preparation owner use the canonical metered public-input route.
+    fn prepared_entrypoint_arguments(&self) -> Option<crate::PreparedArgumentRecord> {
+        None
+    }
     /// Return a deterministic upper bound for the syscall's additional gas.
     ///
     /// Preparation must be side-effect-free. For [`SyscallMetering::Reserved`] calls the VM debits
@@ -2339,11 +2337,7 @@ impl DefaultHost {
         AXT_GAS_BASE.saturating_add(AXT_GAS_PER_BYTE.saturating_mul(bytes))
     }
     fn axt_commit_gas(state: &axt::HostAxtState) -> u64 {
-        let entries = state
-            .touches()
-            .len()
-            .saturating_add(state.proofs().len())
-            .saturating_add(state.handles().len());
+        let entries = state.touches().len().saturating_add(state.proofs().len());
         Self::axt_gas(entries)
     }
     fn pointer_gas(payload_len: usize) -> u64 {
@@ -2619,99 +2613,6 @@ impl DefaultHost {
         // is diagnostic only, so proof-consuming AXT calls fail closed here.
         Err(VMError::PermissionDenied)
     }
-    fn validate_axt_handle_proof_binding(
-        handle: &AssetHandle,
-        dsid: DataSpaceId,
-        proof: &ProofBlob,
-    ) -> Result<(), VMError> {
-        axt::validate_proof_blob(proof)?;
-        if handle.manifest_view_root.len() != 32 {
-            return Err(VMError::NoritoInvalid);
-        }
-        if handle.manifest_view_root.iter().all(|byte| *byte == 0) {
-            return Err(VMError::PermissionDenied);
-        }
-        let envelope = decode_canonical_norito::<axt::AxtProofEnvelope>(&proof.payload)?;
-        axt::preflight_fastpq_v1_proof_envelope(&envelope, dsid)?;
-        if handle.manifest_view_root.as_slice() != envelope.manifest_root.as_slice() {
-            return Err(VMError::PermissionDenied);
-        }
-        // The standalone host cannot accept a FastPQ AXT proof without a real verifier.
-        Err(VMError::PermissionDenied)
-    }
-    fn handle_axt_use_asset_handle(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
-        let handle_ptr = vm.register(10);
-        let handle_tlv = vm.validate_tlv(handle_ptr)?;
-        if handle_tlv.type_id != PointerType::AssetHandle {
-            return Err(VMError::NoritoInvalid);
-        }
-        let mut gas_len = handle_tlv.payload.len();
-        let handle: AssetHandle = decode_canonical_norito(handle_tlv.payload)?;
-        axt::validate_asset_handle(&handle)?;
-        let Some(binding) = handle.binding_array() else {
-            return Err(VMError::NoritoInvalid);
-        };
-        if binding != state.binding() {
-            return Err(VMError::PermissionDenied);
-        }
-        let op_ptr = vm.register(11);
-        let op_tlv = vm.validate_tlv(op_ptr)?;
-        if op_tlv.type_id != PointerType::NoritoBytes {
-            return Err(VMError::NoritoInvalid);
-        }
-        gas_len = gas_len.saturating_add(op_tlv.payload.len());
-        let intent: RemoteSpendIntent = decode_canonical_norito(op_tlv.payload)?;
-        axt::validate_remote_spend_intent(&intent)?;
-        if !state.expected_dsids().contains(&intent.asset_dsid) {
-            return Err(VMError::PermissionDenied);
-        }
-        if !state.has_touch(&intent.asset_dsid) {
-            return Err(VMError::PermissionDenied);
-        }
-        let proof: Option<ProofBlob> = match vm.register(12) {
-            0 => None,
-            ptr => {
-                let proof_tlv = vm.validate_tlv(ptr)?;
-                if proof_tlv.type_id != PointerType::ProofBlob {
-                    return Err(VMError::NoritoInvalid);
-                }
-                gas_len = gas_len.saturating_add(proof_tlv.payload.len());
-                Some(decode_canonical_norito(proof_tlv.payload)?)
-            }
-        };
-        if let Some(proof) = &proof {
-            axt::validate_proof_blob(proof)?;
-        }
-        if let Some(proof_blob) = proof
-            .as_ref()
-            .or_else(|| state.proofs().get(&intent.asset_dsid))
-        {
-            Self::validate_axt_handle_proof_binding(&handle, intent.asset_dsid, proof_blob)?;
-        }
-        let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
-            .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
-        if resolved_amount.amount > handle.budget.remaining {
-            return Err(VMError::PermissionDenied);
-        }
-        if let Some(per_use) = handle.budget.per_use.as_ref()
-            && &resolved_amount.amount > per_use
-        {
-            return Err(VMError::PermissionDenied);
-        }
-        let usage = axt::HandleUsage {
-            handle,
-            intent,
-            proof,
-            amount: resolved_amount.amount,
-            amount_commitment: resolved_amount.amount_commitment,
-        };
-        let gas = Self::axt_gas(gas_len);
-        preflight_reserved_syscall_gas(vm, gas)?;
-        self.axt_policy.allow_handle(&usage)?;
-        state.record_handle(usage)?;
-        Ok(gas)
-    }
     fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, VMError> {
         let gas = self
             .axt_state
@@ -2732,16 +2633,7 @@ impl DefaultHost {
         }
     }
     fn validate_axt_commit(state: &axt::HostAxtState) -> Result<(), VMError> {
-        state.validate_commit()?;
-        for usage in state.handles() {
-            let proof = usage
-                .proof
-                .as_ref()
-                .or_else(|| state.proofs().get(&usage.intent.asset_dsid))
-                .ok_or(VMError::PermissionDenied)?;
-            Self::validate_axt_handle_proof_binding(&usage.handle, usage.intent.asset_dsid, proof)?;
-        }
-        Ok(())
+        state.validate_commit()
     }
 }
 impl Default for DefaultHost {
@@ -2992,7 +2884,7 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_AXT_TOUCH
             | crate::syscalls::SYSCALL_AXT_COMMIT
             | crate::syscalls::SYSCALL_VERIFY_DS_PROOF
-            | crate::syscalls::SYSCALL_USE_ASSET_HANDLE => {
+            | crate::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => {
                 reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
             }
             _ => {
@@ -3240,6 +3132,7 @@ impl IVMHost for DefaultHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let tlv = Self::decode_any_tlv(vm, ptr)?;
+                crate::numeric_tlv::validate_numeric_frame_if_needed(tlv.type_id, tlv.payload)?;
                 let mut body =
                     Vec::with_capacity(2 + 1 + 4 + tlv.payload.len() + iroha_crypto::Hash::LENGTH);
                 body.extend_from_slice(&tlv.type_id_raw().to_be_bytes());
@@ -3257,6 +3150,16 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_POINTER_FROM_NORITO => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
+                    if [
+                        PointerType::Int,
+                        PointerType::Decimal,
+                        PointerType::Quantity,
+                    ]
+                    .into_iter()
+                    .any(|kind| vm.register(11) == u64::from(kind as u16))
+                    {
+                        return Err(VMError::NoritoInvalid);
+                    }
                     vm.set_register(10, 0);
                     return Ok(Self::pointer_gas(0));
                 }
@@ -3281,6 +3184,7 @@ impl IVMHost for DefaultHost {
                         type_id: inner_type as u16,
                     });
                 }
+                crate::numeric_tlv::validate_numeric_frame_if_needed(inner_type, &inner_payload)?;
                 let mut out = Vec::with_capacity(
                     2 + 1 + 4 + inner_payload.len() + iroha_crypto::Hash::LENGTH,
                 );
@@ -4686,7 +4590,7 @@ impl IVMHost for DefaultHost {
             syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
             syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
-            syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
+            syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => Err(VMError::PermissionDenied),
             _ => Err(Self::unsupported_syscall_error(number)),
         }
     }
@@ -6286,7 +6190,6 @@ mod tests {
             syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY,
             syscalls::SYSCALL_AXT_TOUCH,
             syscalls::SYSCALL_VERIFY_DS_PROOF,
-            syscalls::SYSCALL_USE_ASSET_HANDLE,
             syscalls::SYSCALL_AXT_COMMIT,
         ] {
             assert_eq!(empty.prepare_syscall(syscall, &vm), Ok(available));
@@ -6367,6 +6270,73 @@ mod tests {
             Err(VMError::NoritoInvalid)
         );
         assert_eq!(vm.register(10), blob_carrier_ptr);
+    }
+    #[test]
+    fn default_host_int_pointer_codec_validates_signed_512_frames() {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = DefaultHost::new();
+        let value = iroha_primitives::bigint::BigInt::from_twos_bytes(&[0x7f; 64])
+            .expect("wide signed integer");
+        let inner = crate::numeric_tlv::encode_int(&value).expect("canonical Int pointer");
+        let source = vm.alloc_input_tlv(&inner).expect("allocate Int");
+        vm.set_register(10, source);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_POINTER_TO_NORITO, &mut vm),
+            Ok(DefaultHost::pointer_gas(inner.len()))
+        );
+        let wrapped = vm.register(10);
+        assert_eq!(
+            vm.validate_tlv(wrapped).expect("wrapped Int").payload,
+            inner
+        );
+        vm.set_register(10, wrapped);
+        vm.set_register(11, u64::from(PointerType::Int as u16));
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+            Ok(DefaultHost::pointer_gas(inner.len()))
+        );
+        let restored = vm.validate_tlv(vm.register(10)).expect("restored Int");
+        assert_eq!(
+            crate::numeric_tlv::decode_int_bytes(&test_tlv(PointerType::Int, restored.payload)),
+            Ok(value)
+        );
+
+        let malformed = test_tlv(PointerType::Int, b"17");
+        let malformed_ptr = vm
+            .alloc_input_tlv(&malformed)
+            .expect("allocate malformed Int");
+        vm.set_register(10, malformed_ptr);
+        assert!(matches!(
+            host.syscall(syscalls::SYSCALL_POINTER_TO_NORITO, &mut vm),
+            Err(VMError::PointerAbiFault(_))
+        ));
+        assert_eq!(vm.register(10), malformed_ptr);
+        let wrapped_malformed = test_tlv(PointerType::NoritoBytes, &malformed);
+        let wrapped_ptr = vm
+            .alloc_input_tlv(&wrapped_malformed)
+            .expect("allocate wrapped malformed Int");
+        vm.set_register(10, wrapped_ptr);
+        vm.set_register(11, u64::from(PointerType::Int as u16));
+        assert!(matches!(
+            host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+            Err(VMError::PointerAbiFault(_))
+        ));
+        assert_eq!(vm.register(10), wrapped_ptr);
+        for kind in [
+            PointerType::Int,
+            PointerType::Decimal,
+            PointerType::Quantity,
+        ] {
+            vm.set_register(10, 0);
+            vm.set_register(11, u64::from(kind as u16));
+            assert_eq!(
+                host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+                Err(VMError::NoritoInvalid),
+                "numeric {kind:?} cannot decode from null"
+            );
+            assert_eq!(vm.register(10), 0);
+        }
     }
     #[test]
     fn common_helper_quotes_are_exact_at_length_boundaries() {

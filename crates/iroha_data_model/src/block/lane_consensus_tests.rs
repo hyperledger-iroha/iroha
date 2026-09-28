@@ -21,11 +21,9 @@ fn fixture() -> (FrozenLaneConsensusContextV1, Vec<KeyPair>) {
                     network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
                         Hash::new(b"model lane fixture network"),
                     )),
-                    protocol_version: wire::PROTOCOL_VERSION,
+                    protocol_version: crate::sumeragi::PROTOCOL_VERSION,
                     opening_global_height: 41,
-                    opening_global_context_id: wire::HeightContextId(
-                        HashOf::from_untyped_unchecked(Hash::new(b"opening context")),
-                    ),
+                    opening_consensus_hash: Hash::new(b"opening context"),
                     admitted_binding_hash: Hash::new(b"pinned binding"),
                     admission_priority: QueuePlanAdmissionPriorityV1::new(40, 0).unwrap(),
                     epoch: 7,

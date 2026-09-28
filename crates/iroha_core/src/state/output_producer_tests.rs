@@ -105,11 +105,15 @@ fn proof() -> iroha_data_model::proof::ProofBox {
     iroha_data_model::proof::ProofBox::new("output-fixture".into(), vec![7, 8, 9])
 }
 
-fn finish_empty_internal(producer: &mut ExecutionOutputProducer<'_, '_, '_>) -> Result<(), String> {
+fn finish_empty_internal(
+    producer: &mut ExecutionOutputProducer<'_, '_, '_>,
+) -> Result<(), ExecutionAttemptError<String>> {
     // This fixture's actual registry has no Pipeline or Time actions.
     assert!(producer.state.world.triggers.pipeline_triggers().is_empty());
     assert!(producer.state.world.triggers.time_triggers().is_empty());
-    producer.skip_uninvoked(ExecutionOutputPhase::Time, 1)
+    producer
+        .skip_uninvoked(ExecutionOutputPhase::Time, 1)
+        .map_err(Into::into)
 }
 
 fn retained<'a>(block: &'a StateBlock<'_>) -> &'a RetainedExecutionOutputs {
@@ -378,6 +382,79 @@ fn unfinished_network_or_callback_obligation_cannot_finish() {
 }
 
 #[test]
+fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_boundaries() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll, Wake, Waker},
+    };
+    #[derive(Default)]
+    struct Wakes(AtomicUsize);
+    impl Wake for Wakes {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
+    let budget = mv::allocation::AllocationBudget::new(8);
+    let occupied = budget.try_reserve_bytes(8).unwrap();
+    let refusal = budget.try_reserve_bytes(1).unwrap_err();
+    let state = state(16_384);
+    let source = source(&state, 1);
+    let mut block = state.block(source.header());
+    block.reserve_ordinary_execution_outputs(&source).unwrap();
+    let before = block.world.parameters.get().clone();
+    let error = block
+        .produce_ordinary_execution_outputs(&source, |producer| {
+            producer.try_apply_network_success(0, |_, tx| {
+                write_state(tx, 7);
+                Err(tx.defer_execution(refusal.clone()).to_string())
+            })?;
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(*block.world.parameters.get(), before);
+    assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(ExecutionOutputPlanState::Poisoned)
+    ));
+    assert!(!source.has_results());
+    let sealed: ExecutionOutputSealError<String> = error.clone().into();
+    let ExecutionOutputSealError::Deferred(sealed_owner) = sealed else {
+        panic!("seal error must preserve the local owner");
+    };
+    assert_eq!(sealed_owner.allocation_refusal(), Some(&refusal));
+    let native = native::native_attempt_error(error);
+    let block_error = crate::block::BlockValidationError::from_certified_merge_stage_error(native);
+    let crate::block::BlockValidationError::ExecutionDeferred(owner) = block_error else {
+        panic!("block boundary must preserve the local owner");
+    };
+    assert_eq!(owner.allocation_refusal(), Some(&refusal));
+    drop(block);
+    drop(state);
+    drop(budget);
+    let Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+        owner.allocation_refusal()
+    else {
+        panic!("original release observation must survive rollback");
+    };
+    let mut release = release.clone().wait_for_release();
+    let wakes = Arc::new(Wakes::default());
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut context = Context::from_waker(&waker);
+    assert_eq!(Pin::new(&mut release).poll(&mut context), Poll::Pending);
+    drop(occupied);
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    assert_eq!(Pin::new(&mut release).poll(&mut context), Poll::Ready(()));
+}
+
+#[test]
 fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
     let _guard = exec_witness::exec_witness_guard();
     exec_witness::start_block();
@@ -390,12 +467,19 @@ fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
         .produce_ordinary_execution_outputs(&source, |producer| {
             producer.try_apply_network_success(0, |_, tx| {
                 write_state(tx, 7);
-                Err("fixture local serializer refusal".into())
+                Err(tx
+                    .defer_execution(ivm::error::ExecutionDeferral::AllocationUnavailable)
+                    .to_string())
             })?;
             Ok(())
         })
         .unwrap_err();
-    assert_eq!(error, "fixture local serializer refusal");
+    assert_eq!(
+        error,
+        ExecutionAttemptError::Deferred(
+            ivm::error::ExecutionDeferral::AllocationUnavailable.into()
+        )
+    );
     assert_eq!(*block.world.parameters.get(), before);
     assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
     assert!(matches!(

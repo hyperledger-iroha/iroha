@@ -70,6 +70,12 @@ pub enum AdmittedStorageError {
     Changed,
     /// The original finite pool cannot admit the complete demand.
     Allocation(AllocationRefusal),
+    /// The physical allocator refused an exact already admitted layout.
+    /// No backing allocation exists and no new release observation is fabricated.
+    Allocator {
+        /// Original requested backing layout, including its alignment.
+        layout: std::alloc::Layout,
+    },
     /// Publication was attempted outside the original pool's active scope.
     ScopeIdentity,
     /// A policy returned a reservation from another pool.

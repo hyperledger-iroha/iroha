@@ -5,7 +5,7 @@
 //! - Insert/hit/eviction behavior under bounded capacity
 //! - Capacity clamp when configured to zero (must behave as capacity = 1)
 use ivm::{encoding, instruction, ivm_cache};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 static CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 fn halt32_code() -> Vec<u8> {
     encoding::wide::encode_halt().to_le_bytes().to_vec()
@@ -38,10 +38,10 @@ fn cache_insert_hit_and_eviction_under_capacity() {
     let _a1_hit = ivm_cache::global_get(&code1).expect("hit code1");
     // Insert third distinct entry; capacity=2 so LRU (code2) should be evicted
     let _a3 = ivm_cache::global_get(&code3).expect("decode code3");
-    // Access code2 again; should be a miss and produce a new Arc (re-decoded)
+    // Access code2 again; should be a miss and produce a new allocation (re-decoded)
     let a2_second = ivm_cache::global_get(&code2).expect("re-decode code2");
     assert!(
-        !Arc::ptr_eq(&a2_first, &a2_second),
+        !ivm::cache_memory::SharedAllocation::ptr_eq(&a2_first, &a2_second),
         "expected code2 to be evicted and re-decoded",
     );
     let (h1, m1, e1) = ivm_cache::global_counters();
@@ -64,7 +64,7 @@ fn zero_capacity_is_clamped_to_one() {
     let a1_second = ivm_cache::global_get(&code1).expect("re-decode code1");
     // With effective capacity=1, code1 should have been evicted by code2 and re-decoded now
     assert!(
-        !Arc::ptr_eq(&a1_first, &a1_second),
+        !ivm::cache_memory::SharedAllocation::ptr_eq(&a1_first, &a1_second),
         "expected code1 to be evicted under capacity=1 and re-decoded",
     );
 }

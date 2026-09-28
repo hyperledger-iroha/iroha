@@ -154,6 +154,16 @@ impl SettlementEngine {
     pub const fn config(&self) -> &SettlementConfig {
         self.calculator.config()
     }
+    /// Check that this retained engine is exactly the deterministic derivative
+    /// of the State-owned router configuration.
+    ///
+    /// The complete State commitment owner can use this check before omitting
+    /// the engine's duplicate derived fields from its canonical row set.
+    #[must_use]
+    pub fn matches_router_config(&self, router: &config::Router) -> bool {
+        let expected = Self::from_router_config(router);
+        self.config() == expected.config() && self.buffer_policy() == expected.buffer_policy()
+    }
     /// Quote a settlement from an exact local gas-token amount, a positive
     /// local-token-per-XOR TWAP, and the conversion path's liquidity profile.
     ///
@@ -482,5 +492,36 @@ mod tests {
         assert_eq!(engine.buffer_policy().throttle, 60);
         assert_eq!(engine.buffer_policy().xor_only, 40);
         assert_eq!(engine.buffer_policy().halt, 5);
+    }
+    #[test]
+    fn engine_derivation_check_covers_every_router_input() {
+        let baseline = config::Router::default();
+        let engine = SettlementEngine::from_router_config(&baseline);
+        assert!(engine.matches_router_config(&baseline));
+        let changes: [(&str, fn(&mut config::Router)); 7] = [
+            ("twap_window", |config| {
+                config.twap_window += std::time::Duration::from_secs(1)
+            }),
+            ("epsilon_bps", |config| config.epsilon_bps += 1),
+            ("buffer_alert_pct", |config| config.buffer_alert_pct += 1),
+            ("buffer_throttle_pct", |config| {
+                config.buffer_throttle_pct += 1
+            }),
+            ("buffer_xor_only_pct", |config| {
+                config.buffer_xor_only_pct += 1
+            }),
+            ("buffer_halt_pct", |config| config.buffer_halt_pct += 1),
+            ("buffer_horizon_hours", |config| {
+                config.buffer_horizon_hours += 1
+            }),
+        ];
+        for (name, change) in changes {
+            let mut altered = baseline;
+            change(&mut altered);
+            assert!(
+                !engine.matches_router_config(&altered),
+                "{name} must change the derived engine"
+            );
+        }
     }
 }

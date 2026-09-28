@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 322
-type rows preserve 358 populated values and 1,432 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 330
+type rows preserve 366 populated values and 1,464 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`66733415c7a05159759e9d7c11271f8e3c71b49ea3992e142587d77cb9a08711`.
+`39a371818b4dbc04d04b4723739fd9e9b64ddf3f469990e0a190b1e7d1fb467d`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -24,6 +24,11 @@ The create-only temporary capture writer was removed afterwards.
 Musubi, KAGEMUSHA, private-settlement and Exact12 values reuse the existing
 typed synthetic fixture producers. Opaque byte artifacts test preservation;
 they do not attest production qualification or ledger admission.
+
+The first-release `AdvanceMusubiPinOutboxV1` declaration adds one canonical
+populated row with exact root, vector, option and map frames. Its compiler
+identity is `1893a09ca99cc2829a0da3822d80bf6b`; the historical capture hashes
+above remain records of their original runs.
 
 The permanent tests decode every captured root, compare its value after a
 roundtrip, and require exact re-encoding of all four frame forms. They compare
@@ -88,7 +93,32 @@ this codec fixture does not establish finalized admission or certify publication
 The complete `generated_record_identity_tests` filter passed on 2026-09-26:
 325 tests passed, none failed and three explicit maintenance captures were ignored.
 
+`RegisterPrivacyExact12QualificationV1` was recaptured from the current typed
+Exact12 qualification fixture for this first-release candidate. Its four frame
+forms changed with the current source payload; the other 354 cases and all
+nominal and directional identities remain unchanged. The permanent roundtrip
+tests decode and re-encode every frame.
+
+The combined 2026-09-27 native capture validates all 324 instantiated records,
+360 populated cases and 1,440 frames with the current compiled codec. Among the
+existing cases only the five Kaigi private values changed. Their exact retired
+bytes and all four rejection assertions are retained solely in
+`kaigi_retired_scalar_rejections.json` and its dedicated test owner. The separate
+positive Kaigi fixture is removed; populated typed constructors remain the sole
+authority for generating positive private values.
+
+The same native test binary captured 1,776 codec identities: eight current
+KAGEMUSHA identities were added and the FASTPQ transition frame changed. The
+compiled instruction registry contains 382 entries, including 21 governance
+entries and 361 non-governance entries. The capture report is
+`native_codec_capture_2026_09_27.json`, SHA-256
+`5fae6cc228a9cd2a7e4575de0c7e54d2c8f94808da2c40dd8bac96b497c2ae58`.
+This is scoped development evidence; SDK, hardware and complete release-candidate
+qualification remain separate gates. Earlier dated evidence applies only to its
+original source snapshots.
+
 On 2026-09-28 the `CancelConsensusEvidencePenalty` row was removed together with
 the instruction: consensus evidence is a local log and telemetry record, so no
-on-chain penalty exists to cancel. The other 322 rows are byte-for-byte
-unchanged.
+on-chain penalty exists to cancel. The merged first-release inventory retains 330 rows and 366 populated cases;
+the current registry has 388 instructions (21 governance and 367 non-governance).
+These totals combine existing captures and are not a new native qualification run.

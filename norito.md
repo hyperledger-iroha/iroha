@@ -934,6 +934,13 @@ The exact encoded schema is domain-separated and hashed into its argument,
 return, or state record; a decoder must reject a record whose schema hash or
 flat schema-delimited atom tape does not match.
 
+An empty nominal struct has a zero-field schema and contributes no atoms to
+the canonical record. Its VM representation is one initialized public zero
+word, including inside lists, sums, and other products; this does not turn its
+nominal schema into Unit. KSV1 permits zero arity for Struct nodes, while tuple
+arity remains at least two. KRV1 permits an empty atom stream at the root or
+inside a list element when the bound schema describes an empty product.
+
 On wire, a list starts with one flat `List(u8)` atom containing its active
 element count. The count is followed immediately in the record's single atom
 tape by one schema-delimited atom stream for each active element, in order.

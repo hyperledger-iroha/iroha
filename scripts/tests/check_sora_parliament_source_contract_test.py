@@ -94,6 +94,60 @@ def test_complete_source_contract_baseline() -> None:
     assert guard.main() == 0
 
 
+def test_beacon_parliament_fixture_module_is_connected_to_production_guard() -> None:
+    """The full checker follows the compiled module and both canonical admissions."""
+    guard.require_beacon_parliament_pulse_fixtures(
+        guard.read("crates/iroha_core/src/beacon.rs"),
+        guard.read("crates/iroha_core/src/beacon/tests.rs"),
+    )
+    body = ast.parse(inspect.getsource(guard.main))
+    calls = [node.func.id for node in ast.walk(body)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    assert calls.count("require_beacon_parliament_pulse_fixtures") == 1
+
+
+@pytest.mark.parametrize("replacement", (
+    "",
+    "#[cfg(any())]\npub(crate) mod tests;",
+    '#[path = "disconnected.rs"]\n#[cfg(test)]\npub(crate) mod tests;',
+    "#[cfg(test)]\npub(crate) mod other_tests;",
+))
+def test_beacon_parliament_fixture_module_cannot_be_disconnected(replacement: str) -> None:
+    """Intact fixture text is insufficient when its compiled owner is removed."""
+    core = guard.read("crates/iroha_core/src/beacon.rs")
+    anchor = "#[cfg(test)]\npub(crate) mod tests;"
+    assert core.count(anchor) == 1
+    with pytest.raises(RuntimeError, match="original test module"):
+        guard.require_beacon_parliament_pulse_fixtures(
+            core.replace(anchor, replacement, 1) + "\n/* " + anchor + " */\n",
+            guard.read("crates/iroha_core/src/beacon/tests.rs"),
+        )
+
+
+@pytest.mark.parametrize("declaration", (
+    "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
+    "fn assert_same_block_key_rotation_persists_requested_pulse(",
+))
+@pytest.mark.parametrize("original,replacement", (
+    (".put_parliament_attempt(attempt)", ".unchecked_parliament_attempt(attempt)"),
+    ('expect("persist the Parliament request and its beacon-slot index")', 'unwrap()'),
+))
+def test_beacon_parliament_fixture_admission_cannot_be_moved_to_disconnected_text(
+    declaration: str, original: str, replacement: str,
+) -> None:
+    """Each actual consumer retains its own admission and persistence assertion."""
+    path = "crates/iroha_core/src/beacon/tests.rs"
+    fixtures = guard.read(path)
+    body = guard.section(fixtures, declaration, "\n}\n", path)
+    assert body.count(original) == 1
+    changed = fixtures.replace(body, body.replace(original, replacement, 1), 1)
+    changed += "\n/* " + original + " */\n"
+    with pytest.raises(RuntimeError, match="missing modeled source binding"):
+        guard.require_beacon_parliament_pulse_fixtures(
+            guard.read("crates/iroha_core/src/beacon.rs"), changed,
+        )
+
+
 def test_encrypted_beacon_dkg_source_baseline() -> None:
     """The current public model and reducer require signed private edges."""
     guard.require_encrypted_beacon_dkg_source(
@@ -210,6 +264,21 @@ def test_signed_staking_fee_boundary_rejects_omitted_guards(
             sources["crates/iroha_core/src/validation_fee/committee_effects.rs"],
             sources["crates/iroha_core/src/validation_fee/staking_effects.rs"],
         )
+
+
+def test_proved_trigger_registration_cannot_downgrade_to_plain_ivm() -> None:
+    """A proof-carrying trigger must fail before its bytecode is registered."""
+    source = guard.read("crates/iroha_core/src/smartcontracts/isi/triggers/set.rs")
+    guard.require_proved_trigger_rejection(source)
+    missing_rejection = source.replace(
+        "Executable::IvmProved(_) => return Err(Error::ProofBackedTriggerUnavailable)",
+        "Executable::IvmProved(_) => unreachable!()",
+        1,
+    )
+    with pytest.raises(RuntimeError, match=r"missing modeled source binding\(s\)"):
+        guard.require_proved_trigger_rejection(missing_rejection)
+    with pytest.raises(RuntimeError, match="downgraded to plain bytecode"):
+        guard.require_proved_trigger_rejection(source + "\nlet bytes = proved.bytecode;\n")
 
 
 def test_source_contract_cli_help() -> None:
@@ -362,6 +431,7 @@ def test_production_checker_enforces_repaired_guards(
 
 
 STATE_PATH = "crates/iroha_core/src/state.rs"
+PUBLICATION_PATH = "crates/iroha_core/src/state/publication.rs"
 EXPIRY_CALL = (
     "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)\n"
     "            .map_err(StateBlockStartError::Storage)?;"
@@ -468,7 +538,7 @@ def test_block_start_phase_calls_reject_disconnected_or_late_owners(mutation: st
         mutated = source.replace(ENACTMENT_CALL, "if false { " + ENACTMENT_CALL + " }", 1)
     else:
         anchor = ("        sb.start_of_block_effects_applied = true;" if mutation == "late_before_flag"
-                  else "        let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?;")
+                  else "\n        let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?;")
         assert source.count(anchor) == 1
         mutated = source.replace(ENACTMENT_CALL, "", 1).replace(anchor, anchor + "\n        " + ENACTMENT_CALL, 1)
     assert mutated != source
@@ -510,7 +580,8 @@ def test_block_start_phase_bodies_reject_changed_height_or_rollback(
     ("before_start(&mut sb).map_err(StateBlockStartError::Stage)?", "before_start(&mut sb).unwrap()"),
     (EXPIRY_CALL, "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h).unwrap();"),
     (ENACTMENT_CALL, "Self::apply_block_start_parliament_enactments(&mut sb, now_h).unwrap();"),
-    ("after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?", "after_start(&mut sb, continuation).unwrap()"),
+    ("\n        let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?", "\n        let result = after_start(&mut sb, continuation).unwrap()"),
+    ("\n            let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?", "\n            let result = after_start(&mut sb, continuation).unwrap()"),
 ))
 def test_block_start_admission_and_stage_refusals_remain_typed(
     original: str, replacement: str,
@@ -578,27 +649,34 @@ def test_prepared_parliament_commit_publication_baseline_and_entrypoint() -> Non
 
 
 @pytest.mark.parametrize("mutation", (
-    "world_refusal", "geometry_refusal", "world_drop", "hash_drop", "swapped_commits",
+    "world_refusal", "world_validation_refusal", "geometry_refusal", "world_drop", "hash_drop", "swapped_commits",
     "writer_removed", "generation_removed", "writer_early_drop", "conditional_world",
     "replay_prevalidation", "authenticated_replay", "transitions_outside_replay_guard",
     "gauges_inside_replay_guard", "duplicate_publisher", "early_telemetry", "missing_cfg",
     "hash_prepare_refusal", "commit_lock_early_drop", "commit_lock_after_prepare",
+    "state_commit_unlock_before_publication", "effect_owner_declared_after_commit_lock",
+    "kagemusha_runtime_refusal", "kagemusha_certificate_check", "kagemusha_unowned_refusal",
 ))
-def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutation: str) -> None:
+def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
+    mutation: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Complete Rust statements cannot bypass refusals, publish early, or recount replay."""
-    source = guard.read(STATE_PATH)
-    guard.require_parliament_commit_publication(source)
-    commit = guard.section(source, "    fn commit_inner(",
-                           "    fn mint_canonical_carrier_commit_metadata_authorization(", STATE_PATH)
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    commit = guard.read(PUBLICATION_PATH)
     telemetry_start = commit.index('        #[cfg(feature = "telemetry")]\n        if !*replay_prevalidation {',
-                                   commit.index("drop(autoscale_lifecycle_guard);"))
-    telemetry_end = commit.index("        if !verified_lane_relay_records.is_empty()", telemetry_start)
+                                   commit.index("pending_public_lane_slash_observability.iter()"))
+    telemetry_end = commit.index("        // Run the retained persistence plan", telemetry_start)
     telemetry = commit[telemetry_start:telemetry_end]
     changed = commit
     if mutation == "world_refusal":
-        anchor = "TransactionsBlockError::WorldCommitPreparation\n        })?);"
+        anchor = "TransactionsBlockError::ExecutionDeferred(reason)\n                        }\n                    }\n                })?,"
         assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, anchor.replace("})?);", "}).unwrap());"), 1)
+        changed = commit.replace(anchor, anchor.replace("})?,", "}).unwrap(),"), 1)
+    elif mutation == "world_validation_refusal":
+        anchor = "TransactionsBlockError::ExecutionDeferred(reason)\n            }\n        })?;"
+        assert commit.count(anchor) == 1
+        changed = commit.replace(anchor, anchor.replace("})?;", "}).unwrap();"), 1)
     elif mutation == "geometry_refusal":
         geometry = guard.section(commit, "if let Err(err) = geometry_result {",
                                  "autoscale_start.elapsed()", STATE_PATH)
@@ -606,11 +684,9 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
         changed = commit.replace(geometry,
                                  geometry.replace("return Err(TransactionsBlockError::from(err));", "", 1), 1)
     elif mutation == "hash_prepare_refusal":
-        anchor = (
-            "block_hashes.try_prepare_publication().map_err(|_| {\n"
-            "                TransactionsBlockError::SnapshotObservationChanged\n"
-            "            })?;"
-        )
+        anchor = guard.section(commit, "            block_hashes\n                .try_prepare_publication()",
+                               "            world\n                .try_prepare_frozen_publication()", PUBLICATION_PATH)
+        anchor = "            block_hashes\n                .try_prepare_publication()" + anchor
         assert commit.count(anchor) == 1
         changed = commit.replace(anchor, "block_hashes.try_prepare_publication().unwrap();", 1)
     elif mutation == "commit_lock_early_drop":
@@ -619,9 +695,30 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
             "            drop(_state_commit_lock);\n            world.publish_prepared();", 1)
     elif mutation == "commit_lock_after_prepare":
         changed = commit.replace("        let _state_commit_lock = commit_fence.lock();", "", 1).replace(
-            "        tiered_snapshot = Some(tiered_publication::PreparedTieredSnapshot::prepare(",
+            "            *tiered_snapshot = Some(tiered_publication::PreparedTieredSnapshot::prepare(",
             "        let _state_commit_lock = commit_fence.lock();\n"
-            "        tiered_snapshot = Some(tiered_publication::PreparedTieredSnapshot::prepare(", 1)
+            "            *tiered_snapshot = Some(tiered_publication::PreparedTieredSnapshot::prepare(", 1)
+    elif mutation == "state_commit_unlock_before_publication":
+        changed = commit.replace("        drop(_state_commit_lock);", "", 1).replace(
+            "            transactions.publish_prepared();",
+            "            drop(_state_commit_lock);\n            transactions.publish_prepared();", 1)
+    elif mutation == "effect_owner_declared_after_commit_lock":
+        owner = "effect_cleanup: effect_publication::StateEffectLocks::new(state),"
+        fence = "commit_fence: state.state_commit_lock.defer_notifications(),"
+        changed = commit.replace(owner, "", 1).replace(fence, fence + "\n            " + owner, 1)
+    elif mutation == "kagemusha_runtime_refusal":
+        anchor = "return Err(TransactionsBlockError::KagemushaVerifierAuthority);"
+        assert commit.count(anchor) == 1
+        changed = commit.replace(anchor, "", 1)
+    elif mutation == "kagemusha_certificate_check":
+        anchor = "authorization.validate_for_state_commit("
+        assert commit.count(anchor) == 1
+        changed = commit.replace(anchor, "authorization.unchecked_commit(", 1)
+    elif mutation == "kagemusha_unowned_refusal":
+        anchor = "return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);"
+        assert commit.count(anchor) == 2
+        offset = commit.rfind(anchor)
+        changed = commit[:offset] + commit[offset:].replace(anchor, "", 1)
     elif mutation == "world_drop":
         changed = commit.replace("world.publish_prepared();", "drop(world);", 1)
     elif mutation == "hash_drop":
@@ -663,15 +760,78 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
         changed = commit.replace(telemetry, moved, 1)
     elif mutation == "gauges_inside_replay_guard":
         moved = telemetry.replace("                }\n            }\n            if let Some(counts)",
-                                  "                }\n            if let Some(counts)", 1).replace(
+                                  "                }\n            if !*authenticated_replay_commit {\n            if let Some(counts)", 1).replace(
             "            if let Some(citizens_total)", "            }\n            if let Some(citizens_total)", 1)
         changed = commit.replace(telemetry, moved, 1)
     else:
         changed = commit.replace(telemetry, "", 1).replace(
-            "        let mut lifecycle_post_publication = None;", telemetry + "        let mut lifecycle_post_publication = None;", 1)
+            "        let _state_commit_lock = commit_fence.lock();", telemetry + "        let _state_commit_lock = commit_fence.lock();", 1)
     assert changed != commit
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda path:
+                        changed if path == PUBLICATION_PATH else original_read(path))
+    with pytest.raises(RuntimeError, match=PUBLICATION_PATH):
+        guard.require_parliament_commit_publication(state)
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("self.try_publish_inner(None, None)", "self.try_publish_inner(None, None).discard()"),
+    ("self.try_publish_inner(authorization, veto).into_result()", "Ok(())"),
+    (".unwrap_or_else(|| StatePublication::new(self.state_ref, authorization))",
+     ".unwrap_or_else(|| StatePublication::new(other_state, authorization))"),
+    ("if original.published {", "if false {"),
+    ("self.attempt_original_publication(&mut original, veto)",
+     "self.attempt_original_publication(&mut replacement, veto)"),
+    ("self.recover_original_publication_fields();", ""),
+    ("self.retire_original_publication_notices();", ""),
+    ("self.publication = Some(original);\n        if terminal {",
+     "self.publication = None;\n        if terminal {"),
+    ("*published = true;", "*published = false;"),
+))
+def test_retained_publication_rejects_substituted_or_repeated_owners(
+    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both entrypoints reuse the exact original owner and publish its metrics once."""
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    publication = guard.read(PUBLICATION_PATH)
+    assert publication.count(original) == 1
+    changed = publication.replace(original, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda path:
+                        changed if path == PUBLICATION_PATH else original_read(path))
+    with pytest.raises(RuntimeError, match=PUBLICATION_PATH):
+        guard.require_parliament_commit_publication(state)
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("mod publication;", "mod other_publication;"),
+    ("publication: Option<publication::StatePublication<'state>>",
+     "publication: Option<OtherPublication<'state>>"),
+))
+def test_state_binds_its_retained_publication_module(original: str, replacement: str) -> None:
+    """A correct detached module cannot stand in for the actual State publisher."""
+    source = guard.read(STATE_PATH)
+    assert source.count(original) == 1
     with pytest.raises(RuntimeError, match=STATE_PATH):
-        guard.require_parliament_commit_publication(source.replace(commit, changed, 1))
+        guard.require_parliament_commit_publication(source.replace(original, replacement, 1))
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("let sccp_header = sb._curr_block;", "let sccp_header = foreign_header;"),
+    ("crate::smartcontracts::isi::sccp::hook::apply_block_start(&mut sb, &sccp_header)",
+     "crate::smartcontracts::isi::sccp::hook::apply_block_start(&mut other, &sccp_header)"),
+    ("crate::smartcontracts::isi::sccp::hook::apply_block_start(&mut sb, &sccp_header)\n"
+     "            .map_err(StateBlockStartError::Storage)?;", ""),
+))
+def test_sccp_heartbeat_keeps_the_original_ordered_start_owner(
+    original: str, replacement: str,
+) -> None:
+    """The required SCCP heartbeat cannot be omitted or use a different State/header."""
+    source = guard.read(STATE_PATH)
+    assert source.count(original) == 1
+    with pytest.raises(RuntimeError, match="start phases"):
+        guard.require_block_start_enactment_phases(source.replace(original, replacement, 1))
 
 
 BEACON_PATH = "crates/iroha_core/src/sumeragi/v2_beacon.rs"

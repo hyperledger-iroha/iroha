@@ -1,672 +1,27 @@
 //! GOST R 34.10-2012 signatures backed by `RustCrypto`'s Streebog hash.
 //!
-//! The elliptic-curve arithmetic uses a constant-time backend layered on top of
+//! The elliptic-curve arithmetic uses a fixed-width backend layered on top of
 //! `crypto-bigint` Montgomery field arithmetic with Jacobian point operations.
 //! All field operations remain deterministic across platforms.
 #[cfg(test)]
 use core::ops::ShrAssign;
 use core::{cmp::Ordering, fmt};
-use num_bigint::{BigInt, BigUint, Sign};
+use num_bigint::BigUint;
+#[cfg(test)]
+use num_bigint::{BigInt, Sign};
 use num_traits::{One, Zero};
 use rand::{RngCore, rngs::OsRng};
 use rand_core::TryRngCore;
 use std::sync::LazyLock;
 use streebog::{Digest, Streebog256, Streebog512};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
-#[cfg(feature = "gost")]
-mod constant_time {
-    //! Constant-time arithmetic for the TC26 curves.
-    //!
-    //! This module provides field operations backed by `crypto-bigint`’s constant-time
-    //! Montgomery arithmetic and Jacobian point helpers that will replace the compat
-    //! `num-bigint` implementation during Task G2.
-    use super::{AffinePoint as OuterAffinePoint, CurveParams as OuterCurveParams};
-    #[cfg(test)]
-    use crate::Algorithm;
-    use crypto_bigint::{
-        Odd, U256, U512, Uint,
-        modular::{MontyForm, MontyParams},
-    };
-    use num_bigint::BigUint;
-    use num_traits::Zero;
-    use std::{ptr, sync::LazyLock};
-    use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
-    /// Field element represented in Montgomery form with constant-time operations.
-    #[derive(Clone, Copy)]
-    struct FieldElement<const LIMBS: usize> {
-        residue: MontyForm<LIMBS>,
-    }
-    impl<const LIMBS: usize> FieldElement<LIMBS> {
-        fn zero(params: MontyParams<LIMBS>) -> Self {
-            Self {
-                residue: MontyForm::zero(params),
-            }
-        }
-        fn one(params: MontyParams<LIMBS>) -> Self {
-            Self {
-                residue: MontyForm::one(params),
-            }
-        }
-        fn from_uint(value: Uint<LIMBS>, params: MontyParams<LIMBS>) -> Self {
-            Self {
-                residue: MontyForm::new(&value, params),
-            }
-        }
-        fn as_uint(&self) -> Uint<LIMBS> {
-            self.residue.retrieve()
-        }
-        fn add(&self, rhs: &Self) -> Self {
-            Self {
-                residue: self.residue.add(&rhs.residue),
-            }
-        }
-        fn sub(&self, rhs: &Self) -> Self {
-            Self {
-                residue: self.residue.sub(&rhs.residue),
-            }
-        }
-        fn mul(&self, rhs: &Self) -> Self {
-            Self {
-                residue: self.residue.mul(&rhs.residue),
-            }
-        }
-        fn square(&self) -> Self {
-            Self {
-                residue: self.residue.square(),
-            }
-        }
-        fn double(&self) -> Self {
-            self.add(self)
-        }
-        fn triple(&self) -> Self {
-            self.double().add(self)
-        }
-        fn is_zero(&self) -> Choice {
-            self.residue.retrieve().ct_eq(&Uint::<LIMBS>::ZERO)
-        }
-        fn invert(&self) -> Option<Self> {
-            if bool::from(self.is_zero()) {
-                return None;
-            }
-            let exponent = self
-                .residue
-                .params()
-                .modulus()
-                .as_ref()
-                .wrapping_sub(&Uint::<LIMBS>::from_u64(2));
-            Some(Self {
-                residue: self.residue.pow(&exponent),
-            })
-        }
-        fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
-            Self {
-                residue: MontyForm::conditional_select(&a.residue, &b.residue, choice),
-            }
-        }
-    }
-    impl<const LIMBS: usize> ConstantTimeEq for FieldElement<LIMBS> {
-        fn ct_eq(&self, other: &Self) -> Choice {
-            self.residue.retrieve().ct_eq(&other.residue.retrieve())
-        }
-    }
-    #[derive(Clone, Copy)]
-    struct AffinePoint<const LIMBS: usize> {
-        x: FieldElement<LIMBS>,
-        y: FieldElement<LIMBS>,
-    }
-    #[derive(Clone, Copy)]
-    struct JacobianPoint<const LIMBS: usize> {
-        x: FieldElement<LIMBS>,
-        y: FieldElement<LIMBS>,
-        z: FieldElement<LIMBS>,
-    }
-    impl<const LIMBS: usize> JacobianPoint<LIMBS> {
-        fn infinity(params: MontyParams<LIMBS>) -> Self {
-            Self {
-                x: FieldElement::zero(params),
-                y: FieldElement::one(params),
-                z: FieldElement::zero(params),
-            }
-        }
-        fn from_affine(point: &AffinePoint<LIMBS>, params: MontyParams<LIMBS>) -> Self {
-            Self {
-                x: point.x,
-                y: point.y,
-                z: FieldElement::one(params),
-            }
-        }
-        fn is_infinity(&self) -> Choice {
-            self.z.is_zero()
-        }
-        fn double(&self, curve: &CurveParameters<LIMBS>) -> Self {
-            let params = curve.field_params;
-            let is_inf = self.is_infinity();
-            let mut result = Self::infinity(params);
-            if bool::from(is_inf) {
-                return result;
-            }
-            let xx = self.x.square();
-            let yy = self.y.square();
-            let yyyy = yy.square();
-            let zz = self.z.square();
-            let zz2 = zz.square();
-            let s = self.x.mul(&yy).double().double(); // 4 * X * Y^2
-            let m = xx.triple().add(&curve.a.mul(&zz2));
-            let x3 = m.square().sub(&s.double());
-            let s_minus_x3 = s.sub(&x3);
-            let y3 = m.mul(&s_minus_x3).sub(&yyyy.double().double().double());
-            let z3 = self.y.mul(&self.z).double();
-            result.x = x3;
-            result.y = y3;
-            result.z = z3;
-            result
-        }
-        fn add(&self, other: &Self, curve: &CurveParameters<LIMBS>) -> Self {
-            let params = curve.field_params;
-            let inf_self = self.is_infinity();
-            let inf_other = other.is_infinity();
-            let z1z1 = self.z.square();
-            let z2z2 = other.z.square();
-            let u1 = self.x.mul(&z2z2);
-            let u2 = other.x.mul(&z1z1);
-            let z1_cubed = self.z.mul(&z1z1);
-            let z2_cubed = other.z.mul(&z2z2);
-            let s1 = self.y.mul(&z2_cubed);
-            let s2 = other.y.mul(&z1_cubed);
-            let delta_x = u2.sub(&u1);
-            let double_delta_y = s2.sub(&s1).double();
-            let delta_x_is_zero = delta_x.is_zero();
-            let double_delta_y_is_zero = double_delta_y.is_zero();
-            let doubled_delta_x = delta_x.double();
-            let delta_x_double_squared = doubled_delta_x.square();
-            let delta_x_cubed = delta_x.mul(&delta_x_double_squared);
-            let u1_scaled = u1.mul(&delta_x_double_squared);
-            let x3_generic = double_delta_y
-                .square()
-                .sub(&delta_x_cubed)
-                .sub(&u1_scaled.double());
-            let y3_generic = double_delta_y
-                .mul(&u1_scaled.sub(&x3_generic))
-                .sub(&s1.mul(&delta_x_cubed).double());
-            let z3_generic = (self.z.add(&other.z))
-                .square()
-                .sub(&z1z1)
-                .sub(&z2z2)
-                .mul(&delta_x);
-            let generic = Self {
-                x: x3_generic,
-                y: y3_generic,
-                z: z3_generic,
-            };
-            let infinity = Self::infinity(params);
-            let doubled = self.double(curve);
-            // H == 0 && R == 0  => points are equal (use doubling)
-            let select_double = delta_x_is_zero & double_delta_y_is_zero;
-            // H == 0 && R != 0 => result is infinity
-            let select_infinity = delta_x_is_zero & (!double_delta_y_is_zero);
-            let mut result = Self::conditional_select(&generic, &infinity, select_infinity);
-            result = Self::conditional_select(&result, &doubled, select_double);
-            result = Self::conditional_select(&result, other, inf_self);
-            result = Self::conditional_select(&result, self, inf_other);
-            result
-        }
-        fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
-            Self {
-                x: FieldElement::conditional_select(&a.x, &b.x, choice),
-                y: FieldElement::conditional_select(&a.y, &b.y, choice),
-                z: FieldElement::conditional_select(&a.z, &b.z, choice),
-            }
-        }
-        fn as_affine(&self) -> Option<AffinePoint<LIMBS>> {
-            if bool::from(self.is_infinity()) {
-                return None;
-            }
-            let z_inv = self.z.invert()?;
-            let z_inv2 = z_inv.square();
-            let z_inv3 = z_inv2.mul(&z_inv);
-            let x = self.x.mul(&z_inv2);
-            let y = self.y.mul(&z_inv3);
-            Some(AffinePoint { x, y })
-        }
-    }
-    struct CurveParameters<const LIMBS: usize> {
-        field_params: MontyParams<LIMBS>,
-        a: FieldElement<LIMBS>,
-        generator: AffinePoint<LIMBS>,
-    }
-    impl<const LIMBS: usize> CurveParameters<LIMBS> {
-        fn generator(&self) -> JacobianPoint<LIMBS> {
-            JacobianPoint::from_affine(&self.generator, self.field_params)
-        }
-        fn field_params(&self) -> MontyParams<LIMBS> {
-            self.field_params
-        }
-    }
-    fn params_from_hex<const LIMBS: usize>(hex: &str) -> MontyParams<LIMBS> {
-        let modulus = Odd::new(Uint::<LIMBS>::from_be_hex(hex)).expect("curve modulus must be odd");
-        MontyParams::new_vartime(modulus)
-    }
-    fn fe_from_hex<const LIMBS: usize>(
-        hex: &str,
-        params: MontyParams<LIMBS>,
-    ) -> FieldElement<LIMBS> {
-        FieldElement::from_uint(Uint::<LIMBS>::from_be_hex(hex), params)
-    }
-    fn curve_from_constants_256(
-        p_hex: &str,
-        a_hex: &str,
-        generator_hex: (&str, &str),
-    ) -> CurveParameters<{ U256::LIMBS }> {
-        let field_params = params_from_hex::<{ U256::LIMBS }>(p_hex);
-        CurveParameters {
-            field_params,
-            a: fe_from_hex(a_hex, field_params),
-            generator: AffinePoint {
-                x: fe_from_hex(generator_hex.0, field_params),
-                y: fe_from_hex(generator_hex.1, field_params),
-            },
-        }
-    }
-    fn curve_from_constants_512(
-        p_hex: &str,
-        a_hex: &str,
-        generator_hex: (&str, &str),
-    ) -> CurveParameters<{ U512::LIMBS }> {
-        let field_params = params_from_hex::<{ U512::LIMBS }>(p_hex);
-        CurveParameters {
-            field_params,
-            a: fe_from_hex(a_hex, field_params),
-            generator: AffinePoint {
-                x: fe_from_hex(generator_hex.0, field_params),
-                y: fe_from_hex(generator_hex.1, field_params),
-            },
-        }
-    }
-    static CURVE_256_A: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
-        curve_from_constants_256(
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD94",
-            (
-                "0000000000000000000000000000000000000000000000000000000000000001",
-                "8D91E471E0989CDA27DF505A453F2B7635294F2DDF23E3B122ACC99C9E9F1E14",
-            ),
-        )
-    });
-    static CURVE_256_B: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
-        curve_from_constants_256(
-            "8000000000000000000000000000000000000000000000000000000000000C99",
-            "8000000000000000000000000000000000000000000000000000000000000C96",
-            (
-                "0000000000000000000000000000000000000000000000000000000000000001",
-                "3FA8124359F96680B83D1C3EB2C070E5C545C9858D03ECFB744BF8D717717EFC",
-            ),
-        )
-    });
-    static CURVE_256_C: LazyLock<CurveParameters<{ U256::LIMBS }>> = LazyLock::new(|| {
-        curve_from_constants_256(
-            "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D759B",
-            "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D7598",
-            (
-                "0000000000000000000000000000000000000000000000000000000000000000",
-                "41ECE55743711A8C3CBF3783CD08C0EE4D4DC440D4641A8F366E550DFDB3BB67",
-            ),
-        )
-    });
-    static CURVE_512_A: LazyLock<CurveParameters<{ U512::LIMBS }>> = LazyLock::new(|| {
-        curve_from_constants_512(
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC4",
-            (
-                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
-                "7503CFE87A836AE3A61B8816E25450E6CE5E1C93ACF1ABC1778064FDCBEFA921DF1626BE4FD036E93D75E6A50E3A41E98028FE5FC235F5B889A589CB5215F2A4",
-            ),
-        )
-    });
-    static CURVE_512_B: LazyLock<CurveParameters<{ U512::LIMBS }>> = LazyLock::new(|| {
-        curve_from_constants_512(
-            "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006F",
-            "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006C",
-            (
-                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
-                "1A8F7EDA389B094C2C071E3647A8940F3C123B697578C213BE6DD9E6C8EC7335DCB228FD1EDF4A39152CBCAAF8C0398828041055F94CEEEC7E21340780FE41BD",
-            ),
-        )
-    });
-    enum CurveSelection {
-        Bits256(&'static CurveParameters<{ U256::LIMBS }>),
-        Bits512(&'static CurveParameters<{ U512::LIMBS }>),
-    }
-    #[cfg(test)]
-    fn curve_for_algorithm(algo: Algorithm) -> Option<CurveSelection> {
-        match algo {
-            Algorithm::Gost3410_2012_256ParamSetA => Some(CurveSelection::Bits256(&CURVE_256_A)),
-            Algorithm::Gost3410_2012_256ParamSetB => Some(CurveSelection::Bits256(&CURVE_256_B)),
-            Algorithm::Gost3410_2012_256ParamSetC => Some(CurveSelection::Bits256(&CURVE_256_C)),
-            Algorithm::Gost3410_2012_512ParamSetA => Some(CurveSelection::Bits512(&CURVE_512_A)),
-            Algorithm::Gost3410_2012_512ParamSetB => Some(CurveSelection::Bits512(&CURVE_512_B)),
-            _ => None,
-        }
-    }
-    fn curve_for_params(params: &OuterCurveParams) -> Option<CurveSelection> {
-        if ptr::eq(
-            ptr::from_ref(params),
-            ptr::from_ref(LazyLock::force(&super::PARAM_256_A)),
-        ) {
-            return Some(CurveSelection::Bits256(&CURVE_256_A));
-        }
-        if ptr::eq(
-            ptr::from_ref(params),
-            ptr::from_ref(LazyLock::force(&super::PARAM_256_B)),
-        ) {
-            return Some(CurveSelection::Bits256(&CURVE_256_B));
-        }
-        if ptr::eq(
-            ptr::from_ref(params),
-            ptr::from_ref(LazyLock::force(&super::PARAM_256_C)),
-        ) {
-            return Some(CurveSelection::Bits256(&CURVE_256_C));
-        }
-        if ptr::eq(
-            ptr::from_ref(params),
-            ptr::from_ref(LazyLock::force(&super::PARAM_512_A)),
-        ) {
-            return Some(CurveSelection::Bits512(&CURVE_512_A));
-        }
-        if ptr::eq(
-            ptr::from_ref(params),
-            ptr::from_ref(LazyLock::force(&super::PARAM_512_B)),
-        ) {
-            return Some(CurveSelection::Bits512(&CURVE_512_B));
-        }
-        None
-    }
-    fn biguint_to_uint<const LIMBS: usize>(value: &BigUint) -> Option<Uint<LIMBS>> {
-        let bytes = value.to_bytes_be();
-        if bytes.len() > Uint::<LIMBS>::BYTES {
-            return None;
-        }
-        let mut padded = vec![0u8; Uint::<LIMBS>::BYTES];
-        let offset = padded.len() - bytes.len();
-        padded[offset..].copy_from_slice(&bytes);
-        Some(Uint::<LIMBS>::from_be_slice(&padded))
-    }
-    fn uint_to_biguint<const LIMBS: usize>(value: &Uint<LIMBS>) -> BigUint {
-        let mut bytes = Vec::with_capacity(Uint::<LIMBS>::BYTES);
-        for word in value.to_words() {
-            bytes.extend_from_slice(&word.to_le_bytes());
-        }
-        BigUint::from_bytes_le(&bytes)
-    }
-    fn generator_outer_point<const LIMBS: usize>(
-        curve: &CurveParameters<LIMBS>,
-    ) -> OuterAffinePoint {
-        let generator_affine = curve
-            .generator()
-            .as_affine()
-            .expect("generator must not be at infinity");
-        OuterAffinePoint::new(
-            uint_to_biguint(&generator_affine.x.as_uint()),
-            uint_to_biguint(&generator_affine.y.as_uint()),
-        )
-    }
-    fn affine_from_outer<const LIMBS: usize>(
-        curve: &CurveParameters<LIMBS>,
-        point: &OuterAffinePoint,
-    ) -> Option<AffinePoint<LIMBS>> {
-        let params = curve.field_params();
-        let x = FieldElement::from_uint(biguint_to_uint::<LIMBS>(&point.x)?, params);
-        let y = FieldElement::from_uint(biguint_to_uint::<LIMBS>(&point.y)?, params);
-        Some(AffinePoint { x, y })
-    }
-    fn scalar_mul_impl<const LIMBS: usize>(
-        curve: &CurveParameters<LIMBS>,
-        scalar: &BigUint,
-        point: &OuterAffinePoint,
-    ) -> Option<OuterAffinePoint> {
-        if scalar.is_zero() {
-            return None;
-        }
-        let scalar_uint = biguint_to_uint::<LIMBS>(scalar)?;
-        if bool::from(scalar_uint.ct_eq(&Uint::<LIMBS>::ZERO)) {
-            return None;
-        }
-        let params = curve.field_params();
-        let base_affine = affine_from_outer(curve, point)?;
-        let base = JacobianPoint::from_affine(&base_affine, params);
-        let mut acc = JacobianPoint::infinity(params);
-        for i in (0..Uint::<LIMBS>::BITS).rev() {
-            let doubled = acc.double(curve);
-            let added = doubled.add(&base, curve);
-            let choice = scalar_uint.bit(i);
-            acc = JacobianPoint::conditional_select(&doubled, &added, choice.into());
-        }
-        let affine = acc.as_affine()?;
-        Some(OuterAffinePoint::new(
-            uint_to_biguint(&affine.x.as_uint()),
-            uint_to_biguint(&affine.y.as_uint()),
-        ))
-    }
-    #[cfg(test)]
-    fn point_add_impl<const LIMBS: usize>(
-        curve: &CurveParameters<LIMBS>,
-        p: &OuterAffinePoint,
-        q: &OuterAffinePoint,
-    ) -> Option<OuterAffinePoint> {
-        let params = curve.field_params();
-        let p_jacobian = JacobianPoint::from_affine(&affine_from_outer(curve, p)?, params);
-        let q_jacobian = JacobianPoint::from_affine(&affine_from_outer(curve, q)?, params);
-        let sum = p_jacobian.add(&q_jacobian, curve);
-        let affine = sum.as_affine()?;
-        Some(OuterAffinePoint::new(
-            uint_to_biguint(&affine.x.as_uint()),
-            uint_to_biguint(&affine.y.as_uint()),
-        ))
-    }
-    pub(super) fn scalar_mul(
-        params: &OuterCurveParams,
-        scalar: &BigUint,
-        point: &OuterAffinePoint,
-    ) -> Option<OuterAffinePoint> {
-        curve_for_params(params).and_then(|selection| match selection {
-            CurveSelection::Bits256(curve) => scalar_mul_impl(curve, scalar, point),
-            CurveSelection::Bits512(curve) => scalar_mul_impl(curve, scalar, point),
-        })
-    }
-    fn scalar_mul_base_impl<const LIMBS: usize>(
-        curve: &CurveParameters<LIMBS>,
-        scalar: &BigUint,
-    ) -> Option<OuterAffinePoint> {
-        if scalar.is_zero() {
-            return None;
-        }
-        let generator = generator_outer_point(curve);
-        scalar_mul_impl(curve, scalar, &generator)
-    }
-    pub(super) fn scalar_mul_base(
-        params: &OuterCurveParams,
-        scalar: &BigUint,
-    ) -> Option<OuterAffinePoint> {
-        curve_for_params(params).and_then(|selection| match selection {
-            CurveSelection::Bits256(curve) => scalar_mul_base_impl(curve, scalar),
-            CurveSelection::Bits512(curve) => scalar_mul_base_impl(curve, scalar),
-        })
-    }
-    fn mul_add_impl<const LIMBS: usize>(
-        curve: &CurveParameters<LIMBS>,
-        scalar_g: &BigUint,
-        scalar_q: &BigUint,
-        point_q: &OuterAffinePoint,
-    ) -> Option<OuterAffinePoint> {
-        let generator_scalar_uint = biguint_to_uint::<LIMBS>(scalar_g)?;
-        let point_scalar_uint = biguint_to_uint::<LIMBS>(scalar_q)?;
-        if bool::from(
-            generator_scalar_uint.ct_eq(&Uint::<LIMBS>::ZERO)
-                & point_scalar_uint.ct_eq(&Uint::<LIMBS>::ZERO),
-        ) {
-            return None;
-        }
-        let params = curve.field_params();
-        let base = curve.generator();
-        let affine_q = affine_from_outer(curve, point_q)?;
-        let point = JacobianPoint::from_affine(&affine_q, params);
-        let mut table = [
-            JacobianPoint::infinity(params),
-            JacobianPoint::infinity(params),
-            JacobianPoint::infinity(params),
-            JacobianPoint::infinity(params),
-        ];
-        table[1] = base;
-        table[2] = point;
-        table[3] = table[1].add(&table[2], curve);
-        let mut acc = JacobianPoint::infinity(params);
-        for bit_index in (0..Uint::<LIMBS>::BITS).rev() {
-            acc = acc.double(curve);
-            let bit_g = Choice::from(generator_scalar_uint.bit(bit_index));
-            let bit_q = Choice::from(point_scalar_uint.bit(bit_index));
-            let both = bit_g & bit_q;
-            let mut addend = table[0];
-            addend = JacobianPoint::conditional_select(&addend, &table[1], bit_g);
-            addend = JacobianPoint::conditional_select(&addend, &table[2], bit_q);
-            addend = JacobianPoint::conditional_select(&addend, &table[3], both);
-            acc = acc.add(&addend, curve);
-        }
-        let affine = acc.as_affine()?;
-        Some(OuterAffinePoint::new(
-            uint_to_biguint(&affine.x.as_uint()),
-            uint_to_biguint(&affine.y.as_uint()),
-        ))
-    }
-    pub(super) fn mul_add(
-        params: &OuterCurveParams,
-        scalar_g: &BigUint,
-        scalar_q: &BigUint,
-        point_q: &OuterAffinePoint,
-    ) -> Option<OuterAffinePoint> {
-        curve_for_params(params).and_then(|selection| match selection {
-            CurveSelection::Bits256(curve) => mul_add_impl(curve, scalar_g, scalar_q, point_q),
-            CurveSelection::Bits512(curve) => mul_add_impl(curve, scalar_g, scalar_q, point_q),
-        })
-    }
-    #[cfg(test)]
-    pub(super) fn point_add(
-        params: &OuterCurveParams,
-        p: &OuterAffinePoint,
-        q: &OuterAffinePoint,
-    ) -> Option<OuterAffinePoint> {
-        curve_for_params(params).and_then(|selection| match selection {
-            CurveSelection::Bits256(curve) => point_add_impl(curve, p, q),
-            CurveSelection::Bits512(curve) => point_add_impl(curve, p, q),
-        })
-    }
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use crate::{
-            rng::rng_from_seed,
-            signature::gost::{Params, compat_point_add, compat_scalar_mul, params_for_algorithm},
-        };
-        use num_bigint::BigUint;
-        use num_traits::{One, Zero};
-        use rand_core::RngCore;
-        #[test]
-        fn generator_is_on_curve_all_params() {
-            for algo in [
-                Algorithm::Gost3410_2012_256ParamSetA,
-                Algorithm::Gost3410_2012_256ParamSetB,
-                Algorithm::Gost3410_2012_256ParamSetC,
-                Algorithm::Gost3410_2012_512ParamSetA,
-                Algorithm::Gost3410_2012_512ParamSetB,
-            ] {
-                match curve_for_algorithm(algo).unwrap() {
-                    CurveSelection::Bits256(curve) => {
-                        let generator_point = curve.generator();
-                        let affine = generator_point
-                            .as_affine()
-                            .expect("generator not at infinity");
-                        let compat_params = match params_for_algorithm(algo).unwrap() {
-                            Params::Bits256(p) => p,
-                            _ => unreachable!(),
-                        };
-                        let x = BigUint::from_bytes_le(&affine.x.as_uint().to_le_bytes());
-                        let y = BigUint::from_bytes_le(&affine.y.as_uint().to_le_bytes());
-                        let compat = compat_params.generator();
-                        assert_eq!(x, compat.x);
-                        assert_eq!(y, compat.y);
-                    }
-                    CurveSelection::Bits512(curve) => {
-                        let generator_point = curve.generator();
-                        let affine = generator_point
-                            .as_affine()
-                            .expect("generator not at infinity");
-                        let compat_params = match params_for_algorithm(algo).unwrap() {
-                            Params::Bits512(p) => p,
-                            _ => unreachable!(),
-                        };
-                        let x = BigUint::from_bytes_le(&affine.x.as_uint().to_le_bytes());
-                        let y = BigUint::from_bytes_le(&affine.y.as_uint().to_le_bytes());
-                        let compat = compat_params.generator();
-                        assert_eq!(x, compat.x);
-                        assert_eq!(y, compat.y);
-                    }
-                }
-            }
-        }
-        #[test]
-        fn jacobian_double_matches_compat_add() {
-            let curve = &*CURVE_256_A;
-            let generator_point = curve.generator();
-            let doubled = generator_point.double(curve);
-            let affine = doubled.as_affine().expect("affine conversion");
-            let compat_params =
-                match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
-                    Params::Bits256(p) => p,
-                    _ => unreachable!(),
-                };
-            let compat_gen = compat_params.generator();
-            let compat_double =
-                compat_point_add(compat_params, &compat_gen, &compat_gen).expect("compat double");
-            let x = BigUint::from_bytes_le(&affine.x.as_uint().to_le_bytes());
-            let y = BigUint::from_bytes_le(&affine.y.as_uint().to_le_bytes());
-            assert_eq!(x, compat_double.x);
-            assert_eq!(y, compat_double.y);
-        }
-        #[test]
-        fn scalar_mul_matches_compat() {
-            let curve = &*CURVE_256_B;
-            let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetB).unwrap()
-            {
-                Params::Bits256(p) => p,
-                _ => unreachable!(),
-            };
-            let mut rng = rng_from_seed(b"ct-scalar-test".to_vec());
-            let mut scalar_bytes = vec![0u8; params.scalar_len];
-            rng.fill_bytes(&mut scalar_bytes);
-            let modulus_big = params.q.clone();
-            let mut scalar_big = BigUint::from_bytes_le(&scalar_bytes);
-            scalar_big %= &modulus_big;
-            if scalar_big.is_zero() {
-                scalar_big = BigUint::one();
-            }
-            let mut reduced_bytes = scalar_big.to_bytes_le();
-            reduced_bytes.resize(U256::BYTES, 0);
-            let scalar = U256::from_le_slice(&reduced_bytes);
-            let mut acc = JacobianPoint::infinity(curve.field_params());
-            let base = curve.generator();
-            for i in (0..U256::BITS).rev() {
-                acc = acc.double(curve);
-                if bool::from(scalar.bit(i)) {
-                    acc = acc.add(&base, curve);
-                }
-            }
-            let affine = acc.as_affine().expect("affine conversion");
-            let compat_point = compat_scalar_mul(params, &scalar_big, &params.generator()).unwrap();
-            let x = BigUint::from_bytes_le(&affine.x.as_uint().to_le_bytes());
-            let y = BigUint::from_bytes_le(&affine.y.as_uint().to_le_bytes());
-            assert_eq!(x, compat_point.x);
-            assert_eq!(y, compat_point.y);
-        }
-    }
-}
+#[path = "gost/parameters.rs"]
+mod parameters;
+
+#[path = "gost/constant_time.rs"]
+mod constant_time;
+pub(crate) use constant_time::KeyRejection;
+
 trait DeterministicNonceGenerator {
     fn generate(
         &mut self,
@@ -992,116 +347,30 @@ fn params_for_algorithm(algorithm: Algorithm) -> Result<Params<'static>, ParseEr
         ))),
     }
 }
-macro_rules! curve256 {
-    ($name:ident, $algo:expr, $p:literal, $q:literal, $a:literal, $b:literal, $gx:literal, $gy:literal) => {
-        static $name: LazyLock<CurveParams> = LazyLock::new(|| CurveParams {
-            name: stringify!($algo),
-            p: {
-                let p = be_hex($p);
-                p
-            },
-            q: be_hex($q),
-            a: {
-                let p = be_hex($p);
-                be_hex($a) % &p
-            },
-            b: {
-                let p = be_hex($p);
-                be_hex($b) % &p
-            },
-            gx: {
-                let p = be_hex($p);
-                be_hex($gx) % &p
-            },
-            gy: {
-                let p = be_hex($p);
-                be_hex($gy) % &p
-            },
-            scalar_len: 32,
-            digest_len: 32,
-        });
-    };
+fn curve_from_constants(constants: &parameters::CurveConstants) -> CurveParams {
+    let p = be_hex(constants.p);
+    CurveParams {
+        name: constants.name,
+        q: be_hex(constants.q),
+        a: be_hex(constants.a) % &p,
+        b: be_hex(constants.b) % &p,
+        gx: be_hex(constants.gx) % &p,
+        gy: be_hex(constants.gy) % &p,
+        p,
+        scalar_len: constants.scalar_len,
+        digest_len: constants.scalar_len,
+    }
 }
-macro_rules! curve512 {
-    ($name:ident, $algo:expr, $p:literal, $q:literal, $a:literal, $b:literal, $gx:literal, $gy:literal) => {
-        static $name: LazyLock<CurveParams> = LazyLock::new(|| CurveParams {
-            name: stringify!($algo),
-            p: {
-                let p = be_hex($p);
-                p
-            },
-            q: be_hex($q),
-            a: {
-                let p = be_hex($p);
-                be_hex($a) % &p
-            },
-            b: {
-                let p = be_hex($p);
-                be_hex($b) % &p
-            },
-            gx: {
-                let p = be_hex($p);
-                be_hex($gx) % &p
-            },
-            gy: {
-                let p = be_hex($p);
-                be_hex($gy) % &p
-            },
-            scalar_len: 64,
-            digest_len: 64,
-        });
-    };
-}
-curve256!(
-    PARAM_256_A,
-    Algorithm::Gost3410_2012_256ParamSetA,
-    "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd97",
-    "ffffffffffffffffffffffffffffffff6c611070995ad10045841b09b761b893",
-    "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd94",
-    "00000000000000000000000000000000000000000000000000000000000000a6",
-    "0000000000000000000000000000000000000000000000000000000000000001",
-    "8d91e471e0989cda27df505a453f2b7635294f2ddf23e3b122acc99c9e9f1e14"
-);
-curve256!(
-    PARAM_256_B,
-    Algorithm::Gost3410_2012_256ParamSetB,
-    "8000000000000000000000000000000000000000000000000000000000000c99",
-    "800000000000000000000000000000015f700cfff1a624e5e497161bcc8a198f",
-    "8000000000000000000000000000000000000000000000000000000000000c96",
-    "3e1af419a269a5f866a7d3c25c3df80ae979259373ff2b182f49d4ce7e1bbc8b",
-    "0000000000000000000000000000000000000000000000000000000000000001",
-    "3fa8124359f96680b83d1c3eb2c070e5c545c9858d03ecfb744bf8d717717efc"
-);
-curve256!(
-    PARAM_256_C,
-    Algorithm::Gost3410_2012_256ParamSetC,
-    "9b9f605f5a858107ab1ec85e6b41c8aacf846e86789051d37998f7b9022d759b",
-    "9b9f605f5a858107ab1ec85e6b41c8aa582ca3511eddfb74f02f3a6598980bb9",
-    "9b9f605f5a858107ab1ec85e6b41c8aacf846e86789051d37998f7b9022d7598",
-    "000000000000000000000000000000000000000000000000000000000000805a",
-    "0000000000000000000000000000000000000000000000000000000000000000",
-    "41ece55743711a8c3cbf3783cd08c0ee4d4dc440d4641a8f366e550dfdb3bb67"
-);
-curve512!(
-    PARAM_512_A,
-    Algorithm::Gost3410_2012_512ParamSetA,
-    "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdc7",
-    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff27e69532f48d89116ff22b8d4e0560609b4b38abfad2b85dcacdb1411f10b275",
-    "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdc4",
-    "e8c2505dedfc86ddc1bd0b2b6667f1da34b82574761cb0e879bd081cfd0b6265ee3cb090f30d27614cb4574010da90dd862ef9d4ebee4761503190785a71c760",
-    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
-    "7503cfe87a836ae3a61b8816e25450e6ce5e1c93acf1abc1778064fdcbefa921df1626be4fd036e93d75e6a50e3a41e98028fe5fc235f5b889a589cb5215f2a4"
-);
-curve512!(
-    PARAM_512_B,
-    Algorithm::Gost3410_2012_512ParamSetB,
-    "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006f",
-    "800000000000000000000000000000000000000000000000000000000000000149a1ec142565a545acfdb77bd9d40cfa8b996712101bea0ec6346c54374f25bd",
-    "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006c",
-    "687d1b459dc841457e3e06cf6f5e2517b97c7d614af138bcbf85dc806c4b289f3e965d2db1416d217f8b276fad1ab69c50f78bee1fa3106efb8ccbc7c5140116",
-    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
-    "1a8f7eda389b094c2c071e3647a8940f3c123b697578c213be6dd9e6c8ec7335dcb228fd1edf4a39152cbcaaf8c0398828041055f94ceeec7e21340780fe41bd"
-);
+static PARAM_256_A: LazyLock<CurveParams> =
+    LazyLock::new(|| curve_from_constants(&parameters::PARAM_256_A));
+static PARAM_256_B: LazyLock<CurveParams> =
+    LazyLock::new(|| curve_from_constants(&parameters::PARAM_256_B));
+static PARAM_256_C: LazyLock<CurveParams> =
+    LazyLock::new(|| curve_from_constants(&parameters::PARAM_256_C));
+static PARAM_512_A: LazyLock<CurveParams> =
+    LazyLock::new(|| curve_from_constants(&parameters::PARAM_512_A));
+static PARAM_512_B: LazyLock<CurveParams> =
+    LazyLock::new(|| curve_from_constants(&parameters::PARAM_512_B));
 fn be_hex(hex: &str) -> BigUint {
     BigUint::parse_bytes(hex.as_bytes(), 16).expect("valid hex")
 }
@@ -1140,6 +409,7 @@ fn mod_mul(a: &BigUint, b: &BigUint, modulus: &BigUint) -> BigUint {
 fn mod_square(a: &BigUint, modulus: &BigUint) -> BigUint {
     a.modpow(&BigUint::from(2u8), modulus)
 }
+#[cfg(test)]
 fn mod_inv(value: &BigUint, modulus: &BigUint) -> Option<BigUint> {
     if value.is_zero() {
         return None;
@@ -1185,14 +455,6 @@ fn scalar_mul(params: &CurveParams, scalar: &BigUint, point: &AffinePoint) -> Op
         return constant_time::scalar_mul_base(params, scalar);
     }
     constant_time::scalar_mul(params, scalar, point)
-}
-fn mul_add(
-    params: &CurveParams,
-    scalar_g: &BigUint,
-    scalar_q: &BigUint,
-    point_q: &AffinePoint,
-) -> Option<AffinePoint> {
-    constant_time::mul_add(params, scalar_g, scalar_q, point_q)
 }
 #[cfg(test)]
 #[allow(private_interfaces)]
@@ -1315,33 +577,6 @@ fn parse_private_generic(params: &CurveParams, payload: &[u8]) -> Result<Private
         bytes_le: Zeroizing::new(payload.to_vec()),
     })
 }
-fn parse_public_generic(params: &CurveParams, payload: &[u8]) -> Result<PublicKey, ParseError> {
-    if payload.len() != params.scalar_len * 2 {
-        return Err(ParseError(format!(
-            "public key for {} must be {} bytes, got {}",
-            params.name,
-            params.scalar_len * 2,
-            payload.len()
-        )));
-    }
-    if payload.iter().all(|&byte| byte == 0) {
-        return Err(ParseError(format!(
-            "public key for {} must not be all zero",
-            params.name
-        )));
-    }
-    let (x_bytes, y_bytes) = payload.split_at(params.scalar_len);
-    let point = AffinePoint::new(le_bytes_to_biguint(x_bytes), le_bytes_to_biguint(y_bytes));
-    if !is_on_curve(params, &point) {
-        return Err(ParseError(format!(
-            "public key is not on the curve for {}",
-            params.name
-        )));
-    }
-    Ok(PublicKey {
-        bytes_le: payload.to_vec(),
-    })
-}
 fn scalar_from_private(params: &CurveParams, key: &PrivateKey) -> Result<BigUint, Error> {
     if key.as_bytes().len() != params.scalar_len {
         return Err(Error::KeyGen(format!(
@@ -1351,6 +586,7 @@ fn scalar_from_private(params: &CurveParams, key: &PrivateKey) -> Result<BigUint
     }
     Ok(le_bytes_to_biguint(key.as_bytes()))
 }
+#[cfg(test)]
 fn point_from_public(params: &CurveParams, key: &PublicKey) -> Result<AffinePoint, Error> {
     if key.as_bytes().len() != params.scalar_len * 2 {
         return Err(Error::BadSignature);
@@ -1408,38 +644,6 @@ fn sign_impl(
         signature.extend_from_slice(&scalar_to_le_bytes(&r_component, params.scalar_len));
         signature.extend_from_slice(&scalar_to_le_bytes(&s_component, params.scalar_len));
         return Ok(signature);
-    }
-}
-fn verify_impl(
-    params: &CurveParams,
-    message: &[u8],
-    signature: &[u8],
-    public: &PublicKey,
-) -> Result<(), Error> {
-    if signature.len() != params.scalar_len * 2 {
-        return Err(Error::BadSignature);
-    }
-    let (r_bytes, s_bytes) = signature.split_at(params.scalar_len);
-    let r = le_bytes_to_biguint(r_bytes);
-    let s = le_bytes_to_biguint(s_bytes);
-    if r.is_zero() || r >= params.q || s.is_zero() || s >= params.q {
-        return Err(Error::BadSignature);
-    }
-    let mut e = hash_to_scalar(params, message);
-    if e.is_zero() {
-        e = BigUint::one();
-    }
-    let inv = mod_inv(&e, &params.q).ok_or(Error::BadSignature)?;
-    let z1 = (&s * &inv) % &params.q;
-    let r_neg = (&params.q + &params.q - &r) % &params.q;
-    let z2 = (&r_neg * &inv) % &params.q;
-    let q_point = point_from_public(params, public)?;
-    let sum = mul_add(params, &z1, &z2, &q_point).ok_or(Error::BadSignature)?;
-    let x = sum.x % &params.q;
-    if x == r {
-        Ok(())
-    } else {
-        Err(Error::BadSignature)
     }
 }
 fn derive_public_impl(params: &CurveParams, private: &PrivateKey) -> Result<PublicKey, Error> {
@@ -1549,8 +753,10 @@ where
 /// # Errors
 /// Returns [`ParseError`] when `payload` does not encode a valid public key for `algorithm`.
 pub fn parse_public_key(algorithm: Algorithm, payload: &[u8]) -> Result<PublicKey, ParseError> {
-    let params = params_for_algorithm(algorithm)?;
-    parse_public_generic(params.curve(), payload)
+    validate_public_key(algorithm, payload).map_err(KeyRejection::into_parse_error)?;
+    Ok(PublicKey {
+        bytes_le: payload.to_vec(),
+    })
 }
 /// Parse a serialized private key for the selected GOST parameter set.
 ///
@@ -1593,11 +799,11 @@ pub fn derive_public_key(algorithm: Algorithm, private: &PrivateKey) -> Result<P
 /// Returns [`Error::KeyGen`] when the derived public key does not match `public`.
 pub fn validate_key_pair(
     algorithm: Algorithm,
-    public: &PublicKey,
+    public: &[u8],
     private: &PrivateKey,
 ) -> Result<(), Error> {
     let derived = derive_public_key(algorithm, private)?;
-    if derived.as_bytes() == public.as_bytes() {
+    if derived.as_bytes() == public {
         Ok(())
     } else {
         Err(Error::KeyGen("GOST key pair mismatch".into()))
@@ -1623,16 +829,34 @@ pub fn sign(algorithm: Algorithm, message: &[u8], private: &PrivateKey) -> Resul
 /// Verify a signature produced by the specified parameter set.
 ///
 /// # Errors
-/// Returns [`Error::KeyGen`] if verification fails or the parameter set is unsupported.
+/// Returns [`Error::BadSignature`] for invalid signatures or keys, and
+/// [`Error::KeyGen`] when the parameter set is unsupported.
 pub fn verify(
     algorithm: Algorithm,
     message: &[u8],
     signature: &[u8],
     public_key: &PublicKey,
 ) -> Result<(), Error> {
-    let params = params_for_algorithm(algorithm).map_err(|err| Error::KeyGen(err.to_string()))?;
-    verify_impl(params.curve(), message, signature, public_key)
+    verify_bytes(algorithm, message, signature, public_key.as_bytes())
 }
+/// Validate a borrowed GOST public key without retaining decoded material.
+pub(crate) fn validate_public_key(
+    algorithm: Algorithm,
+    payload: &[u8],
+) -> Result<(), KeyRejection> {
+    constant_time::validate_public_key(algorithm, payload)
+}
+
+/// Verify borrowed canonical bytes through the shared fixed-width relation.
+pub(crate) fn verify_bytes(
+    algorithm: Algorithm,
+    message: &[u8],
+    signature: &[u8],
+    public: &[u8],
+) -> Result<(), Error> {
+    constant_time::verify_bytes(algorithm, message, signature, public)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1998,7 +1222,7 @@ mod tests {
         // Private key must be exactly scalar_len bytes.
         assert!(parse_private_generic(params, &[0x01]).is_err());
         // Public key must be 2 * scalar_len bytes.
-        assert!(parse_public_generic(params, &[0x02; 10]).is_err());
+        assert!(parse_public_key(Algorithm::Gost3410_2012_256ParamSetA, &[0x02; 10]).is_err());
     }
     #[test]
     fn parse_public_key_rejects_all_zero_payloads() {
@@ -2101,7 +1325,8 @@ mod tests {
                     Some(point) => point,
                     None => continue,
                 };
-                let actual = mul_add(params, &scalar_g, &scalar_q, &q_point);
+                let actual =
+                    constant_time::mul_add_for_test(algorithm, &scalar_g, &scalar_q, &q_point);
                 let expected = {
                     let part_g = compat_scalar_mul(params, &scalar_g, &params.generator());
                     let part_q = compat_scalar_mul(params, &scalar_q, &q_point);

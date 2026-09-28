@@ -20,9 +20,7 @@ use iroha_test_samples::{BOB_ID, CARPENTER_ID};
 #[test]
 fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_entry() {
     let _guard = crate::exec_witness::exec_witness_guard();
-    let _fee_guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         crate::status::reset_nexus_economics_for_tests();
         let asset = AssetDefinitionId::derive_from_components(
@@ -272,9 +270,7 @@ fn unchecked_whole_entry_statement_bytes(bundle: &[TransferTranscript]) -> usize
 #[test]
 fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activation() {
     let _guard = crate::exec_witness::exec_witness_guard();
-    let _fee_guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         crate::status::reset_nexus_economics_for_tests();
         let asset = AssetDefinitionId::derive_from_components(

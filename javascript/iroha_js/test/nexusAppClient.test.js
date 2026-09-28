@@ -43,6 +43,7 @@ const fixtureErrorCase = (name) => {
 const fixtureFinalized = finalizeBrowserSignedTransaction(
   {
     networkId: fixtureNetworkId,
+    networkPrefix: fixtureChainDiscriminant,
     payloadBytes: fixturePayloadBytes,
     payloadHashHex: fixture.expected.payload_hash_hex,
     authority: fixture.transfer_input.authority,
@@ -113,6 +114,7 @@ function fixtureFeePayment() {
 function fixtureSignable(overrides = {}) {
   return {
     networkId: fixtureNetworkId,
+    networkPrefix: fixtureChainDiscriminant,
     payloadBytes: Buffer.from(fixturePayloadBytes),
     payloadHashHex: fixture.expected.payload_hash_hex,
     authority: fixture.transfer_input.authority,
@@ -202,7 +204,7 @@ test("NexusAppClient builds a signable transfer draft", () => {
     signingPublicKey: fixturePublicKey,
     transactionCodec: {
       buildTransferPayload(input) {
-        assert.equal(input.chainDiscriminant, fixtureChainDiscriminant);
+        assert.equal(input.networkPrefix, fixtureChainDiscriminant);
         assert.equal(input.networkId, fixtureNetworkId);
         assert.equal(input.authority, fixtureAuthority);
         assert.equal(input.quantity, "12.5");
@@ -220,6 +222,7 @@ test("NexusAppClient builds a signable transfer draft", () => {
   });
 
   assert.equal(draft.signable.networkId, fixtureNetworkId);
+  assert.equal(draft.signable.networkPrefix, fixtureChainDiscriminant);
   assert.deepEqual(draft.signable.payloadBytes, payloadBytes);
   assert.equal(
     draft.signable.payloadHashHex,
@@ -836,6 +839,7 @@ test("NexusAppClient accepts raw wallet signature byte inputs", async () => {
   const payloadBytes = fixturePayloadBytes;
   const signable = {
     networkId: fixtureNetworkId,
+    networkPrefix: fixtureChainDiscriminant,
     payloadBytes,
     payloadHashHex: nexusPayloadHashHex(payloadBytes),
     authority: fixture.transfer_input.authority,
@@ -1570,6 +1574,7 @@ test("NexusAppClient accepts exact numeric and string Ed25519 signature algorith
   const receipt = await client.finalizeAndSubmit(
     {
       networkId: fixtureNetworkId,
+      networkPrefix: fixtureChainDiscriminant,
       payloadBytes: payload,
       payloadHashHex: nexusPayloadHashHex(payload),
       authority: fixture.transfer_input.authority,
@@ -1729,6 +1734,7 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
       client.finalizeAndSubmit(
         {
           networkId: fixtureNetworkId,
+          networkPrefix: fixtureChainDiscriminant,
           payloadBytes: Buffer.from("payload"),
           payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
           authority: fixtureAuthority,
@@ -1747,6 +1753,7 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
       client.finalizeAndSubmit(
         {
           networkId: fixtureNetworkId,
+          networkPrefix: fixtureChainDiscriminant,
           payloadBytes: fixturePayloadBytes,
           payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
           authority: fixture.transfer_input.authority,
@@ -1764,6 +1771,7 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
 test("NexusAppClient rejects Torii hash mismatches and maps submit/status failures", async () => {
   const signable = {
     networkId: fixtureNetworkId,
+    networkPrefix: fixtureChainDiscriminant,
     payloadBytes: fixturePayloadBytes,
     payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
     authority: fixture.transfer_input.authority,

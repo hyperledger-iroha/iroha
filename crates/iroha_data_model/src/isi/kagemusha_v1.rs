@@ -1687,12 +1687,12 @@ pub struct KagemushaMintFinalitySealMessageV1 {
     pub network_id: NetworkId,
     /// Finalized block height.
     pub block_height: u64,
-    /// Frozen consensus context governing `block_height`.
+    /// Complete native scheduling context identity governing `block_height`.
     pub height_context_id: HeightContextId,
-    /// Digest of the exact Commit vote subject.
+    /// Domain-separated digest of the exact native Commit statement (instance, epoch, height, block and R).
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub subject_digest: [u8; 32],
-    /// Digest of the full exact execution commitment signed by the ordinary Commit vote.
+    /// Exact native R digest of the full original execution and schedule result.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub execution_commitment_digest: [u8; 32],
     /// Marked SHA-256 bridge of the paired Poseidon top-up tree root.
@@ -1713,10 +1713,15 @@ impl KagemushaMintFinalitySealMessageV1 {
     /// # Errors
     ///
     /// Returns an error when any authority-bearing identity is absent, the top-up projection is
-    /// empty or oversized, or `validator_count` is not an admitted `3f + 1` committee size.
+    /// oversized, an unsigned genesis bootstrap is presented as finality, or `validator_count`
+    /// is not an admitted `3f + 1` committee size. A rejected flagged top-up after genesis may
+    /// certify zero leaves; it creates no membership proof and authorizes no mint.
     pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
         self.validate_header()?;
-        if self.kagemusha_top_up_count == 0 && self.next_epoch_authorization.is_none() {
+        if self.block_height == 1
+            && self.kagemusha_top_up_count == 0
+            && self.next_epoch_authorization.is_none()
+        {
             return Err(invalid("mint_finality.header"));
         }
         Ok(())
@@ -3476,6 +3481,11 @@ mod tests {
         assert!(mint.bootstrap_binding_digest().is_err());
         let mut later = message.clone();
         later.block_height = 2;
+        assert!(
+            later.validate().is_ok(),
+            "a rejected flagged top-up certifies an empty result"
+        );
+        assert!(later.signing_digest().is_ok());
         assert!(later.validate_bootstrap().is_err());
         let mut successor = message.clone();
         successor.block_height = successor.epoch_authorization.last_height;

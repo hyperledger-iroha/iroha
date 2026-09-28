@@ -446,7 +446,7 @@ final class CanonicalRequestTests: XCTestCase {
         }
     }
 
-    func testSigningRejectsNonV1AndControllerClassInconsistentI105Headers() throws {
+    func testSigningRejectsNonV1AndInvalidKeyI105Headers() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 6, count: 32))
         let malformedAccounts: [(String, AccountAddressError)] = [
             (
@@ -459,7 +459,7 @@ final class CanonicalRequestTests: XCTestCase {
             ),
             (
                 "sora3uｵﾔDｶﾕｽﾘｲfﾃfﾃﾉXヰﾏﾓZｸｵVfﾍbﾄﾊEｼTmｽWfﾂｴYXｸﾛxｺWHHMWJ",
-                .unsupportedAddressFormat
+                .invalidPublicKey
             ),
         ]
 

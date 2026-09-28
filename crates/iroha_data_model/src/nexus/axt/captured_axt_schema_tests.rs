@@ -94,9 +94,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::AxtRemoteSpendClaimV1>(
         "iroha_data_model::nexus::axt::AxtRemoteSpendClaimV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::AxtHandleFragment>(
-        "iroha_data_model::nexus::axt::AxtHandleFragment",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::AxtHandleReplayKey>(
         "iroha_data_model::nexus::axt::AxtHandleReplayKey",
     ),
@@ -129,3 +126,5 @@ fn captured_codec_schema_identities() {
         case.check();
     }
 }
+
+crate::captured_schema_tests::native_capture::owner_printer!(CASES);

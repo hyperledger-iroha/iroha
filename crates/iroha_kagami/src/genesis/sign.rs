@@ -24,14 +24,12 @@ use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
 use iroha_data_model::{
     account::address::{AccountAddress, ChainDiscriminantGuard},
     asset::AssetDefinitionAlias,
-    block::consensus_v2::{
-        ConsensusMode as WireConsensusMode, MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
-    },
     da::commitment::DaProofPolicyBundle,
     isi::RegisterPublicLaneValidator,
     nexus::PublicLaneMonetaryPlanV1,
-    parameter::system::SumeragiConsensusMode,
+    parameter::system::{ConsensusMode, SumeragiConsensusMode},
     prelude::*,
+    sumeragi::epoch::MAX_VALIDATORS,
 };
 use iroha_genesis::{
     GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction,
@@ -1004,24 +1002,45 @@ pub fn staged_signed_sumeragi_v2_context_hashes(
     let staged = restage_signed_sumeragi_v2_context_hashes(genesis, Some(config), signed)?;
     Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash))
 }
-/// Authenticate the final signed bundle and retain its same-stage merge authority.
-///
-/// The caller retains the original bounded wire, manifest and effective config.
-/// No genesis signing key is read, and no provisional NetworkId or proof-supplied
-/// authority participates in this path.
-pub(crate) fn staged_signed_genesis_merge_authority(
+/// Original signed genesis and its exact native lane state produced by actual staging.
+/// This receipt grants no signing capability and contains no retired lane catalog authority.
+#[derive(Debug)]
+pub(crate) struct StagedNativeGenesis {
+    genesis: SignedBlock,
+    epoch: iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
+    lane_policy: Option<iroha_data_model::sumeragi_lanes::SumeragiLanePolicy>,
+    lanes: iroha_data_model::sumeragi_lanes::SumeragiLaneState,
+}
+impl StagedNativeGenesis {
+    pub(crate) fn genesis(&self) -> &SignedBlock {
+        &self.genesis
+    }
+    pub(crate) fn epoch(&self) -> &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1 {
+        &self.epoch
+    }
+    pub(crate) fn lane_policy(
+        &self,
+    ) -> Option<&iroha_data_model::sumeragi_lanes::SumeragiLanePolicy> {
+        self.lane_policy.as_ref()
+    }
+    pub(crate) fn lanes(&self) -> &iroha_data_model::sumeragi_lanes::SumeragiLaneState {
+        &self.lanes
+    }
+}
+
+/// Authenticate and execute the exact signed bundle with its independently retained config.
+pub(crate) fn staged_signed_native_genesis(
     genesis: &RawGenesisTransaction,
     signed_wire: &[u8],
     config: &actual::Root,
-) -> Result<iroha_core::sumeragi::GenesisMergeAuthority, color_eyre::eyre::Error> {
-    staged_signed_genesis_with_projection(genesis, signed_wire, config, |_, _| Ok(()))
+) -> Result<StagedNativeGenesis, color_eyre::eyre::Error> {
+    staged_signed_native_genesis_with_projection(genesis, signed_wire, config, |_, _| Ok(()))
         .map(|(authority, ())| authority)
 }
-/// Authenticate one exact signed genesis and project owned data from its live staged state.
-///
-/// The projection and merge authority come from the same validated StateBlock. No state borrow
-/// escapes the bounded worker, and the caller cannot supply a substitute context or authority.
-pub(crate) fn staged_signed_genesis_with_projection<T: Send>(
+
+/// Project owned values from the same actual staged StateBlock as the native lane receipt.
+/// The caller cannot provide a replacement epoch, context, policy or poststate.
+pub(crate) fn staged_signed_native_genesis_with_projection<T: Send>(
     genesis: &RawGenesisTransaction,
     signed_wire: &[u8],
     config: &actual::Root,
@@ -1030,7 +1049,7 @@ pub(crate) fn staged_signed_genesis_with_projection<T: Send>(
         &iroha_core::state::StateBlock<'_>,
     ) -> Result<T, color_eyre::eyre::Error>
     + Send,
-) -> Result<(iroha_core::sumeragi::GenesisMergeAuthority, T), color_eyre::eyre::Error> {
+) -> Result<(StagedNativeGenesis, T), color_eyre::eyre::Error> {
     ensure_peer_config_matches_manifest(config, genesis)?;
     let validated = iroha_genesis::validate_prepared_genesis_bundle(
         signed_wire,
@@ -1038,47 +1057,46 @@ pub(crate) fn staged_signed_genesis_with_projection<T: Send>(
         &config.genesis.public_key,
         config.genesis.expected_hash,
     )
-    .wrap_err("authenticate final signed genesis for merge authority")?;
+    .wrap_err("authenticate original signed native genesis")?;
     iroha_core::validate_genesis_block(
         validated.block(),
         &AccountId::new(validated.public_key().clone()),
     )
-    .map_err(|error| eyre!("final genesis failed full core validation: {error}"))?;
+    .map_err(|error| eyre!("original genesis failed full core validation: {error}"))?;
     let authenticated = GenesisBlock(validated.block().clone());
     std::thread::scope(|scope| {
         std::thread::Builder::new()
-            .name("kagami-genesis-merge-authority".to_owned())
+            .name("kagami-native-genesis-state".to_owned())
             .stack_size(16 * 1024 * 1024)
             .spawn_scoped(scope, move || {
-                let mode = match genesis.consensus_mode() {
-                    SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
-                    SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
-                };
                 let staged = staged_genesis_with_projection_on_bounded_stack(
                     genesis,
                     Some(config),
                     GenesisBlock(authenticated.0.clone()),
                     |staged| {
-                        let authority = iroha_core::sumeragi::freeze_genesis_merge_authority(
-                            &authenticated,
-                            staged,
-                            mode,
-                        )
-                        .map_err(color_eyre::eyre::Error::new)?;
+                        let epoch =
+                            iroha_data_model::sumeragi_finality::genesis_epoch(&authenticated.0)
+                                .map_err(|error| eyre!(error))?;
+                        let authority = StagedNativeGenesis {
+                            genesis: authenticated.0.clone(),
+                            epoch,
+                            lane_policy: iroha_core::sumeragi::lanes::lane_policy(staged.world()),
+                            lanes: staged.world().sumeragi_lanes().clone(),
+                        };
                         let projection = project(&authenticated, staged)?;
                         Ok((authority, projection))
                     },
                 )?;
                 if staged.execution.executed_block.hash() != authenticated.0.hash() {
                     return Err(eyre!(
-                        "final authenticated genesis changed during exact restaging"
+                        "original authenticated genesis changed during exact restaging"
                     ));
                 }
                 Ok(staged.projection)
             })
-            .wrap_err("spawn bounded genesis merge-authority staging thread")?
+            .wrap_err("spawn bounded native genesis staging thread")?
             .join()
-            .map_err(|_| eyre!("bounded genesis merge-authority staging thread panicked"))?
+            .map_err(|_| eyre!("bounded native genesis staging thread panicked"))?
     })
 }
 fn restage_signed_sumeragi_v2_context_hashes(
@@ -1121,12 +1139,26 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
         confidential_policy_hash,
         creation_time_ms,
     )?;
-    let staged = staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
+    match staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
         genesis,
         config,
         provisional,
-    )?;
-    Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash))
+    ) {
+        Ok(staged) => Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash)),
+        Err(error) => match error.downcast_ref::<iroha_core::block::BlockValidationError>() {
+            Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+                actual_execution,
+                actual_nexus,
+                ..
+            }) => {
+                // Only the unpublished signing draft consumes the sole validator's exact
+                // derived hashes. The newly signed final bundle must pass that validator
+                // unchanged before it can be returned or published.
+                Ok((*actual_nexus, *actual_execution))
+            }
+            _ => Err(error),
+        },
+    }
 }
 fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
     genesis: &RawGenesisTransaction,
@@ -1143,15 +1175,83 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     project: impl FnOnce(&iroha_core::state::StateBlock<'_>) -> Result<T, color_eyre::eyre::Error>,
 ) -> Result<StagedGenesisProjection<T>, color_eyre::eyre::Error> {
     let _chain_discriminant = staged_genesis_chain_discriminant(genesis);
+    let consensus_mode = match genesis.consensus_mode() {
+        SumeragiConsensusMode::Permissioned => ConsensusMode::Permissioned,
+        SumeragiConsensusMode::Npos => ConsensusMode::Npos,
+    };
+    let (state, _, authority) = configured_initial_genesis_state(genesis, config, &provisional)?;
+    let voters = iroha_core::sumeragi::schedule::genesis_validators(&provisional)
+        .map_err(|error| eyre!("invalid signed Sumeragi genesis roster: {error}"))?;
+    if voters.is_empty() {
+        return Err(eyre!(
+            "Sumeragi genesis roster is empty; inject BLS topology entries and PoPs before signing"
+        ));
+    }
+    let topology = Topology::new(voters.into_keys());
+    let (valid, staged) = ValidBlock::validate_signed_genesis(
+        provisional.0,
+        &topology,
+        &authority,
+        &TimeSource::new_system(),
+        &state,
+        consensus_mode,
+    )
+    .unpack(|_| {})
+    .map_err(|(block, error)| {
+        let transaction_errors = block
+            .execution_outputs()
+            .iter()
+            .enumerate()
+            .filter_map(|(output_index, output)| {
+                use iroha_data_model::block::execution_output::ExecutionOutputV1;
+                let reason = output.result().as_ref().err()?;
+                let source = match output {
+                    ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
+                    ExecutionOutputV1::Pipeline(_) => format!("pipeline output[{output_index}]"),
+                    ExecutionOutputV1::Time(_) => format!("time output[{output_index}]"),
+                };
+                Some(format!("{source}: {reason:?}"))
+            })
+            .collect::<Vec<_>>();
+        if transaction_errors.is_empty() {
+            color_eyre::Report::new(error).wrap_err(format!(
+                "staged genesis execution failed ({} network inputs)",
+                block.network_entrypoint_count()
+            ))
+        } else {
+            color_eyre::Report::new(error).wrap_err(format!(
+                "staged genesis execution failed; {}",
+                transaction_errors.join("; ")
+            ))
+        }
+    })?;
+    let nexus_amx_context_hash =
+        iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
+    let execution_policy_hash = iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
+        .map_err(|error| eyre!("derive staged genesis execution policy: {error}"))?;
+    let projection = project(&staged)?;
+    drop(staged);
+    Ok(StagedGenesisProjection {
+        execution: StagedGenesisExecution {
+            nexus_amx_context_hash,
+            execution_policy_hash,
+            executed_block: valid.into(),
+        },
+        projection,
+    })
+}
+/// Build the original fresh-node State once, before any genesis instruction executes.
+/// Both normal staging and the genuine native execution fixture use this configuration owner.
+fn configured_initial_genesis_state(
+    genesis: &RawGenesisTransaction,
+    config: Option<&actual::Root>,
+    provisional: &GenesisBlock,
+) -> Result<(State, Arc<Kura>, AccountId), color_eyre::eyre::Error> {
     // Never inherit iroha_core's repository-wide test identity here. Signing stages the
     // unbound provisional block, while prepared-bundle admission stages the final signed block.
     // Generation-zero Nexus state is intentionally independent of this value, so both paths
     // reproduce the same signed commitments without requiring a genesis-hash fixed point.
     let staging_network_id = NetworkId::from_genesis_hash(provisional.0.hash());
-    let consensus_mode = match genesis.consensus_mode() {
-        SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
-        SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
-    };
     let authority = provisional
         .0
         .external_transactions()
@@ -1189,6 +1289,10 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     )
     .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?;
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        iroha_core::state::AllocationBudget::new(config.map_or(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            |config| config.pipeline.ivm_execution_max_bytes,
+        )),
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -1197,66 +1301,56 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
     configure_staged_genesis_state(&mut state, genesis, config, nexus)?;
-    let voters = iroha_core::sumeragi::schedule::genesis_validators(&provisional)
-        .map_err(|error| eyre!("invalid signed Sumeragi genesis roster: {error}"))?;
-    if voters.is_empty() {
+    Ok((state, kura, authority))
+}
+
+/// Execute an independently prepared genesis with its exact original node configuration and
+/// known fixture custody. No provisional block, alternate epoch, or synthetic result enters
+/// the production native worker.
+#[cfg(test)]
+pub(crate) fn prepared_native_test_chain(
+    genesis: iroha_genesis::ValidatedGenesisBundle,
+    manifest: &RawGenesisTransaction,
+    config: &actual::Root,
+    validator_keys: Vec<KeyPair>,
+    pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
+    clock: KeyPair,
+    lane_blocks: Arc<dyn iroha_core::sumeragi::lanes::merge::LaneBlockSource>,
+) -> Result<iroha_core::sumeragi::test_chain::CertifiedTestChain, color_eyre::eyre::Error> {
+    ensure_peer_config_matches_manifest(config, manifest)?;
+    if genesis.public_key() != &config.genesis.public_key
+        || genesis.expected_hash() != config.genesis.expected_hash
+    {
         return Err(eyre!(
-            "Sumeragi genesis roster is empty; inject BLS topology entries and PoPs before signing"
+            "native fixture config changes its exact prepared genesis"
         ));
     }
-    let topology = Topology::new(voters.into_keys());
-    let (valid, staged) = ValidBlock::validate_signed_genesis(
-        provisional.0,
-        &topology,
-        &authority,
-        &TimeSource::new_system(),
-        &state,
-        consensus_mode,
-    )
-    .unpack(|_| {})
-    .map_err(|(block, error)| {
-        let transaction_errors = block
-            .execution_outputs()
-            .iter()
-            .enumerate()
-            .filter_map(|(output_index, output)| {
-                use iroha_data_model::block::execution_output::ExecutionOutputV1;
-                let reason = output.result().as_ref().err()?;
-                let source = match output {
-                    ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
-                    ExecutionOutputV1::Pipeline(_) => format!("pipeline output[{output_index}]"),
-                    ExecutionOutputV1::Time(_) => format!("time output[{output_index}]"),
-                };
-                Some(format!("{source}: {reason:?}"))
-            })
-            .collect::<Vec<_>>();
-        if transaction_errors.is_empty() {
-            eyre!(
-                "staged genesis execution failed: {error} ({} network inputs)",
-                block.network_entrypoint_count()
-            )
-        } else {
-            eyre!(
-                "staged genesis execution failed: {error}; {}",
-                transaction_errors.join("; ")
-            )
-        }
-    })?;
-    let nexus_amx_context_hash =
-        iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
-    let execution_policy_hash = iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
-        .map_err(|error| eyre!("derive staged genesis execution policy: {error}"))?;
-    let projection = project(&staged)?;
-    drop(staged);
-    Ok(StagedGenesisProjection {
-        execution: StagedGenesisExecution {
-            nexus_amx_context_hash,
-            execution_policy_hash,
-            executed_block: valid.into(),
+    let _discriminant = staged_genesis_chain_discriminant(manifest);
+    let (state, kura, _) = configured_initial_genesis_state(
+        manifest,
+        Some(config),
+        &GenesisBlock(genesis.block().clone()),
+    )?;
+    iroha_core::sumeragi::test_chain::CertifiedTestChain::from_prepared(
+        iroha_core::sumeragi::test_chain::PreparedTestChainConfig {
+            genesis,
+            manifest: manifest.clone(),
+            state: Arc::new(state),
+            kura,
+            validator_keys,
+            pasta_seeds,
+            clock,
+            lane_blocks,
         },
-        projection,
+    )
+    .map_err(|failure| {
+        eyre!(
+            "execute original prepared native fixture: {}",
+            failure.error
+        )
     })
 }
+
 fn staged_genesis_chain_discriminant(genesis: &RawGenesisTransaction) -> ChainDiscriminantGuard {
     ChainDiscriminantGuard::enter(genesis.chain_discriminant())
 }
@@ -1358,6 +1452,8 @@ fn staged_default_kura() -> actual::Kura {
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -1424,9 +1520,15 @@ fn install_staged_nexus_policies(
     } else {
         None
     };
-    // Load and validate both policy owners before changing either installed projection.
+    // Load and validate both policy owners before changing the installed projections.
+    state
+        .install_materialized_lane_manifests_for_catalog(
+            &Arc::new(lane_manifests),
+            &nexus.lane_catalog,
+            &nexus.governance,
+        )
+        .map_err(|error| eyre!("install staged genesis lane manifests: {error}"))?;
     state.install_lane_compliance_engine(lane_compliance);
-    state.install_lane_manifests(&Arc::new(lane_manifests));
     Ok(())
 }
 fn should_auto_bootstrap_npos_validators(config: Option<&actual::Root>) -> bool {
@@ -1850,10 +1952,10 @@ fn ensure_valid_genesis_committee(topology: &[PeerId]) -> Result<(), color_eyre:
             "genesis topology contains duplicate voting peer identities"
         ));
     }
-    if !is_valid_committee_size(unique.len()) {
+    if !(4..=MAX_VALIDATORS).contains(&unique.len()) || (unique.len() - 1) % 3 != 0 {
         return Err(eyre!(
             "genesis topology must contain an exact Sumeragi v2 `3f + 1` validator committee \
-             in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} (saw {})",
+             in the supported range 4..={MAX_VALIDATORS} (saw {})",
             unique.len()
         ));
     }
@@ -1872,7 +1974,7 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
     hex::decode(s.strip_prefix("0x").unwrap_or(s)).wrap_err("decode PoP hex")
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::genesis::CompleteTestGenesisBuilder as _;
     use iroha_crypto::{Algorithm, HashOf, KeyPair as CryptoKeyPair, bls_normal_pop_prove};
@@ -1903,71 +2005,65 @@ mod tests {
         str::FromStr,
     };
 
-    struct MergeAuthorityGenesisFixture {
-        config: actual::Root,
-        manifest: RawGenesisTransaction,
-        signed: GenesisBlock,
-        _manifests: tempfile::TempDir,
+    pub(crate) struct NativeGenesisFixture {
+        pub(crate) config: actual::Root,
+        pub(crate) manifest: RawGenesisTransaction,
+        pub(crate) signed: GenesisBlock,
+        pub(crate) _manifests: tempfile::TempDir,
     }
-    fn merge_authority_genesis_fixture(lane_count: u32) -> MergeAuthorityGenesisFixture {
+    fn native_genesis_fixture(lane_count: u32) -> NativeGenesisFixture {
+        native_genesis_fixture_with_instructions(lane_count, Vec::new())
+    }
+    pub(crate) fn native_genesis_fixture_with_instructions(
+        lane_count: u32,
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    ) -> NativeGenesisFixture {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/peer0.toml"));
         let key = KeyPair::try_from_seed(vec![0x7D; 32], Algorithm::Ed25519).unwrap();
         config.genesis.public_key = key.public_key().clone();
         let topology = valid_test_topology_entries(4);
-        let raw = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
-            .set_topology_for_test(topology.clone())
+        let builder = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
+            .set_topology_for_test(topology.clone());
+        let raw = instructions
+            .into_iter()
+            .fold(builder, GenesisBuilder::append_instruction)
             .build_raw()
-            .expect("complete generic signed genesis fixture")
+            .expect("complete signed native genesis fixture")
             .with_consensus_mode(SumeragiConsensusMode::Permissioned);
-        let manifests = tempfile::tempdir().unwrap();
-        let catalog = LaneCatalog::new(
-            std::num::NonZeroU32::new(lane_count).unwrap(),
-            (0..lane_count)
-                .map(|id| LaneConfig {
-                    id: LaneId::new(id),
-                    alias: format!("fixed-{id}"),
-                    governance: Some("parliament".to_owned()),
-                    ..LaneConfig::default()
-                })
-                .collect(),
-        )
-        .expect("one/four fixed generic lanes");
-        let mut nexus =
-            staged_default_nexus(&raw).expect("generic discriminant-aware Nexus defaults");
-        nexus.lane_catalog = catalog.clone();
-        nexus.configured_lane_catalog = catalog;
-        nexus.lane_config = actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        nexus
-            .governance
-            .modules
-            .insert("parliament".to_owned(), actual::GovernanceModule::default());
-        nexus.registry.manifest_directory = Some(manifests.path().to_path_buf());
-        nexus.registry.cache_directory = None;
-        let validators = topology
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
+        };
+        let mut committee = topology
             .iter()
-            .map(|entry| {
-                let account = AccountId::new(entry.peer.public_key().clone());
-                let literal = AccountAddress::from_account_id(&account)
-                    .unwrap()
-                    .to_i105_for_discriminant(raw.chain_discriminant())
-                    .unwrap();
-                norito::json!({"validator": literal, "peer_id": (entry.peer.to_string())})
+            .map(|entry| SumeragiLaneMember {
+                peer: entry.peer.clone(),
+                pop: hex::decode(entry.pop_hex.as_ref().unwrap()).unwrap(),
             })
             .collect::<Vec<_>>();
-        for lane in nexus.lane_catalog.lanes() {
-            let document = norito::json!({"lane": (lane.alias.clone()),
-                "governance": "parliament", "version": 1,
-                "validators": (validators.clone()), "quorum": 3});
-            fs::write(
-                manifests
-                    .path()
-                    .join(format!("{}.manifest.json", lane.alias)),
-                norito::json::to_vec(&document).unwrap(),
-            )
+        committee.sort_by(|a, b| a.peer.cmp(&b.peer));
+        let policy = SumeragiLanePolicy {
+            anchor_freshness: 16,
+            max_merge_blocks: 32,
+            stall_window: 256,
+            lane_params: raw.effective_parameters().unwrap().sumeragi().clone(),
+            fixed: (1..lane_count)
+                .map(|lane| SumeragiFixedLane {
+                    lane: LaneId::new(lane),
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    committee: committee.clone(),
+                })
+                .collect(),
+            routes: Vec::new(),
+            autoscale: None,
+        };
+        let raw = raw
+            .into_builder()
+            .append_parameter(Parameter::Custom(policy.into_custom_parameter()))
+            .build_raw()
             .unwrap();
-        }
-        config.nexus = nexus;
+        let manifests = tempfile::tempdir().unwrap();
+        config.nexus = staged_default_nexus(&raw).expect("single universal native World");
         let policies = Some(iroha_core::da::proof_policy_bundle(
             &config.nexus.lane_config,
         ));
@@ -1982,7 +2078,7 @@ mod tests {
         )
         .expect("execute, bind, materialize and sign the generic final genesis");
         config.genesis.expected_hash = signed.0.hash();
-        MergeAuthorityGenesisFixture {
+        NativeGenesisFixture {
             config,
             manifest,
             signed,
@@ -1991,68 +2087,127 @@ mod tests {
     }
 
     #[test]
-    fn final_signed_merge_authority_matches_actual_stage_for_one_and_four_lanes() {
-        use iroha_core::state::LaneAuthorityRoute;
-        use iroha_core::state::StateReadOnly;
+    fn prepared_native_chain_reuses_original_one_and_four_lane_configuration() {
+        use iroha_core::state::{StateReadOnly, WorldReadOnly};
         for lane_count in [1, 4] {
-            let fixture = merge_authority_genesis_fixture(lane_count);
-            let wire = fixture
-                .signed
-                .0
-                .encode_wire()
-                .expect("canonical final signed wire");
-            let authority =
-                staged_signed_genesis_merge_authority(&fixture.manifest, &wire, &fixture.config)
-                    .expect("authenticate and project final generic genesis");
+            let fixture = native_genesis_fixture(lane_count);
+            let original = fixture.signed.0.encode_wire().unwrap();
+            let validated = iroha_genesis::validate_prepared_genesis_bundle(
+                &original,
+                &fixture.manifest,
+                &fixture.config.genesis.public_key,
+                fixture.config.genesis.expected_hash,
+            )
+            .unwrap();
+            let mut keys = (0x40..=0x43)
+                .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+                .collect::<Vec<_>>();
+            keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+            let mut chain = prepared_native_test_chain(
+                validated,
+                &fixture.manifest,
+                &fixture.config,
+                keys,
+                (0..4)
+                    .map(|seat| zeroize::Zeroizing::new([0xA0 + seat; 32]))
+                    .collect(),
+                KeyPair::from_seed(vec![0x7D; 32], Algorithm::Ed25519),
+                Arc::new(iroha_core::sumeragi::lanes::merge::NoLanes),
+            )
+            .unwrap();
+            assert_eq!(chain.genesis().encode_wire().unwrap(), original);
             assert_eq!(
-                authority.context().network_id,
-                NetworkId::from_genesis_hash(fixture.signed.0.hash())
+                chain.state().view().world().sumeragi_lanes().lanes.len(),
+                lane_count as usize - 1
             );
-            assert_eq!(authority.context().height, 1);
-            assert_eq!(authority.active_lanes().len(), lane_count as usize);
-            assert_eq!(authority.proofs_of_possession().len(), 4);
-            let observed = std::thread::scope(|scope| {
-                std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn_scoped(scope, || {
-                    staged_genesis_with_projection_on_bounded_stack(
-                        &fixture.manifest, Some(&fixture.config), fixture.signed.clone(), |staged| {
-                            let bootstrap = iroha_core::sumeragi::freeze_staged_genesis_v2(
-                                &fixture.signed, staged, WireConsensusMode::Permissioned,
-                            ).map_err(color_eyre::eyre::Error::new)?;
-                            let committees = authority.active_lanes().iter().map(|binding| {
-                                assert_eq!(Some(&binding.incarnation), staged.lane_incarnations.get(&binding.lane_id));
-                                assert_eq!(binding.activation_height, 1);
-                                staged.resolve_lane_committee_at_height(
-                                    LaneAuthorityRoute::new(binding.lane_id, binding.dataspace_id), 1,
-                                ).unwrap().into_validators()
-                            }).collect::<Vec<_>>();
-                            assert_eq!(authority.context(), bootstrap.context());
-                            assert_eq!(authority.proofs_of_possession(), bootstrap.proofs_of_possession());
-                            Ok(iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&committees).unwrap())
-                        },
-                    ).unwrap()
-                }).unwrap().join().unwrap()
-            });
-            assert_eq!(observed.projection, *authority.lane_authority_catalog());
-            assert_eq!(
-                observed.execution.executed_block.hash(),
-                fixture.signed.0.hash()
+            chain.commit(Vec::new());
+            let committed = chain.committed(2);
+            assert!(
+                committed
+                    .block()
+                    .network_output_at(0)
+                    .unwrap()
+                    .1
+                    .result
+                    .is_ok()
             );
-            assert_eq!(
-                authority.catalog_hash(),
-                iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
-                    &fixture.config.nexus.lane_catalog
-                )
-            );
+            let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
+                fixture.manifest.chain_id(),
+                chain.network_id(),
+                Arc::clone(chain.committed(1).block()),
+            )
+            .unwrap();
+            let (_, genesis) = prefix
+                .push(Arc::clone(committed.block()))
+                .unwrap()
+                .into_parts();
+            assert!(genesis.is_some());
         }
     }
 
     #[test]
-    fn final_signed_merge_authority_rejects_wire_signer_hash_manifest_and_policy_rebinding() {
-        let fixture = merge_authority_genesis_fixture(4);
+    fn final_signed_native_policy_matches_actual_stage_for_one_and_four_lanes() {
+        use iroha_core::state::{StateReadOnly, WorldReadOnly};
+        for lane_count in [1, 4] {
+            let fixture = native_genesis_fixture(lane_count);
+            let wire = fixture.signed.0.encode_wire().unwrap();
+            let (authority, observed) = staged_signed_native_genesis_with_projection(
+                &fixture.manifest,
+                &wire,
+                &fixture.config,
+                |genesis, staged| {
+                    assert_eq!(genesis.0.hash(), fixture.signed.0.hash());
+                    Ok((
+                        staged.world().sumeragi_lanes().clone(),
+                        iroha_core::sumeragi::lanes::lane_policy(staged.world()),
+                    ))
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                authority.epoch().network_id,
+                NetworkId::from_genesis_hash(fixture.signed.0.hash())
+            );
+            assert_eq!(authority.epoch().authorization.first_height, 1);
+            assert_eq!(authority.epoch().committee.len(), 4);
+            assert_eq!(authority.lanes().lanes.len(), lane_count as usize - 1);
+            assert_eq!(authority.lanes(), &observed.0);
+            assert_eq!(authority.lane_policy(), observed.1.as_ref());
+            for lane in &authority.lanes().lanes {
+                let fixed = authority
+                    .lane_policy()
+                    .unwrap()
+                    .fixed
+                    .iter()
+                    .find(|fixed| fixed.lane == lane.lane)
+                    .unwrap();
+                assert_eq!(lane.created_at, 1);
+                assert_eq!(lane.active_from, 3);
+                assert_eq!(lane.dataspace, fixed.dataspace);
+                assert_eq!(lane.committee, fixed.committee);
+                assert_eq!(lane.params, authority.lane_policy().unwrap().lane_params);
+                for member in &lane.committee {
+                    iroha_crypto::bls_normal_pop_verify(member.peer.public_key(), &member.pop)
+                        .unwrap();
+                }
+            }
+            for member in &authority.epoch().committee {
+                iroha_crypto::bls_normal_pop_verify(
+                    member.validator.public_key(),
+                    &member.proof_of_possession,
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn final_signed_native_genesis_rejects_wire_signer_hash_manifest_and_policy_rebinding() {
+        let fixture = native_genesis_fixture(4);
         let wire = fixture.signed.0.encode_wire().unwrap();
         let mut wrong_chain = fixture.config.clone();
         wrong_chain.common.chain = ChainId::from("other-generic-chain");
-        let error = staged_signed_genesis_merge_authority(&fixture.manifest, &wire, &wrong_chain)
+        let error = staged_signed_native_genesis(&fixture.manifest, &wire, &wrong_chain)
             .err()
             .unwrap();
         assert!(format!("{error:#}").contains("does not match genesis manifest chain"));
@@ -2062,16 +2217,14 @@ mod tests {
             .chain_discriminant()
             .checked_add(1)
             .unwrap();
-        let error =
-            staged_signed_genesis_merge_authority(&fixture.manifest, &wire, &wrong_discriminant)
-                .err()
-                .unwrap();
+        let error = staged_signed_native_genesis(&fixture.manifest, &wire, &wrong_discriminant)
+            .err()
+            .unwrap();
         assert!(format!("{error:#}").contains("chain discriminant"));
         let mut trailing = wire.clone();
         trailing.push(0);
         assert!(
-            staged_signed_genesis_merge_authority(&fixture.manifest, &trailing, &fixture.config)
-                .is_err()
+            staged_signed_native_genesis(&fixture.manifest, &trailing, &fixture.config).is_err()
         );
         let mut wrong_signer = fixture.config.clone();
         wrong_signer.genesis.public_key =
@@ -2079,14 +2232,14 @@ mod tests {
                 .unwrap()
                 .public_key()
                 .clone();
-        let error = staged_signed_genesis_merge_authority(&fixture.manifest, &wire, &wrong_signer)
+        let error = staged_signed_native_genesis(&fixture.manifest, &wire, &wrong_signer)
             .err()
             .unwrap();
         assert!(format!("{error:#}").contains("differs from verifier key"));
         let mut wrong_hash = fixture.config.clone();
         wrong_hash.genesis.expected_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"different-final-genesis"));
-        let error = staged_signed_genesis_merge_authority(&fixture.manifest, &wire, &wrong_hash)
+        let error = staged_signed_native_genesis(&fixture.manifest, &wire, &wrong_hash)
             .err()
             .unwrap();
         assert!(format!("{error:#}").contains("signed genesis body hashes to"));
@@ -2094,21 +2247,16 @@ mod tests {
             .manifest
             .clone()
             .with_consensus_mode(SumeragiConsensusMode::Npos);
-        let error = staged_signed_genesis_merge_authority(&wrong_manifest, &wire, &fixture.config)
+        let error = staged_signed_native_genesis(&wrong_manifest, &wire, &fixture.config)
             .err()
             .unwrap();
         assert!(format!("{error:#}").contains("genesis manifest consensus mode"));
         let mut wrong_policy = fixture.config.clone();
         wrong_policy.pipeline.amx_group_budget_ms += 1;
-        let error = staged_signed_genesis_merge_authority(&fixture.manifest, &wire, &wrong_policy)
+        let error = staged_signed_native_genesis(&fixture.manifest, &wire, &wrong_policy)
             .err()
             .unwrap();
-        assert!(matches!(
-            error.downcast_ref::<iroha_core::sumeragi::GenesisMergeAuthorityError>(),
-            Some(iroha_core::sumeragi::GenesisMergeAuthorityError::Bootstrap(
-                iroha_core::sumeragi::V2GenesisBootstrapError::NexusAmxContextHashMismatch { .. }
-            ))
-        ));
+        assert!(format!("{error:#}").contains("policy"), "{error:#}");
     }
 
     fn checked_in_config(path: &std::path::Path) -> actual::Root {
@@ -3052,7 +3200,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert!(
                 error
                     .to_string()
-                    .contains("fresh genesis must advertise wire_protocol_version = 4"),
+                    .contains("fresh genesis must advertise wire_protocol_version = 8"),
                 "unexpected error for protocol version {version}: {error}"
             );
         }

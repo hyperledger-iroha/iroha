@@ -46,15 +46,14 @@ fn alternate_account() -> ivm::mock_wsv::AccountId {
             .expect("alternate public key"),
     )
 }
-fn set_and_get_program() -> Vec<u8> {
-    common::assemble_bytes_state_contract_syscalls(
-        &[
-            u8::try_from(syscalls::SYSCALL_STATE_SET).expect("state syscall fits"),
-            u8::try_from(syscalls::SYSCALL_STATE_GET).expect("state syscall fits"),
-        ],
-        &["counter"],
-    )
+fn state_schema_program() -> Vec<u8> {
+    common::assemble_bytes_state_schema_contract(&["counter"])
 }
+fn set_and_get(host: &mut WsvHost, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+    host.syscall(syscalls::SYSCALL_STATE_SET, vm)?;
+    host.syscall(syscalls::SYSCALL_STATE_GET, vm)
+}
+
 #[test]
 fn overlay_stages_and_flushes_on_finish() {
     let p_path = state_path_tlv("counter");
@@ -62,16 +61,11 @@ fn overlay_stages_and_flushes_on_finish() {
         PointerType::NoritoBytes,
         &common::encode_bytes_state_value(b"5"),
     );
-    let program = set_and_get_program();
+    let program = state_schema_program();
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(MockWorldStateView::new(), sample_account());
-    vm.set_host(host);
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), sample_account());
     {
-        let host = vm
-            .host_mut_any()
-            .expect("host present")
-            .downcast_mut::<WsvHost>()
-            .expect("WsvHost");
+        let host = &mut host;
         IVMHost::begin_tx(host, &Default::default()).expect("begin_tx");
     }
     let p_path_ptr = vm.alloc_input_tlv(&p_path).expect("alloc path");
@@ -79,16 +73,12 @@ fn overlay_stages_and_flushes_on_finish() {
     vm.set_register(10, p_path_ptr);
     vm.set_register(11, p_val_ptr);
     vm.load_program(&program).expect("load program");
-    let res = vm.run();
+    let res = set_and_get(&mut host, &mut vm);
     assert!(res.is_ok(), "execute overlay program: {res:?}");
     let value_ptr = vm.register(10);
     assert_eq!(decode_state_payload(value_ptr, &vm), b"5");
     {
-        let host = vm
-            .host_mut_any()
-            .expect("host present")
-            .downcast_mut::<WsvHost>()
-            .expect("WsvHost");
+        let host = &mut host;
         assert!(
             host.wsv.sc_get("counter").is_none(),
             "state should not flush before finish_tx"
@@ -109,26 +99,17 @@ fn overlay_restores_snapshot_on_rollback() {
         PointerType::NoritoBytes,
         &common::encode_bytes_state_value(b"9"),
     );
-    let program = set_and_get_program();
+    let program = state_schema_program();
     let mut wsv = MockWorldStateView::new();
     wsv.sc_set("counter", initial).expect("seed durable state");
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, sample_account());
-    vm.set_host(host);
+    let mut host = WsvHost::new_with_subject(wsv, sample_account());
     {
-        let host = vm
-            .host_mut_any()
-            .expect("host present")
-            .downcast_mut::<WsvHost>()
-            .expect("WsvHost");
+        let host = &mut host;
         IVMHost::begin_tx(host, &Default::default()).expect("begin_tx");
     }
     let snapshot = {
-        let host = vm
-            .host_mut_any()
-            .expect("host present")
-            .downcast_mut::<WsvHost>()
-            .expect("WsvHost");
+        let host = &mut host;
         host.checkpoint().expect("checkpoint captured")
     };
     let p_path_ptr = vm.alloc_input_tlv(&p_path).expect("alloc path");
@@ -136,15 +117,11 @@ fn overlay_restores_snapshot_on_rollback() {
     vm.set_register(10, p_path_ptr);
     vm.set_register(11, p_val_ptr);
     vm.load_program(&program).expect("load program");
-    let res = vm.run();
+    let res = set_and_get(&mut host, &mut vm);
     assert!(res.is_ok(), "execute overlay program: {res:?}");
     assert_eq!(decode_state_payload(vm.register(10), &vm), b"9");
     {
-        let host = vm
-            .host_mut_any()
-            .expect("host present")
-            .downcast_mut::<WsvHost>()
-            .expect("WsvHost");
+        let host = &mut host;
         host.restore(snapshot.as_ref()).expect("restore checkpoint");
         IVMHost::finish_tx(host).expect("finish_tx after restore");
         let stored = host
@@ -240,20 +217,15 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
         MockWorldStateView::with_state_store(persist_path).expect("persisted mock WSV available");
     fs::write(&blocker, b"block").expect("blocker file");
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(wsv, sample_account());
-    vm.set_host(host);
+    let mut host = WsvHost::new_with_subject(wsv, sample_account());
     let p_path = state_path_tlv("counter");
     let p_val = make_tlv(
         PointerType::NoritoBytes,
         &common::encode_bytes_state_value(b"5"),
     );
-    let program = set_and_get_program();
+    let program = state_schema_program();
     {
-        let host = vm
-            .host_mut_any()
-            .expect("host present")
-            .downcast_mut::<WsvHost>()
-            .expect("WsvHost");
+        let host = &mut host;
         IVMHost::begin_tx(host, &Default::default()).expect("begin_tx");
     }
     let p_path_ptr = vm.alloc_input_tlv(&p_path).expect("alloc path");
@@ -261,13 +233,9 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     vm.set_register(10, p_path_ptr);
     vm.set_register(11, p_val_ptr);
     vm.load_program(&program).expect("load program");
-    vm.run().expect("execute overlay program");
+    set_and_get(&mut host, &mut vm).expect("execute overlay program");
     {
-        let host = vm
-            .host_mut_any()
-            .expect("host present")
-            .downcast_mut::<WsvHost>()
-            .expect("WsvHost");
+        let host = &mut host;
         assert!(
             host.wsv.sc_get("counter").is_none(),
             "flush should not occur before finish_tx"

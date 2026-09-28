@@ -291,7 +291,7 @@ fn restore_native_batch_pre_state_for_test(state: &State) -> Box<State> {
         .expect("restore original startup policy on the authenticated pre-State");
     // Bare snapshots intentionally start with no configured manifest authority.
     // The daemon installs its frozen manifests/compliance before replay too.
-    restored.install_lane_manifests(&state.lane_manifests.read().clone());
+    restored.install_lane_manifests_for_testing(&state.lane_manifests.read().clone());
     restored.install_lane_compliance_engine(state.lane_compliance_engine());
     assert_eq!(
         restored.execution_policy_digest_v1().unwrap(),

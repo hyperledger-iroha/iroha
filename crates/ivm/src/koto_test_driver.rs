@@ -62,14 +62,13 @@ pub use source_set::{
     run_tests_structured_source_set_with_modules_v1,
 };
 const DEFAULT_CALLER: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
 const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
 const TEST_SYSCALL_ACTOR_SIGN: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN;
 const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u32 =
     crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
 const TEST_SYSCALL_EXPECT_REJECT_AS: u32 = crate::syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS;
-const TEST_MAX_RETURN_VALUES: usize = 13;
+const TEST_MAX_RETURN_VALUES: usize = ivm_abi::call::MAX_CALL_WORDS_V1;
 #[derive(Clone)]
 struct FixtureActor {
     account: AccountId,
@@ -1216,21 +1215,12 @@ fn build_coverage_functions(
             _ => None,
         })
         .collect::<HashSet<_>>();
-    let implementation_bases = report
-        .budget_report
-        .iter()
-        .filter_map(|entry| entry.function_name.strip_prefix(ENTRYPOINT_IMPL_PREFIX))
-        .map(ToOwned::to_owned)
-        .collect::<HashSet<_>>();
     let mut functions = report
         .budget_report
         .iter()
         .filter_map(|entry| {
             let display_name = normalize_user_function_name(&entry.function_name)?;
             if test_names.contains(display_name) {
-                return None;
-            }
-            if implementation_bases.contains(&entry.function_name) {
                 return None;
             }
             Some(CoverageFunction {
@@ -1245,9 +1235,6 @@ fn build_coverage_functions(
     functions
 }
 fn normalize_user_function_name(name: &str) -> Option<&str> {
-    if let Some(base) = name.strip_prefix(ENTRYPOINT_IMPL_PREFIX) {
-        return Some(base);
-    }
     if name.starts_with("__") {
         return None;
     }
@@ -1272,18 +1259,13 @@ fn execute_suite_for_chain(
     jobs: usize,
     chain_discriminant: u16,
 ) -> Result<Vec<TestRunResult>, String> {
-    let suite_return_pc = compiled
-        .suite
-        .program
-        .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
-        .ok_or_else(|| "compiled suite is missing its validated return entrypoint".to_owned())?;
     let worker_count = jobs.min(compiled.tests.len().max(1));
     if worker_count == 1 {
         let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
         return compiled
             .tests
             .iter()
-            .map(|test| execute_test(compiled, test, trace_mode, suite_return_pc))
+            .map(|test| execute_test(compiled, test, trace_mode))
             .collect();
     }
     let joined = std::thread::scope(|scope| {
@@ -1297,8 +1279,7 @@ fn execute_suite_for_chain(
                     .enumerate()
                     .filter(|(index, _)| index % worker_count == worker)
                     .map(|(index, test)| {
-                        execute_test(compiled, test, trace_mode, suite_return_pc)
-                            .map(|result| (index, result))
+                        execute_test(compiled, test, trace_mode).map(|result| (index, result))
                     })
                     .collect::<Result<Vec<_>, String>>()
             }));
@@ -1320,13 +1301,12 @@ fn execute_test(
     compiled: &CompiledSuite,
     test: &CompiledTestCase,
     trace_mode: TraceMode,
-    suite_return_pc: u64,
 ) -> Result<TestRunResult, String> {
     let mut host = build_host_for_fixture(compiled, test.fixture.as_deref())?;
-    let mut vm = IVM::new(u64::MAX);
+    let mut vm = IVM::try_new(u64::MAX)
+        .map_err(|err| format!("failed to allocate Kotodama test VM: {err:?}"))?;
     vm.load_koto_test_prepared(&compiled.suite.program)
         .map_err(|err| format!("failed to load compiled suite: {err:?}"))?;
-    vm.set_register(1, suite_return_pc);
     vm.set_program_counter(test.pc)
         .map_err(|err| format!("failed to jump to test `{}`: {err:?}", test.name))?;
     vm.set_trace_mode(trace_mode);
@@ -1821,14 +1801,11 @@ impl KotoTestHost {
         let entrypoint =
             Self::decode_alias_arg(vm, 11, "kotoage").map_err(|_| crate::VMError::NoritoInvalid)?;
         let payload = Self::decode_json_arg(vm, 12)?;
-        let return_pointer_mask = if expect_reject { 0 } else { vm.register(13) };
+        let result_table = if expect_reject { 0 } else { vm.register(13) };
         let return_arity = if expect_reject {
             1
         } else {
-            match vm.register(14) {
-                0 => 1,
-                raw => usize::try_from(raw).unwrap_or(TEST_MAX_RETURN_VALUES + 1),
-            }
+            usize::try_from(vm.register(14)).unwrap_or(TEST_MAX_RETURN_VALUES + 1)
         };
         if return_arity == 0 || return_arity > TEST_MAX_RETURN_VALUES {
             return self.fail_test(format!(
@@ -1913,7 +1890,7 @@ impl KotoTestHost {
                 make_tlv(PointerType::NoritoBytes, &encoded_payload),
             );
         }
-        let mut nested_vm = IVM::new(u64::MAX);
+        let mut nested_vm = IVM::try_new(u64::MAX)?;
         nested_vm.reset();
         let clear = [0u8; 7 + iroha_crypto::Hash::LENGTH];
         nested_vm
@@ -1955,7 +1932,7 @@ impl KotoTestHost {
                     vm,
                     &runtime_entrypoint.return_schema,
                     return_arity,
-                    return_pointer_mask,
+                    result_table,
                 ) {
                     self.inner.restore(rollback.as_ref())?;
                     return Err(error);

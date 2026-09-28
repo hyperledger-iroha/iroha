@@ -10,6 +10,10 @@ use std::slice;
 
 use crate::internals::lincowcell::Untracked;
 
+/// Fixed bookkeeping for original tree nodes, retaining each buffer's exact charge.
+pub(crate) type NodeTrackingBuffer<K, V, Charge> =
+    FixedTrackingBuffer<*mut super::node::Node<K, V, Charge>, Charge>;
+
 mod sealed {
     /// Only the two concrete bookkeeping owners have audited cursor bounds.
     pub trait Sealed {}

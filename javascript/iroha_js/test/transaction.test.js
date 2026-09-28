@@ -168,13 +168,13 @@ test("decodeSignedTransaction parses the native JSON inspection envelope", () =>
   };
   withTransactionApi(
     { decodeSignedTransactionJson: () => JSON.stringify(decoded) },
-    (transaction) => assert.deepEqual(transaction.decodeSignedTransaction(input), decoded),
+    (transaction) => assert.deepEqual(transaction.decodeSignedTransaction(input, 753), decoded),
   );
   withTransactionApi(
     { decodeSignedTransactionJson: () => "[]" },
     (transaction) =>
       assert.throws(
-        () => transaction.decodeSignedTransaction(input),
+        () => transaction.decodeSignedTransaction(input, 753),
         /must be an object/u,
       ),
   );
@@ -194,6 +194,7 @@ test("encodeContractArgumentRecord delegates exact JSON to the native encoder", 
         transaction.encodeContractArgumentRecord(
           { fields: [{ name: "amount" }] },
           { amount: 10 },
+          753,
         ),
         Buffer.from([1, 2, 3]),
       );
@@ -206,7 +207,7 @@ test("encodeContractArgumentRecord delegates exact JSON to the native encoder", 
     { encodeContractArgumentRecordJson: () => Buffer.alloc(0) },
     (transaction) =>
       assert.throws(
-        () => transaction.encodeContractArgumentRecord(undefined, { amount: 10 }),
+        () => transaction.encodeContractArgumentRecord(undefined, { amount: 10 }, 753),
         /must be JSON values/u,
       ),
   );
@@ -230,6 +231,7 @@ test("hashInstructionBatch serializes instructions and delegates to native", () 
       assert.deepEqual(
         transaction.hashInstructionBatch(
           [JSON.stringify({ Fail: { message: "stop" } })],
+          753,
           { encoding: "buffer" },
         ),
         fakeHash,

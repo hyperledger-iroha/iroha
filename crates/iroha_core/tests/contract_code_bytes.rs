@@ -28,10 +28,16 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 4,
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm::call::CallWordV1::Unit],
+            }],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "contract-code-bytes-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -59,12 +65,34 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         states: Vec::new(),
     };
     let mut code = Vec::new();
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        code.extend_from_slice(&instruction.to_le_bytes());
+    }
     let mut out = meta.encode();
     out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
     ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
     out
+}
+#[test]
+fn minimal_contract_fixture_completes_its_authenticated_unit_table() {
+    let program = minimal_ivm_program(1);
+    let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+    let interface = metadata.contract_interface.as_ref().unwrap();
+    assert_eq!(interface.callables.len(), 1);
+    let entry_pc = metadata.prefix_len() as u64 + interface.entrypoints[0].entry_pc;
+    let mut vm = ivm::IVM::new(100_000);
+    vm.load_program(&program).unwrap();
+    vm.set_program_counter(entry_pc).unwrap();
+    vm.run()
+        .expect("fixture returns through its authenticated callable");
+    assert_eq!(vm.call_result_word_count().unwrap(), 1);
+    assert_eq!(vm.public_call_result_word(0).unwrap(), 0);
 }
 fn multi_chunk_ivm_program() -> Vec<u8> {
     use iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;

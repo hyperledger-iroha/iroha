@@ -550,7 +550,7 @@ fn leader_repushes_to_members_lacking_the_proposal() {
 }
 
 #[test]
-fn proposals_and_commit_qcs_reach_next_committee_joiners() {
+fn boundary_proposals_use_only_the_applied_committee() {
     let mut h = H::new(5, |_| 0);
     let keys: Vec<PublicKey> = (0..5).map(|i| h.v.key(i)).collect();
     h.committees
@@ -574,10 +574,16 @@ fn proposals_and_commit_qcs_reach_next_committee_joiners() {
         .find(|(_, m)| matches!(m, WireMessage::Proposal(_)))
         .expect("proposal");
     assert!(
-        broadcast.0.contains(&keys[4]),
-        "the joiner of C_2 receives the proposal"
+        h.core.config(&2).is_none(),
+        "successor authority awaits the applied boundary"
     );
-    assert_eq!(broadcast.0.last(), Some(&keys[4]), "after the members");
+    assert!(
+        !broadcast.0.contains(&keys[4]),
+        "an unapplied successor cannot become an authenticated proposal recipient"
+    );
+    h.commit_with(view, b"authenticated committee boundary");
+    assert_eq!(h.core.cfg.committee, h.config(2).committee);
+    assert!(h.core.cfg.committee.contains(&keys[4]));
 }
 
 // ---- §6.9 sync and serving ------------------------------------------------------------------------
@@ -696,7 +702,9 @@ fn startup_rejects_bad_input() {
     init.configs.retain(|(height, _)| *height != 2);
     assert_eq!(
         new(init, h.local, signers()),
-        Err(ConfigError::MissingConfig(2))
+        Err(ConfigError::InvalidInit(
+            "next epoch must await its applied boundary"
+        ))
     );
     let mut init = h.init(fresh.clone());
     init.tip.block_hash = Hash32([1; 32]);

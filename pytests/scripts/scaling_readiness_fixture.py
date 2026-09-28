@@ -29,7 +29,7 @@ def write_inputs(directory):
     genesis = 'hash:' + '01' * 32 + '#ABCD'
     context = 'hash:' + '03' * 32 + '#ABCD'
     value = dict(schema=inputs.ANCHORS_SCHEMA, version=1, lane_count=4, genesis_hash=genesis,
-                 context_id=context, network_id=genesis, consensus_mode='npos', chain_id='test-chain',
+                 genesis_epoch_context_id=context, network_id=genesis, consensus_mode='npos', chain_id='test-chain',
                  genesis_public_key='ed0120' + 'AB' * 32, chain_discriminant=0,
                  peers=[], accounts=[], artifacts=[])
     files = {'genesis.json': b'{}', 'genesis.signed.nrt': b'test-signed-native-genesis',

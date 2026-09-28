@@ -34,13 +34,17 @@ Notes
 - Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
 - A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
 - Hardware acceleration (SIMD/Metal/CUDA) is enabled by default when compiled and available. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation, and backend status only reports parity as OK after policy, hardware detection, and golden self-tests all pass.
-- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
-  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
-  NEON while keeping deterministic fallbacks.
-- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
+- Mobile SDKs (Android/Swift) surface the same policy. `IrohaSwift.AccelerationSettings`
+  calls `connect_norito_acceleration_config_set_v1` with the complete current record
+  and its exact length; config/state readback uses `connect_norito_acceleration_config_get_v1`
+  and `connect_norito_acceleration_state_get_v1`. Size-less exports are retired.
+- Operator opt-outs and finite process ceilings come from `[accel]` and
+  `[accel.resource_limits]` file configuration. Runtime environment variables do
+  not select acceleration policy. Unsupported or unqualified devices use the
+  deterministic CPU path; policy acceptance does not establish device qualification.
 
 Durable state helpers and ABI surface
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
+- The V1 ABI hash covers the durable State helper syscalls, canonical JSON/SCHEMA operations, and generic `POINTER_TO_NORITO`/`POINTER_FROM_NORITO` transport. Kotodama `int` uses canonical signed-512 `IntValueV1` frames.
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
@@ -114,7 +118,7 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | db4259aa28486967f2d8799b4e66e1b919f4d18690db2d94cd96efa05ee840a3 |
+| ABI v1 | 4de60141043f6e9990d9a36ec5049d1fa2400792a72889604a4b2b6f7c6aa0f9 |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and

@@ -102,8 +102,19 @@ mod model {
         Sccp(SccpEventFilter),
     }
     /// An event filter for [`crate::sccp::events::SccpEvent`] values (`specs/sccp.md` §4.17).
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::SccpEventFilter")]
     pub struct SccpEventFilter {
         /// If specified, matches only events that name this external network.

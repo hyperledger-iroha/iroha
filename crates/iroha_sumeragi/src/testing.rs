@@ -13,6 +13,74 @@
 //!   MAC per member key and height standing in for the application's signature, so a forged,
 //!   stripped or replayed attestation is told apart from a genuine one.
 
+/// Explicit stationary scheduling context for protocol-unit fixtures.
+/// Rotation harnesses replace bounds and identity from their declared schedule.
+pub const TEST_EPOCH: crate::types::EpochConfig = crate::types::EpochConfig {
+    id: crate::types::EpochId {
+        epoch: 0,
+        context: crate::types::Hash32([0xE0; 32]),
+    },
+    authority_generation: crate::types::Hash32([0xE1; 32]),
+    first_height: 0,
+    last_height: u64::MAX,
+    leader_seed: crate::types::Hash32([0xE2; 32]),
+};
+
+/// Explicit successor identity for test schedules; no production caller derives authority here.
+pub fn scheduled_epoch(
+    epoch: u64,
+    first_height: u64,
+    last_height: u64,
+) -> crate::types::EpochConfig {
+    let mut context = TEST_EPOCH;
+    context.id.epoch = epoch;
+    context.first_height = first_height;
+    context.last_height = last_height;
+    if epoch != 0 || first_height != 0 || last_height != u64::MAX {
+        let mut bytes = b"sumeragi/test-epoch".to_vec();
+        bytes.extend_from_slice(&epoch.to_be_bytes());
+        bytes.extend_from_slice(&first_height.to_be_bytes());
+        bytes.extend_from_slice(&last_height.to_be_bytes());
+        context.id.context = crate::types::Hash32(sha256(&bytes));
+        context.authority_generation = context.id.context;
+        bytes.push(1);
+        context.leader_seed = crate::types::Hash32(sha256(&bytes));
+    }
+    context
+}
+
+/// Window slot after an applied cut, with no guessed next-epoch roster.
+pub fn window_slot(
+    active: &crate::types::HeightConfig,
+    height: u64,
+    config: crate::types::HeightConfig,
+) -> crate::types::ConfigSlot {
+    if active.epoch.contains(height) {
+        crate::types::ConfigSlot::Ready(config)
+    } else {
+        crate::types::ConfigSlot::PendingBoundary {
+            boundary_height: active.epoch.last_height,
+            predecessor: active.epoch.id,
+        }
+    }
+}
+
+/// The atomic application result supplied by a simulated original execution.
+pub fn applied_config(
+    height: u64,
+    current: &crate::types::HeightConfig,
+    next: crate::types::HeightConfig,
+    after_next: crate::types::HeightConfig,
+) -> crate::types::AppliedConfig {
+    if height == current.epoch.last_height {
+        crate::types::AppliedConfig::Boundary { next, after_next }
+    } else {
+        crate::types::AppliedConfig::Continuation {
+            after_next: window_slot(current, height + 2, after_next),
+        }
+    }
+}
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -169,12 +237,20 @@ const TAG_FAKE_ATTEST: &[u8] = b"sumeragi/fake-attest";
 /// The fake attestation (§3.7) of `statement` by member `key` at `height`:
 /// `SHA-256("sumeragi/fake-attest" ‖ kb(key) ‖ be64(height) ‖ statement)`, a keyed MAC standing
 /// in for the application's signature under the member's key of that height.
-pub fn fake_attestation(key: &PublicKey, height: u64, statement: &[u8]) -> Vec<u8> {
+pub fn fake_attestation(
+    key: &PublicKey,
+    height: u64,
+    statement: &[u8],
+) -> crate::message::CommitAttestation {
     let mut input = TAG_FAKE_ATTEST.to_vec();
     input.extend_from_slice(&preimage::kb(key));
     input.extend_from_slice(&height.to_be_bytes());
     input.extend_from_slice(statement);
-    sha256(&input).to_vec()
+    crate::message::CommitAttestation {
+        witness: crate::message::ResultWitness::from_untrusted(statement.to_vec())
+            .expect("nonempty bounded test statement"),
+        signature: crate::message::AttestationSignature::try_from_slice(&sha256(&input)).unwrap(),
+    }
 }
 
 /// The statements `(height, att_preimage(height, bh, R))` of the blocks a node executed to
@@ -197,9 +273,16 @@ impl Executed {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Record the execution of `bh` at `height` of instance `instance` to `Valid(result)`.
-    pub fn record(&self, instance: &Hash32, height: u64, bh: &Hash32, result: &Hash32) {
-        let statement = preimage::att_preimage(instance, height, bh, result);
+    /// Record execution of `bh` under its authenticated epoch to `Valid(result)`.
+    pub fn record(
+        &self,
+        instance: &Hash32,
+        epoch: &crate::types::EpochId,
+        height: u64,
+        bh: &Hash32,
+        result: &Hash32,
+    ) {
+        let statement = preimage::att_preimage(instance, epoch, height, bh, result);
         self.lock().insert((height, statement));
     }
 
@@ -280,10 +363,11 @@ impl Attestor for FakeAttestor {
             return AttestOutcome::Pending;
         }
         let mut attestation = fake_attestation(key, height, statement);
-        if self.forge
-            && let Some(first) = attestation.first_mut()
-        {
-            *first ^= 0xff;
+        if self.forge {
+            let mut bytes = attestation.signature.as_slice().to_vec();
+            bytes[0] ^= 0xff;
+            attestation.signature =
+                crate::message::AttestationSignature::try_from_slice(&bytes).unwrap();
         }
         AttestOutcome::Attested(attestation)
     }
@@ -301,9 +385,14 @@ impl AttestationVerifier for FakeVerifier {
         _signer: ValidatorIndex,
         key: &PublicKey,
         statement: &[u8],
+        witness: &crate::message::ResultWitness,
         attestation: &[u8],
     ) -> bool {
-        fake_attestation(key, height, statement) == attestation
+        witness.as_slice() == statement
+            && fake_attestation(key, height, statement)
+                .signature
+                .as_slice()
+                == attestation
     }
 }
 
@@ -516,7 +605,7 @@ impl SignLog {
             committee.get(entry.signer).is_some_and(|key| {
                 self.was_signed(
                     key,
-                    &preimage::tmo_preimage(&tc.instance, tc.height, tc.view, entry.hq),
+                    &preimage::tmo_preimage(&tc.instance, &tc.epoch, tc.height, tc.view, entry.hq),
                 )
             })
         });
@@ -641,9 +730,25 @@ impl FakeValidators {
         result: &Hash32,
         attest: bool,
     ) -> Vote {
-        let msg = preimage::vote_preimage(kind, instance, height, view, block_hash, result, attest);
-        let statement = preimage::att_preimage(instance, height, block_hash, result);
+        let msg = preimage::vote_preimage(
+            kind,
+            instance,
+            &crate::testing::TEST_EPOCH.id,
+            height,
+            view,
+            block_hash,
+            result,
+            attest,
+        );
+        let statement = preimage::att_preimage(
+            instance,
+            &crate::testing::TEST_EPOCH.id,
+            height,
+            block_hash,
+            result,
+        );
         Vote {
+            epoch: crate::testing::TEST_EPOCH.id,
             kind,
             instance: *instance,
             height,
@@ -688,8 +793,23 @@ impl FakeValidators {
         signers: &[ValidatorIndex],
         attest: bool,
     ) -> Qc {
-        let msg = preimage::vote_preimage(kind, instance, height, view, block_hash, result, attest);
-        let statement = preimage::att_preimage(instance, height, block_hash, result);
+        let msg = preimage::vote_preimage(
+            kind,
+            instance,
+            &crate::testing::TEST_EPOCH.id,
+            height,
+            view,
+            block_hash,
+            result,
+            attest,
+        );
+        let statement = preimage::att_preimage(
+            instance,
+            &crate::testing::TEST_EPOCH.id,
+            height,
+            block_hash,
+            result,
+        );
         let mut sorted = signers.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
@@ -700,12 +820,15 @@ impl FakeValidators {
         let attestations = if kind == VoteKind::Commit && attest {
             sorted
                 .iter()
-                .map(|index| fake_attestation(&self.key(*index), height, &statement))
+                .map(|index| fake_attestation(&self.key(*index), height, &statement).signature)
                 .collect()
         } else {
             Vec::new()
         };
         Qc {
+            attestation_witness: (kind == VoteKind::Commit && attest)
+                .then(|| crate::message::ResultWitness::from_untrusted(statement.clone()).unwrap()),
+            epoch: crate::testing::TEST_EPOCH.id,
             kind,
             instance: *instance,
             height,
@@ -730,8 +853,10 @@ impl FakeValidators {
         high_pqc: Option<Qc>,
     ) -> TimeoutVote {
         let hq = high_pqc.as_ref().map(|qc| qc.view);
-        let msg = preimage::tmo_preimage(instance, height, view, hq);
+        let msg =
+            preimage::tmo_preimage(instance, &crate::testing::TEST_EPOCH.id, height, view, hq);
         TimeoutVote {
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: *instance,
             height,
             view,
@@ -762,6 +887,7 @@ impl FakeValidators {
             .and_then(|t| t.high_pqc.clone());
         let sigs: Vec<Signature> = timeouts.iter().map(|t| t.sig).collect();
         TimeoutCert {
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: *instance,
             height,
             view,
@@ -791,7 +917,14 @@ impl FakeValidators {
     ) -> Proposal {
         let bh = preimage::block_hash(&self.crypto, &header);
         let ad = preimage::att_digest(&self.crypto, justify.as_ref(), parent_qc.as_ref());
-        let msg = preimage::prop_preimage(instance, height, view, &bh, &ad);
+        let msg = preimage::prop_preimage(
+            instance,
+            &crate::testing::TEST_EPOCH.id,
+            height,
+            view,
+            &bh,
+            &ad,
+        );
         Proposal {
             instance: *instance,
             height,

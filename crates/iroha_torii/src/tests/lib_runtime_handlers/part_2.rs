@@ -3084,16 +3084,6 @@ fn http_route_timeout_covers_read_fanout_proxy_budget() {
         super::route_timeout_for_path("/v1/accounts/example/permissions") >= fanout_budget,
         "outer HTTP timeout must not expire before the read-fanout proxy budget"
     );
-    assert_eq!(
-        super::route_timeout_for_path("/v1/zk/ivm/derive"),
-        ZK_IVM_ROUTE_TIMEOUT,
-        "ZK IVM derive can legitimately exceed the default route timeout"
-    );
-    assert_eq!(
-        super::route_timeout_for_path("/v1/zk/ivm/prove"),
-        ZK_IVM_ROUTE_TIMEOUT,
-        "ZK IVM prove can legitimately exceed the default route timeout"
-    );
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
 #[test]

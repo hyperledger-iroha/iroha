@@ -871,7 +871,11 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
     );
     kura.install_authenticated_snapshot_prefix_for_testing(&payload)
         .expect("retain authenticated imported hash vector");
-    let mut restored = crate::state::deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+    let mut restored = crate::state::deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        execution_budget: mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         lane_manifests: Arc::clone(&frozen_manifests),
         kura: Arc::clone(&kura),
         query_handle: LiveQueryStore::start_test(),

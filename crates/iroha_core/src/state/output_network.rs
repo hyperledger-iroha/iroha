@@ -1,18 +1,17 @@
 //! Actual Network execution and rejection settlement under one retained budget.
 //!
-//! Routes and authenticated QueuePlan validation instants are frozen before any
+//! Exact source routes and global carrier validation time are frozen before any
 //! source runs. The caller still owes complete proposal/finality, duplicate/replay,
 //! control, host-memory and common-wire admission before production integration.
-//! Ordinary carriers and constructor-owned native sources share this executor.
-//! Native admission retains its exact QueuePlan instant and typed fitting prefix.
+//! Every global input, including the verified merged suffix, shares this executor.
+//! Its original source and captured execution route survive rejection and fee handling.
 
 use super::*;
 use crate::{
-    queue::{
-        RoutingDecision, evaluate_policy_plan_with_nexus_and_world_at_block_height,
-        routing_plan_from_execution_context,
-    },
+    queue::RoutingDecision,
     smartcontracts::ivm::cache::IvmCache,
+    state::WorldReadOnly,
+    sumeragi::lanes::routing::RoutingInputs,
     tx::{
         AcceptedTransaction, execution_rejection_from_admission_failure,
         rejected_transaction_gas_is_accountable,
@@ -20,99 +19,36 @@ use crate::{
 };
 use iroha_data_model::{
     ValidationFail,
+    block::ExternalExecutionContext,
     events::{EventBox, trigger_completed::TriggerCompletedEvent},
-    transaction::{
-        TransactionAdmissionIntent, TransactionResult, error::TransactionRejectionReason,
-    },
+    transaction::{TransactionResult, error::TransactionRejectionReason},
 };
-use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
-use std::{alloc::Layout, borrow::Cow, time::Duration};
+use std::borrow::Cow;
+
+/// Resolve only the original validated context, or the signed genesis routing scope.
+fn freeze_network_route<W: WorldReadOnly>(
+    input: &TransactionEntrypoint,
+    context: Option<&ExternalExecutionContext>,
+    genesis_routes: Option<RoutingInputs<'_, W>>,
+    height: u64,
+) -> Result<RoutingDecision, String> {
+    if let Some(context) = context {
+        if context.entrypoint_hash != input.hash() {
+            return Err("Network route belongs to another source".into());
+        }
+        return Ok(RoutingDecision::new(context.lane_id, context.dataspace_id));
+    }
+    let routes = genesis_routes.ok_or("Network source lacks its authenticated execution route")?;
+    let borrowed = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(input));
+    routes
+        .execution_route(&borrowed, height)
+        .ok_or_else(|| "genesis Network route has no exact active lane".into())
+}
 
 struct FrozenNetworkSource<'source> {
     pub(super) routing: RoutingDecision,
     admission: Option<Result<AcceptedTransaction<'source>, TransactionRejectionReason>>,
     quarantine: QuarantineAdmission,
-}
-
-/// Exact requested Native Network vectors, including temporary reveal ordering.
-#[derive(Clone, Copy)]
-struct NativeFrozenNetworkDemand {
-    sources: Layout,
-    order: Layout,
-    reveal_positions: Layout,
-    sorted_reveals: Layout,
-    quarantine_candidates: Layout,
-    total_bytes: usize,
-}
-
-impl NativeFrozenNetworkDemand {
-    fn plan(count: usize) -> Result<Self, AllocationRefusal> {
-        let sources = Layout::array::<FrozenNetworkSource<'static>>(count)
-            .map_err(|_| AllocationRefusal::DemandOverflow)?;
-        let order = Layout::array::<usize>(count).map_err(|_| AllocationRefusal::DemandOverflow)?;
-        let reveal_positions = order;
-        let sorted_reveals = Layout::array::<((u64, Hash, u64), usize)>(count)
-            .map_err(|_| AllocationRefusal::DemandOverflow)?;
-        let quarantine_candidates = Layout::array::<(HashOf<TransactionEntrypoint>, usize)>(count)
-            .map_err(|_| AllocationRefusal::DemandOverflow)?;
-        let total_bytes = [
-            sources,
-            order,
-            reveal_positions,
-            sorted_reveals,
-            quarantine_candidates,
-        ]
-        .into_iter()
-        .try_fold(0usize, |total, layout| total.checked_add(layout.size()))
-        .ok_or(AllocationRefusal::DemandOverflow)?;
-        Ok(Self {
-            sources,
-            order,
-            reveal_positions,
-            sorted_reveals,
-            quarantine_candidates,
-            total_bytes,
-        })
-    }
-
-    fn try_reserve(
-        self,
-        budget: &AllocationBudget,
-    ) -> Result<NativeFrozenNetworkCharges, AllocationRefusal> {
-        let mut reservation = budget.try_reserve_bytes(self.total_bytes)?;
-        let sources = reservation
-            .try_split(self.sources)
-            .expect("prepaid source layout");
-        let order = reservation
-            .try_split(self.order)
-            .expect("prepaid order layout");
-        let reveal_positions = reservation
-            .try_split(self.reveal_positions)
-            .expect("prepaid reveal-position layout");
-        let sorted_reveals = reservation
-            .try_split(self.sorted_reveals)
-            .expect("prepaid sorted-reveal layout");
-        let quarantine_candidates = reservation
-            .try_split(self.quarantine_candidates)
-            .expect("prepaid quarantine layout");
-        assert_eq!(reservation.remaining_bytes(), 0);
-        Ok(NativeFrozenNetworkCharges {
-            _sources: sources,
-            _order: order,
-            _reveal_positions: reveal_positions,
-            _sorted_reveals: sorted_reveals,
-            _quarantine_candidates: quarantine_candidates,
-        })
-    }
-}
-
-/// These charges outlive all five corresponding requested vectors.
-struct NativeFrozenNetworkCharges {
-    _sources: AllocationCharge,
-    _order: AllocationCharge,
-    _reveal_positions: AllocationCharge,
-    _sorted_reveals: AllocationCharge,
-    _quarantine_candidates: AllocationCharge,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -131,14 +67,6 @@ pub(super) struct FrozenNetworkSources<'source> {
     sources: Vec<FrozenNetworkSource<'source>>,
     pub(super) order: Option<Vec<usize>>,
     quarantine_policy: FrozenQuarantinePolicy,
-    _native_charges: Option<NativeFrozenNetworkCharges>,
-}
-
-/// Actual admission identity captured before a transaction can remove its sealed
-/// commitment or compress its result to a bounded output-limit rejection.
-pub(super) struct ExecutedNetworkSource {
-    pub(super) stateless_accepted: bool,
-    pub(super) authenticated_signed_replay_alias: Option<Hash>,
 }
 
 impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
@@ -146,7 +74,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
     pub(super) fn execute_network_sources(
         &mut self,
         genesis: Option<&crate::block::AuthenticatedGenesisOutputSource>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionAttemptError<String>> {
         let result = (|| {
             if self.failed
                 || self.network_sources.is_some()
@@ -178,11 +106,8 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
     fn freeze_network_sources(
         &self,
         genesis: Option<&crate::block::AuthenticatedGenesisOutputSource>,
-    ) -> Result<FrozenNetworkSources<'source>, String> {
-        let ExecutionSource::Ordinary(source) = &self.source else {
-            return Err("ordinary admission cannot replace native preflight".into());
-        };
-        let source = *source;
+    ) -> Result<FrozenNetworkSources<'source>, ExecutionAttemptError<String>> {
+        let source = self.source.0;
         let genesis_account = match (source.header().is_genesis(), genesis) {
             (true, Some(genesis)) if self.state.block_hashes.is_empty() => {
                 Some(genesis.account_for(source)?)
@@ -203,58 +128,36 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 if context.has_current_version()
                     && HashOf::new(context) == expected
                     && context.native_lane_decisions.is_none()
-                    && (context.merge_entry.is_none()
-                        || (count == 0 && self.state.merge_prefix_seal().is_some()))
+                    && context.merge_entry.is_none()
                     && context.external.len() == count =>
             {
                 Some(context)
             }
             _ => return Err("Network source has an invalid execution context".into()),
         };
+        let genesis_policy =
+            genesis_account.and_then(|_| crate::sumeragi::lanes::lane_policy(&self.state.world));
+        let genesis_routes = genesis_account.map(|_| RoutingInputs {
+            policy: genesis_policy.as_ref(),
+            lanes: self.state.world.sumeragi_lanes(),
+            dataspaces: &self.state.nexus.dataspace_catalog,
+            world: &self.state.world,
+            ledger_time_ms: now_ms,
+        });
         let parameters = self.state.world.parameters.get();
         let mut sources = Vec::new();
-        sources
-            .try_reserve_exact(count)
-            .map_err(|_| "host cannot retain frozen Network sources")?;
+        sources.try_reserve_exact(count).map_err(|_| {
+            ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            )
+        })?;
         for (index, input) in source.network_entrypoints().enumerate() {
             let embedded = context.map(|context| &context.external[index]);
-            if embedded.is_some_and(|context| context.entrypoint_hash != input.hash()) {
-                return Err("Network route belongs to another source".into());
-            }
-            let routing = if let Some(context) = embedded {
-                RoutingDecision::new(context.lane_id, context.dataspace_id)
-            } else {
-                let borrowed = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(input));
-                evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                    &self.state.nexus,
-                    &borrowed,
-                    &self.state.world,
-                    now_ms,
-                    height,
-                )
-                .map_err(|error| {
-                    format!("Network route cannot be frozen at index {index}: {error}")
-                })?
-                .coordinator_route()
-            };
-            let validation_time =
-                if input.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced {
-                    if let Some(context) = embedded {
-                        let plan = routing_plan_from_execution_context(context)
-                            .map_err(|error| error.to_string())?;
-                        self.state
-                            .pending_queue_plan_binding_for_execution_at_block_start(
-                                input, &plan, height,
-                            )?
-                            .map_or(now, |binding| {
-                                Duration::from_millis(binding.enqueue_timestamp_ms)
-                            })
-                    } else {
-                        now
-                    }
-                } else {
-                    now
-                };
+            let routing = freeze_network_route(input, embedded, genesis_routes, height)?;
+            // Lane admission does not preserve TTL. Expansion filters invalid
+            // merged inputs at this same global time before they enter Network,
+            // and execution repeats normal signature/network/expiry validation.
+            let validation_time = now;
             let admission = if let Some(account) = genesis_account {
                 let TransactionEntrypoint::External(signed) = input else {
                     return Err("authenticated genesis contains a non-signed Network source".into());
@@ -318,105 +221,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 quarantine: QuarantineAdmission::Normal,
             });
         }
-        self.freeze_network_order(sources, None)
-    }
-
-    /// Freeze native admission and its fitting prefix before the first economic
-    /// attempt. The exact QueuePlan enqueue instant owns TTL; the applying
-    /// carrier owns placement, policy and effects.
-    pub(super) fn freeze_native_network_sources(
-        &self,
-    ) -> Result<FrozenNetworkSources<'source>, crate::state::MergeLedgerCommitError> {
-        use crate::state::MergeLedgerCommitError;
-        let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
-        let ExecutionSource::Native { groups, .. } = &self.source else {
-            return Err(invalid(
-                "native admission requires its consumed preflight".into(),
-            ));
-        };
-        let groups = *groups;
-        let charges = NativeFrozenNetworkDemand::plan(groups.len())
-            .and_then(|demand| {
-                demand.try_reserve(
-                    self.native_host
-                        .as_ref()
-                        .expect("Native producer has original host admission")
-                        .budget(),
-                )
-            })
-            .map_err(MergeLedgerCommitError::NativeResourceAdmission)?;
-        let mut sources = Vec::new();
-        sources
-            .try_reserve_exact(groups.len())
-            .map_err(|_| invalid("host cannot retain native Network admission".into()))?;
-        let mut reserved_gas = 0u64;
-        for (index, group) in groups.iter().enumerate() {
-            let input = &group.body().payload().input;
-            let routing = input.routing_plan().map_err(invalid)?.coordinator_route();
-            let mut admission = self.state.accept_native_group_entrypoint(group)?;
-            if let Some(signed) = signed_source(&input.entrypoint) {
-                #[cfg(feature = "telemetry")]
-                let telemetry = Some(self.state.telemetry);
-                #[cfg(not(feature = "telemetry"))]
-                let telemetry = None;
-                admission = crate::tx::enforce_fraud_policy(
-                    &self.state.fraud_monitoring,
-                    signed.metadata(),
-                    telemetry,
-                    &crate::tx::LaneAssignment {
-                        lane_id: routing.lane_id,
-                        dataspace_id: routing.dataspace_id,
-                        dataspace_catalog: &self.state.nexus.dataspace_catalog,
-                    },
-                )
-                .and(admission);
-            }
-            if let Ok(transaction) = &admission {
-                match crate::queue::Queue::compute_proposal_gas_cost(transaction) {
-                    Ok(cost)
-                        if crate::gas::gas_components_fit_block_limit(
-                            self.state.gas_limit_per_block,
-                            [cost],
-                        ) =>
-                    {
-                        reserved_gas = reserved_gas
-                            .checked_add(cost)
-                            .filter(|next| {
-                                crate::gas::gas_components_fit_block_limit(
-                                    self.state.gas_limit_per_block,
-                                    [self.state.gas_used_in_block, *next],
-                                )
-                            })
-                            .ok_or(MergeLedgerCommitError::ExecutionBatchFull {
-                                fitting_prefix: index,
-                                gas_limit: self.state.gas_limit_per_block,
-                                gas_used: self.state.gas_used_in_block,
-                            })?;
-                    }
-                    result => {
-                        let reason = match result {
-                            Ok(cost) => format!(
-                                "native input gas reservation {cost} exceeds current whole-block limit {}",
-                                self.state.gas_limit_per_block,
-                            ),
-                            Err(error) => {
-                                format!("native input has invalid proposal gas accounting: {error}")
-                            }
-                        };
-                        admission = Err(TransactionRejectionReason::LimitCheck(
-                            iroha_data_model::transaction::error::TransactionLimitError { reason },
-                        ));
-                    }
-                }
-            }
-            sources.push(FrozenNetworkSource {
-                routing,
-                admission: Some(admission),
-                quarantine: QuarantineAdmission::Normal,
-            });
-        }
-        self.freeze_network_order(sources, Some(charges))
-            .map_err(invalid)
+        self.freeze_network_order(sources)
     }
 
     /// Both source kinds share frozen reveal order and no-refill quarantine
@@ -424,8 +229,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
     fn freeze_network_order(
         &self,
         mut sources: Vec<FrozenNetworkSource<'source>>,
-        native_charges: Option<NativeFrozenNetworkCharges>,
-    ) -> Result<FrozenNetworkSources<'source>, String> {
+    ) -> Result<FrozenNetworkSources<'source>, ExecutionAttemptError<String>> {
         let count = self.source.network_entrypoint_count();
         if sources.len() != count {
             return Err("Network admission lost a source position".into());
@@ -439,16 +243,24 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
         let mut sorted_reveals = Vec::new();
         let mut quarantine_candidates = Vec::new();
         for vector in [&mut order, &mut reveal_positions] {
-            vector
-                .try_reserve_exact(count)
-                .map_err(|_| "host cannot retain Network order")?;
+            vector.try_reserve_exact(count).map_err(|_| {
+                ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            })?;
         }
-        sorted_reveals
-            .try_reserve_exact(count)
-            .map_err(|_| "host cannot retain frozen reveal keys")?;
+        sorted_reveals.try_reserve_exact(count).map_err(|_| {
+            ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            )
+        })?;
         quarantine_candidates
             .try_reserve_exact(count)
-            .map_err(|_| "host cannot retain quarantine admission ranking")?;
+            .map_err(|_| {
+                ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            })?;
         for (index, frozen) in sources.iter_mut().enumerate() {
             let input = self
                 .source
@@ -484,7 +296,6 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             sources,
             order: Some(order),
             quarantine_policy,
-            _native_charges: native_charges,
         })
     }
 
@@ -502,7 +313,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
         &mut self,
         index: usize,
         cache: &mut IvmCache,
-    ) -> Result<ExecutedNetworkSource, String> {
+    ) -> Result<(), ExecutionAttemptError<String>> {
         let policy = &self
             .network_sources
             .as_ref()
@@ -532,14 +343,6 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             .take()
             .ok_or("Network admission was consumed twice")?;
         let quarantine = frozen.quarantine;
-        let disposition = ExecutedNetworkSource {
-            stateless_accepted: admitted.is_ok(),
-            authenticated_signed_replay_alias: (admitted.is_ok() && self.source.is_native())
-                .then(|| {
-                    crate::tx::authenticated_signed_replay_alias(self.state, input).map(Hash::from)
-                })
-                .flatten(),
-        };
         let reservation = self
             .budget
             .as_mut()
@@ -562,7 +365,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
         )?;
         self.rows[index] = row;
         self.network_resolved[index] = true;
-        Ok(disposition)
+        Ok(())
     }
 }
 
@@ -582,7 +385,7 @@ pub(in crate::state) fn execute_network_attempt(
     quarantine_overflow: bool,
     reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
     cache: &mut IvmCache,
-) -> Result<ExecutionOutputV1, String> {
+) -> Result<ExecutionOutputV1, ExecutionAttemptError<String>> {
     if inputs.input_at(input_index as usize) != Some(input)
         || state._curr_block.height().get() != height
         || admitted
@@ -604,14 +407,23 @@ pub(in crate::state) fn execute_network_attempt(
         Ok(_) if quarantine_overflow => Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted("quarantine overflow".into()),
         )),
-        Ok(accepted) => StateBlock::execute_accepted_transaction_in_overlay(
+        Ok(accepted) => match StateBlock::execute_accepted_transaction_in_overlay(
             accepted,
             transaction,
             cache,
             Some(routing),
-        ),
+        ) {
+            Ok(sequence) => Ok(sequence),
+            Err(ExecutionAttemptError::Rejected(reason)) => Err(reason),
+            Err(ExecutionAttemptError::Deferred(reason)) => {
+                return Err(ExecutionAttemptError::Deferred(reason));
+            }
+        },
         Err(reason) => Err(reason),
     };
+    if let Some(reason) = transaction.execution_deferral() {
+        return Err(ExecutionAttemptError::Deferred(reason));
+    }
     if transaction.fastpq_source_quota.intrinsic_rejected()? {
         result = Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(
@@ -704,7 +516,7 @@ pub(in crate::state) fn execute_network_attempt(
                 let charged = match basis.settle(transaction, signed) {
                     Ok(charged) => Ok(charged),
                     Err(crate::executor::ExecutionFeeSettlementError::Owner(error)) => {
-                        return Err(error);
+                        return Err(error.into());
                     }
                     Err(crate::executor::ExecutionFeeSettlementError::Charge(error)) => {
                         Err(TransactionRejectionReason::Validation(error))
@@ -785,7 +597,11 @@ pub(in crate::state) fn execute_network_attempt(
             .world
             .external_event_buf
             .try_reserve(row.completions().len())
-            .map_err(|_| "host cannot retain Network completions")?;
+            .map_err(|_| {
+                ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            })?;
         for completion in row.completions() {
             transaction.world.external_event_buf.push(
                 TriggerCompletedEvent::new(
@@ -870,188 +686,63 @@ fn require_rejection_fragment(
 }
 
 #[cfg(test)]
-mod native_host_resource_tests {
-    use super::*;
-
-    #[test]
-    fn frozen_network_vectors_share_the_original_finite_pool() {
-        let demand = NativeFrozenNetworkDemand::plan(3).unwrap();
-        let short = AllocationBudget::new(demand.total_bytes - 1);
-        assert!(matches!(
-            demand.try_reserve(&short),
-            Err(AllocationRefusal::ExceedsLimit { .. })
-        ));
-        assert_eq!(short.reserved_bytes(), 0);
-
-        let budget = AllocationBudget::new(demand.total_bytes);
-        let charges = demand.try_reserve(&budget).unwrap();
-        assert_eq!(budget.reserved_bytes(), demand.total_bytes);
-        assert_eq!(charges._sources.layout(), demand.sources);
-        assert_eq!(charges._order.layout(), demand.order);
-        drop(charges);
-        assert_eq!(budget.reserved_bytes(), 0);
-    }
-}
-
-#[cfg(test)]
-mod source_binding_tests {
+mod routing_tests {
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        account::AccountId,
-        block::BlockHeader,
-        isi::Log,
-        transaction::{
-            FeePaymentIntent, TransactionBuilder,
-            signed::{SealedTransactionReveal, compute_sealed_transaction_commitment},
-        },
-    };
-    use std::num::NonZeroU64;
+    use iroha_data_model::{prelude::*, transaction::FeePaymentIntent};
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+
+    fn input() -> TransactionEntrypoint {
+        TransactionBuilder::new(
+            iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"native Network route test"),
+            )),
+            iroha_test_samples::ALICE_ID.clone(),
+            FeePaymentIntent::authority(vec![], None),
+        )
+        .with_instructions([Log::new(Level::INFO, "source route".to_owned())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
+        .into()
+    }
 
     #[test]
-    fn binding_keeps_outer_reveal_identity_distinct_from_inner_call() {
-        let key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519).unwrap();
-        let authority = AccountId::new(key.public_key().clone());
-        let state = State::new_for_testing(
+    fn network_keeps_exact_context_and_requires_it_outside_genesis() {
+        let state = State::new(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let signed = TransactionBuilder::new(
-            state.network_id,
-            authority,
-            FeePaymentIntent::authority(vec![], None),
-        )
-        .with_instructions([Log::new(
-            iroha_data_model::Level::INFO,
-            "source identity".to_owned(),
-        )])
-        .sign(key.private_key());
-        let external = TransactionEntrypoint::External(signed.clone());
-        let salt = [0x92; 32];
-        let commitment = compute_sealed_transaction_commitment(&state.network_id, &signed, salt, 9);
-        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
-            commitment, signed, salt,
-        ));
-        assert_ne!(
-            Hash::from(reveal.hash()),
-            Hash::from(reveal.execution_call_hash())
-        );
-
-        let mut block = state.block(BlockHeader::new(
-            NonZeroU64::new(1).unwrap(),
-            None,
-            None,
-            1,
-            0,
-        ));
-        let mut transaction = block.transaction();
-        let route = RoutingDecision::default();
-        bind_source(&mut transaction, &external, 0, route);
-        assert_eq!(
-            transaction.current_network_entrypoint_hash,
-            Some(external.hash())
-        );
-        require_source(&transaction, &external, 0, route).unwrap();
-        transaction.current_network_entrypoint_hash = None;
-        assert!(require_source(&transaction, &external, 0, route).is_err());
-
-        bind_source(&mut transaction, &reveal, 1, route);
-        assert_eq!(
-            transaction.current_network_entrypoint_hash,
-            Some(reveal.hash())
-        );
-        assert_eq!(
-            transaction.tx_call_hash,
-            Some(Hash::from(reveal.execution_call_hash()))
-        );
-        require_source(&transaction, &reveal, 1, route).unwrap();
-    }
-}
-
-/// Component-only wrapper around the sole production attempt implementation.
-/// Immutable accepted input owns this fixture invocation; no signed carrier,
-/// complete phase archive, finality, or publication authorization is fabricated.
-#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
-impl StateBlock<'_> {
-    pub(crate) fn execute_component_network_source(
-        &mut self,
-        accepted: AcceptedTransaction<'_>,
-        cache: &mut IvmCache,
-        execution_index: Option<u64>,
-        routing: Option<RoutingDecision>,
-    ) -> Result<iroha_data_model::transaction::TransactionResultInner, String> {
-        struct ComponentOwner<'a, 'state> {
-            state: &'a mut StateBlock<'state>,
-            finished: bool,
-        }
-        impl Drop for ComponentOwner<'_, '_> {
-            fn drop(&mut self) {
-                if !self.finished {
-                    self.state.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
-                }
-            }
-        }
-        if self.execution_output_plan.is_some() || self.merge_execution_prefix.is_some() {
-            return Err("component invocation cannot replace a carrier owner".into());
-        }
-        let input = accepted.entrypoint().clone();
-        let routing = match routing {
-            Some(route) => route,
-            None => evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                &self.nexus,
-                &accepted,
-                &self.world,
-                u64::try_from(self._curr_block.creation_time().as_millis())
-                    .map_err(|_| "component timestamp exceeds u64")?,
-                self._curr_block.height().get(),
-            )
-            .map_err(|error| error.to_string())?
-            .coordinator_route(),
+        let world = state.world.view();
+        let source = input();
+        let genesis_routes = RoutingInputs {
+            policy: None,
+            lanes: world.sumeragi_lanes(),
+            dataspaces: &world.dataspace_catalog,
+            world: &world,
+            ledger_time_ms: 1_000,
         };
-        let (_, output) = self.fastpq_source_policy_at_block_start();
-        let phases =
-            iroha_data_model::block::output_budget::ExecutionOutputTerminalCeilings::derive()?
-                .envelope(0, 0)
-                .reservations(1, &output.limits())?;
-        let mut budget = ExecutionOutputBudget::new(output.limits(), phases)?;
-        self.execution_output_plan = Some(ExecutionOutputPlanState::Running);
-        let mut owner = ComponentOwner {
-            state: self,
-            finished: false,
-        };
-        let height = owner.state._curr_block.height().get();
-        let reservation = budget.begin(ExecutionOutputV1::network_output_limit_rejection(0))?;
-        let row = execute_network_attempt(
-            owner.state,
-            std::slice::from_ref(&input),
-            &input,
-            0,
-            execution_index.unwrap_or(0),
-            height,
-            routing,
-            Ok(accepted),
-            false,
-            reservation,
-            cache,
-        )?;
-        budget.finish()?;
-        let ExecutionOutputV1::Network(row) = row else {
-            return Err("component invocation produced a non-Network row".into());
-        };
-        if !row.result.batch_transfer_outcomes().is_empty() {
-            owner.state.batch_transfer_outcomes.insert(
-                HashOf::from_untyped_unchecked(Hash::from(input.execution_call_hash())),
-                row.result.batch_transfer_outcomes().to_vec(),
-            );
-        }
-        owner.state.execution_output_plan = None;
-        owner.finished = true;
-        Ok(row.result.0)
+        assert_eq!(
+            freeze_network_route(&source, None, Some(genesis_routes), 1).unwrap(),
+            RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL)
+        );
+        assert!(
+            freeze_network_route::<crate::state::WorldView<'_>>(&source, None, None, 2).is_err()
+        );
+        let mut original =
+            ExternalExecutionContext::new(source.hash(), LaneId::new(7), DataSpaceId::new(9));
+        assert_eq!(
+            freeze_network_route::<crate::state::WorldView<'_>>(&source, Some(&original), None, 2)
+                .unwrap(),
+            RoutingDecision::new(LaneId::new(7), DataSpaceId::new(9))
+        );
+        original.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign source"));
+        assert!(
+            freeze_network_route::<crate::state::WorldView<'_>>(&source, Some(&original), None, 2)
+                .is_err()
+        );
     }
 }

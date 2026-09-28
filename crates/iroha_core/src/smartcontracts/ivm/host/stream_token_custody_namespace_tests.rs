@@ -82,7 +82,7 @@ fn custody_namespace_scoped_host() -> CoreHost {
 
 fn custody_namespace_vm(paths: &[StatePath]) -> IVM {
     let program = build_authenticated_test_contract_program_with_states(
-        &ivm::encoding::wide::encode_halt().to_le_bytes(),
+        &[],
         0,
         false,
         paths
@@ -368,7 +368,7 @@ fn stream_token_custody_namespace_scan_rejects_a_declared_opaque_map() {
     let root: StatePath = "sorafs_stream_token_custody_v1".parse().unwrap();
     let user: StatePath = "sorafs_stream_token_custody_v1x".parse().unwrap();
     let program = build_authenticated_test_contract_program_with_states(
-        &ivm::encoding::wide::encode_halt().to_le_bytes(),
+        &[],
         0,
         false,
         [root.clone(), user.clone()]

@@ -718,9 +718,9 @@ fn next_unfrozen_election_height(
         .ok_or_else(|| Error::InvariantViolation("validator epoch boundary overflowed".into()))
 }
 
-/// Select an unfrozen global tenure from committed interval boundaries: the current NPoS
-/// epoch and any frozen preparations after it. Lengths are projected only after the last
-/// frozen interval, so a preparation with its own interval moves every later boundary.
+/// Select an unfrozen global tenure from authenticated interval boundaries.
+/// Future lengths are projected only after the last immutable interval; they are
+/// recomputed at execution and are never inferred from a genesis-height modulus.
 fn global_eligibility_from_intervals(
     current_first: u64,
     current_last: u64,
@@ -781,19 +781,19 @@ fn validator_eligibility_height(
     if lane_id != LaneId::SINGLE {
         return next_unfrozen_election_height(key_ready_height, length);
     }
-    // The current interval is the committed NPoS epoch containing the execution height; frozen
-    // preparations in World fix the intervals after it. No node-local finality is read.
-    // TODO(S8): once elections activate prepared committees at epoch boundaries, an activated
-    // preparation's interval (not the epoch arithmetic) becomes the current one.
-    let current =
-        crate::state::validator_committee::SchedulingEpoch::containing(execution_height, length)
-            .map_err(fail)?;
-    if key_ready_height < execution_height {
+    let (authority, current) =
+        crate::state::validator_committee::current_authority(state).map_err(fail)?;
+    current
+        .validate_against_authority(&authority)
+        .map_err(|error| fail(error.to_string()))?;
+    if execution_height < current.first_height
+        || execution_height > current.last_height
+        || key_ready_height < execution_height
+    {
         return Err(fail(
-            "validator key readiness precedes the scheduling execution height".into(),
+            "validator scheduling height lies outside the authenticated current interval".into(),
         ));
     }
-    let network = *state.network_id();
     let next_epoch = current
         .epoch
         .checked_add(1)
@@ -805,14 +805,14 @@ fn validator_eligibility_height(
     let next = world.validator_committee_transitions().get(&next_epoch);
     let future = world.validator_committee_transitions().get(&future_epoch);
     if let Some(next) = next {
-        current
-            .validate_prepared_successor(network, &next.preparation)
+        next.preparation
+            .validate_against_preparing_authorization(&current)
             .map_err(fail)?;
     }
     if let Some(future) = future {
         future.preparation.validate().map_err(fail)?;
         if execution_height != current.last_height
-            || future.preparation.network_id != network
+            || future.preparation.network_id != current.network_id
             || future.preparation.selection_height != current.last_height
             || future.preparation.selection_epoch != current.epoch
             || future.preparation.target_epoch != future_epoch
@@ -991,11 +991,14 @@ fn has_global_committee_obligation(
     record: &PublicLaneValidatorRecord,
 ) -> bool {
     record.lane_id == LaneId::SINGLE
-        && crate::state::validator_committee::peer_has_committee_obligation(
-            &state.world,
-            state.commit_topology.iter(),
-            &record.peer_id,
-        )
+        && (state
+            .native_epoch_boundary
+            .is_some_and(|guard| guard.retains_peer(&record.peer_id))
+            || crate::state::validator_committee::peer_has_committee_obligation(
+                &state.world,
+                state.commit_topology.iter(),
+                &record.peer_id,
+            ))
 }
 
 fn ensure_validator_deactivation_reached(
@@ -3797,7 +3800,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         set_fixture_xor_identity(&mut stx, &asset_def_id);
@@ -3834,7 +3837,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -3900,7 +3903,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -3931,7 +3934,7 @@ mod tests {
         let state = setup_state();
         let block = new_block_with_height(2);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let err = RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -3974,7 +3977,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let err = RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -4023,7 +4026,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
@@ -4062,7 +4065,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
@@ -4108,7 +4111,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
@@ -4154,7 +4157,7 @@ mod tests {
         let mut state = setup_state();
         set_epoch_length(&mut state, 3);
         let mut state_block = state.block(block_header_with_height(4));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let validator_peer = validator_peer_id(&validator);
         seed_consensus_key_for_role_with_heights(
@@ -4199,7 +4202,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let lane_id = LaneId::new(7);
         set_transaction_lane_catalog(
             &mut stx,
@@ -4253,7 +4256,7 @@ mod tests {
         let state = setup_state();
         let block = new_block_with_height(6);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let future_lane = LaneId::new(1);
         let mut autoscale_lane = LaneConfig {
             id: future_lane,
@@ -4321,7 +4324,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height(1);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let stake_lane = LaneId::new(0);
         let admin_lane = LaneId::new(1);
         set_transaction_lane_catalog(
@@ -4405,7 +4408,7 @@ mod tests {
         state_block.commit_empty_block_for_testing().unwrap();
         let block = new_block_with_height(2);
         let mut activation_block = state.block(block.as_ref().header());
-        let mut activation_tx = activation_block.transaction();
+        let mut activation_tx = activation_block.transaction_for_callback_testing();
         ActivatePublicLaneValidator {
             lane_id: stake_lane,
             validator: validator.clone(),
@@ -4454,7 +4457,7 @@ mod tests {
         state.set_pipeline(pipeline);
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         set_transaction_lane_catalog(
             &mut stx,
             LaneCatalog::new(
@@ -4524,7 +4527,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
@@ -4571,7 +4574,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let peer = validator_peer_id(&validator);
         let height = stx.block_height();
@@ -4618,7 +4621,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
 
         let participant_peer = validator_peer_id(&validator);
@@ -4700,7 +4703,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let foreign_peer = checked_peer_id();
         let _ = stx.world.peers.push(foreign_peer.clone());
@@ -4736,7 +4739,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, replacement, _, _) = prepare_accounts(&mut stx);
         let shared_peer = validator_peer_id(&validator);
         stx.commit_topology.get_mut().clear();
@@ -4788,7 +4791,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, stale_validator, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(144);
         let shared_peer = validator_peer_id(&validator);
@@ -4843,7 +4846,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height(4);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let replacement_key = checked_keypair();
@@ -4911,7 +4914,7 @@ mod tests {
         let mut state = setup_state();
         set_epoch_length(&mut state, 3);
         let mut registration_block = state.block(block_header_with_height(4));
-        let mut registration_stx = registration_block.transaction();
+        let mut registration_stx = registration_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut registration_stx);
         let first_key = checked_keypair();
         let second_key = checked_keypair();
@@ -4944,7 +4947,7 @@ mod tests {
             .unwrap();
 
         let mut safe_block = state.block(block_header_with_height(5));
-        let mut safe_stx = safe_block.transaction();
+        let mut safe_stx = safe_block.transaction_for_callback_testing();
         rebind_for_test(
             &safe_stx,
             lane_id,
@@ -4958,7 +4961,7 @@ mod tests {
         safe_block.commit_world_overlay_for_testing().unwrap();
 
         let mut frozen_block = state.block(block_header_with_height(9));
-        let mut frozen_stx = frozen_block.transaction();
+        let mut frozen_stx = frozen_block.transaction_for_callback_testing();
         let err = rebind_for_test(
             &frozen_stx,
             lane_id,
@@ -4984,7 +4987,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(46);
         let peer_id = validator_peer_id(&validator);
@@ -5025,7 +5028,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height(4);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, replacement, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(47);
         RegisterPublicLaneValidator {
@@ -5080,7 +5083,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height(4);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, stale_validator, _, _) = prepare_accounts(&mut stx);
         seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let lane_id = LaneId::new(147);
@@ -5142,7 +5145,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(152);
         let replacement_peer = checked_peer_id();
@@ -5182,7 +5185,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let replacement_peer = checked_peer_id();
@@ -5231,7 +5234,7 @@ mod tests {
             let state = setup_state();
             let block = new_block();
             let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let (validator, _, _, _) = prepare_accounts(&mut stx);
             seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
             let replacement_peer = checked_peer_id();
@@ -5279,7 +5282,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
@@ -5329,7 +5332,7 @@ mod tests {
         let mut state = setup_state();
         set_epoch_length(&mut state, 3);
         let mut state_block = state.block(block_header_with_height(7));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, mismatched_validator, _, _) = prepare_accounts(&mut stx);
         let valid_lane = LaneId::new(149);
         let mismatched_key_lane = LaneId::new(150);
@@ -5398,7 +5401,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
 
         let mut state_block = state.block(block_header_with_height(7));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (owner_validator, sibling_validator, _, _) = prepare_accounts(&mut stx);
         let owner_lane = LaneId::SINGLE;
         let sibling_lane = LaneId::new(1);
@@ -5461,7 +5464,7 @@ mod tests {
     fn activate_public_lane_validator_rejects_mismatched_public_lane_validator_row() {
         let state = setup_state();
         let mut state_block = state.block(block_header_with_height(1));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(154);
         insert_validator_record_for_key(
@@ -5498,7 +5501,7 @@ mod tests {
         let state = setup_state();
         let block = new_block_with_height_and_time(2, 1_000);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, mismatched_validator, _, _) = prepare_accounts(&mut stx);
         let valid_lane = LaneId::new(156);
         let mismatched_key_lane = LaneId::new(157);
@@ -5551,7 +5554,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         // Start in epoch 1 to avoid genesis, which allows immediate activation.
         let mut state_block = state.block(block_header_with_height(4));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -5583,7 +5586,7 @@ mod tests {
         stx.apply();
         state_block.commit_world_overlay_for_testing().unwrap();
         let mut activate_block = state.block(block_header_with_height(5));
-        let mut activate_stx = activate_block.transaction();
+        let mut activate_stx = activate_block.transaction_for_callback_testing();
         let err = ActivatePublicLaneValidator {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
@@ -5597,13 +5600,13 @@ mod tests {
         activate_stx.apply();
         activate_block.commit_world_overlay_for_testing().unwrap();
         let mut intermediate_block = state.block(block_header_with_height(6));
-        let intermediate_stx = intermediate_block.transaction();
+        let intermediate_stx = intermediate_block.transaction_for_callback_testing();
         intermediate_stx.apply();
         intermediate_block
             .commit_world_overlay_for_testing()
             .unwrap();
         let mut activate_block = state.block(block_header_with_height(10));
-        let mut activate_stx = activate_block.transaction();
+        let mut activate_stx = activate_block.transaction_for_callback_testing();
         ActivatePublicLaneValidator {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
@@ -5640,7 +5643,7 @@ mod tests {
         let mut state = setup_state();
         set_epoch_length(&mut state, 3);
         let mut state_block = state.block(block_header_with_height(6));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
 
         RegisterPublicLaneValidator {
@@ -5677,7 +5680,7 @@ mod tests {
     fn genesis_activation_allows_same_block() {
         let state = setup_state();
         let mut state_block = state.block(block_header_with_height(1));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -5729,7 +5732,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![LaneConfig {
@@ -5819,9 +5822,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-            b"record_rewards_rejects_mismatched_public_lane_validator_row",
-        ));
+        let mut stx = state_block.transaction_for_callback_testing();
         let lane_id = LaneId::new(59);
         let (_sink, validator, reward_asset, _) = configure_reward_fixture(&mut stx, lane_id, 500);
         let record = stx
@@ -5859,9 +5860,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-            b"out_of_order_sibling_lane_rewards_preserve_canonical_owner_reward_epoch",
-        ));
+        let mut stx = state_block.transaction_for_callback_testing();
 
         let owner_lane = LaneId::SINGLE;
         let serviced_lane = LaneId::new(1);
@@ -5947,7 +5946,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(161);
         insert_validator_record_for_key(
@@ -5982,7 +5981,7 @@ mod tests {
         // Start in epoch 1 to avoid genesis, which allows immediate activation.
         let block1 = new_block_with_height(4);
         let mut state_block = state.block(block1.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -6004,7 +6003,7 @@ mod tests {
         state_block.commit_world_overlay_for_testing().unwrap();
         let block2 = new_block_with_height(5);
         let mut state_block2 = state.block(block2.as_ref().header());
-        let stx2 = state_block2.transaction();
+        let stx2 = state_block2.transaction_for_callback_testing();
         stx2.apply();
         state_block2.commit_world_overlay_for_testing().unwrap();
         let block3 = new_block_with_height(6);
@@ -6024,12 +6023,14 @@ mod tests {
         );
         drop(view);
         let mut state_block3 = state.block(block3.as_ref().header());
-        let stx3 = state_block3.transaction();
+        let stx3 = state_block3.transaction_for_callback_testing();
         stx3.apply();
         state_block3.commit_world_overlay_for_testing().unwrap();
         for height in 7..=9 {
             let mut intermediate_block = state.block(block_header_with_height(height));
-            intermediate_block.transaction().apply();
+            intermediate_block
+                .transaction_for_callback_testing()
+                .apply();
             intermediate_block
                 .commit_world_overlay_for_testing()
                 .unwrap();
@@ -6073,7 +6074,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block1 = new_block_with_height(1);
         let mut state_block = state.block(block1.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -6102,12 +6103,12 @@ mod tests {
         // Insert an intermediate block to keep heights monotonic before the activation block.
         let block2 = new_block_with_height(2);
         let mut mid_block = state.block(block2.as_ref().header());
-        let mid_tx = mid_block.transaction();
+        let mid_tx = mid_block.transaction_for_callback_testing();
         mid_tx.apply();
         mid_block.commit_world_overlay_for_testing().unwrap();
         let block3 = new_block_with_height(3);
         let mut activation_block = state.block(block3.as_ref().header());
-        let mut stx3 = activation_block.transaction();
+        let mut stx3 = activation_block.transaction_for_callback_testing();
         let err = finalize_pending_activations(&mut stx3)
             .expect_err("regressing activation height must be rejected");
         assert!(matches!(
@@ -6120,7 +6121,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let (validator, _, _escrow, asset_def_id) = prepare_accounts(&mut stx);
         seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
@@ -6230,7 +6231,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(7);
@@ -6261,7 +6262,7 @@ mod tests {
         state_block.commit_world_overlay_for_testing().unwrap();
         let block2 = new_block_with_height_and_time(7, 10);
         let mut state_block = state.block(block2.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let (replacement, _kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
@@ -6326,7 +6327,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let (validator, _, escrow, asset_definition) = prepare_accounts(&mut stx);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
@@ -6390,7 +6391,7 @@ mod tests {
 
         let block = new_block_with_height_and_time(8, 0);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         stx.nexus.staking.stake_asset_id = asset_definition.to_string();
         set_fixture_xor_identity(&mut stx, &asset_definition);
@@ -6435,7 +6436,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(12);
@@ -6459,7 +6460,7 @@ mod tests {
         state_block.commit_world_overlay_for_testing().unwrap();
         let block2 = new_block_with_height_and_time(2, 5);
         let mut state_block = state.block(block2.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
@@ -6505,7 +6506,7 @@ mod tests {
         );
         let block3 = new_block_with_height_and_time(7, 10);
         let mut state_block = state.block(block3.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
@@ -6560,7 +6561,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(10);
@@ -6594,7 +6595,7 @@ mod tests {
         let block2 = new_block_with_height_and_time(2, 10);
         let mut state_block = state.block(block2.as_ref().header());
         let replacement = {
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let (replacement, _kp) = gen_account_in("nexus");
             Register::account(Account::new(replacement.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -6619,7 +6620,7 @@ mod tests {
         let block3 = new_block_with_height_and_time(3, 10);
         let mut state_block = state.block(block3.as_ref().header());
         {
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             stx.nexus.staking.max_validators = nonzero!(1u32);
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
             set_fixture_xor_identity(&mut stx, &asset_def_id);
@@ -6660,7 +6661,7 @@ mod tests {
         let block4 = new_block_with_height_and_time(7, 60);
         let mut state_block = state.block(block4.as_ref().header());
         {
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             stx.nexus.staking.max_validators = nonzero!(1u32);
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
             set_fixture_xor_identity(&mut stx, &asset_def_id);
@@ -6715,7 +6716,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let lane_id = LaneId::SINGLE;
         let (validator, _, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
@@ -6761,7 +6762,7 @@ mod tests {
         }
         let block = new_block_with_height(2);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         seed_validator_consensus_key(&mut stx, &validator_peer, ConsensusKeyStatus::Disabled);
         stx.apply();
         state_block.commit_empty_block_for_testing().unwrap();
@@ -6779,7 +6780,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let lane_id = LaneId::SINGLE;
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
@@ -6825,7 +6826,7 @@ mod tests {
         }
         let block = new_block_with_height(2);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let foreign_peer = checked_peer_id();
         let _ = stx.world.peers.push(foreign_peer.clone());
         stx.commit_topology.get_mut().clear();
@@ -6846,7 +6847,7 @@ mod tests {
         let state = setup_state();
         let block = new_block_with_height(1);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let lane_id = LaneId::SINGLE;
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
@@ -6892,7 +6893,7 @@ mod tests {
         }
         let block = new_block_with_height(2);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         if let Some(pos) = stx
             .world
             .peers
@@ -6930,7 +6931,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         RegisterPublicLaneValidator {
@@ -6995,7 +6996,7 @@ mod tests {
         state_block.commit_world_overlay_for_testing().unwrap();
         let early_block = new_block_with_height_and_time(2, release_at_ms);
         let mut early_state_block = state.block(early_block.as_ref().header());
-        let mut early_tx = early_state_block.transaction();
+        let mut early_tx = early_state_block.transaction_for_callback_testing();
         early_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         set_fixture_xor_identity(&mut early_tx, &asset_def_id);
         early_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
@@ -7023,7 +7024,7 @@ mod tests {
         drop(early_state_block);
         let finalize_block = new_block_with_height_and_time(8, release_at_ms);
         let mut finalize_state_block = state.block(finalize_block.as_ref().header());
-        let mut finalize_tx = finalize_state_block.transaction();
+        let mut finalize_tx = finalize_state_block.transaction_for_callback_testing();
         finalize_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         set_fixture_xor_identity(&mut finalize_tx, &asset_def_id);
         finalize_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
@@ -7089,7 +7090,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height_and_time(3, 0);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         let lane_id = LaneId::new(174);
@@ -7140,7 +7141,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         let lane_id = LaneId::new(83);
@@ -7272,7 +7273,7 @@ mod tests {
         state_block.commit_world_overlay_for_testing().unwrap();
         let finalize_block = new_block_with_height_and_time(8, release_at_ms);
         let mut finalize_state_block = state.block(finalize_block.as_ref().header());
-        let mut finalize_tx = finalize_state_block.transaction();
+        let mut finalize_tx = finalize_state_block.transaction_for_callback_testing();
         finalize_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         set_fixture_xor_identity(&mut finalize_tx, &asset_def_id);
         finalize_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
@@ -7321,7 +7322,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         stx.world.peers.clear();
         let res = RegisterPublicLaneValidator {
@@ -7346,7 +7347,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
 
         let (validator, _, escrow, asset_definition) = prepare_accounts(&mut stx);
         let owner_lane = LaneId::SINGLE;
@@ -7441,7 +7442,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         // Register matching peer so validator admission passes.
         let peer_id =
@@ -7484,7 +7485,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let peer_id =
             iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
@@ -7554,7 +7555,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(84);
         RegisterPublicLaneValidator {
@@ -7603,7 +7604,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(163);
         insert_validator_record_for_key(
@@ -7636,7 +7637,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let lane_id = LaneId::new(34);
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
         let peer_id =
@@ -7746,7 +7747,7 @@ mod tests {
         let state = setup_state();
         let block = new_block_with_height_and_time(1, 1_000);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let lane_id = LaneId::new(35);
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
@@ -7797,7 +7798,7 @@ mod tests {
         // Prepare replacement validator in a dedicated setup block.
         let setup_block = new_block_with_height_and_time(2, release_at_ms.saturating_sub(2_000));
         let mut setup_state_block = state.block(setup_block.as_ref().header());
-        let mut setup_tx = setup_state_block.transaction();
+        let mut setup_tx = setup_state_block.transaction_for_callback_testing();
         setup_tx.nexus.staking.max_validators = nonzero!(1u32);
         setup_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         set_fixture_xor_identity(&mut setup_tx, &asset_def_id);
@@ -7823,7 +7824,7 @@ mod tests {
         let prerelease_block = new_block_with_height_and_time(3, release_at_ms.saturating_sub(1));
         let mut prerelease_state_block = state.block(prerelease_block.as_ref().header());
         {
-            let mut prerelease_tx = prerelease_state_block.transaction();
+            let mut prerelease_tx = prerelease_state_block.transaction_for_callback_testing();
             prerelease_tx.nexus.staking.max_validators = nonzero!(1u32);
             prerelease_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
             set_fixture_xor_identity(&mut prerelease_tx, &asset_def_id);
@@ -7859,7 +7860,7 @@ mod tests {
             .unwrap();
         let post_block = new_block_with_height_and_time(4, release_at_ms.saturating_add(1));
         let mut post_state_block = state.block(post_block.as_ref().header());
-        let mut post_tx = post_state_block.transaction();
+        let mut post_tx = post_state_block.transaction_for_callback_testing();
         post_tx.nexus.staking.max_validators = nonzero!(1u32);
         post_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         set_fixture_xor_identity(&mut post_tx, &asset_def_id);
@@ -7915,7 +7916,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let peer_id =
             iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
@@ -7965,7 +7966,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let lane_id = LaneId::new(32);
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
         let peer_id =
@@ -8053,7 +8054,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, _, asset_def_id) = prepare_accounts(&mut stx);
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
         let delegator_balance = Quantity::from(10_000_u64);
@@ -8111,7 +8112,7 @@ mod tests {
             let state = setup_state();
             let block = new_block();
             let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let (validator, delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
             let lane_id = LaneId::new(210 + u32::try_from(index).expect("small status index"));
             RegisterPublicLaneValidator {
@@ -8212,7 +8213,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(165);
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
@@ -8284,7 +8285,7 @@ mod tests {
         state.nexus.get_mut().staking.min_validator_stake = 2_000_u64.into();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let res = RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -8308,7 +8309,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let missing_peer = iroha_model_base::peer::PeerId::from(
             validator
@@ -8350,7 +8351,7 @@ mod tests {
         state.nexus.get_mut().staking.unbonding_delay = Duration::from_secs(10);
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -8385,7 +8386,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_stake_shares_per_validator = nonzero!(1_u32);
         let (validator, delegator, _escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(171);
@@ -8472,7 +8473,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_pending_unbonds_per_share = nonzero!(2_u32);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         let (validator, _delegator, _escrow, _asset_definition) = prepare_accounts(&mut stx);
@@ -8554,7 +8555,7 @@ mod tests {
         state.nexus.get_mut().staking.unbonding_delay = Duration::from_millis(0);
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(167);
         RegisterPublicLaneValidator {
@@ -8618,7 +8619,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         // Route slashes to the delegator account to ensure the transfer is observable.
         stx.nexus.staking.slash_sink_account_id = delegator.to_string();
@@ -8714,7 +8715,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(173);
         stx.nexus.staking.slash_sink_account_id = delegator.to_string();
@@ -8811,7 +8812,7 @@ mod tests {
         set_epoch_length(&mut state, 3);
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(175);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
@@ -8854,7 +8855,7 @@ mod tests {
 
         let slash_block = new_block_with_height_and_time(7, 1);
         let mut slash_state_block = state.block(slash_block.as_ref().header());
-        let mut slash_tx = slash_state_block.transaction();
+        let mut slash_tx = slash_state_block.transaction_for_callback_testing();
         slash_tx.nexus.staking.stake_asset_id = asset_definition.to_string();
         set_fixture_xor_identity(&mut slash_tx, &asset_definition);
         slash_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
@@ -8906,7 +8907,7 @@ mod tests {
                 &slash_tx,
                 lane_id,
                 &validator,
-                4,
+                7,
                 Quantity::from(1_u64),
             ),
             lane_id,
@@ -8934,7 +8935,7 @@ mod tests {
                 &slash_tx,
                 lane_id,
                 &validator,
-                4,
+                7,
                 Quantity::from(101_u64),
             ),
             lane_id,
@@ -8966,7 +8967,7 @@ mod tests {
                 &slash_tx,
                 lane_id,
                 &validator,
-                4,
+                7,
                 Quantity::from(100_u64),
             ),
             lane_id,
@@ -8999,7 +9000,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let lane_id = LaneId::new(13);
         let (validator, escrow_asset, sink_asset, staking_config) = {
-            let mut transaction = state_block.transaction();
+            let mut transaction = state_block.transaction_for_callback_testing();
             let (validator, delegator, escrow, asset_definition_id) =
                 prepare_accounts(&mut transaction);
             transaction.nexus.staking.slash_sink_account_id = delegator.to_string();
@@ -9151,7 +9152,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(169);
         let escrow_asset = AssetId::new(asset_def_id, escrow);
@@ -9224,7 +9225,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(171);
         stx.nexus.staking.max_slash_bps = 10_000;
@@ -9559,7 +9560,7 @@ mod tests {
         state.nexus.get_mut().staking.max_slash_bps = 1_000; // 10%
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -9613,8 +9614,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block
-            .transaction_for_fastpq_testing(Hash::new(b"record_rewards_rejects_underfunded_sink"));
+        let mut stx = state_block.transaction_for_callback_testing();
         let (_sink, validator, reward_asset, _) =
             configure_reward_fixture(&mut stx, LaneId::new(11), 50);
         let share = PublicLaneRewardShare {
@@ -9641,8 +9641,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block
-            .transaction_for_fastpq_testing(Hash::new(b"record_rewards_rejects_stale_epoch"));
+        let mut stx = state_block.transaction_for_callback_testing();
         let (_sink, validator, reward_asset, _) =
             configure_reward_fixture(&mut stx, LaneId::new(8), 500);
         let share = PublicLaneRewardShare {
@@ -9676,9 +9675,7 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-            b"record_rewards_rejects_zero_share_amounts",
-        ));
+        let mut stx = state_block.transaction_for_callback_testing();
         let (_sink, validator, reward_asset, _) =
             configure_reward_fixture(&mut stx, LaneId::new(0), 100);
         let share = PublicLaneRewardShare {

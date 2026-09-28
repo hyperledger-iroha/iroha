@@ -5,7 +5,6 @@ mod tests {
     fn cuda_generated_ptx_files_exist() {
         let out_dir = env!("OUT_DIR");
         let files = [
-            "add.ptx",
             "aes.ptx",
             "bitonic_sort.ptx",
             "bn254.ptx",

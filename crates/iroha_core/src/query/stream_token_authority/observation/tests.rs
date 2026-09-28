@@ -443,3 +443,6 @@ fn preparation_rejects_wrong_scope_and_binding_consumes_substituted_transaction(
         Some(Error::Transaction)
     );
 }
+
+#[path = "tests/single_walk.rs"]
+mod single_walk;

@@ -921,3 +921,64 @@ fn charged_notification_retains_original_control_through_observers_and_deferred_
     drop(same);
     assert_eq!(refunds.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn deferred_notice_merge_retains_exact_source_and_never_wakes_early() {
+    let source = ReleaseNotification::default();
+    let foreign = ReleaseNotification::default();
+    let physical = Mutex::new(());
+    let mut batch = source.deferred_batch();
+    let mut wrong = foreign.deferred_batch();
+    let mut wait = source.observe().wait_for_release();
+    let wake = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wake).is_pending());
+    for _ in 0..3 {
+        let (_, notice) = source
+            .guard(physical.lock().unwrap())
+            .release_deferred(drop);
+        assert!(physical.try_lock().is_ok());
+        let notice = match notice.try_merge_into(&mut wrong) {
+            Err(original) => original,
+            Ok(()) => panic!("foreign source accepted actual release"),
+        };
+        assert!(notice.try_merge_into(&mut batch).is_ok());
+        assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+        assert!(poll(&mut wait, &wake).is_pending());
+    }
+    drop(wrong);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    drop(batch);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    assert!(poll(&mut wait, &wake).is_ready());
+}
+
+#[test]
+fn deferred_notice_merge_preserves_poison_after_rejected_transfer() {
+    let source = ReleaseNotification::default();
+    let foreign = ReleaseNotification::default();
+    let mut exact = source.deferred_batch();
+    let mut wrong = foreign.deferred_batch();
+    let observation = source.observe();
+    let physical = Mutex::new(());
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = physical.lock().unwrap();
+        panic!("actual original physical poison");
+    });
+    assert!(physical.is_poisoned());
+    let guard = ReleaseGuard {
+        inner: Some(physical.lock().unwrap_or_else(|poison| poison.into_inner())),
+        notification: &source,
+        poison: PoisonPolicy::Fixed(physical.is_poisoned()),
+    };
+    let (_, notice) = guard.release_deferred(drop);
+    let notice = match notice.try_merge_into(&mut wrong) {
+        Err(original) => original,
+        Ok(()) => panic!("foreign poison source accepted"),
+    };
+    assert!(notice.try_merge_into(&mut exact).is_ok());
+    assert!(!observation.is_poisoned());
+    drop(wrong);
+    assert!(!foreign.observe().is_poisoned());
+    drop(exact);
+    assert!(observation.is_poisoned());
+}

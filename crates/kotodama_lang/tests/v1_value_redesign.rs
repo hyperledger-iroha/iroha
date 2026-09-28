@@ -216,3 +216,178 @@ fn exact_rejection_requires_expected_while_catch_all_stays_explicit() {
         .analyze(&catch_all)
         .expect("the explicitly named catch-all helper accepts three labeled arguments");
 }
+
+#[test]
+fn structural_equality_accepts_nested_values_and_consumes_results() {
+    let source = r#"seiyaku Equality {
+        error enum Failure { Missing = 1; Denied = 2 }
+        struct Record { () marker; (int, bool) pair; Option<List<Result<quantity, Failure>, 2>> values; }
+        fn compare(Record left, Record right) -> bool { left == right }
+        fn different(Record left, Record right) -> bool { left != right }
+        view fn main() -> bool {
+            let Record first = Record { marker: (), pair: (3, true), values: Option::some([Result::ok(4)]) };
+            let Record second = Record { marker: (), pair: (3, true), values: Option::some([Result::ok(4)]) };
+            compare(left: first, right: second)
+        }
+    }"#;
+    Compiler::new()
+        .compile_source(source)
+        .expect("compile recursive value equality");
+    checked("fn f() { let left = [quantity::try_from_int(1)]; let right = [quantity::try_from_int(1)]; let equal = left == right; }")
+        .expect("whole-value comparison consumes both Result collections");
+    checked("fn f() { let left = Option::some(quantity::try_from_int(1)); let right = Option::some(quantity::try_from_int(1)); let different = left != right; }")
+        .expect("whole-value inequality consumes nested Result payloads");
+    checked("fn f(List<StateCursor<int>, 2> values, StateCursor<int> cursor) -> bool { values.contains(cursor) }")
+        .expect("contains and equality share the same canonical cursor comparison");
+}
+
+#[test]
+fn structural_equality_preserves_nominal_types_and_resource_rejections() {
+    for source in [
+        "struct Left { int value; } struct Right { int value; } fn f(Left left, Right right) -> bool { left == right }",
+        "error enum Left { Failed = 1 } error enum Right { Failed = 1 } fn f(Option<Left> left, Option<Right> right) -> bool { left != right }",
+        "fn f(List<int, 2> left, List<int, 3> right) -> bool { left == right }",
+        "fn f((int, bool) left, (decimal, bool) right) -> bool { left == right }",
+        "fn f(StateMap<int, int> left, StateMap<int, int> right) -> bool { left == right }",
+    ] {
+        rejected(source, "K2003");
+    }
+}
+
+#[test]
+fn structural_equality_handles_only_results_on_executed_paths() {
+    rejected(
+        "fn f(bool compare) { let left = Option::some(quantity::try_from_int(1)); let right = Option::some(quantity::try_from_int(1)); if compare { let equal = left == right; } }",
+        "E_RESULT_MUST_USE",
+    );
+    checked("fn f(bool compare) { let left = Option::some(quantity::try_from_int(1)); let right = Option::some(quantity::try_from_int(1)); if compare { let equal = left == right; } else { let _ = left; let _ = right; } }")
+        .expect("both branches handle the complete compared values");
+}
+
+#[test]
+fn call_tables_flatten_large_products_and_bind_all_callable_signatures() {
+    use ivm_abi::call::CallWordV1;
+    let fields = (0..32)
+        .map(|index| format!("bool f{index}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let source = format!(
+        "seiyaku Wide {{ struct Record {{ {fields}; }} fn echo(Record value) -> Record {{ value }} view fn main(Record value) -> Record {{ echo(value: value) }} }}"
+    );
+    let bytes = Compiler::new()
+        .compile_source(&source)
+        .expect("compile 32-word arguments and results");
+    let parsed = ivm_abi::metadata::ProgramMetadata::parse(&bytes).expect("parse artifact");
+    let interface = parsed.contract_interface.expect("CNTR");
+    assert_eq!(interface.callables.len(), 2);
+    assert!(
+        interface
+            .callables
+            .windows(2)
+            .all(|pair| pair[0].entry_pc < pair[1].entry_pc)
+    );
+    for callable in &interface.callables {
+        assert_eq!(callable.argument_words, vec![CallWordV1::Bool; 32]);
+        assert_eq!(callable.result_words, vec![CallWordV1::Bool; 32]);
+        assert!(callable.validate());
+        assert!(callable.frame_bytes >= 16);
+    }
+    let main = &interface.entrypoints[0];
+    assert!(
+        interface
+            .callables
+            .iter()
+            .any(|callable| callable.entry_pc == main.entry_pc)
+    );
+    assert_eq!(
+        main.argument_schema.as_ref().unwrap().word_count(),
+        Some(32)
+    );
+    assert_eq!(main.return_schema.as_ref().unwrap().word_count(), Some(32));
+}
+
+#[test]
+fn call_tables_preserve_8192_word_bound_without_a_register_fast_path() {
+    let limit = ivm_abi::call::MAX_CALL_WORDS_V1;
+    let parameters = (0..=limit)
+        .map(|index| format!("bool p{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "seiyaku Bound {{ fn too_wide({parameters}) -> bool {{ p0 }} view fn main() -> bool {{ true }} }}"
+    );
+    let error = kotodama_lang::session::CompilerSession::default()
+        .check(kotodama_lang::session::CompileRequest {
+            source: &source,
+            source_name: Some("bound.ko"),
+        })
+        .expect_err("one word beyond the table bound is rejected before lowering");
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "K2007" && diagnostic.message.contains("8192"))
+    );
+    let inclusive = source.replace(&format!(", bool p{limit}"), "");
+    kotodama_lang::session::CompilerSession::default()
+        .check(kotodama_lang::session::CompileRequest {
+            source: &inclusive,
+            source_name: Some("inclusive.ko"),
+        })
+        .expect("exactly 8192 argument words remain valid");
+    let source = "seiyaku Small { fn echo(bool value) -> bool { value } view fn main() -> bool { echo(value: true) } }";
+    let bytes = Compiler::new()
+        .compile_source(source)
+        .expect("small calls use the same descriptor");
+    let interface = ivm_abi::metadata::ProgramMetadata::parse(&bytes)
+        .unwrap()
+        .contract_interface
+        .unwrap();
+    assert_eq!(interface.callables.len(), 2);
+    assert!(
+        interface
+            .callables
+            .iter()
+            .all(|callable| callable.frame_bytes >= 16)
+    );
+    assert!(
+        interface
+            .callables
+            .iter()
+            .any(|callable| callable.argument_words.is_empty())
+    );
+    assert!(
+        interface
+            .callables
+            .iter()
+            .any(|callable| callable.argument_words.len() == 1)
+    );
+}
+
+#[test]
+fn call_tables_reject_oversized_shared_product_returns_before_lowering() {
+    let mut declarations = "struct B0 { bool bit; }".to_owned();
+    for level in 1..=14 {
+        declarations.push_str(&format!(
+            " struct B{level} {{ B{} left; B{} right; }}",
+            level - 1,
+            level - 1
+        ));
+    }
+    let source = format!(
+        "seiyaku Bound {{ {declarations} fn too_wide(B13 value) -> B14 {{ B14 {{ left: value, right: value }} }} view fn main() -> bool {{ true }} }}"
+    );
+    let error = kotodama_lang::session::CompilerSession::default()
+        .check(kotodama_lang::session::CompileRequest {
+            source: &source,
+            source_name: Some("return-bound.ko"),
+        })
+        .expect_err("16384-word product result is rejected without expanding shared type storage");
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "K2007"
+                && diagnostic.message.contains("returns more than 8192"))
+    );
+}

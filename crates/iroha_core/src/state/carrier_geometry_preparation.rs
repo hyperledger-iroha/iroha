@@ -418,35 +418,7 @@ impl StateBlock<'_> {
             if pending.transition.requires_geometry() {
                 let mut prospective = previous_nexus.clone();
                 prospective.dataspace_catalog = update.updated_dataspace_catalog.clone();
-                let derivation_header = if let Some(entry) = self
-                    .staged_merge_entry
-                    .as_ref()
-                    .filter(|_| pending.runtime_catalog.is_some())
-                    .filter(|entry| entry.execution_batch.is_some())
-                {
-                    let batch = entry
-                        .execution_batch
-                        .as_ref()
-                        .expect("filtered execution batch");
-                    if !crate::merge::merge_execution_batch_commitments_match(batch)
-                        || batch.application_block_header
-                            != crate::merge::merge_application_header_from_carrier(
-                                &self._curr_block,
-                            )
-                        || batch.application_block_header.height() != self._curr_block.height()
-                        || entry.merge_qc.carrier_height != self._curr_block.height().get()
-                        || batch.application_block_header.prev_block_hash()
-                            != Some(entry.merge_qc.carrier_parent_hash)
-                        || batch.application_block_header.view_change_index() != entry.merge_qc.view
-                    {
-                        return Err(runtime_catalog_invalid(
-                            "geometry derivation has no exact certified carrier header",
-                        ));
-                    }
-                    batch.application_block_header.hash()
-                } else {
-                    self._curr_block.hash()
-                };
+                let derivation_header = self._curr_block.hash();
                 let expected = prepare_lane_lifecycle_update(
                     &prospective,
                     &previous_incarnations,

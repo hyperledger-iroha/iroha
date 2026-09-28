@@ -393,9 +393,25 @@ final class ToriiContractAPITests: XCTestCase {
                 timestampMs: 4_102_444_801_000,
                 nonce: "canonical-read-test"
             )
-            for (name, value) in expectedHeaders {
+            for (name, value) in expectedHeaders
+                where name != ToriiCanonicalRequest.headerSignature {
                 XCTAssertEqual(request.value(forHTTPHeaderField: name), value)
             }
+            let encodedSignature = try XCTUnwrap(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+            )
+            let signature = try XCTUnwrap(Data(base64Encoded: encodedSignature))
+            XCTAssertEqual(signature.base64EncodedString(), encodedSignature)
+            let signedMessage = try ToriiCanonicalRequest.signatureMessage(
+                networkId: TestNetworkIds.canonical,
+                method: "POST",
+                url: try XCTUnwrap(request.url),
+                body: bodyData,
+                timestampMs: 4_102_444_801_000,
+                nonce: "canonical-read-test"
+            )
+            let signer = try Curve25519.Signing.PrivateKey(rawRepresentation: self.signingSeed)
+            XCTAssertTrue(signer.publicKey.isValidSignature(signature, for: signedMessage))
             XCTAssertNil(body["private_key"])
             XCTAssertNil(body["draft_intent"])
             XCTAssertEqual(

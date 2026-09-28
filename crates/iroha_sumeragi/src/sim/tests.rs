@@ -417,7 +417,7 @@ fn report() {
 }
 
 /// F37 (§3.7): flagged blocks commit under forging, withholding and stripping members, and
-/// each committed flagged block's `CommitQC` carries at least `q` valid attestations (the O-ATT
+/// each committed flagged block's `CommitQC` carries exactly `q` valid attestations (the O-ATT
 /// oracle checks every honest commit; this counts that flagged blocks were committed at all).
 #[test]
 fn f37_commit_attestation() {
@@ -455,6 +455,8 @@ fn o_att_requires_exactly_q_attested_signers() {
     let committee = inst.committee(1).clone();
     let (n, q) = (committee.n(), committee.q());
     let header = BlockHeader {
+        epoch: inst.config(1).epoch.id,
+        control_witness: crate::types::ControlWitness::empty(),
         instance: inst.id,
         height: 1,
         origin_view: 0,
@@ -471,11 +473,15 @@ fn o_att_requires_exactly_q_attested_signers() {
         payload: vec![0],
     };
     let (bh, result) = (Hash32([2; 32]), Hash32([3; 32]));
-    let statement = preimage::att_preimage(&inst.id, 1, &bh, &result);
+    let statement = preimage::att_preimage(&inst.id, &inst.config(1).epoch.id, 1, &bh, &result);
     let qc_of = |count: usize| {
         let signers: Vec<u32> = (0..u32::try_from(count).unwrap()).collect();
         Qc {
+            attestation_witness: Some(
+                crate::message::ResultWitness::from_untrusted(statement.clone()).unwrap(),
+            ),
             kind: VoteKind::Commit,
+            epoch: inst.config(1).epoch.id,
             instance: inst.id,
             height: 1,
             view: 0,
@@ -485,7 +491,7 @@ fn o_att_requires_exactly_q_attested_signers() {
             signers: Bitmap::from_indices(n, signers.iter().copied()).unwrap(),
             agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
             attestations: (signers.iter())
-                .map(|i| fake_attestation(committee.get(*i).unwrap(), 1, &statement))
+                .map(|i| fake_attestation(committee.get(*i).unwrap(), 1, &statement).signature)
                 .collect(),
         }
     };
@@ -640,5 +646,88 @@ fn io_kill_at_each_write_completion() {
             assert_eq!(world.stats.crashes, 1, "nth {nth}");
             assert!(world.committed(0) >= 5, "nth {nth}: {}", world.committed(0));
         }
+    }
+}
+
+/// O-CERT counts one exact quorum independently of the production certificate verifier.
+#[test]
+fn o_cert_requires_exactly_q_signers() {
+    use super::crypto::SimSigner;
+    use crate::{
+        crypto::{Crypto, Signer},
+        message::{Qc, TcEntry, TimeoutCert, VoteKind},
+        preimage,
+        testing::FakeCrypto,
+        types::{AggregateSignature, Bitmap, Hash32, SIGNATURE_LEN},
+    };
+    let world = World::new(scenarios::f37(0));
+    let instance = &world.instances[0];
+    let committee = instance.committee(1);
+    let (n, q) = (committee.n(), committee.q());
+    let crypto = FakeCrypto::new();
+    for count in [q - 1, q, q + 1] {
+        let indices: Vec<_> = (n - count..n).map(crate::types::index_of).collect();
+        for kind in [VoteKind::Prepare, VoteKind::Commit] {
+            let mut qc = Qc {
+                attestation_witness: None,
+                kind,
+                epoch: instance.config(1).epoch.id,
+                instance: instance.id,
+                height: 1,
+                view: 0,
+                block_hash: Hash32([2; 32]),
+                result: Hash32([3; 32]),
+                attest: false,
+                signers: Bitmap::from_indices(n, indices.iter().copied()).unwrap(),
+                agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
+                attestations: Vec::new(),
+            };
+            let signatures: Vec<_> = indices
+                .iter()
+                .map(|index| {
+                    SimSigner::new(
+                        committee.get(*index).unwrap().clone(),
+                        None,
+                        world.log.clone(),
+                    )
+                    .sign(&qc.preimage())
+                })
+                .collect();
+            qc.agg_sig = crypto.aggregate(&signatures);
+            assert_eq!(
+                world.cert_qc(0, &qc).is_ok(),
+                count == q,
+                "kind={kind:?}, count={count}"
+            );
+        }
+        let preimage =
+            preimage::tmo_preimage(&instance.id, &instance.config(1).epoch.id, 1, 0, None);
+        let signatures: Vec<_> = indices
+            .iter()
+            .map(|index| {
+                SimSigner::new(
+                    committee.get(*index).unwrap().clone(),
+                    None,
+                    world.log.clone(),
+                )
+                .sign(&preimage)
+            })
+            .collect();
+        let tc = TimeoutCert {
+            epoch: instance.config(1).epoch.id,
+            instance: instance.id,
+            height: 1,
+            view: 0,
+            entries: indices
+                .iter()
+                .map(|signer| TcEntry {
+                    signer: *signer,
+                    hq: None,
+                })
+                .collect(),
+            agg_sig: crypto.aggregate(&signatures),
+            high_pqc: None,
+        };
+        assert_eq!(world.cert_tc(0, &tc).is_ok(), count == q, "count={count}");
     }
 }

@@ -46,6 +46,9 @@ fn historical_autonomous_merge_recovers_certified_carrier_before_world_replay_on
     );
 
     let cold = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::default(),
         Arc::clone(&state.kura),
         LiveQueryStore::start_test(),
@@ -288,7 +291,11 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
     let snapshot = norito::json::to_value(state).expect("native State snapshot");
     let height = NonZeroUsize::new(carrier.header().height().get() as usize).unwrap();
     let restore = |lane_manifests: LaneManifestRegistryHandle| {
-        deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             kura: Arc::clone(&state.kura),
             lane_manifests,
             query_handle: LiveQueryStore::start_test(),
@@ -318,7 +325,11 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
             norito::json::to_value(&vec![foreign]).unwrap()
         };
         cell.insert("blocks".to_owned(), value);
-        let error = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        let error = deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             kura: Arc::clone(&state.kura),
             lane_manifests: Arc::clone(&baseline),
             query_handle: LiveQueryStore::start_test(),

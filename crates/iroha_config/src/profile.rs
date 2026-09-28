@@ -344,8 +344,6 @@ pub struct GenesisRecipeV1 {
     pub block_max_transactions: u64,
     /// Signed IVM gas budget per block.
     pub ivm_gas_limit_per_block: u64,
-    /// `NPoS` seat allocation band.
-    pub npos_seat_band_pct: u8,
     /// `NPoS` minimum self bond.
     pub npos_min_self_bond: u64,
 }
@@ -531,7 +529,6 @@ struct GenesisRecipeFile {
     epoch_length_blocks: u64,
     block_max_transactions: u64,
     ivm_gas_limit_per_block: u64,
-    npos_seat_band_pct: u8,
     npos_min_self_bond: u64,
 }
 
@@ -703,7 +700,6 @@ impl Profile {
                 epoch_length_blocks: file.genesis_recipe.epoch_length_blocks,
                 block_max_transactions: file.genesis_recipe.block_max_transactions,
                 ivm_gas_limit_per_block: file.genesis_recipe.ivm_gas_limit_per_block,
-                npos_seat_band_pct: file.genesis_recipe.npos_seat_band_pct,
                 npos_min_self_bond: file.genesis_recipe.npos_min_self_bond,
             },
             static_config,

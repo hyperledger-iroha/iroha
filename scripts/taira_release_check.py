@@ -1107,7 +1107,7 @@ CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters
     'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
     'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
     'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
-    'zk::debug_backend_tests::halo2_ivm_replay_binding_rejects_relabelled_demo_verifying_key',
+    'zk::debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
 )), )
 
 CORE_PENDING_KURA_RECOVERY_STAGES = (("standalone and linked Apply recovery across retained Kura shutdown", (

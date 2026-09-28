@@ -51,12 +51,13 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 4,
         abi_version: 1,
     };
     let embedded_entrypoints = entrypoints
         .iter()
-        .map(|entrypoint| ivm::EmbeddedEntrypointDescriptor {
+        .enumerate()
+        .map(|(index, entrypoint)| ivm::EmbeddedEntrypointDescriptor {
             name: entrypoint.name.clone(),
             kind: entrypoint.kind,
             params: entrypoint.params.clone(),
@@ -69,10 +70,24 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
             access_hints_complete: entrypoint.access_hints_complete,
             access_hints_skipped: entrypoint.access_hints_skipped.clone(),
             triggers: entrypoint.triggers.clone(),
-            entry_pc: 0,
+            entry_pc: u64::try_from(index).unwrap() * 16,
         })
         .collect();
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: entrypoints
+            .iter()
+            .enumerate()
+            .map(|(index, entrypoint)| {
+                assert!(entrypoint.params.is_empty());
+                assert_eq!(entrypoint.return_type.as_deref(), Some("()"));
+                ivm::call::EmbeddedCallableV1 {
+                    entry_pc: u64::try_from(index).unwrap() * 16,
+                    frame_bytes: 0,
+                    argument_words: Vec::new(),
+                    result_words: vec![ivm::call::CallWordV1::Unit],
+                }
+            })
+            .collect(),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "contract-manifest-trigger-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -84,12 +99,47 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
         states: Vec::new(),
     };
     let mut code = Vec::new();
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for _ in &entrypoints {
+        for instruction in [
+            ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+            ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+        ] {
+            code.extend_from_slice(&instruction.to_le_bytes());
+        }
+    }
     let mut out = meta.encode();
     out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
     let verified = ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
     (out, verified.manifest)
+}
+#[test]
+fn trigger_fixture_authenticates_each_distinct_unit_return_entrypoint() {
+    let (_, manifest) = ivm::KotodamaCompiler::new()
+        .compile_source_with_manifest(
+            "seiyaku TriggerFixture { view fn run() { () } view fn arm() { () } }",
+        )
+        .unwrap();
+    let (program, _) = contract_artifact(manifest.entrypoints.unwrap());
+    let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+    let interface = metadata.contract_interface.as_ref().unwrap();
+    assert_eq!(interface.callables.len(), 2);
+    assert_ne!(
+        interface.entrypoints[0].entry_pc,
+        interface.entrypoints[1].entry_pc
+    );
+    for entrypoint in &interface.entrypoints {
+        let mut vm = ivm::IVM::new(100_000);
+        vm.load_program(&program).unwrap();
+        vm.set_program_counter(metadata.prefix_len() as u64 + entrypoint.entry_pc)
+            .unwrap();
+        vm.run()
+            .expect("each trigger target completes its own Unit table");
+        assert_eq!(vm.call_result_word_count().unwrap(), 1);
+        assert_eq!(vm.public_call_result_word(0).unwrap(), 0);
+    }
 }
 fn checked_random_contract_manifest_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked contract manifest signer keypair")

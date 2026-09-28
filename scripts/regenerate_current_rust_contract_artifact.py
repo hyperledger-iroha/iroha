@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -262,6 +263,35 @@ def _resolve_input_file(raw: Path, label: str, *, executable: bool = False) -> P
     if executable and metadata.st_mode & 0o111 == 0:
         raise FixtureError(f"{label} is not executable: {candidate}")
     return candidate
+
+
+def _default_git_path(*, platform: str | None = None) -> Path:
+    """Select a copyable Git executable for the sealed input stage."""
+
+    platform = sys.platform if platform is None else platform
+    if platform == "darwin":
+        # `/usr/bin/git` is Apple's arm64e command-line-tools shim. It runs in
+        # place but macOS kills a private sealed copy before it can enumerate
+        # source inputs. xcrun resolves the real developer-tools executable.
+        try:
+            found = subprocess.run(
+                ["/usr/bin/xcrun", "--find", "git"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise FixtureError("cannot locate copyable Git with xcrun --find git") from error
+        path = Path(found)
+        if not found or not path.is_absolute() or path == Path("/usr/bin/git"):
+            raise FixtureError("xcrun did not select a real developer-tools Git executable")
+        return path
+
+    found = shutil.which("git")
+    if found is None:
+        raise FixtureError("Git is not available on PATH")
+    return Path(found)
 
 
 def _bind_directory(path: Path, label: str, *, exact_mode: int | None = None) -> BoundDirectory:
@@ -1395,8 +1425,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--git",
         type=Path,
-        required=True,
-        help="exact non-symbolic Git executable used to enumerate tracked inputs",
+        help="override the discovered non-symbolic Git executable used to enumerate tracked inputs",
     )
     parser.add_argument(
         "--cache-root",
@@ -1429,7 +1458,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_stage: BoundDirectory | None = None
     try:
         koto = _resolve_input_file(args.koto, "koto", executable=True)
-        git = _resolve_input_file(args.git, "Git", executable=True)
+        git = _resolve_input_file(
+            args.git if args.git is not None else _default_git_path(),
+            "Git",
+            executable=True,
+        )
         cache_root = _bind_directory(args.cache_root, "task cache root")
         if args.write:
             output_stage = _bind_output(cache_root, args.output)

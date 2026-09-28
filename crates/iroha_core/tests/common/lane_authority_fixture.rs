@@ -69,7 +69,7 @@ pub(crate) fn install_manifest(state: &State) {
         validator_bindings: bindings,
         ..GovernanceRules::default()
     };
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
         BTreeMap::from([(
             lane.id,
             LaneManifestStatus {

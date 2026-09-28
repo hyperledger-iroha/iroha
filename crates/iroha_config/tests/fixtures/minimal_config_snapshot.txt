@@ -682,6 +682,7 @@ Root {
         max_disk_usage_bytes: Bytes(
             0,
         ),
+        native_context_archive_max_bytes: 16777216,
         blocks_in_memory: 1024,
         block_hash_history_bytes: Bytes(
             268435456,
@@ -1209,6 +1210,7 @@ Root {
         cache_size: 128,
         ivm_cache_max_decoded_ops: 8000000,
         ivm_cache_max_bytes: 67108864,
+        ivm_execution_max_bytes: 1073741824,
         ivm_prover_threads: 0,
         overlay_max_instructions: 0,
         overlay_max_bytes: 0,

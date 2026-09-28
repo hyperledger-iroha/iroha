@@ -11,11 +11,16 @@ use std::{
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json::Value};
 use sha2::{Digest, Sha256};
 
+/// Bounded, explicitly requested capture of the current typed identity inventory.
+pub(crate) mod native_capture;
+
+mod current_release_capture;
+
 /// Number of retained nominal codec identities in the reviewed fixture.
-const EXPECTED_CODEC_COUNT: usize = 1_705;
+const EXPECTED_CODEC_COUNT: usize = 1_712;
 const CAPTURE_REPORT_SHA256: &str =
-    "be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd";
-const FIXTURE_SHA256: &str = "012a5ad90ffb6f21d721faae97a88a917db63de1a6a4a915a036183aeba371be";
+    "5fae6cc228a9cd2a7e4575de0c7e54d2c8f94808da2c40dd8bac96b497c2ae58";
+const FIXTURE_SHA256: &str = "c6e3e4ba1143c006c075ad93849d25be6eab95181508ae396aaf81bf53d00f94";
 
 fn fixture() -> &'static BTreeMap<String, Value> {
     static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
@@ -25,6 +30,13 @@ fn fixture() -> &'static BTreeMap<String, Value> {
             hex::encode(Sha256::digest(source.as_bytes())),
             FIXTURE_SHA256,
             "the reviewed compiler capture fixture is immutable"
+        );
+        assert_eq!(
+            hex::encode(Sha256::digest(include_bytes!(
+                "../tests/fixtures/native_codec_capture_2026_09_27.json"
+            ))),
+            CAPTURE_REPORT_SHA256,
+            "the native capture report must match its fixture binding"
         );
         let document: Value = norito::json::from_str(source).expect("immutable capture fixture");
         assert_eq!(document.get("schema").and_then(Value::as_u64), Some(1));
@@ -82,7 +94,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
                 "capture names must be unique"
             );
         }
-        assert_eq!(direction_counts, [1_630, 68, 7]);
+        assert_eq!(direction_counts, [1_637, 68, 7]);
         names
     })
 }
@@ -155,6 +167,7 @@ where
 pub struct Case {
     nominal: &'static str,
     assertion: fn(&str),
+    capture: fn(&str) -> native_capture::Identity,
 }
 
 impl Case {
@@ -163,6 +176,7 @@ impl Case {
         Self {
             nominal,
             assertion: assert_serialize::<T>,
+            capture: native_capture::serialize::<T>,
         }
     }
 
@@ -174,6 +188,7 @@ impl Case {
         Self {
             nominal,
             assertion: assert_deserialize::<T>,
+            capture: native_capture::deserialize::<T>,
         }
     }
 
@@ -185,6 +200,7 @@ impl Case {
         Self {
             nominal,
             assertion: assert_bidirectional::<T>,
+            capture: native_capture::bidirectional::<T>,
         }
     }
 

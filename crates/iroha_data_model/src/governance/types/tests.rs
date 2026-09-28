@@ -14,6 +14,130 @@ fn checked_random_keypair() -> KeyPair {
 fn checked_account_id() -> AccountId {
     AccountId::new(checked_random_keypair().public_key().clone())
 }
+fn kagemusha_policy_install_proposal() -> KagemushaVerifierPolicyInstallProposalV1 {
+    KagemushaVerifierPolicyInstallProposalV1 {
+        proposal_operator: checked_account_id(),
+        network_id: NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0x51; iroha_crypto::Hash::LENGTH]),
+            ),
+        ),
+        expected_predecessor: KagemushaGovernedVerifierRegistryV1::default(),
+        authority_policy: KagemushaReleaseAuthorityPolicyV1 {
+            version: crate::kagemusha::KAGEMUSHA_WIRE_VERSION_V1,
+            authority_set_id: [0xAB; 32],
+            threshold: 1,
+            authorized_signers: vec![checked_random_keypair().public_key().clone()],
+        },
+    }
+}
+
+#[test]
+fn kagemusha_initial_policy_proposal_is_canonical_and_binds_every_field() {
+    let payload = kagemusha_policy_install_proposal();
+    payload.validate().expect("valid initial proposal");
+    assert_eq!(
+        <KagemushaVerifierPolicyInstallProposalV1 as norito::NoritoSchema>::nominal_name(),
+        "iroha_data_model::parliament_types::KagemushaVerifierPolicyInstallProposalV1"
+    );
+    assert_eq!(
+        hex::encode(norito::schema::identity::frame_hash::<
+            KagemushaVerifierPolicyInstallProposalV1,
+        >()),
+        "beb45df25c666201690ed546a399214b"
+    );
+    let kind = ProposalKind::KagemushaVerifierPolicyInstall(payload.clone());
+    let empty_head = parliament_expected_head_root_v1(&payload.expected_predecessor);
+    // Parity with the former Core-owned head-root preimage used by every
+    // Parliament compare-and-set subject before the shared helper moved here.
+    const LEGACY_HEAD_DOMAIN: &[u8] = b"iroha.governance.parliament.expected_head.root.v1";
+    assert_eq!(
+        crate::governance_fingerprint::PARLIAMENT_EXPECTED_HEAD_ROOT_V1,
+        LEGACY_HEAD_DOMAIN
+    );
+    let mut previous_hasher = Blake2bVar::new(32).expect("32-byte head digest");
+    previous_hasher.update(
+        &u64::try_from(LEGACY_HEAD_DOMAIN.len())
+            .unwrap()
+            .to_le_bytes(),
+    );
+    previous_hasher.update(LEGACY_HEAD_DOMAIN);
+    previous_hasher.update(&payload.expected_predecessor.encode());
+    let mut previous_root = [0; 32];
+    previous_hasher
+        .finalize_variable(&mut previous_root)
+        .expect("32-byte head output");
+    assert_eq!(empty_head, previous_root);
+    assert_ne!(empty_head, [0; 32]);
+    let mut installed = payload.expected_predecessor.clone();
+    installed
+        .initialize_authority_policy(payload.authority_policy.clone())
+        .expect("valid policy installation");
+    assert_ne!(empty_head, parliament_expected_head_root_v1(&installed));
+    assert_eq!(
+        kind.encode().get(..4),
+        Some(10_u32.to_le_bytes().as_slice())
+    );
+    let bytes = norito::to_bytes(&kind).expect("encode exact proposal");
+    assert_eq!(
+        norito::decode_from_bytes::<ProposalKind>(&bytes).expect("decode exact proposal"),
+        kind
+    );
+    let json = norito::json::to_json(&kind).expect("proposal JSON");
+    assert_eq!(
+        norito::json::from_json::<ProposalKind>(&json).expect("proposal JSON roundtrip"),
+        kind
+    );
+    assert_eq!(
+        kind.proposal_operator_v1(),
+        Some(&payload.proposal_operator)
+    );
+    assert_ne!(kind.fingerprint(), kind.effect_preimage_hash_v1());
+
+    let subject = kind.governed_subject_id_v1().expect("governed subject");
+    let mut changed = payload.clone();
+    changed.authority_policy.authority_set_id[0] ^= 1;
+    let changed_policy = ProposalKind::KagemushaVerifierPolicyInstall(changed);
+    assert_ne!(kind.fingerprint(), changed_policy.fingerprint());
+    assert_ne!(
+        kind.effect_preimage_hash_v1(),
+        changed_policy.effect_preimage_hash_v1()
+    );
+    assert_eq!(
+        subject,
+        changed_policy.governed_subject_id_v1().expect("subject")
+    );
+
+    let mut changed = payload.clone();
+    changed.proposal_operator = checked_account_id();
+    assert_ne!(
+        kind.fingerprint(),
+        ProposalKind::KagemushaVerifierPolicyInstall(changed).fingerprint()
+    );
+    let mut changed = payload.clone();
+    changed.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        crate::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed([0x52; iroha_crypto::Hash::LENGTH]),
+    ));
+    let changed_network = ProposalKind::KagemushaVerifierPolicyInstall(changed);
+    assert_ne!(kind.fingerprint(), changed_network.fingerprint());
+    assert_ne!(
+        subject,
+        changed_network.governed_subject_id_v1().expect("subject")
+    );
+
+    let mut changed = payload.clone();
+    changed.expected_predecessor.version = 0;
+    assert!(changed.validate().is_err());
+    assert_ne!(
+        kind.fingerprint(),
+        ProposalKind::KagemushaVerifierPolicyInstall(changed).fingerprint()
+    );
+    let mut changed = payload;
+    changed.authority_policy.threshold = 2;
+    assert!(changed.validate().is_err());
+}
 #[test]
 fn timed_ovn_required_chunk_blocks_round_up_at_the_wire_bound() {
     assert_eq!(parliament_timed_ovn_required_chunk_blocks_v1(0), 0);
@@ -491,6 +615,15 @@ fn governance_types_encode() {
         ProposalKind::GlobalDataTriggerPermissionGovernance(_) => {
             panic!("unexpected global data-trigger permission proposal")
         }
+        ProposalKind::KagemushaVerifierPolicyInstall(_) => {
+            panic!("unexpected KAGEMUSHA verifier-policy proposal")
+        }
+        ProposalKind::KagemushaVerifierReleaseInstall(_) => {
+            panic!("unexpected KAGEMUSHA verifier-release proposal")
+        }
+        ProposalKind::KagemushaVerifierReleaseActivate(_) => {
+            panic!("unexpected KAGEMUSHA verifier-activation proposal")
+        }
     }
 }
 
@@ -727,6 +860,15 @@ fn runtime_upgrade_proposal_roundtrip() {
         }
         ProposalKind::GlobalDataTriggerPermissionGovernance(_) => {
             panic!("unexpected global data-trigger permission proposal")
+        }
+        ProposalKind::KagemushaVerifierPolicyInstall(_) => {
+            panic!("unexpected KAGEMUSHA verifier-policy proposal")
+        }
+        ProposalKind::KagemushaVerifierReleaseInstall(_) => {
+            panic!("unexpected KAGEMUSHA verifier-release proposal")
+        }
+        ProposalKind::KagemushaVerifierReleaseActivate(_) => {
+            panic!("unexpected KAGEMUSHA verifier-activation proposal")
         }
     }
 }
@@ -2377,3 +2519,6 @@ fn assert_certificate_lifecycle_boundaries(certificate: &GovernanceCertificateV1
 
 #[path = "tests/certificate_validation.rs"]
 mod certificate_validation;
+
+#[path = "tests/build_closure.rs"]
+mod build_closure;

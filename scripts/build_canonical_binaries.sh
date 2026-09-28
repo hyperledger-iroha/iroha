@@ -5,6 +5,9 @@ set -euo pipefail
 #
 # Prerequisites: the repository Rust toolchain and Cargo dependencies. Set
 # BUILD_PROFILE to select a non-default Cargo profile (for example `deploy`).
+# Keep package defaults so the daemon retains ordinary SIMD/Metal selection.
+# The Linux release adds the signed, embedded IVM CUDA path automatically;
+# source/bundle admission fails closed until qualified PTX is present.
 
 usage() {
   cat <<'EOF'
@@ -16,9 +19,9 @@ Cargo profile. Windows software-signer packaging is explicitly unsupported.
 EOF
 }
 
-declare -a profile_flag=()
+declare -a build_args=(build --locked)
 if [[ -n "${BUILD_PROFILE:-}" ]]; then
-  profile_flag=(--profile "${BUILD_PROFILE}")
+  build_args+=(--profile "${BUILD_PROFILE}")
 fi
 
 case "${1-}" in
@@ -35,7 +38,11 @@ case "${1-}" in
 esac
 
 echo "Building canonical binaries (iroha, iroha3d, sorafs_governance_dag, external signer)..."
-cargo build "${profile_flag[@]}" -p irohad -p iroha_cli --no-default-features \
-  --features irohad/external-software-signer-bin,iroha_cli/cli \
+daemon_features="irohad/external-software-signer-bin,iroha_cli/cli"
+if [[ "$(uname -s)" == Linux ]]; then
+  daemon_features+=",irohad/ivm-cuda"
+fi
+cargo "${build_args[@]}" -p irohad -p iroha_cli \
+  --features "$daemon_features" \
   --bin iroha3d --bin sorafs_governance_dag \
   --bin sorafs_external_software_signer --bin iroha

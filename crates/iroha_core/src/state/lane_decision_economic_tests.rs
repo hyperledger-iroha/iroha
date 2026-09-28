@@ -173,6 +173,9 @@ fn native_economic_state_setup(
     .expect("authenticate the actual configured catalog before opening fixture State");
     let state = Box::new(
         State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             world,
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
@@ -698,6 +701,7 @@ fn native_economic_fixture_from_state_with_initializer(
                         0,
                         primary,
                     )
+                    .expect("local execution completes")
                     .1
                     .unwrap();
                     seed.commit_world_overlay_for_testing().unwrap();
@@ -988,7 +992,7 @@ state_test! { sync native_economic_execution_retains_its_owner_across_manifest_c
     let generation = state.state_view_generation();
     let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (overlay, actual) = state.with_native_lane_execution(header, &groups, |overlay, executions| {
-        state.install_lane_manifests(&overlay.lane_manifests);
+        state.install_lane_manifests_for_testing(&overlay.lane_manifests);
         assert_ne!(state.state_view_generation(), generation,
             "exercise the real cache publication, not a manually changed counter");
         Ok(executions)

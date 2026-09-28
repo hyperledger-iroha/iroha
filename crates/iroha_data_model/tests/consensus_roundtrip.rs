@@ -220,11 +220,6 @@ fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
         max_validators: rng.next_u32(),
         min_self_bond: rng.next_u64().into(),
         min_nomination_bond: rng.next_u64().into(),
-        max_nominator_concentration_pct: u8::try_from(rng.up_to(100))
-            .expect("percentage bound fits into u8"),
-        seat_band_pct: u8::try_from(rng.up_to(100)).expect("percentage bound fits into u8"),
-        max_entity_correlation_pct: u8::try_from(rng.up_to(100))
-            .expect("percentage bound fits into u8"),
         finality_margin_blocks: rng.next_u64(),
         evidence_horizon_blocks: rng.next_u64(),
         activation_lag_blocks: rng.next_u64(),
@@ -465,9 +460,6 @@ fn consensus_genesis_norito_roundtrip() {
         max_validators: 19,
         min_self_bond: 10_u64.into(),
         min_nomination_bond: 2_u64.into(),
-        max_nominator_concentration_pct: 35,
-        seat_band_pct: 15,
-        max_entity_correlation_pct: 25,
         finality_margin_blocks: 9,
         evidence_horizon_blocks: 1_024,
         activation_lag_blocks: 12,

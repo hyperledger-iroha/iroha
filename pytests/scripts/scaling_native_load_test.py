@@ -173,7 +173,7 @@ def test_plan_limits_before_child_or_writer_admission(load_setup,field,value):
 def test_existing_output_or_control_is_never_overwritten(load_setup,kind):
     s=load_setup
     target={'trace':s.paths.transaction_trace,'journal':s.paths.collector_journal,
-        'stage':s.paths.transaction_trace.with_name('trace.json.collecting'),'capture':s.paths.resource_capture_dir,
+        'stage':s.paths.transaction_trace.with_name('trace.json.publishing'),'capture':s.paths.resource_capture_dir,
         'config':s.paths.resource_config}[kind]
     target.write_bytes(b'original');target.chmod(0o600)
     rejected(s.create)
@@ -186,7 +186,7 @@ def test_terminal_file_receipt_does_not_accept_missing_or_substituted_outputs(lo
     def mutate(argv):
         if kind=='trace':s.paths.transaction_trace.unlink()
         elif kind=='journal':s.paths.collector_journal.write_bytes(b'changed')
-        elif kind=='stage':s.paths.transaction_trace.with_name('trace.json.collecting').write_bytes(b'stage')
+        elif kind=='stage':s.paths.transaction_trace.with_name('trace.json.publishing').write_bytes(b'stage')
         elif kind=='capture':s.paths.resource_capture_dir.rmdir()
         elif kind=='mode':s.paths.collector_journal.chmod(0o644)
         else:

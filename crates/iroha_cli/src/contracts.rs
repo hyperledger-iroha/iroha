@@ -1085,7 +1085,8 @@ fn execute_local_contract_debug_view<C: RunContext>(
     host.set_chain_id(&context.config().chain);
     host.set_durable_state_snapshot(durable_state);
     let mut tracing_host = TracingHost::new(host);
-    let mut vm = ivm::IVM::new(args.gas_limit);
+    let mut vm = ivm::IVM::try_new(args.gas_limit)
+        .map_err(|err| eyre!("failed to allocate contract debug view VM: {err}"))?;
     vm.load_program(&code)
         .map_err(|err| eyre!("failed to load contract debug view bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);
@@ -1236,7 +1237,8 @@ fn execute_local_contract_debug_call<C: RunContext>(
     host.set_chain_id(&context.config().chain);
     host.set_durable_state_snapshot(durable_state);
     let mut tracing_host = TracingHost::new(host);
-    let mut vm = ivm::IVM::new(args.gas_limit);
+    let mut vm = ivm::IVM::try_new(args.gas_limit)
+        .map_err(|err| eyre!("failed to allocate contract debug call VM: {err}"))?;
     vm.load_program(&code)
         .map_err(|err| eyre!("failed to load contract debug call bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);

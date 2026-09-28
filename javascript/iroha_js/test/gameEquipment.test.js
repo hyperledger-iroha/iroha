@@ -28,7 +28,7 @@ test('Join requires explicit resources, rejects the obsolete native layout and s
   assert.throws(() => decodeGameValueV1('JoinGameSessionV1', obsoleteJoin));
   assert.deepEqual(buildJoinGameSessionV1(join).JoinGameSessionV1.resources, []);
   const signed = { ...join, resources: [clause] };
-  const payload = value => buildBrowserInstructionTransactionPayload({ networkId: NetworkId.parse(fixture.network_id), authority: account(1),
+  const payload = value => buildBrowserInstructionTransactionPayload({ networkId: NetworkId.parse(fixture.network_id), networkPrefix: 753, authority: account(1),
     instructions: [buildJoinGameSessionV1(value)], feePayment: { payer: 'authority', chargeLimits: [{ kind: 'nexus', assetDefinitionId: join.expected_asset_definition, maxAmount: '0.25' }] }, creationTimeMs: 1, ttlMs: 120000 });
   const digest = browserTransactionPayloadHashHex(payload(signed), 753);
   for (const changed of [{ ...clause, expected_metadata_hash: hash(9) }, { ...clause, role_id: hash(11) }, { ...clause, nft_id: 'other$equipment.universal' }]) {

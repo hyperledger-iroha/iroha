@@ -10,7 +10,7 @@ use iroha_primitives::numeric::NumericWorkStep;
 /// This value is included in the gas-schedule descriptor. Any change to a
 /// logical-work formula, charge-point ordering, or stable staged-phase tag
 /// MUST increment it and regenerate the gas-schedule golden hash.
-pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 5;
+pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 6;
 /// Fixed staged-syscall entry charge.
 ///
 /// The value is calibrated against the complete admitted-call control path, including deterministic
@@ -377,7 +377,11 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
             materialization_work(u64::from(value_limbs))
         }
         NumericWorkStep::Negate { value_limbs } => u64::from(value_limbs).max(1),
-        NumericWorkStep::Add {
+        NumericWorkStep::Compare {
+            lhs_limbs,
+            rhs_limbs,
+        }
+        | NumericWorkStep::Add {
             lhs_limbs,
             rhs_limbs,
         }
@@ -596,6 +600,13 @@ mod tests {
     }
     #[test]
     fn observed_steps_map_to_stable_work_formulas() {
+        assert_eq!(
+            work_step_gas(NumericWorkStep::Compare {
+                lhs_limbs: 8,
+                rhs_limbs: 1
+            }),
+            Ok(32)
+        );
         assert_eq!(
             work_step_gas(NumericWorkStep::CanonicalityProbe {
                 mantissa_limbs: 3,

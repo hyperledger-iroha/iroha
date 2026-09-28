@@ -19,6 +19,26 @@ final class IrohaSDKAccelerationTests: XCTestCase {
     }
 
     #if canImport(Darwin)
+    func testDefaultSDKPreservesPreviouslyAppliedFilePolicy() throws {
+        let original = try XCTUnwrap(AccelerationSettings.currentAppliedSettings(),
+                                    "current native bridge is required for policy inheritance")
+        defer { original.apply() }
+        let policy = try AccelerationSettings.fromIrohaConfig(Data(
+            #"{"accel":{"enable_metal":false,"enable_cuda":false,"max_gpus":0,"resource_limits":{"host_bytes":0,"device_bytes":0}}}"#.utf8))
+        XCTAssertTrue(policy.apply())
+        let sdk = IrohaSDK(baseURL: URL(string: "http://127.0.0.1")!)
+        XCTAssertFalse(sdk.accelerationSettings.enableMetal)
+        XCTAssertFalse(sdk.accelerationSettings.enableCUDA)
+        XCTAssertEqual(sdk.accelerationSettings.maxGPUs, 0)
+        XCTAssertEqual(sdk.accelerationSettings.resourceLimits.hostBytes, 0)
+        let applied = try XCTUnwrap(AccelerationSettings.currentAppliedSettings())
+        XCTAssertFalse(applied.enableMetal)
+        XCTAssertFalse(applied.enableCUDA)
+        XCTAssertEqual(applied.maxGPUs, 0)
+        XCTAssertEqual(applied.resourceLimits.hostBytes, 0)
+        XCTAssertEqual(applied.resourceLimits.deviceBytes, 0)
+    }
+
     func testDecodingNativeAccelerationConfig() {
         let native = ConnectNoritoAccelerationConfig(
             enable_simd: 1,
@@ -35,7 +55,8 @@ final class IrohaSDKAccelerationTests: XCTestCase {
             prefer_cpu_sha2_max_leaves_aarch64: 1024,
             prefer_cpu_sha2_max_leaves_aarch64_present: 1,
             prefer_cpu_sha2_max_leaves_x86: 0,
-            prefer_cpu_sha2_max_leaves_x86_present: 0
+            prefer_cpu_sha2_max_leaves_x86_present: 0,
+            resource_limits: AccelerationSettings().nativeConfig.resource_limits
         )
         let decoded = AccelerationSettings(nativeConfig: native)
         XCTAssertTrue(decoded.enableMetal)
@@ -72,7 +93,8 @@ final class IrohaSDKAccelerationTests: XCTestCase {
                 prefer_cpu_sha2_max_leaves_aarch64: 32768,
                 prefer_cpu_sha2_max_leaves_aarch64_present: 1,
                 prefer_cpu_sha2_max_leaves_x86: 65536,
-                prefer_cpu_sha2_max_leaves_x86_present: 1
+                prefer_cpu_sha2_max_leaves_x86_present: 1,
+                resource_limits: AccelerationSettings().nativeConfig.resource_limits
             ),
             simd: ConnectNoritoAccelerationBackendStatus(supported: 1,
                                                          configured: 1,

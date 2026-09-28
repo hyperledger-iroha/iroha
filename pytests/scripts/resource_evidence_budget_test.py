@@ -159,7 +159,7 @@ def test_run_order_does_not_replace_identity_and_same_values_are_accepted():
     ("transaction_trace", 1, "artifact_budget_required"),
     ("canonical_proof", None, "artifact_budget_required"),
     ("run_receipt", None, "artifact_budget_required"), ("raw_run", None, "artifact_budget_required"),
-    ("native_finality", [], "artifact_budget_required"), ("native_queries", (None,), "artifact_budget_required"),
+    ("native_carrier", [], "artifact_budget_required"), ("native_queries", (None,), "artifact_budget_required"),
 ])
 def test_each_run_requires_typed_allocations_and_no_unsampled_form(field, value, code):
     fail(code, lambda: replace(inputs()["runs"][0], **{field: value}))

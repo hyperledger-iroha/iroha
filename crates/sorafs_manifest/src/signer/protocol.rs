@@ -105,6 +105,8 @@ pub enum SignerRoleV1 {
     FinalPromotionAccountTransaction = 15,
     /// Reviewed deployment topology configuration for one exact release candidate.
     TopologyApproval = 16,
+    /// Exact completed Musubi bundle approval; never a transaction signature.
+    MusubiProviderAttestation = 17,
 }
 impl SignerRoleV1 {
     /// Stable role label.
@@ -127,6 +129,7 @@ impl SignerRoleV1 {
             Self::FinalPromotionProvenance => "final_promotion_provenance",
             Self::FinalPromotionAccountTransaction => "final_promotion_account_transaction",
             Self::TopologyApproval => "topology_approval",
+            Self::MusubiProviderAttestation => "musubi_provider_attestation",
         }
     }
     /// Exact signing domain enforced before any key operation.
@@ -153,13 +156,18 @@ impl SignerRoleV1 {
                 "sorafs.native-transaction.final-promotion-account.v1"
             }
             Self::TopologyApproval => "sorafs.production-readiness.topology-approval.v1",
+            Self::MusubiProviderAttestation => "sorafs.musubi.provider-attestation.v1",
         }
     }
     /// Whether this isolated role admits the requested key algorithm.
     #[must_use]
     pub const fn allows_algorithm(self, algorithm: SignerKeyAlgorithmV1) -> bool {
         match self {
-            Self::ProofOutcome | Self::Repair | Self::Reserve | Self::Orderbook => true,
+            Self::ProofOutcome
+            | Self::Repair
+            | Self::Reserve
+            | Self::Orderbook
+            | Self::MusubiProviderAttestation => true,
             Self::PotrProvider => matches!(algorithm, SignerKeyAlgorithmV1::MlDsa),
             Self::Promotion
             | Self::GovernanceDag
@@ -197,6 +205,7 @@ impl FromStr for SignerRoleV1 {
             "final_promotion_provenance" => Ok(Self::FinalPromotionProvenance),
             "final_promotion_account_transaction" => Ok(Self::FinalPromotionAccountTransaction),
             "topology_approval" => Ok(Self::TopologyApproval),
+            "musubi_provider_attestation" => Ok(Self::MusubiProviderAttestation),
             _ => Err(SignerValueParseErrorV1),
         }
     }
@@ -269,6 +278,26 @@ pub enum SignerPurposeBindingV1 {
         /// Canonical deployment identity governed by the account-key signing policy.
         deployment_id: String,
     },
+    /// Exact authority and finalized policy for completed Musubi bundle approvals.
+    ///
+    /// Account bytes use canonical Norito encoding. The daemon-owned payload
+    /// validator decodes and compares them before any private-key operation.
+    MusubiProviderAttestation {
+        /// Genesis-derived network identity.
+        network_id: [u8; 32],
+        /// Admitted provider whose completed bundles may be approved.
+        provider_id: [u8; 32],
+        /// Complete canonical provider-owner account identity, including its controller.
+        owner_account_id: Vec<u8>,
+        /// Stable governed signing-policy identity.
+        policy_id: [u8; 32],
+        /// Monotonic governed policy revision.
+        policy_revision: u64,
+        /// Exact preceding policy digest, absent only at revision one.
+        predecessor_digest: Option<[u8; 32]>,
+        /// Exact governed signer, key, and validity policy digest.
+        policy_digest: [u8; 32],
+    },
     /// Exact deployment whose candidate-bound topology configuration may be approved.
     TopologyApproval {
         /// Canonical deployment identity governed by the topology signing policy.
@@ -289,6 +318,31 @@ impl SignerPurposeBindingV1 {
                 Self::NativeOrPromotion,
             )
             | (SignerRoleV1::EvidenceViewer, Self::EvidenceViewer) => true,
+            (
+                SignerRoleV1::MusubiProviderAttestation,
+                Self::MusubiProviderAttestation {
+                    network_id,
+                    provider_id,
+                    owner_account_id,
+                    policy_id,
+                    policy_revision,
+                    predecessor_digest,
+                    policy_digest,
+                },
+            ) => {
+                let predecessor_valid = match (policy_revision, predecessor_digest) {
+                    (1, None) => true,
+                    (2.., Some(digest)) => *digest != [0; 32],
+                    _ => false,
+                };
+                network_id[31] & 1 == 1
+                    && *provider_id != [0; 32]
+                    && !owner_account_id.is_empty()
+                    && owner_account_id.len() <= 8 * 1024
+                    && *policy_id != [0; 32]
+                    && *policy_digest != [0; 32]
+                    && predecessor_valid
+            }
             (SignerRoleV1::StreamToken, Self::StreamToken { provider_id }) => {
                 *provider_id != [0; 32]
             }
@@ -837,3 +891,57 @@ mod final_promotion_account_purpose_tests;
 #[cfg(test)]
 #[path = "protocol/production_identity_tests.rs"]
 mod production_identity_tests;
+
+#[cfg(test)]
+mod musubi_purpose_tests {
+    use super::*;
+    #[test]
+    fn musubi_purpose_keeps_exact_subject_and_policy_tuple() {
+        let role = SignerRoleV1::MusubiProviderAttestation;
+        assert_eq!(role.as_str().parse::<SignerRoleV1>().unwrap(), role);
+        assert_ne!(role.domain(), SignerRoleV1::ProofOutcome.domain());
+        assert!(role.allows_algorithm(SignerKeyAlgorithmV1::Ed25519));
+        assert!(role.allows_algorithm(SignerKeyAlgorithmV1::MlDsa));
+        let binding = SignerPurposeBindingV1::MusubiProviderAttestation {
+            network_id: [1; 32],
+            provider_id: [2; 32],
+            owner_account_id: vec![3; 32],
+            policy_id: [4; 32],
+            policy_revision: 2,
+            predecessor_digest: Some([5; 32]),
+            policy_digest: [6; 32],
+        };
+        assert!(binding.validates_role(role));
+        assert!(!binding.validates_role(SignerRoleV1::ProofOutcome));
+        let bytes = norito::encode_canonical(&binding).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<SignerPurposeBindingV1>(&bytes).unwrap(),
+            binding
+        );
+        for index in 0..7 {
+            let mut altered = binding.clone();
+            let SignerPurposeBindingV1::MusubiProviderAttestation {
+                network_id,
+                provider_id,
+                owner_account_id,
+                policy_id,
+                policy_revision,
+                predecessor_digest,
+                policy_digest,
+            } = &mut altered
+            else {
+                unreachable!()
+            };
+            match index {
+                0 => *network_id = [0; 32],
+                1 => *provider_id = [0; 32],
+                2 => owner_account_id.clear(),
+                3 => *policy_id = [0; 32],
+                4 => *policy_revision = 1,
+                5 => *predecessor_digest = None,
+                _ => *policy_digest = [0; 32],
+            }
+            assert!(!altered.validates_role(role));
+        }
+    }
+}

@@ -1,0 +1,45 @@
+// Copyright 2026 Hyperledger Iroha Contributors
+// SPDX-License-Identifier: Apache-2.0
+package org.hyperledger.iroha.sdk.crypto
+
+import kotlin.test.Test
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class BlsNormalPublicKeyAdmissionTest {
+    @Test
+    fun validatesCanonicalSubgroupPublicKeys() {
+        VALID.forEach { assertTrue(BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(it), it) }
+    }
+    @Test
+    fun rejectsMalformedInfinityOffCurveAndNonSubgroupPoints() {
+        INVALID.forEach { assertFalse(BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(it), it) }
+    }
+    @Test
+    fun cachedAdmissionStillChecksTheExactLiteral() {
+        repeat(2) {
+            assertTrue(BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(VALID.first()))
+            assertFalse(BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(VALID.first().lowercase()))
+            assertFalse(BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(VALID.first() + " "))
+        }
+    }
+    companion object {
+        private val VALID = listOf(
+            "ea013094D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54E0",
+            "ea01309988FA1336476987EF7F91C3EA728B7EA0556698AA0F1A294147C8D5CD43BB24C4BCD14FAE23A384D721CBF1F6A16DF7",
+            "ea013099BA3FACE165941434D3238C4D5767059EBFFFB4120A9885A4EB2BAC9CD868F690660D2936B03C0214FBDAD36034D578",
+            "ea0130B921EAC90D1A99EC9DA3FF8C8A29EBEE19DD1B659A4C6FC21BC8046EA30DE566668EDCCEAE4CB5932F4F860606A1E0E3",
+        )
+        private val INVALID = listOf(
+            "",
+            "ea013094D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54E0 ",
+            " ea013094D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54E0",
+            "ea013094d37a1fca72e8734caad4163678d82c36fe2ca70b80f5626e6591709e0d44831be86cba9bd0471c6d0d73ff9c4b54e0",
+            "ea013094D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54",
+            "ea0130C00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "ea0130800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "ea0130BFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+            "ea013014D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54E0",
+        )
+    }
+}

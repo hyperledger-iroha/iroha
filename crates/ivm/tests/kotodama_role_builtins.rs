@@ -159,5 +159,9 @@ fn kotodama_authority_matches_domainless_account_literal() {
     common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run()
         .expect("context::authority() should match the domainless account literal");
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        1
+    );
 }

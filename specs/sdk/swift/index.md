@@ -447,42 +447,32 @@ and rent slots and rejects unknown receipt or stripe fields.
 
 ## Hardware Acceleration
 
-`AccelerationSettings` mirrors the Rust `AccelerationConfig` (Metal/NEON toggles, Merkle
-thresholds). Apply settings before Norito bridge usage:
+`AccelerationSettings` carries the canonical native process policy. SIMD, Metal
+and CUDA default on, while device qualification determines availability. Optional
+unsigned counts inherit defaults only when absent; zero is explicit. Concrete
+`AccelerationResourceLimits` bound process resources separately from transaction
+execution memory. The raw C/Swift resource record contains ten `UInt64` fields;
+the native reader checks platform widths, including the `u32` discovery bound.
 
 ```swift
-var accel = AccelerationSettings(enableMetal: true, merkleMinLeavesMetal: 256)
-accel.apply()
-sdk.accelerationSettings = accel
-
-if let url = Bundle.main.url(forResource: "client", withExtension: "toml") {
-    // Automatically detects JSON or TOML `iroha_config` files and normalises zero/default values.
-    sdk.accelerationSettings = (try? AccelerationSettings.fromIrohaConfigFile(at: url)) ?? accel
-}
-```
-
-`AccelerationSettings.fromIrohaConfig`/`fromIrohaConfigFile` accept the full
-`iroha_config` document (JSON or TOML). They locate the `accel` section, normalise
-zero-as-default fields, and return settings ready to apply (falling back to defaults if
-no `accel` section exists) so Rust and Swift can share configuration artefacts.
-
-For production apps, `AccelerationSettingsLoader.load(...)` threads the
-`NORITO_ACCEL_CONFIG_PATH` environment override (developer/testing convenience) and the
-bundled `acceleration.{json,toml}` or `client.{json,toml}` files before falling back to
-defaults:
-
-```swift
-let accel = AccelerationSettingsLoader.load(
-    environmentKey: "NORITO_ACCEL_CONFIG_PATH",
-    environment: ProcessInfo.processInfo.environment,
+let policy = try AccelerationSettingsLoader.load(
+    configurationURL: configurationURL,
     bundle: .main
 )
-sdk.accelerationSettings = accel
+let accepted = policy.apply()
+sdk.accelerationSettings = policy
 ```
 
-The loader reuses the same parsing/normalisation logic and logs which source supplied
-the configuration so mobile telemetry can attach provenance to the chosen Metal/NEON
-thresholds.
+The loader reads the explicit URL, then bundled `acceleration.{json,toml}` or
+`client.{json,toml}` files, then defaults if no file exists. It does not consume
+runtime environment policy. Present malformed files throw. Node configuration
+uses the root `accel` section and `[accel.resource_limits]` TOML table. Table and
+key components may be quoted and contain surrounding whitespace. Dotted and inline
+acceleration assignments are rejected explicitly; use the named tables. The retired
+`acceleration` alias is rejected. Dedicated `fromJSON` accepts a direct policy
+record. `apply()` reports whether the available native owner accepted the request;
+it does not certify device availability or resource growth. SDK settings retain
+the requested policy, while native readback reports applied policy.
 
 Call `AccelerationSettings.runtimeState()` when exporting telemetry so dashboards can
 record whether Metal/CUDA backends were detected, configured, and healthy on the host

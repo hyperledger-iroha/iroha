@@ -16,7 +16,7 @@ fn kotodama_state_scalar_reads_durable() {
     vm.load_program(&code).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute reader");
-    assert_eq!(common::decode_i64_register(&vm, 10), 42);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 42);
 }
 #[test]
 fn kotodama_state_struct_helper_param_reads_flattened_fields() {
@@ -31,7 +31,7 @@ fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     vm.load_program(&code).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute struct state helper");
-    assert_eq!(common::decode_i64_register(&vm, 10), 8);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 8);
 }
 fn run_named_struct_order(source: &str) -> (i64, i64) {
     let code = KotodamaCompiler::new()
@@ -45,7 +45,7 @@ fn run_named_struct_order(source: &str) -> (i64, i64) {
         .expect("load named-struct source-order fixture");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute named-struct source-order fixture");
-    let result = common::decode_i64_register(&vm, 10);
+    let result = common::decode_i64_return_word(&vm, 0);
     let trace = {
         let host = vm.host_mut_any().expect("CoreHost available");
         let host = host.downcast_mut::<CoreHost>().expect("CoreHost type");

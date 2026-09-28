@@ -23,8 +23,16 @@ pub const EXEC_RETRY_INITIAL: Millis = 100;
 pub const DELTA_NOMINAL: Millis = 500;
 /// Nominal local processing delay `δ_nom` used by config validation (§9.4).
 pub const LOCAL_DELAY_NOMINAL: Millis = 50;
-/// Extra frame budget over `max_block_bytes` (64 KiB, §9.4, O10).
-pub const FRAME_OVERHEAD: u32 = 64 * 1024;
+/// Extra frame budget over `max_block_bytes`: the certificate/header allowance plus the
+/// complete bounded control frame, one result witness, compact shares, and worst-case member
+/// key/TC overhead up to the generic core committee bound (§9.4, O10).
+pub const FRAME_OVERHEAD: u32 = 64 * 1024
+    + crate::message::MAX_RESULT_WITNESS_BYTES as u32
+    + crate::types::MAX_COMMITTEE_SIZE as u32
+        * (crate::message::MAX_ATTESTATION_SIGNATURE_BYTES + crate::types::MAX_PUBLIC_KEY_LEN + 64)
+            as u32
+    + crate::types::MAX_CONTROL_WITNESS_BYTES as u32
+    + 32;
 /// Upper bound of `T_max_eff` (2^40 ms ≈ 35 years). Up to this bound [`view_timeout`] and
 /// [`level_cap`] are exact in 128-bit arithmetic.
 // SPEC: §9.4 does not bound `T_max_eff`; the clamp only matters for absurd chain parameters.
@@ -483,6 +491,7 @@ mod tests {
             .map(|i| PublicKey::new(vec![u8::try_from(i).unwrap(); 32]).unwrap())
             .collect();
         HeightConfig {
+            epoch: Box::new(crate::testing::TEST_EPOCH),
             committee: Committee::new(keys).unwrap(),
             params,
         }
@@ -850,7 +859,7 @@ mod tests {
             ),
             (
                 LocalParams {
-                    sync_max_bytes: 4 * 1024 * 1024 + 64 * 1024 - 1,
+                    sync_max_bytes: 4 * 1024 * 1024 + FRAME_OVERHEAD - 1,
                     ..base
                 },
                 ConfigError::SyncMaxBytesTooSmall,

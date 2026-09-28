@@ -4,20 +4,6 @@
   "source_slice_hash_scope": "complete Rust constant declaration including trailing LF",
   "assets": [
     {
-      "path": "sha_fixed_algebraic_child_digests_v1.bin",
-      "byte_length": 640,
-      "sha256": "2a33fe8fe231a098243d714c5b17481dc144e00b371a2bdb70134c0999ac2251",
-      "layout": "5 shapes x 4 ordered child segments x 32 digest bytes",
-      "source_preimages": [
-        {
-          "path": "../fixed_algebraic_sha.rs",
-          "constant": "SHA_FIXED_ALGEBRAIC_CHILD_DIGESTS_V1",
-          "physical_lines": 112,
-          "sha256": "982423bb22b0f963688a5f2302be44d75252c2ea50c5d4f2722d4bbfcce0ff9e"
-        }
-      ]
-    },
-    {
       "path": "rfc5280_grammar_rules_v1.bin",
       "byte_length": 2236,
       "sha256": "2cf3ccbd8083384286fe7427427ac03900310b68e551a0b0345720f4e147e1e6",

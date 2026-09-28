@@ -1,4 +1,13 @@
 //! Lane compliance policy evaluation and loading.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: consume the lane compliance projection in the complete State root owner"
+    )
+)]
+pub(crate) mod authority;
+
 use crate::{
     interlane::LanePrivacyRegistryHandle,
     secure_file_metadata::{self, SecureMetadata},

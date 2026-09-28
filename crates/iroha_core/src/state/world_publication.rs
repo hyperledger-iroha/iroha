@@ -12,8 +12,8 @@ pub(super) fn storage_shell_layout<K: Key, V: Value, M: WorldStorageMode<K, V>>(
     Layout::new::<PreparedStorage<'static, K, V, M>>()
 }
 
-pub(super) fn cell_shell_layout<V: Value>() -> Layout {
-    Layout::new::<PreparedCell<'static, V>>()
+pub(super) fn cell_shell_layout<V: Value, C: Send + Sync + 'static>() -> Layout {
+    Layout::new::<PreparedCell<'static, V, C>>()
 }
 
 pub(super) fn triggers_shell_layout() -> Layout {
@@ -182,19 +182,19 @@ where
     })
 }
 
-struct PreparedCell<'target, V: Value> {
-    original: Option<Box<RetainedCell<V>>>,
+struct PreparedCell<'target, V: Value, C: Send + Sync + 'static> {
+    original: Option<Box<RetainedCell<V, C>>>,
     phase: FieldPhase<
-        mv::cell::DetachedPublicationSlot<'target, V, (), ()>,
-        mv::cell::PreparedPublication<'target, V, (), ()>,
+        mv::cell::DetachedPublicationSlot<'target, V, (), (), C>,
+        mv::cell::PreparedPublication<'target, V, (), (), C>,
     >,
-    published: Option<mv::cell::PublishedPublication<V, (), ()>>,
+    published: Option<mv::cell::PublishedPublication<V, (), (), C>>,
     aborted: Option<mv::PublicationCleanup<()>>,
     released: bool,
     normal_recovery: bool,
 }
 
-impl<V: Value> PreparedWorldField for PreparedCell<'_, V> {
+impl<V: Value, C: Send + Sync + 'static> PreparedWorldField for PreparedCell<'_, V, C> {
     fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
         assert!(!self.released, "original field was terminally released");
         let name = self.original.as_ref().expect("original field box").name;
@@ -280,8 +280,8 @@ impl<V: Value> PreparedWorldField for PreparedCell<'_, V> {
     }
 }
 
-pub(super) fn cell_slot<'target, V: Value>(
-    mut original: Box<RetainedCell<V>>,
+pub(super) fn cell_slot<'target, V: Value, C: Send + Sync + 'static>(
+    mut original: Box<RetainedCell<V, C>>,
     world: &'target World,
 ) -> Box<dyn PreparedWorldField + 'target> {
     let target = (original.target)(world);

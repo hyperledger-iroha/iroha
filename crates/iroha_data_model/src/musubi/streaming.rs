@@ -1,4 +1,4 @@
-//! Allocation-free size accounting for canonical Musubi encodings.
+//! Borrowed hashing and allocation-free validation for canonical Musubi encodings.
 use super::*;
 pub(super) fn canonical_frame_len<T: norito::core::NoritoSerialize>(
     value: &T,
@@ -440,4 +440,40 @@ fn musubi_curve_id(
     crate::account::curve::CurveId::try_from_algorithm(algorithm)
         .map(crate::account::curve::CurveId::as_u8)
         .map_err(|_| norito::json::BoundedJsonError::Unsupported)
+}
+
+// Borrowing is an implementation detail of the existing preimage identity;
+// unlike a generic wire parameter, its lifetime must not enter the schema name.
+impl norito::NoritoSchema for MusubiProviderBundleAttestationSetPreimageV1<'_> {
+    fn nominal_name() -> String {
+        "iroha_data_model::musubi::MusubiProviderBundleAttestationSetPreimageV1".to_owned()
+    }
+}
+
+// This payload is private to the fixed-layout canonical digest.
+impl norito::core::SerializePayload for MusubiProviderBundleAttestationSetPreimageV1<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        if norito::core::use_packed_struct() {
+            return Err(norito::core::Error::UnsupportedFeature(
+                "borrowed Musubi attestation set packed struct",
+            ));
+        }
+        norito::core::write_len_prefixed(writer, &self.archive_id)?;
+        norito::core::write_len_prefixed(writer, &self.replication_order)?;
+        norito::core::write_len_prefixed(writer, &AttestationReferences(self.references))
+    }
+}
+
+struct AttestationReferences<'a>(&'a [MusubiProviderBundleAttestationRefV1]);
+
+impl norito::core::SerializePayload for AttestationReferences<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        // Fixed canonical flags do not use packed offsets, so the codec streams
+        // these borrowed rows without allocating an offset table or row copies.
+        norito::core::write_element_sequence::<MusubiProviderBundleAttestationRefV1, _>(
+            writer,
+            self.0.iter(),
+            norito::core::max_archive_len(),
+        )
+    }
 }

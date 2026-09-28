@@ -46,7 +46,7 @@ pub struct SoftwareSignerProvisioningV1 {
     pub administrator_id: String,
     /// Exact UID that will run the service.
     pub service_uid: u32,
-    /// Exact runtime-provider broker UID.
+    /// Exact authorized runtime client UID.
     pub client_uid: u32,
     /// Exact administrator UID.
     pub administrator_uid: u32,
@@ -151,7 +151,14 @@ impl SoftwareSignerServiceV1 {
         Self::provision_with_keypair(state_directory, provisioning, wrapping_key, keypair)
     }
 
-    pub(super) fn provision_with_keypair(
+    /// Durably provision an independently generated role-bound software key.
+    ///
+    /// The caller owns runtime-only key custody. Musubi account ownership is
+    /// pinned before creation, so its controller key must already be known.
+    /// # Errors
+    /// Rejects invalid identity, controller membership, algorithm, custody paths,
+    /// or incomplete durable initialization before returning a service.
+    pub fn provision_with_keypair(
         state_directory: impl Into<PathBuf>,
         provisioning: SoftwareSignerProvisioningV1,
         wrapping_key: SoftwareSignerWrappingKeyV1,
@@ -167,7 +174,14 @@ impl SoftwareSignerServiceV1 {
         keypair: KeyPair,
     ) -> Result<Self, SoftwareSignerErrorV1> {
         provisioning.validate()?;
-        if keypair.algorithm() != provisioning.algorithm.algorithm() {
+        if keypair.algorithm() != provisioning.algorithm.algorithm()
+            || provisioning.role == SignerRoleV1::MusubiProviderAttestation
+                && super::musubi_subject::validate_key_subject(
+                    &provisioning.purpose_binding,
+                    keypair.public_key(),
+                )
+                .is_err()
+        {
             return Err(SoftwareSignerErrorV1::InvalidBinding);
         }
         let state_directory = state_directory.into();
@@ -478,6 +492,18 @@ impl SoftwareSignerServiceV1 {
                 }
                 let new_keypair = KeyPair::try_random_with_algorithm(algorithm.algorithm())
                     .map_err(|_| SoftwareSignerAdminErrorV1::Unavailable)?;
+                // A controller key cannot rotate inside an immutable Musubi owner
+                // binding. A finalized authority/policy change requires separately
+                // provisioned custody bound to that exact successor subject.
+                if state.binding.role == SignerRoleV1::MusubiProviderAttestation
+                    && super::musubi_subject::validate_key_subject(
+                        &state.binding.purpose_binding,
+                        new_keypair.public_key(),
+                    )
+                    .is_err()
+                {
+                    return Err(SoftwareSignerAdminErrorV1::Rejected);
+                }
                 let mut new_aad = state.envelope.aad().clone();
                 new_aad.algorithm = *algorithm;
                 new_aad.key_revision = *new_key_revision;

@@ -14,7 +14,7 @@ pub(super) struct WitnessCaptureGuard<'capture, 'state> {
 impl<'capture, 'state> WitnessCaptureGuard<'capture, 'state> {
     pub(super) fn new(state: &'capture mut StateBlock<'state>) -> Self {
         Self {
-            prior_lane_seal: state.lane_consensus_contexts_seal,
+            prior_lane_seal: state.sumeragi_lane_state_seal,
             state,
             finished: false,
         }
@@ -33,7 +33,7 @@ impl<'capture, 'state> WitnessCaptureGuard<'capture, 'state> {
     }
 
     fn invalidate(&mut self, error: String) -> String {
-        self.state.lane_consensus_contexts_seal = self.prior_lane_seal;
+        self.state.sumeragi_lane_state_seal = self.prior_lane_seal;
         if self.state.execution_output_plan.is_some() {
             self.state.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
         }

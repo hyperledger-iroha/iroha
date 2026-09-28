@@ -339,6 +339,9 @@ mod tests {
             .public_key()
             .clone();
         let expected = iroha_data_model::sumeragi::SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: iroha_crypto::Hash::new(b"native Torii diagnostic configuration"),
+            beacon_horizon: None,
             instance: [1; 32],
             height: 42,
             view: 3,
@@ -1015,7 +1018,11 @@ mod tests {
                     .as_ref()
                     .clone()
                     .with_commit_certificate(corrupt.then(|| {
-                        CommitCertificate::new(Vec::new(), Vec::new(), b"invalid result".to_vec())
+                        CommitCertificate::from_untrusted_parts(
+                            Vec::new(),
+                            Vec::new(),
+                            b"invalid result".to_vec(),
+                        )
                     }));
                 let header = block.header();
                 let hash = block.hash();

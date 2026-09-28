@@ -482,3 +482,6 @@ pub(super) fn prepare_with_hook(
     launch.identity_with_hook(&mut hook)?;
     Ok(launch)
 }
+
+#[path = "collect_pair.rs"]
+pub(super) mod collect_pair;

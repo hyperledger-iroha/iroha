@@ -69,7 +69,9 @@ fn actual_costly_opcodes_match_completed_counter_and_refuse_before_dispatch() {
 fn actual_runs_and_warm_template_reuse_share_one_allowance() {
     let allowance = budget(6);
     let mut runtime = vm(&[add(), halt()]);
-    let template = runtime.runtime_template();
+    let template = runtime
+        .try_runtime_template()
+        .expect("runtime template allocation fits test host");
     for expected in [2, 4] {
         runtime.reset_from_runtime_template(&template).unwrap();
         runtime
@@ -174,7 +176,7 @@ impl IVMHost for NestedHost {
     }
     fn syscall(&mut self, number: u32, parent: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, NEST);
-        self.retained = Some(parent.clone());
+        self.retained = Some(parent.try_clone_snapshot()?);
         let mut child = if self.depth == 0 {
             vm(&nested_words())
         } else {

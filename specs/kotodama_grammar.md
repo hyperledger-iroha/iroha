@@ -267,11 +267,11 @@ record. For prepared calls, it first validates the compiler-owned flat schema
 and derives the schema's conservative maximum aggregate and pointer-allocation
 bound. The signed wire lengths and that bound must be affordable before the
 untrusted canonical record is decoded exactly once. The complete record stays
-host-owned; the VM receives only a domain-separated binding plus a fixed table
-of typed ABI words, and JSON is never the VM argument transport. The host
-preflights the complete aligned allocation sequence before any allocation.
-Pointer TLVs and the word table prefer INPUT and spill into owned HEAP; raw
-`List` and sum storage is always owned HEAP. Raw decode-syscall quoting uses
+host-owned; the VM receives a fixed table of typed ABI words, and JSON is never
+the VM argument transport. Before guest entry the host preflights pointer
+copies, active aggregates, the argument table, and the exact result reservation
+together. Pointer TLVs prefer INPUT and spill into owned HEAP; argument/result
+tables and raw `List` and sum storage use owned HEAP. Raw decode-syscall quoting uses
 only bounded record/schema envelope lengths and reserves the full HEAP before
 authenticating either payload. The argument-record protocol cap is inclusive
 at 1 MiB, while the selected artifact/node cycle ceiling still limits what an
@@ -311,14 +311,32 @@ encoded record payload is at most 1,048,537 bytes after the exact 39-byte V1
 TLV envelope. Cumulative pointer cloning is rejected before a repeated or
 aliased large pointer can amplify memory use.
 
-The V1 function-call convention has a fixed 13-word argument window (`r10`
-through `r22`). Every scalar or pointer leaf consumes one word. `Option<T>`,
-`Result<T,E>`, and `List<T,N>` each consume exactly one typed heap-handle word,
-independent of payload width; sums do not occupy a separate tag register.
-Structs and tuples consume the sum of their fields. A function
-whose complete flattened parameter list exceeds 13 words is rejected with
-`K2007`; arguments are never truncated and V1 has no hidden stack-argument
-convention.
+Every V1 function uses caller-owned argument and result tables. On entry `r10`
+contains the argument-table address, `r11` its exact word count, `r12` the
+result-table address, and `r13` its exact schema-derived capacity. On return
+`r10` names that same result table and `r11` gives its exact initialized word
+count. Each table is aligned to eight bytes and bounded to 64 KiB (8,192 words);
+an empty argument table uses `(address, count) = (0, 0)`. Unit returns one zero
+word. An empty nominal struct occupies one zero word while preserving its
+nominal identity. Struct and tuple fields flatten in declaration order; Option, Result, and
+List retain one active-only handle. Private and public functions use this same
+convention, including calls with one argument or one result.
+
+The authenticated CNTR callable descriptors bind every function root, its
+aligned stack-frame reservation, and every argument/result slot's representation
+and privacy role. Admission checks public signatures against their canonical
+schemas. Runtime checks caller ownership, disjoint table ranges, exact counts,
+initialized bytes, privacy tags, restored stack pointers, and trusted return
+addresses. Internal scratch tables are reserved once in the caller frame and
+reused across loop calls; public invocation tables belong to the current host
+invocation. Canonical public records retain their independent encoded-record,
+schema-size, and type-node bounds. Root result reservation costs eight gas per
+word. Frame validation reserves `frame_bytes / 8 + result_words` gas before
+allocating initialization coverage, and charges eight gas before validating each
+typed argument or result slot. Pointer validation costs `16 + 39 + payload_bytes`
+before authentication; secret numeric pointers use the declared type's maximum
+frame length so gas does not reveal a private length. Active sum and list headers
+cost eight and sixteen gas respectively.
 
 Self-describing IVM trigger actions select their callback explicitly with
 `contract_entrypoint` action metadata. When an event fires, the runtime validates
@@ -377,7 +395,7 @@ The V1 type vocabulary is:
 | `decimal` | `Decimal` | `0x0012` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `Quantity` | `0x0010` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-`0x0013` is unassigned and rejected as unknown; it is not an ABI tombstone.
+`0x000c`, `0x0014` is unassigned and rejected as unknown; it is not an ABI tombstone.
 <!-- END GENERATED: kotodama-v1-source-policy -->
 
 - `int`
@@ -649,8 +667,8 @@ proven maximum is its source capacity, even when it has an `if` filter, and it
 is rejected if that maximum exceeds 64 or the contextual capacity. Lists may
 nest and contain ordinary structured values, but never resource handles such
 as `StateMap` or `Secret`. Every element schema must flatten to at least one
-runtime word; zero-field and recursively zero-sized product elements are
-rejected with `E_LIST_ZERO_SIZED_ELEMENT`.
+runtime word. An empty nominal struct uses one initialized zero word, so lists
+can contain empty structs and products composed of empty structs.
 
 The bounded API includes `len`, `get(index) -> Option<T>`,
 `set(index: int, value: T) -> ()`, `push(value) -> ()`,
@@ -665,8 +683,15 @@ Recoverable failures preserve both list contents and length. Resource exhaustion
 and malformed runtime values remain fatal faults.
 
 Indexed assignment is unsupported. Its diagnostic recommends
-`list.set(index: index, value: value);`. `contains` uses canonical equality,
-including nominal error identity and recursive structured values.
+`list.set(index: index, value: value);`. `contains` uses the same canonical value
+equality as `==` and `!=`, including nominal error identity and recursive
+structured values. Aggregate equality requires the same declared type, including
+struct identity, error identity, and List capacity. Structs and tuples compare fields in
+declaration order; sums compare their tag and only the active payload; Lists
+compare their length and active elements. Inactive sum storage and unused List
+capacity are not compared. Both operand expressions execute exactly once, from
+left to right, before comparison. `!=` negates equality. `Secret` and `StateMap`
+values are not comparable, including when nested in an aggregate.
 
 Every `Result` value is must-use. Implicit expression discards, unread result
 bindings, and overwrites of unconsumed result bindings are compile errors,
@@ -907,11 +932,13 @@ Source code uses namespaced capabilities. Representative roots are:
 
 Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. In particular, `tlv_len` and `codec::tlv_len` remain internal; source uses only the typed `bytes::len`. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
 
-The scalar IVM operations historically exposed as `math::isqrt`, `math::abs`,
-`math::min`, `math::max`, `math::div_ceil`, `math::gcd`, and `math::mean` are not
-Kotodama V1 source helpers. They remain internal until complete signed 512-bit
-semantics and deterministic gas formulas are specified. Use ordinary checked
-operators and comparisons; no implicit 64-bit narrowing is permitted.
+The integer helpers `math::isqrt(value)`, `math::abs(value)`, and binary
+`math::min(left:, right:)`, `math::max(left:, right:)`,
+`math::div_ceil(left:, right:)`, `math::gcd(left:, right:)`, and
+`math::mean(left:, right:)` operate over the complete signed 512-bit domain.
+Compiler folding and typed runtime syscalls share the primitive algorithms.
+See [numeric semantics](kotodama_numeric_v1.md) for checked boundaries and
+staged limb-work charging; operands never narrow to machine integers.
 
 Compiler-owned lifecycle and code-operation labels use the branded
 `seiyaku::deactivate_instance`, `seiyaku::remove_code`,

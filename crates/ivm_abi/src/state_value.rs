@@ -223,9 +223,6 @@ pub enum StateValueKindV1 {
     /// AXT descriptor.
     #[codec(index = 14)]
     AxtDescriptor,
-    /// AXT asset handle.
-    #[codec(index = 15)]
-    AssetHandle,
     /// AXT proof blob.
     #[codec(index = 16)]
     ProofBlob,
@@ -256,7 +253,6 @@ impl StateValueKindV1 {
             Self::Name => 12,
             Self::DataSpaceId => 13,
             Self::AxtDescriptor => 14,
-            Self::AssetHandle => 15,
             Self::ProofBlob => 16,
             Self::SoracloudRequest => 17,
             Self::SoracloudResponse => 18,
@@ -279,7 +275,6 @@ impl StateValueKindV1 {
             12 => Self::Name,
             13 => Self::DataSpaceId,
             14 => Self::AxtDescriptor,
-            15 => Self::AssetHandle,
             16 => Self::ProofBlob,
             17 => Self::SoracloudRequest,
             18 => Self::SoracloudResponse,
@@ -309,7 +304,6 @@ impl StateValueKindV1 {
             Self::Name => PointerType::Name,
             Self::DataSpaceId => PointerType::DataSpaceId,
             Self::AxtDescriptor => PointerType::AxtDescriptor,
-            Self::AssetHandle => PointerType::AssetHandle,
             Self::ProofBlob => PointerType::ProofBlob,
             Self::SoracloudRequest => PointerType::SoracloudRequest,
             Self::SoracloudResponse => PointerType::SoracloudResponse,
@@ -319,11 +313,6 @@ impl StateValueKindV1 {
     #[must_use]
     pub const fn is_pointer(self) -> bool {
         self.pointer_type().is_some()
-    }
-    /// Return whether this leaf is a non-copyable resource handle.
-    #[must_use]
-    pub const fn is_resource_handle(self) -> bool {
-        matches!(self, Self::AssetHandle)
     }
 }
 /// One preorder node in a compiler-emitted durable-value schema.
@@ -827,7 +816,9 @@ fn decode_state_value_schema_payload(encoded: &[u8]) -> Result<StateValueSchemaV
                 };
                 if let Some(constructor) = constructor {
                     let child_count = constructor.child_count();
-                    if child_count == 0 || child_count > MAX_STATE_VALUE_NODES {
+                    if (child_count == 0 && !matches!(&constructor, Constructor::Struct { .. }))
+                        || child_count > MAX_STATE_VALUE_NODES
+                    {
                         return Err(state_value_schema_codec_error(
                             "invalid StateValueSchemaV1 constructor arity",
                         ));
@@ -1196,7 +1187,6 @@ impl StateValueSchemaV1 {
                         node_count: 1,
                         max_words: 0,
                         depth,
-                        contains_resource_handle: false,
                     };
                     match node {
                         StateValueNodeV1::Unit
@@ -1225,7 +1215,6 @@ impl StateValueSchemaV1 {
                             if !crate::entrypoint::is_canonical_kotodama_struct_name(name)
                                 || (name == "StatePage"
                                     && !valid_state_page_shape(nodes, index, fields))
-                                || fields.is_empty()
                                 || fields.iter().any(|field| {
                                     !crate::entrypoint::is_canonical_kotodama_identifier(field)
                                 })
@@ -1242,7 +1231,10 @@ impl StateValueSchemaV1 {
                                 next_index,
                                 child_depth: depth.checked_add(1)?,
                                 remaining: fields.len(),
-                                analysis: base,
+                                analysis: StateValueAnalysisV1 {
+                                    max_words: usize::from(fields.is_empty()),
+                                    ..base
+                                },
                             });
                         }
                         StateValueNodeV1::Tuple { arity } => {
@@ -1291,11 +1283,10 @@ impl StateValueSchemaV1 {
                                 depth: depth.checked_add(1)?,
                             });
                         }
-                        StateValueNodeV1::Leaf(kind) => {
+                        StateValueNodeV1::Leaf(_) => {
                             completed.push(Completed {
                                 analysis: StateValueAnalysisV1 {
                                     max_words: 1,
-                                    contains_resource_handle: kind.is_resource_handle(),
                                     ..base
                                 },
                                 next_index,
@@ -1341,7 +1332,6 @@ impl StateValueSchemaV1 {
                     analysis.max_words =
                         analysis.max_words.checked_add(child.analysis.max_words)?;
                     analysis.depth = analysis.depth.max(child.analysis.depth);
-                    analysis.contains_resource_handle |= child.analysis.contains_resource_handle;
                     if analysis.node_count > MAX_STATE_VALUE_NODES
                         || analysis.max_words > MAX_STATE_VALUE_WORDS
                     {
@@ -1361,7 +1351,6 @@ impl StateValueSchemaV1 {
                         node_count: 1usize.checked_add(child.analysis.node_count)?,
                         max_words: 1,
                         depth: depth.max(child.analysis.depth),
-                        contains_resource_handle: child.analysis.contains_resource_handle,
                     };
                     if analysis.node_count > MAX_STATE_VALUE_NODES {
                         return None;
@@ -1388,8 +1377,6 @@ impl StateValueSchemaV1 {
                             .checked_add(err.analysis.node_count)?,
                         max_words: 1,
                         depth: depth.max(ok.analysis.depth).max(err.analysis.depth),
-                        contains_resource_handle: ok.analysis.contains_resource_handle
-                            || err.analysis.contains_resource_handle,
                     };
                     if analysis.node_count > MAX_STATE_VALUE_NODES {
                         return None;
@@ -1406,7 +1393,6 @@ impl StateValueSchemaV1 {
                 } => {
                     let nested = completed.pop()?;
                     if nested.next_index != element_len
-                        || nested.analysis.contains_resource_handle
                         || nested.analysis.node_count > MAX_STATE_VALUE_NODES
                         || nested.analysis.max_words > MAX_STATE_VALUE_WORDS
                     {
@@ -1416,7 +1402,6 @@ impl StateValueSchemaV1 {
                         node_count: 1usize.checked_add(nested.analysis.node_count)?,
                         max_words: 1,
                         depth: parent_depth.max(nested.analysis.depth),
-                        contains_resource_handle: false,
                     };
                     if analysis.node_count > MAX_STATE_VALUE_NODES {
                         return None;
@@ -1488,7 +1473,6 @@ struct StateValueAnalysisV1 {
     node_count: usize,
     max_words: usize,
     depth: usize,
-    contains_resource_handle: bool,
 }
 fn skip_state_value_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> bool {
     let mut remaining = 1usize;
@@ -1545,6 +1529,9 @@ fn max_state_value_word_kinds(
                 }
             }
             StateValueNodeV1::Struct { fields, .. } => {
+                if fields.is_empty() && record_kind {
+                    words.push(StateValueWordKindV1::Unit);
+                }
                 pending.extend((0..fields.len()).map(|_| record_kind));
             }
             StateValueNodeV1::Tuple { arity } => {
@@ -1681,6 +1668,9 @@ fn walk_state_value_atoms<'a>(
                         }
                     }
                     StateValueNodeV1::Struct { fields, .. } => {
+                        if fields.is_empty() && record_kind {
+                            kinds.push(StateValueWordKindV1::Unit);
+                        }
                         pending.extend((0..fields.len()).map(|_| Pending::Visit {
                             cursor: cursor_id,
                             record_kind,
@@ -1928,9 +1918,9 @@ fn encode_state_value_record_payload(record: &StateValueRecordV1) -> Result<Vec<
     while let Some(item) = pending.pop() {
         match item {
             Pending::Stream { atoms, depth } => {
-                if atoms.is_empty() || atoms.len() > MAX_STATE_VALUE_WORDS {
+                if atoms.len() > MAX_STATE_VALUE_WORDS {
                     return Err(state_value_record_codec_error(
-                        "StateValueRecordV1 atom-stream count is outside 1..=256",
+                        "StateValueRecordV1 atom-stream count exceeds 256",
                     ));
                 }
                 let count = u16::try_from(atoms.len()).map_err(|_| {
@@ -2173,9 +2163,9 @@ fn decode_state_value_record_payload(encoded: &[u8]) -> Result<StateValueRecordV
         allocation_limit: usize,
     ) -> Result<BuilderFrame, NoritoError> {
         let atom_count = usize::from(decode_state_value_record_u16(encoded, offset)?);
-        if atom_count == 0 || atom_count > MAX_STATE_VALUE_WORDS {
+        if atom_count > MAX_STATE_VALUE_WORDS {
             return Err(state_value_record_codec_error(
-                "StateValueRecordV1 atom-stream count is outside 1..=256",
+                "StateValueRecordV1 atom-stream count exceeds 256",
             ));
         }
         let atoms =
@@ -2510,6 +2500,49 @@ pub fn decode_canonical_state_value_record_v1(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn empty_nominal_struct_schema_and_record_have_one_runtime_unit() {
+        use super::*;
+        let empty = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Struct {
+                name: "Empty".into(),
+                fields: Vec::new(),
+            }],
+        };
+        assert!(empty.validate());
+        assert_eq!(empty.word_count(), Some(1));
+        assert_eq!(empty.word_kinds(), Some(vec![StateValueWordKindV1::Unit]));
+        assert_eq!(
+            empty.word_kinds_for_atoms(&[]),
+            Some(vec![StateValueWordKindV1::Unit])
+        );
+        assert!(empty.validate_atoms(&[]));
+        assert!(!empty.validate_atoms(&[StateValueAtomV1::Unit]));
+        let frame = norito::to_bytes(&empty).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<StateValueSchemaV1>(&frame).unwrap(),
+            empty
+        );
+        let record = StateValueRecordV1 {
+            schema_hash: state_value_schema_hash_v1(&frame),
+            atoms: Vec::new(),
+        };
+        let frame = norito::to_bytes(&record).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<StateValueRecordV1>(&frame).unwrap(),
+            record
+        );
+        let other = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Struct {
+                name: "Other".into(),
+                fields: Vec::new(),
+            }],
+        };
+        assert_ne!(
+            state_value_schema_hash_v1(&norito::to_bytes(&empty).unwrap()),
+            state_value_schema_hash_v1(&norito::to_bytes(&other).unwrap())
+        );
+    }
+    #[test]
     fn durable_state_pages_require_exact_fields_and_matching_scalar_keys() {
         use super::*;
         let schema = StateValueSchemaV1 {
@@ -2798,7 +2831,6 @@ mod tests {
             StateValueKindV1::Name,
             StateValueKindV1::DataSpaceId,
             StateValueKindV1::AxtDescriptor,
-            StateValueKindV1::AssetHandle,
             StateValueKindV1::ProofBlob,
             StateValueKindV1::SoracloudRequest,
             StateValueKindV1::SoracloudResponse,
@@ -2819,16 +2851,15 @@ mod tests {
             Some(PointerType::Name),
             Some(PointerType::DataSpaceId),
             Some(PointerType::AxtDescriptor),
-            Some(PointerType::AssetHandle),
             Some(PointerType::ProofBlob),
             Some(PointerType::SoracloudRequest),
             Some(PointerType::SoracloudResponse),
         ];
-        for (expected, (kind, pointer_type)) in kinds.into_iter().zip(pointer_types).enumerate() {
-            assert_eq!(kind.tag(), u32::try_from(expected).expect("kind tag"));
+        for (kind, pointer_type) in kinds.into_iter().zip(pointer_types) {
             assert_eq!(kind.pointer_type(), pointer_type);
             assert_norito_discriminant(&kind, kind.tag());
         }
+        assert!(StateValueKindV1::from_wire_tag(15).is_none());
         let int_schema = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
         };
@@ -3134,24 +3165,8 @@ mod tests {
         }
     }
     #[test]
-    fn lists_reject_resource_handles_recursively() {
-        let resource = StateValueSchemaV1 {
-            nodes: vec![
-                StateValueNodeV1::Option,
-                StateValueNodeV1::Leaf(StateValueKindV1::AssetHandle),
-            ],
-        };
-        assert!(
-            resource.validate(),
-            "resource values remain valid outside lists"
-        );
-        let list = StateValueSchemaV1 {
-            nodes: vec![StateValueNodeV1::List {
-                element: Box::new(resource),
-                capacity: 1,
-            }],
-        };
-        assert!(!list.validate());
+    fn retired_standalone_handle_kind_is_unassigned() {
+        assert_eq!(StateValueKindV1::from_wire_tag(15), None);
     }
     #[test]
     fn recursive_list_schema_boundary_is_stack_safe() {
@@ -3566,7 +3581,8 @@ mod tests {
             schema_hash: [0; 32],
             atoms: Vec::new(),
         };
-        assert!(encode_state_value_record_payload(&empty).is_err());
+        let encoded = encode_state_value_record_payload(&empty).expect("empty product atom tape");
+        assert_eq!(decode_state_value_record_payload(&encoded).unwrap(), empty);
         let wide = StateValueRecordV1 {
             schema_hash: [0; 32],
             atoms: (0..=MAX_STATE_VALUE_WORDS)
@@ -3734,10 +3750,7 @@ mod tests {
                 ],
             },
             StateValueSchemaV1 {
-                nodes: vec![
-                    StateValueNodeV1::Option,
-                    StateValueNodeV1::Leaf(StateValueKindV1::AssetHandle),
-                ],
+                nodes: vec![StateValueNodeV1::Option],
             },
         ];
         for element in invalid_elements {

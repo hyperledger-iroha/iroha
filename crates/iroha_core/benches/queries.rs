@@ -83,6 +83,9 @@ fn build_state_with_accounts(n: usize) -> State {
         accounts.push(account);
     }
     State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::with([domain], accounts, []),
         kura,
         query_handle,
@@ -297,6 +300,9 @@ fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
         nfts.push(Nft::new(nft_id, Metadata::default()).build(&authority));
     }
     let state = State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::with_assets(domains, accounts, asset_definitions, assets, nfts),
         kura,
         query_handle.clone(),
@@ -769,6 +775,9 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     }
     let world = World::with([domain], [Account::new(auth.clone()).build(&auth)], defs);
     let state = State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         world,
         kura,
         query_handle.clone(),
@@ -936,6 +945,9 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
         accounts.push(account);
     }
     State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::with_assets([domain], accounts, definitions, assets, []),
         kura,
         query_handle,
@@ -1038,6 +1050,9 @@ fn build_state_with_domains(n: usize) -> State {
         domains.push(Domain::new(id).build(&authority_id));
     }
     State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::with(domains, [], []),
         kura,
         query_handle,
@@ -1096,6 +1111,9 @@ fn build_state_with_asset_definitions(n: usize) -> State {
         );
     }
     State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::with_assets([domain], [owner], defs, [], []),
         kura,
         query_handle,

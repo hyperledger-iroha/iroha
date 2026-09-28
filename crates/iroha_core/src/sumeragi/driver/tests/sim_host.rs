@@ -133,6 +133,18 @@ impl DriverHost {
                 block: Box::new(commit.block.clone()),
                 qc: Box::new(commit.qc.clone()),
             }),
+            Op::Exec(ExecOp::BuildControlWitness { .. }) => {
+                self.complete_kernel(Completion::Exec(ExecDone::ControlWitnessBuilt(Ok((
+                    iroha_sumeragi::types::ControlWitness::empty(),
+                    false,
+                )))))
+            }
+            Op::Exec(ExecOp::DriveApplicationControl(_)) => self.complete_kernel(Completion::Exec(
+                ExecDone::ApplicationControlDriven(Ok(None)),
+            )),
+            Op::Exec(ExecOp::ReceiveApplicationControl { .. }) => self.complete_kernel(
+                Completion::Exec(ExecDone::ApplicationControlReceived(Ok(()))),
+            ),
             Op::Exec(ExecOp::Build {
                 req,
                 max_bytes,
@@ -310,9 +322,9 @@ impl Host for DriverHost {
             Done::Executed { outcome, .. } => Completion::Exec(ExecDone::Executed(outcome)),
             Done::Discarded { .. } => Completion::Exec(ExecDone::Discarded),
             Done::Prepared { result, .. } => Completion::Exec(ExecDone::Prepared(Ok(result))),
-            Done::Committed {
-                config_after_next, ..
-            } => Completion::Exec(ExecDone::Committed(Ok(config_after_next))),
+            Done::Committed { config, .. } => {
+                Completion::Exec(ExecDone::Committed(Ok(Box::new(config))))
+            }
         };
         self.complete_kernel(completion);
     }

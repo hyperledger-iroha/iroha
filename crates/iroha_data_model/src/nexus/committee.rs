@@ -5,10 +5,8 @@
 
 use crate::{
     NetworkId,
-    block::{
-        BlockHeader,
-        consensus_v2::{DualQuorum, ValidatorPower},
-    },
+    asset::{AssetBalanceScope, AssetDefinitionId},
+    block::BlockHeader,
     consensus::GlobalThresholdBeaconPartialSignatureV1,
     isi::kagemusha_v1::{
         BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
@@ -16,10 +14,14 @@ use crate::{
         KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityPairedPossessionProofV1,
         KagemushaMintFinalitySeatReadinessContextV1, KagemushaMintFinalityValidatorKeysV1,
     },
-    parameter::{CustomParameter, CustomParameterId},
+    parameter::{CustomParameter, CustomParameterId, system::SumeragiNposParameters},
+    sumeragi::epoch::{ValidatorCommitteeMemberV1, validate_committee},
 };
 use iroha_crypto::{Hash, HashOf, SignatureOf};
-use iroha_primitives::json::Json;
+use iroha_primitives::{
+    json::Json,
+    numeric::{Quantity, XOR_QUANTITY_SCALE},
+};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -144,6 +146,97 @@ impl ValidatorCandidateKeysV1 {
     }
 }
 
+/// Signed eligibility policy frozen with one immutable committee selection.
+///
+/// The selecting execution authenticates the XOR identity against the network's installed
+/// parameters. Activation uses these exact floors and bounds even if later parameters change.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::nexus::ValidatorElectionPolicyV1")]
+#[norito(deny_unknown_fields)]
+pub struct ValidatorElectionPolicyV1 {
+    /// Exact canonical XOR definition authenticated by this network's signed parameters.
+    pub xor_asset_definition_id: AssetDefinitionId,
+    /// The single global custody bucket; dataspace-scoped stake is not eligible.
+    pub asset_scope: AssetBalanceScope,
+    /// Canonical XOR precision, exactly nine decimal places.
+    pub asset_scale: u32,
+    /// Positive minimum self-bond, exactly representable at the frozen asset scale.
+    pub min_self_bond: Quantity,
+    /// Positive minimum nomination, exactly representable at the frozen asset scale.
+    pub min_nomination_bond: Quantity,
+    /// Exact bounded `3f + 1` selection ceiling, in 4 through 31.
+    pub max_validators: u32,
+    /// Complete target epoch length; at least three heights are required for the real pulse.
+    pub epoch_length_blocks: u64,
+}
+
+impl ValidatorElectionPolicyV1 {
+    /// Snapshot the exact eligibility fields of authenticated network parameters.
+    ///
+    /// This does not authenticate an arbitrary parameter body. The selecting execution must
+    /// obtain it from its original committed prestate and check the actual XOR definition.
+    ///
+    /// # Errors
+    /// Rejects invalid signed parameters or noncanonical frozen eligibility bounds.
+    pub fn from_npos_parameters(parameters: &SumeragiNposParameters) -> Result<Self, String> {
+        parameters.validate().map_err(str::to_owned)?;
+        let policy = Self {
+            xor_asset_definition_id: parameters.xor_asset_definition_id.clone(),
+            asset_scope: AssetBalanceScope::Global,
+            asset_scale: XOR_QUANTITY_SCALE,
+            min_self_bond: parameters.min_self_bond.clone(),
+            min_nomination_bond: parameters.min_nomination_bond.clone(),
+            max_validators: parameters.max_validators,
+            epoch_length_blocks: parameters.epoch_length_blocks.get(),
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    /// Validate the exact first-release monetary and scheduling bounds.
+    ///
+    /// The network-specific XOR identity is authenticated by the selecting execution and
+    /// frozen in this body; its name alone cannot establish network authority.
+    ///
+    /// # Errors
+    /// Rejects synthetic stake, scoped custody, wrong precision, fractional dust, or bad bounds.
+    pub fn validate(&self) -> Result<(), String> {
+        let synthetic_stake = AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::parse_fully_qualified("nexus.universal")
+                .expect("fixed rejected synthetic staking domain"),
+            "xor"
+                .parse()
+                .expect("fixed rejected synthetic staking name"),
+        );
+        if self.xor_asset_definition_id == synthetic_stake
+            || self.asset_scope != AssetBalanceScope::Global
+            || self.asset_scale != XOR_QUANTITY_SCALE
+            || self.min_self_bond.is_zero()
+            || self.min_nomination_bond.is_zero()
+            || self.min_self_bond.scale() > self.asset_scale
+            || self.min_nomination_bond.scale() > self.asset_scale
+            || self.max_validators < 4
+            || self.max_validators > 31
+            || (self.max_validators - 1) % 3 != 0
+            || self.epoch_length_blocks < 3
+        {
+            return Err("invalid frozen validator election policy".to_owned());
+        }
+        Ok(())
+    }
+}
+
 /// Immutable result of the election at the end of epoch E for epoch E+2.
 #[derive(
     Debug,
@@ -182,19 +275,23 @@ pub struct ValidatorCommitteePreparationV1 {
     pub preparing_authorization_id: [u8; 32],
     /// Independently domain-separated election randomness from the authenticated boundary pulse.
     pub election_seed: [u8; 32],
-    /// Complete ordered target committee; it cannot be shrunk or rerolled.
-    pub roster: Vec<ValidatorPower>,
-    /// Exact consensus-key possession proofs in target seat order.
-    pub validator_set_pops: Vec<Vec<u8>>,
+    /// Exact signed eligibility policy at the selecting boundary's prestate.
+    pub eligibility: ValidatorElectionPolicyV1,
+    /// Complete ordered equal-vote target committee and original BLS possession proofs.
+    /// This committee cannot be shrunk or rerolled within the attempt.
+    pub committee: Vec<ValidatorCommitteeMemberV1>,
 }
 
 impl ValidatorCommitteePreparationV1 {
     /// Validate scheduling arithmetic and the canonical complete committee.
     ///
     /// # Errors
-    /// Rejects malformed shape; election-input authentication and BLS verification belong to Core.
+    /// Rejects malformed bounds or any invalid BLS proof. Election-input authentication and
+    /// current custody readiness are checked against the original execution prestate.
     pub fn validate(&self) -> Result<(), String> {
         let invalid = || "invalid frozen validator committee preparation".to_owned();
+        self.eligibility.validate()?;
+        validate_committee(&self.committee)?;
         if self.version != 1
             || self.network_id.as_bytes() == &[0; 32]
             || self.selection_anchor.as_ref() == &[0; 32]
@@ -208,19 +305,15 @@ impl ValidatorCommitteePreparationV1 {
                 .is_none_or(|preparing_first| self.first_height <= preparing_first)
             || self.preparing_authorization_id == [0; 32]
             || self.election_seed == [0; 32]
-            || self.roster.len() < 4
-            || self.roster.len() > 31
+            || self.committee.len() > self.eligibility.max_validators as usize
             || self
-                .roster
-                .windows(2)
-                .any(|pair| pair[0].validator >= pair[1].validator)
-            || self.roster.iter().any(|entry| entry.power != 1)
-            || self.validator_set_pops.len() != self.roster.len()
-            || self.validator_set_pops.iter().any(|pop| pop.len() != 96)
+                .last_height
+                .checked_sub(self.first_height)
+                .and_then(|distance| distance.checked_add(1))
+                != Some(self.eligibility.epoch_length_blocks)
         {
             return Err(invalid());
         }
-        DualQuorum::from_roster(&self.roster).map_err(|_| invalid())?;
         Ok(())
     }
 
@@ -467,12 +560,12 @@ impl ValidatorCommitteeTransitionV1 {
             .map_err(|error| error.to_string())?;
         if credentials.authority.network_id != preparation.network_id
             || credentials.authority.generation != preparation.authority_generation
-            || credentials.authority.validators.len() != preparation.roster.len()
+            || credentials.authority.validators.len() != preparation.committee.len()
             || credentials
                 .authority
                 .validators
                 .iter()
-                .zip(&preparation.roster)
+                .zip(&preparation.committee)
                 .any(|(keys, voter)| keys.validator != voter.validator)
             || credentials.beacon.session_id != preparation.beacon_session_id()?
             || credentials.beacon.transcript_hash == [0; 32]
@@ -493,7 +586,7 @@ impl ValidatorCommitteeTransitionV1 {
         let credentials = self.validated_credentials()?;
         if usize::try_from(validator_index)
             .ok()
-            .is_none_or(|index| index >= self.preparation.roster.len())
+            .is_none_or(|index| index >= self.preparation.committee.len())
         {
             return Err("target validator seat is out of range".to_owned());
         }
@@ -528,7 +621,7 @@ impl ValidatorCommitteeTransitionV1 {
         self.preparation.validate()?;
         let invalid = || "invalid validator committee transition progress".to_owned();
         let preparation = &self.preparation;
-        if self.readiness.len() > preparation.roster.len()
+        if self.readiness.len() > preparation.committee.len()
             || self
                 .readiness
                 .windows(2)
@@ -564,7 +657,7 @@ impl ValidatorCommitteeTransitionV1 {
             match outcome.decision {
                 KagemushaMintFinalityEpochDecisionV1::Activate => {
                     let credentials = self.credentials.as_ref().ok_or_else(invalid)?;
-                    if self.readiness.len() != preparation.roster.len()
+                    if self.readiness.len() != preparation.committee.len()
                         || outcome.beacon != BeaconEpochBindingV1::Installed(credentials.beacon)
                         || outcome
                             .validate_against_authority(&credentials.authority)
@@ -654,15 +747,30 @@ mod tests {
             authority_generation: 1,
             preparing_authorization_id: authorization.authorization_id().unwrap(),
             election_seed: [4; 32],
-            roster: authority(1)
-                .validators
-                .into_iter()
-                .map(|keys| ValidatorPower {
-                    validator: keys.validator,
-                    power: 1,
-                })
-                .collect(),
-            validator_set_pops: vec![vec![1; 96]; 4],
+            eligibility:
+                ValidatorElectionPolicyV1 {
+                    epoch_length_blocks: 10,
+                    ..ValidatorElectionPolicyV1::from_npos_parameters(
+                        &SumeragiNposParameters::default(),
+                    )
+                    .unwrap()
+                },
+            committee: {
+                let mut members = (1_u8..=4)
+                    .map(|seed| {
+                        let pair = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+                        ValidatorCommitteeMemberV1 {
+                            validator: PeerId::new(pair.public_key().clone()),
+                            proof_of_possession: iroha_crypto::bls_normal_pop_prove(
+                                pair.private_key(),
+                            )
+                            .unwrap(),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                members.sort_by(|a, b| a.validator.cmp(&b.validator));
+                members
+            },
         }
     }
 
@@ -714,6 +822,97 @@ mod tests {
     }
 
     #[test]
+    fn frozen_policy_snapshots_signed_fields_and_rejects_non_xor_precision() {
+        let mut parameters = SumeragiNposParameters::default();
+        parameters.min_self_bond = "1000.000000001".parse().unwrap();
+        let frozen = ValidatorElectionPolicyV1::from_npos_parameters(&parameters).unwrap();
+        assert_eq!(
+            frozen.xor_asset_definition_id,
+            parameters.xor_asset_definition_id
+        );
+        assert_eq!(frozen.min_self_bond, parameters.min_self_bond);
+        assert_eq!(frozen.min_nomination_bond, parameters.min_nomination_bond);
+        assert_eq!(frozen.max_validators, parameters.max_validators);
+        assert_eq!(
+            frozen.epoch_length_blocks,
+            parameters.epoch_length_blocks.get()
+        );
+        assert_eq!(frozen.asset_scope, AssetBalanceScope::Global);
+        assert_eq!(frozen.asset_scale, 9);
+        parameters.min_self_bond = Quantity::one();
+        assert_ne!(frozen.min_self_bond, parameters.min_self_bond);
+        for mutation in 0..10 {
+            let mut invalid = frozen.clone();
+            match mutation {
+                0 => {
+                    invalid.asset_scope =
+                        AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(1))
+                }
+                1 => invalid.asset_scale = 8,
+                2 => invalid.min_self_bond = Quantity::zero(),
+                3 => invalid.min_nomination_bond = Quantity::zero(),
+                4 => invalid.min_self_bond = "0.0000000001".parse().unwrap(),
+                5 => invalid.min_nomination_bond = "0.0000000001".parse().unwrap(),
+                6 => invalid.max_validators = 5,
+                7 => invalid.max_validators = 34,
+                8 => invalid.epoch_length_blocks = 2,
+                _ => {
+                    invalid.xor_asset_definition_id = AssetDefinitionId::derive_from_components(
+                        iroha_model_base::domain::DomainId::try_new("nexus", "universal").unwrap(),
+                        "xor".parse().unwrap(),
+                    )
+                }
+            }
+            assert!(invalid.validate().is_err(), "mutation {mutation}");
+        }
+        parameters.min_nomination_bond = "0.0000000001".parse().unwrap();
+        assert!(ValidatorElectionPolicyV1::from_npos_parameters(&parameters).is_err());
+        let wire = norito::encode_canonical(&frozen).unwrap();
+        assert_eq!(
+            frozen,
+            norito::decode_canonical::<ValidatorElectionPolicyV1>(&wire).unwrap()
+        );
+    }
+
+    #[test]
+    fn frozen_preparation_binds_policy_and_verifies_every_real_pop() {
+        let preparation = preparation();
+        let original_id = preparation.transition_id().unwrap();
+        for mutation in 0..3 {
+            let mut changed = preparation.clone();
+            match mutation {
+                0 => changed.eligibility.min_self_bond = "2000".parse().unwrap(),
+                1 => changed.eligibility.min_nomination_bond = "2".parse().unwrap(),
+                _ => changed.eligibility.max_validators = 7,
+            }
+            changed.validate().unwrap();
+            assert_ne!(original_id, changed.transition_id().unwrap());
+            assert_ne!(
+                preparation.beacon_session_id().unwrap(),
+                changed.beacon_session_id().unwrap()
+            );
+        }
+        for index in 0..preparation.committee.len() {
+            let mut invalid = preparation.clone();
+            invalid.committee[index].proof_of_possession[0] ^= 1;
+            assert!(invalid.validate().is_err(), "invalid proof at seat {index}");
+        }
+        let mut swapped = preparation.clone();
+        let first_proof = swapped.committee[0].proof_of_possession.clone();
+        swapped.committee[0].proof_of_possession = swapped.committee[1].proof_of_possession.clone();
+        swapped.committee[1].proof_of_possession = first_proof;
+        assert!(
+            swapped.validate().is_err(),
+            "correct proofs for different peers are invalid"
+        );
+        let wire = norito::encode_canonical(&preparation).unwrap();
+        assert_eq!(
+            preparation,
+            norito::decode_canonical::<ValidatorCommitteePreparationV1>(&wire).unwrap()
+        );
+    }
+
+    #[test]
     fn committee_preparation_reserves_a_complete_epoch_and_exact_parent() {
         let preparation = preparation();
         preparation
@@ -742,8 +941,7 @@ mod tests {
             another_attempt.transition_id().unwrap()
         );
         let mut partial = preparation;
-        partial.roster.pop();
-        partial.validator_set_pops.pop();
+        partial.committee.pop();
         assert!(partial.validate().is_err());
     }
 
@@ -752,12 +950,18 @@ mod tests {
         let preparing = preparing();
         let mut target = preparation();
         target.last_height = 45;
+        target.eligibility.epoch_length_blocks = 25;
         target
             .validate_against_preparing_authorization(&preparing)
             .unwrap();
         let id = target.transition_id().unwrap();
         let mut changed = target.clone();
         changed.last_height += 1;
+        assert!(
+            changed.validate().is_err(),
+            "target bounds cannot change without the frozen policy"
+        );
+        changed.eligibility.epoch_length_blocks += 1;
         assert_ne!(id, changed.transition_id().unwrap());
         target.first_height += 1;
         assert!(

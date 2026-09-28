@@ -36,8 +36,8 @@ test("native OpenGameSession browser transaction signs local canonical bytes and
   assert.deepEqual(noritoDecodeInstructionBoxArchive(wire, 753), instruction);
   const privateKey = new Uint8Array(32).fill(7), publicKey = ed25519.getPublicKey(privateKey);
   const authority = AccountAddress.fromAccount({ algorithm: "ed25519", publicKey }).toI105();
-  const payloadBytes = buildBrowserInstructionTransactionPayload({ networkId, authority, instructions: [instruction], feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: row.value.asset_definition, maxAmount: "1" }] }, creationTimeMs: 1, ttlMs: 100_000 });
-  const signable = { networkId, authority, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) };
+  const payloadBytes = buildBrowserInstructionTransactionPayload({ networkId, networkPrefix: 753, authority, instructions: [instruction], feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: row.value.asset_definition, maxAmount: "1" }] }, creationTimeMs: 1, ttlMs: 100_000 });
+  const signable = { networkId, networkPrefix: 753, authority, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) };
   validateBrowserInstructionTransactionSignable(signable);
   const hash = Uint8Array.from(blake2b256(payloadBytes)); hash[31] |= 1;
   const signature = ed25519.sign(hash, privateKey);
@@ -52,7 +52,7 @@ test("join approval requires exact debit terms and altered terms invalidate the 
   const open = fixture.vectors.find(row => row.name === "OpenGameSessionV1").value;
   const key = new Uint8Array(32).fill(7), publicKey = ed25519.getPublicKey(key);
   const authority = AccountAddress.fromAccount({ algorithm: "ed25519", publicKey }).toI105();
-  const payload = terms => buildBrowserInstructionTransactionPayload({ networkId, authority,
+  const payload = terms => buildBrowserInstructionTransactionPayload({ networkId, networkPrefix: 753, authority,
     instructions: [buildJoinGameSessionV1(terms)], feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: open.asset_definition, maxAmount: "0.25" }] }, creationTimeMs: 1, ttlMs: 100_000 });
   const original = payload(value), digest = Uint8Array.from(blake2b256(original)); digest[31] |= 1;
   const signature = ed25519.sign(digest, key);
@@ -117,10 +117,10 @@ test("large execution transaction builds, signs, validates and hashes without wi
   const privateKey = new Uint8Array(32).fill(7), publicKey = ed25519.getPublicKey(privateKey);
   const authority = AccountAddress.fromAccount({ algorithm: "ed25519", publicKey }).toI105();
   const open = fixture.vectors.find(row => row.name === "OpenGameSessionV1").value;
-  const input = { networkId, authority, instructions: [instruction], feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: open.asset_definition, maxAmount: "1" }] }, creationTimeMs: 1, ttlMs: 100_000 };
+  const input = { networkId, networkPrefix: 753, authority, instructions: [instruction], feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: open.asset_definition, maxAmount: "1" }] }, creationTimeMs: 1, ttlMs: 100_000 };
   const payloadBytes = buildBrowserInstructionTransactionPayload(input);
   assert.ok(payloadBytes.length > 1024 * 1024);
-  const signable = { networkId, authority, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) };
+  const signable = { networkId, networkPrefix: 753, authority, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) };
   validateBrowserInstructionTransactionSignable(signable);
   const hash = Uint8Array.from(blake2b256(payloadBytes)); hash[31] |= 1;
   const finalized = finalizeBrowserInstructionTransaction(signable, ed25519.sign(hash, privateKey), publicKey);

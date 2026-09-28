@@ -454,6 +454,7 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
     let mut ivm_cache = IvmCache::new();
     let error = super::Executor::Initial
         .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("the call-site authority must match the signed transaction");
     assert!(matches!(error, ValidationFail::InternalError(message) if
         message == "signed authority mismatch"));
@@ -507,6 +508,7 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         let executor = state_tx.world.executor.clone();
         executor
             .execute_transaction(&mut state_tx, &ALICE_ID, tx, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("ordinary metadata must not reject execution");
         assert_eq!(
             state_tx.executor_fuel_remaining, governed_fuel,
@@ -606,7 +608,14 @@ fn validate_native_query_with_world(
     query: &QueryRequest,
 ) -> Result<(), ValidationFail> {
     let world_view = world.view();
-    executor.validate_query_with_world_parts(&world_view, None, authority, query)
+    executor
+        .validate_query_with_world_parts(&world_view, None, authority, query)
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                panic!("query fixture unexpectedly deferred: {reason}")
+            }
+        })
 }
 fn remove_committed_storage_entry<K: mv::Key, V: mv::Value>(
     storage: &mv::storage::Storage<K, V>,
@@ -878,7 +887,10 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             &orderbook,
         )
         .expect_err("orderbook state must not be public under the Initial executor");
-    assert!(matches!(orderbook_error, ValidationFail::NotPermitted(_)));
+    assert!(matches!(
+        orderbook_error,
+        crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(_))
+    ));
     let reserve_error = executor
         .validate_query_with_world_parts(
             &state_transaction.world,
@@ -887,7 +899,10 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             &reserve_events,
         )
         .expect_err("reserve committed events must remain governance-readable");
-    assert!(matches!(reserve_error, ValidationFail::NotPermitted(_)));
+    assert!(matches!(
+        reserve_error,
+        crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(_))
+    ));
     let reputation_policy_error = executor
         .validate_query_with_world_parts(
             &state_transaction.world,
@@ -898,7 +913,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
         .expect_err("reputation authority policy must remain operator-readable");
     assert!(matches!(
         reputation_policy_error,
-        ValidationFail::NotPermitted(_)
+        crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(_))
     ));
     executor
         .validate_query_with_world_parts(
@@ -924,7 +939,10 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             &foreign_eligibility,
         )
         .expect_err("another juror's eligibility must remain private");
-    assert!(matches!(eligibility_error, ValidationFail::NotPermitted(_)));
+    assert!(matches!(
+        eligibility_error,
+        crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(_))
+    ));
     let snapshot_error = executor
         .validate_query_with_world_parts(
             &state_transaction.world,
@@ -933,7 +951,10 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             &moderation_snapshot,
         )
         .expect_err("complete moderation snapshots must remain private");
-    assert!(matches!(snapshot_error, ValidationFail::NotPermitted(_)));
+    assert!(matches!(
+        snapshot_error,
+        crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(_))
+    ));
     executor
         .validate_query_with_world_parts(
             &state_transaction.world,
@@ -1049,7 +1070,7 @@ fn validate_query_rejected_by_executor() {
     assert!(
         matches!(
             err,
-            iroha_data_model::ValidationFail::NotPermitted(ref msg) if msg == "queries disabled"
+            crate::execution_attempt::ExecutionAttemptError::Rejected(iroha_data_model::ValidationFail::NotPermitted(ref msg)) if msg == "queries disabled"
         ),
         "unexpected validation failure: {err:?}"
     );
@@ -1445,7 +1466,12 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
         let error = validate!(query)
             .expect_err("gated SoraFS state must not be readable without its permission");
         assert!(
-            matches!(error, ValidationFail::NotPermitted(_)),
+            matches!(
+                error,
+                crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    ValidationFail::NotPermitted(_)
+                )
+            ),
             "{error:?}"
         );
     }

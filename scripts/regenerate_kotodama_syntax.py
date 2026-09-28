@@ -55,9 +55,6 @@ PYTHON_MANIFEST_PATH = Path("python/iroha_python/src/iroha_python/client.py")
 KOTLIN_MANIFEST_PATH = Path(
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractManifestModels.kt"
 )
-JAVA_MANIFEST_PATH = Path(
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractManifestJsonParser.java"
-)
 SWIFT_MANIFEST_PATH = Path("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift")
 CSHARP_MANIFEST_PATH = Path(
     "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractManifestJson.cs"
@@ -79,7 +76,6 @@ GENERATED_TARGETS = (
     *JAVASCRIPT_IDENTIFIER_PATHS,
     PYTHON_MANIFEST_PATH,
     KOTLIN_MANIFEST_PATH,
-    JAVA_MANIFEST_PATH,
     SWIFT_MANIFEST_PATH,
     CSHARP_MANIFEST_PATH,
 )
@@ -122,7 +118,7 @@ EXPECTED_NUMERIC_ABI = {
 }
 EXPECTED_DECLARATION_RESERVED_EXTRAS = (
     "AxtDescriptor",
-    "AssetHandle",
+    "AxtAnchoredSpendV1",
     "ProofBlob",
     "SoracloudRequest",
     "SoracloudResponse",
@@ -595,17 +591,17 @@ def _validate_final_v1_policy(policy: Policy) -> None:
         )
     if "amount" not in policy.ordinary_value_identifiers:
         raise GenerationError("amount must remain an ordinary value identifier")
-    if policy.first_known_pointer != 0x0001 or policy.last_assigned_pointer != 0x0012:
-        raise GenerationError("V1 known pointer range must be 0x0001 through 0x0012")
-    if policy.unassigned_pointers != (0x0013,):
+    if policy.first_known_pointer != 0x0001 or policy.last_assigned_pointer != 0x0013:
+        raise GenerationError("V1 known pointer range must be 0x0001 through 0x0013")
+    if policy.unassigned_pointers != (0x000C, 0x0014):
         raise GenerationError(
-            "0x0013 must be the sole explicitly unassigned V1 boundary"
+            "0x000C and 0x0014 must remain explicitly unassigned in V1"
         )
     if any(
-        pointer <= policy.last_assigned_pointer
+        pointer < policy.first_known_pointer or pointer > policy.last_assigned_pointer + 1
         for pointer in policy.unassigned_pointers
     ):
-        raise GenerationError("unassigned pointer IDs overlap the assigned range")
+        raise GenerationError("unassigned pointer IDs fall outside the V1 range and boundary")
     if any(name not in policy.editor_member_calls for name in policy.list_member_names):
         raise GenerationError("editor_member_calls omits a bounded List member")
 
@@ -1081,6 +1077,7 @@ def _js_policy(policy: Policy) -> str:
             "",
             f"const NUMERIC_V1_MIN_KNOWN_POINTER_TYPE = 0x{policy.first_known_pointer:04x};",
             f"const NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x{policy.last_assigned_pointer:04x};",
+            f"const NUMERIC_V1_UNASSIGNED_POINTER_TYPE = 0x{policy.unassigned_pointers[0]:04x};",
         ]
     )
     return "\n".join(lines)
@@ -1154,6 +1151,7 @@ def _python_policy(policy: Policy) -> str:
             "",
             f"_NUMERIC_V1_MIN_KNOWN_POINTER_TYPE = 0x{policy.first_known_pointer:04X}",
             f"_NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x{policy.last_assigned_pointer:04X}",
+            f"_NUMERIC_V1_UNASSIGNED_POINTER_TYPE = 0x{policy.unassigned_pointers[0]:04X}",
         ]
     )
     return "\n".join(lines)
@@ -1178,6 +1176,7 @@ def _kotlin_policy(policy: Policy) -> str:
             "",
             f"private const val MIN_KNOWN_POINTER_TYPE = 0x{policy.first_known_pointer:04X}",
             f"private const val MAX_ASSIGNED_POINTER_TYPE = 0x{policy.last_assigned_pointer:04X}",
+            f"private const val UNASSIGNED_POINTER_TYPE = 0x{policy.unassigned_pointers[0]:04X}",
         ]
     )
     return "\n".join(lines)
@@ -1207,6 +1206,7 @@ def _java_policy(policy: Policy) -> str:
             "",
             f"  private static final int MIN_KNOWN_POINTER_TYPE = 0x{policy.first_known_pointer:04X};",
             f"  private static final int MAX_ASSIGNED_POINTER_TYPE = 0x{policy.last_assigned_pointer:04X};",
+            f"  private static final int UNASSIGNED_POINTER_TYPE = 0x{policy.unassigned_pointers[0]:04X};",
         ]
     )
     return "\n".join(lines)
@@ -1267,6 +1267,7 @@ def _swift_policy(policy: Policy) -> str:
             "",
             f"private let numericV1MinKnownPointerType: UInt16 = 0x{policy.first_known_pointer:04X}",
             f"private let numericV1MaxAssignedPointerType: UInt16 = 0x{policy.last_assigned_pointer:04X}",
+            f"private let numericV1UnassignedPointerType: UInt16 = 0x{policy.unassigned_pointers[0]:04X}",
         ]
     )
     return "\n".join(lines)
@@ -1288,6 +1289,7 @@ def _csharp_policy(policy: Policy) -> str:
         [
             f"    private const ushort MinKnownPointerType = 0x{policy.first_known_pointer:04X};",
             f"    private const ushort MaxAssignedPointerType = 0x{policy.last_assigned_pointer:04X};",
+            f"    private const ushort UnassignedPointerType = 0x{policy.unassigned_pointers[0]:04X};",
         ]
     )
     return "\n".join(lines)
@@ -1420,30 +1422,6 @@ def _kotlin_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
     )
 
 
-def _java_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
-    def java_set(name: str, values: Sequence[str]) -> str:
-        rows = "\n".join(
-            f"          {json.dumps(value, ensure_ascii=False)}{',' if i + 1 < len(values) else ''}"
-            for i, value in enumerate(values)
-        )
-        return f"  private static final Set<String> {name} =\n      set(\n{rows});"
-
-    keywords = tuple(spelling for spelling, _ in grammar.keywords)
-    reserved_identifiers = (*keywords, *policy.forbidden_source_identifiers)
-    dynamic_access = policy.dynamic_access_hints
-    return "\n".join(
-        [
-            java_set("RESERVED_IDENTIFIERS", reserved_identifiers),
-            java_set("RESERVED_DECLARATION_NAMES", _declaration_names(policy)),
-            java_set("RETIRED_NUMERIC_TYPE_NAMES", policy.retired_numeric_type_spellings),
-            java_set("STATE_MAP_KEY_TYPE_NAMES", dynamic_access.state_map_key_types),
-            java_set("DYNAMIC_ACCESS_BOUND_KINDS", dynamic_access.bound_kinds),
-            "  private static final BigInteger MAX_DYNAMIC_ACCESS_KEYS = "
-            f"BigInteger.valueOf({dynamic_access.max_keys});",
-        ]
-    )
-
-
 def _swift_validator_policy(policy: Policy, grammar: LexicalGrammar) -> str:
     def swift_set(name: str, values: Sequence[str]) -> str:
         return "\n".join(
@@ -1515,8 +1493,8 @@ def _validate_rust_abi_sources(root: Path, policy: Policy) -> None:
         declaration = f"{schema.rust_type} = 0x{schema.pointer_id:04X},"
         if declaration not in pointer_text:
             raise GenerationError(f"{pointer_path}: missing canonical {declaration}")
-    if re.search(r"\b0x0013\s*=>\s*Some", pointer_text):
-        raise GenerationError(f"{pointer_path}: 0x0013 must remain unassigned")
+    if re.search(r"\b0x0014\s*=>\s*Some", pointer_text):
+        raise GenerationError(f"{pointer_path}: 0x0014 must remain unassigned")
 
     numeric_path = root / "crates/iroha_primitives/src/numeric_abi.rs"
     numeric_text = _read_text(numeric_path)
@@ -1648,14 +1626,6 @@ def render_outputs(root: Path, policy: Policy) -> dict[Path, str]:
         f"    // BEGIN GENERATED: {VALIDATOR_MARKER_NAME}",
         f"    // END GENERATED: {VALIDATOR_MARKER_NAME}",
         _kotlin_validator_policy(policy, grammar),
-        path=path,
-    )
-    path = JAVA_MANIFEST_PATH
-    outputs[path] = _replace_generated(
-        _read_text(root / path),
-        f"  // BEGIN GENERATED: {VALIDATOR_MARKER_NAME}",
-        f"  // END GENERATED: {VALIDATOR_MARKER_NAME}",
-        _java_validator_policy(policy, grammar),
         path=path,
     )
     path = SWIFT_MANIFEST_PATH

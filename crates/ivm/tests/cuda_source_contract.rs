@@ -2,7 +2,7 @@
 #[test]
 fn poseidon_status_is_initialized_by_the_host_only() {
     let kernel = include_str!("../cuda/poseidon.cu");
-    let host = include_str!("../src/cuda.rs");
+    let host = include_str!("../src/cuda/poseidon_launch.rs");
     assert!(
         !kernel.contains("status_out[0].code = STATUS_OK"),
         "a device-side status reset can erase an error reported by another CUDA block"
@@ -18,12 +18,18 @@ fn poseidon_status_is_initialized_by_the_host_only() {
         2,
         "both Poseidon entry points must document the host-owned status lifecycle"
     );
+    let initialization = host
+        .find("work.upload(&mut status, &[0, 0])?;")
+        .expect("the host initializes and uploads both prepaid status words");
+    let launch = host
+        .find("work.launch(")
+        .expect("the complete owner must launch the permutation");
     assert!(
-        host.contains("let mut status = [KernelStatus::default(); 1];"),
-        "the host must initialize the shared Poseidon status before upload"
+        initialization < launch,
+        "the initialized status must be uploaded before the Poseidon kernel launch"
     );
     assert!(
-        host.contains("cuda_buffer_from_slice_async(&status, stream, \"poseidon status upload\")"),
-        "the initialized status must be uploaded before the Poseidon kernel launch"
+        host[initialization..launch].contains("work.wait()?;"),
+        "status upload must complete before the permutation launch"
     );
 }

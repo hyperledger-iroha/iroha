@@ -110,7 +110,7 @@ object ValidatorStakingNoritoV1 {
         val decision: Decision
 
         init {
-            require(version == 1 && firstHeight > 0 && lastHeight >= firstHeight) {
+            require(version == 1 && firstHeight != 0L && unsigned(lastHeight) >= unsigned(firstHeight)) {
                 "invalid epoch authorization interval"
             }
             val binding = variant(7)
@@ -153,13 +153,13 @@ object ValidatorStakingNoritoV1 {
         val acceptancesEndHeight: Long = u64(11)
 
         init {
-            require(version == 1 && committeeSize >= 4 && (committeeSize - 1) % 3 == 0) {
+            require(version == 1 && committeeSize in 4..31 && (committeeSize - 1) % 3 == 0) {
                 "invalid DKG committee geometry"
             }
             require(threshold == (committeeSize - 1) / 3 + 1) { "invalid DKG threshold" }
-            require(startHeight < commitmentsEndHeight &&
-                commitmentsEndHeight < deliveriesEndHeight &&
-                deliveriesEndHeight < acceptancesEndHeight) {
+            require(startHeight != 0L && unsigned(startHeight) < unsigned(commitmentsEndHeight) &&
+                unsigned(commitmentsEndHeight) < unsigned(deliveriesEndHeight) &&
+                unsigned(deliveriesEndHeight) < unsigned(acceptancesEndHeight)) {
                 "invalid DKG cutoffs"
             }
         }
@@ -257,13 +257,67 @@ object ValidatorStakingNoritoV1 {
         }
     }
 
-    /** Exact candidate in a frozen ordered committee. */
-    class ValidatorPower private constructor(payload: ByteArray) : Record(payload, 2) {
-        val validator: Bytes = raw(0)
-        val power: Long = u64(1)
+    /** Frozen monetary and scheduling eligibility; network authority is checked by finality. */
+    class ElectionPolicy private constructor(payload: ByteArray) : Record(payload, 7) {
+        val xorAssetDefinitionId: Bytes = decodeFixedByteArray(fields[0], 16)
+        val assetScope: AssetScope
+        val assetScale: Long = u32(2)
+        val minSelfBond: Quantity = Quantity.decode(fields[3])
+        val minNominationBond: Quantity = Quantity.decode(fields[4])
+        val maxValidators: Long = u32(5)
+        /** Unsigned u64 bits, as with the other Norito height fields. */
+        val epochLengthBlocks: Long = u64(6)
+
+        init {
+            require(fields[1].contentEquals(byteArrayOf(0, 0, 0, 0))) {
+                "validator election custody requires the Global asset scope"
+            }
+            assetScope = AssetScope.GLOBAL
+            val definition = xorAssetDefinitionId.bytes()
+            require((definition[6].toInt() and 0xf0) == 0x40 &&
+                (definition[8].toInt() and 0xc0) == 0x80 &&
+                !definition.contentEquals(RETIRED_SYNTHETIC_XOR)) {
+                "invalid or retired synthetic XOR asset definition"
+            }
+            require(assetScale == 9L && minSelfBond.mantissa.signum() > 0 &&
+                minNominationBond.mantissa.signum() > 0 &&
+                minSelfBond.scale <= assetScale && minNominationBond.scale <= assetScale &&
+                maxValidators in 4L..31L && (maxValidators - 1) % 3 == 0L &&
+                unsigned(epochLengthBlocks) >= BigInteger.valueOf(3)) {
+                "invalid frozen validator election policy"
+            }
+        }
+
+        enum class AssetScope { GLOBAL }
 
         companion object {
-            fun decode(payload: ByteArray): ValidatorPower = ValidatorPower(payload)
+            @JvmStatic
+            fun decode(payload: ByteArray): ElectionPolicy = ElectionPolicy(payload)
+        }
+    }
+
+    /** Original BLS identity and possession proof. Decoding checks shape, not the pairing. */
+    class CommitteeMember private constructor(payload: ByteArray) : Record(payload, 2) {
+        val validator: Bytes = raw(0)
+        val blsPublicKey: Bytes
+        val proofOfPossession: Bytes = decodeByteVector(fields[1])
+
+        init {
+            // PeerId wraps PublicKey's sequence of algorithm byte followed by compressed key.
+            val key = decodeVector(decodeFields(fields[0], 1).single(), 49) {
+                require(it.size == 1) { "non-canonical public-key byte" }
+                it.single()
+            }
+            require(key.size == 49 && key[0] == 2.toByte() &&
+                proofOfPossession.bytes().size == 96) {
+                "committee member requires a 48-byte BLS-normal key and 96-byte possession proof"
+            }
+            blsPublicKey = Bytes(key.drop(1).toByteArray())
+        }
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): CommitteeMember = CommitteeMember(payload)
         }
     }
 
@@ -280,20 +334,38 @@ object ValidatorStakingNoritoV1 {
         val authorityGeneration: Long = u64(8)
         val preparingAuthorizationId: Bytes = fixed(9, 32)
         val electionSeed: Bytes = fixed(10, 32)
-        val roster: List<ValidatorPower> = vector(11, 31, ValidatorPower::decode)
-        val validatorSetPops: List<Bytes> = vector(12, 31) { decodeByteVector(it) }
+        val eligibility: ElectionPolicy = ElectionPolicy.decode(fields[11])
+        private val members: List<CommitteeMember> = vector(12, 31, CommitteeMember::decode)
+        val committee: List<CommitteeMember> get() = members.toList()
 
         init {
-            require(version == 1 && targetEpoch == selectionEpoch + 2) {
-                "invalid E+2 committee preparation"
+            val selected = unsigned(selectionEpoch)
+            val selection = unsigned(selectionHeight)
+            val first = unsigned(firstHeight)
+            val last = unsigned(lastHeight)
+            require(version == 1 && fields[1].any { it != 0.toByte() } &&
+                selectionAnchor.bytes().any { it != 0.toByte() } && selectionHeight != 0L &&
+                authorityGeneration != 0L && selected.add(BigInteger.valueOf(2)) == unsigned(targetEpoch) &&
+                first > selection.add(BigInteger.ONE) && last >= first &&
+                last.subtract(first).add(BigInteger.ONE) == unsigned(eligibility.epochLengthBlocks) &&
+                preparingAuthorizationId.bytes().any { it != 0.toByte() } &&
+                electionSeed.bytes().any { it != 0.toByte() }) {
+                "invalid frozen committee scheduling or identity"
             }
-            require(roster.size >= 4 && (roster.size - 1) % 3 == 0) {
+            require(members.size >= 4 && (members.size - 1) % 3 == 0 &&
+                members.size.toLong() <= eligibility.maxValidators) {
                 "invalid frozen committee geometry"
             }
-            require(roster.size == validatorSetPops.size) { "missing candidate possession proof" }
+            for (index in 1 until members.size) {
+                require(compareBytes(members[index - 1].blsPublicKey.bytes(),
+                    members[index].blsPublicKey.bytes()) < 0) {
+                    "committee keys must be strictly ordered and unique"
+                }
+            }
         }
 
         companion object {
+            @JvmStatic
             fun decode(payload: ByteArray): CommitteePreparation = CommitteePreparation(payload)
         }
     }
@@ -465,6 +537,23 @@ object ValidatorStakingNoritoV1 {
         companion object {
             fun decode(payload: ByteArray): RebindPeer = RebindPeer(payload)
         }
+    }
+
+    // AssetDefinitionId::derive_from_components("nexus.universal", "xor"): rejected identity,
+    // never an accepted network XOR default. The authenticated policy supplies the real identity.
+    private val RETIRED_SYNTHETIC_XOR = "5ecd1e80ac7d4d18b22772091a73fc13"
+        .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    private fun unsigned(value: Long): BigInteger = BigInteger.valueOf(value).let {
+        if (value < 0) it.add(BigInteger.ONE.shiftLeft(64)) else it
+    }
+
+    private fun compareBytes(left: ByteArray, right: ByteArray): Int {
+        for (index in left.indices) {
+            val comparison = (left[index].toInt() and 0xff).compareTo(right[index].toInt() and 0xff)
+            if (comparison != 0) return comparison
+        }
+        return 0
     }
 
     private fun decodeFields(payload: ByteArray, count: Int): List<ByteArray> {

@@ -30,9 +30,9 @@ use super::{
     secret_polynomial::SecretPolynomial,
 };
 #[cfg(test)]
-use crate::gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT};
-#[cfg(test)]
 use crate::field::GoldilocksFp4V1 as F;
+#[cfg(test)]
+use crate::gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT};
 use crate::{Error, Result};
 
 /// Fixed contiguous job count; admission and output order do not depend on pool size.

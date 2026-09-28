@@ -112,6 +112,7 @@ impl QuantityFixture {
             .iter()
             .map(compute_remote_spend_claim_commitment_v1)
             .collect();
+        axt.occurrences = crate::axt_binding::source_occurrence::test_occurrences(&claims, remote);
         // The scalar metadata is an exact outer mirror, not the transfer quantity.
         let built = materialize_quantity_public_transfers(
             &claims,

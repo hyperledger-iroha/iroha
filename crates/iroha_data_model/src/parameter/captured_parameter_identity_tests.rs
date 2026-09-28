@@ -2,6 +2,11 @@
 //!
 //! Parameter payload, validation and governance controls remain in their owning suites.
 
+const CASES: &[crate::captured_schema_tests::Case] =
+    &[crate::captured_schema_tests::Case::bidirectional::<
+        super::system::ConsensusMode,
+    >("iroha_data_model::parameter::system::ConsensusMode")];
+
 /// Decode one immutable independently captured sixteen-byte schema hash.
 fn captured_hash(value: &str) -> [u8; 16] {
     hex::decode(value)
@@ -167,8 +172,9 @@ fn captured_parameter_deserialize_hashes() {
 fn consensus_mode_keeps_its_captured_codec_row_after_the_move() {
     // `ConsensusMode` moved out of `block::consensus_v2`; the compiler-captured codec row moved
     // with it (same codec, new nominal identity).
-    crate::captured_schema_tests::Case::bidirectional::<super::system::ConsensusMode>(
-        "iroha_data_model::parameter::system::ConsensusMode",
-    )
-    .check();
+    for case in CASES {
+        case.check();
+    }
 }
+
+crate::captured_schema_tests::native_capture::owner_printer!(CASES);

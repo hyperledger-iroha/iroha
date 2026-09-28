@@ -138,8 +138,7 @@ impl StateBlock<'_> {
             pending,
             |state| state.validate_owned_fastpq_sources(sources),
             |state, tx_set_hash| state.build_owned_fastpq_source_inventory(sources, tx_set_hash),
-        )?;
-        self.bind_merge_prefix_inventory(sources)
+        )
     }
 
     fn validate_owned_fastpq_sources(&self, sources: &OwnedExecutionSources) -> Result<(), String> {
@@ -158,16 +157,6 @@ impl StateBlock<'_> {
                 "FASTPQ owned sources differ from the applying source-height context".into(),
             );
         }
-        if sources.is_native() {
-            self.verify_native_owned_fastpq_output_join(sources)?;
-        } else if self
-            .native_lane_stage_for_inventory()
-            .map_err(|error| error.to_string())?
-            .is_some()
-        {
-            return Err("ordinary FASTPQ inventory cannot replace a native stage".into());
-        }
-        self.verify_merge_owned_sources(sources)?;
         let routes = sources.network_routes();
         if routes.len() > sources.entries().len() {
             return Err("FASTPQ owned Network routes exceed the actual source count".into());
@@ -213,7 +202,6 @@ impl StateBlock<'_> {
             pending,
             |_| Ok(()),
             |state, tx_set_hash| {
-                state.verify_native_lane_fastpq_output_join(external, routing)?;
                 state.build_fastpq_source_inventory(external, routing, time_calls, tx_set_hash)
             },
         )
@@ -416,13 +404,6 @@ impl StateBlock<'_> {
             entries.push(entry);
             Ok(())
         };
-        let native = self
-            .native_lane_stage_for_inventory()
-            .map_err(|error| error.to_string())?
-            .map(|(batch, _)| batch);
-        if native.is_some() && (!external.is_empty() || !routing.is_empty()) {
-            return Err("native source inventory cannot accept competing external inputs".into());
-        }
         let ordinary = external.iter().zip(routing).map(|(entry, route)| {
             Ok::<_, String>((
                 Hash::from(entry.execution_call_hash()),
@@ -430,19 +411,7 @@ impl StateBlock<'_> {
                 route.dataspace_id,
             ))
         });
-        let native = native
-            .into_iter()
-            .flat_map(|batch| &batch.groups)
-            .map(|group| {
-                let input = &group.payload.input;
-                let route = input.routing_plan()?.coordinator_route();
-                Ok((
-                    Hash::from(input.entrypoint.execution_call_hash()),
-                    Some(route.lane_id),
-                    route.dataspace_id,
-                ))
-            });
-        for source in ordinary.chain(native).chain(
+        for source in ordinary.chain(
             time_calls
                 .iter()
                 .map(|hash| Ok((*hash, None, DataSpaceId::UNIVERSAL))),

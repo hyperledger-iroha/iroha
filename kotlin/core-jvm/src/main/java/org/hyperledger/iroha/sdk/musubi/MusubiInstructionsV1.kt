@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.crypto.Blake3
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -105,6 +106,65 @@ object MusubiInstructionsV1 {
             /** Exact Rust concrete type name used for the Norito schema hash. */
             const val SCHEMA_NAME: String =
                 "iroha_data_model::isi::musubi::RegisterMusubiArchiveV1"
+        }
+    }
+
+    /** Advance one authority's complete signed pin-intent inventory before queue admission. */
+    class AdvanceMusubiPinOutboxV1(
+        @JvmField val networkId: NetworkId,
+        @JvmField val pinAuthority: String,
+        sessionId: ByteArray,
+        @JvmField val expectedRevision: BigInteger,
+        expectedInventoryDigest: ByteArray,
+        inventoryDigest: ByteArray,
+    ) {
+        private val pinAuthorityPayload = TransferWirePayloadEncoder.encodeAccountIdPayload(
+            requireCanonicalI105Address(pinAuthority, "advancePinOutbox.pinAuthority"),
+        )
+        private val sessionId = sessionId.copyOf()
+        private val expectedInventoryDigest = expectedInventoryDigest.copyOf()
+        private val inventoryDigest = inventoryDigest.copyOf()
+
+        init {
+            require(this.sessionId.size == 32 && this.sessionId.any { it.toInt() != 0 }) {
+                "Musubi pin-outbox session ID must be non-zero 32 bytes"
+            }
+            require(this.expectedInventoryDigest.size == 32 && this.inventoryDigest.size == 32 &&
+                this.inventoryDigest.any { it.toInt() != 0 } &&
+                !this.inventoryDigest.contentEquals(this.expectedInventoryDigest)) {
+                "Musubi pin-outbox inventory transition is invalid"
+            }
+            MusubiValidationV1.requireU64(expectedRevision, "advancePinOutbox.expectedRevision")
+            require((expectedRevision == BigInteger.ZERO) ==
+                this.expectedInventoryDigest.all { it.toInt() == 0 }) {
+                "Musubi pin-outbox predecessor revision and inventory digest disagree"
+            }
+        }
+
+        /** Return the canonical headerless Rust payload. */
+        fun barePayload(): ByteArray = encodeBare {
+            encodeField(it) { field -> field.writeBytes(networkId.bytes()) }
+            encodeField(it) { field -> field.writeBytes(pinAuthorityPayload) }
+            encodeField(it) { field -> field.writeBytes(sessionId) }
+            encodeField(it) { field -> encodeU64(field, expectedRevision) }
+            encodeField(it) { field -> field.writeBytes(expectedInventoryDigest) }
+            encodeField(it) { field -> field.writeBytes(inventoryDigest) }
+        }
+
+        /** Return the concrete schema-bound Norito frame registered by core. */
+        fun concreteFrame(): ByteArray = frame(SCHEMA_NAME, barePayload())
+
+        /** Return the dynamic V1 instruction box submitted in a transaction. */
+        fun toInstructionBox(): InstructionBox =
+            InstructionBox.fromWirePayload(WIRE_ID, concreteFrame())
+
+        companion object {
+            /** Stable dynamic instruction registry identifier. */
+            const val WIRE_ID: String = "iroha.musubi.v1.pin_outbox.advance"
+
+            /** Exact Rust concrete type name used for the Norito schema hash. */
+            const val SCHEMA_NAME: String =
+                "iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1"
         }
     }
 

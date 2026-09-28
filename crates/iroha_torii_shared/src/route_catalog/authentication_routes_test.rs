@@ -587,19 +587,15 @@ named_route_policy_test!(
 );
 
 named_route_policy_test!(zk_compute_routes_require_exact_account_authentication, {
-    assert_route_policies(
-        [
-            runtime_governance::ZK_IVM_DERIVE,
-            runtime_governance::ZK_IVM_PROVE,
-            runtime_governance::ZK_VERIFY_BATCH,
-        ],
-        ACCOUNT_EXPENSIVE,
-    );
+    assert_route_policies([runtime_governance::ZK_VERIFY_BATCH], ACCOUNT_EXPENSIVE);
 });
 
 named_route_policy_test!(account_and_node_bootstrap_capabilities_are_public, {
     assert_route_policies(
-        [application_api::ACCOUNTS_CAPABILITIES_GET, application_api::ACCOUNTS_FAUCET_POLICY_GET],
+        [
+            application_api::ACCOUNTS_CAPABILITIES_GET,
+            application_api::ACCOUNTS_FAUCET_POLICY_GET,
+        ],
         RoutePolicyExpectation {
             projections: Some(RouteProjections::OPENAPI_AND_SDK),
             openapi: Some(true),

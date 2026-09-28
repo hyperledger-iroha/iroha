@@ -1,5 +1,5 @@
 #[test]
-fn public_wrapper_decodes_one_complete_norito_argument_record() {
+fn public_entrypoint_loads_one_prepared_table_word_per_parameter() {
     let src = r#"
             seiyaku Demo {
                 kotoage fn run(
@@ -36,7 +36,8 @@ fn public_wrapper_decodes_one_complete_norito_argument_record() {
     let mut record_decodes = 0;
     let mut table_loads = 0;
     let mut json_field_getters = 0;
-    let mut decoded_schema = None;
+    let TypedItem::Function(function) = &typed.items[0];
+    let decoded_schema = entrypoint_argument_schema(&function.param_types).expect("schema");
     for block in &wrapper.blocks {
         for instr in &block.instrs {
             match instr {
@@ -45,7 +46,7 @@ fn public_wrapper_decodes_one_complete_norito_argument_record() {
                 {
                     record_decodes += 1;
                 }
-                Instr::Load64Imm { .. } => table_loads += 1,
+                Instr::LoadVar { .. } => table_loads += 1,
                 Instr::JsonGetNumeric { .. }
                 | Instr::JsonGetJson { .. }
                 | Instr::JsonGetName { .. }
@@ -53,26 +54,14 @@ fn public_wrapper_decodes_one_complete_norito_argument_record() {
                 | Instr::JsonGetAssetDefinitionId { .. }
                 | Instr::JsonGetNftId { .. }
                 | Instr::JsonGetBlobHex { .. } => json_field_getters += 1,
-                Instr::DataRef {
-                    kind: DataRefKind::NoritoBytes,
-                    value,
-                    ..
-                } => {
-                    let bytes = hex::decode(value.strip_prefix("0x").expect("hex schema"))
-                        .expect("decode schema hex");
-                    decoded_schema =
-                        Some(
-                            norito::decode_from_bytes::<
-                                ivm_abi::entrypoint::EntrypointArgumentSchemaV1,
-                            >(&bytes)
-                            .expect("decode argument schema"),
-                        );
-                }
                 _ => {}
             }
         }
     }
-    assert_eq!(record_decodes, 1, "wrapper must decode the payload once");
+    assert_eq!(
+        record_decodes, 0,
+        "host decodes the complete record before entry"
+    );
     assert_eq!(table_loads, 9, "one fixed table load per parameter");
     assert_eq!(
         json_field_getters, 0,
@@ -131,30 +120,11 @@ fn public_aggregate_arguments_cross_internal_calls_as_flat_words() {
     let prog = parse(src).expect("parse aggregate entrypoint");
     let typed = analyze(&prog).expect("analyze aggregate entrypoint");
     let ir = lower(&typed).expect("lower aggregate entrypoint");
-    let wrapper = ir
-        .functions
-        .iter()
-        .find(|function| function.name == "run")
-        .expect("wrapper function");
     let implementation = ir
         .functions
         .iter()
-        .find(|function| function.name == "__entrypoint_impl__run")
-        .expect("implementation function");
-    let call_args = wrapper
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instrs)
-        .find_map(|instr| match instr {
-            Instr::Call { callee, args, .. } if callee == "__entrypoint_impl__run" => Some(args),
-            _ => None,
-        })
-        .expect("wrapper implementation call");
-    assert_eq!(
-        call_args.len(),
-        6,
-        "products flatten recursively while each sum crosses as one raw handle"
-    );
+        .find(|function| function.name == "run")
+        .expect("direct public implementation");
     assert_eq!(implementation.params.len(), 6);
     assert!(
         implementation

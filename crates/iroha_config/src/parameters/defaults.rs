@@ -48,7 +48,7 @@ pub mod crypto {
     pub fn default_hash() -> String {
         DEFAULT_HASH.to_string()
     }
-    /// Whether the OpenSSL-backed SM preview helpers are enabled by default.
+    /// Whether optional OpenSSL SM3/SM4 helpers are enabled by default; SM2 is unaffected.
     pub fn enable_sm_openssl_preview() -> bool {
         ENABLE_SM_OPENSSL_PREVIEW
     }
@@ -331,6 +331,49 @@ pub mod ivm {
         pub const fn beep() -> bool {
             BEEP
         }
+    }
+}
+/// Non-secret private Musubi publication custody defaults.
+pub mod musubi_publication {
+    /// Private root containing the independent journal, seed and clock owners.
+    pub const CUSTODY_ROOT: &str = "./storage/musubi-publication";
+    /// Loopback-only listener until an operator injects a qualified private TLS deployment.
+    pub const PRIVATE_TLS_BIND: &str = "127.0.0.1:18495";
+    /// Exact mount prefix stripped by the private TLS ingress.
+    pub const PRIVATE_MOUNT_PREFIX: &str = "/private";
+    /// Bound on concurrent private TLS requests and their admitted body reservations.
+    pub const MAX_INFLIGHT_REQUESTS: u16 = 2;
+    /// Lifetime operation capacity of the durable publication journal.
+    pub const JOURNAL_MAX_OPERATIONS: u32 = 1_024;
+    /// Unexpired authorization capacity of the durable publication journal.
+    pub const JOURNAL_MAX_AUTHORIZATIONS: u32 = 4_096;
+    /// Total durable response bytes, including in-flight terminal reservations.
+    pub const JOURNAL_MAX_TOTAL_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
+    /// Maximum complete canonical journal snapshot size.
+    pub const JOURNAL_MAX_SNAPSHOT_BYTES: u64 = 40 * 1024 * 1024;
+    /// Maximum number of exact CAR seed records retained in local custody.
+    pub const MAX_SEED_RECORDS: u32 = 16;
+    /// Maximum total bytes of exact CAR seed records retained in local custody.
+    pub const MAX_SEED_BYTES: u64 = 256 * 1024 * 1024;
+    /// Maximum publisher-clock lead accepted by publication authorization.
+    pub const MAX_FUTURE_CLOCK_SKEW_MS: u64 = 2_000;
+    /// Lifetime assigned to a broker-signed seed-ingress receipt.
+    pub const RECEIPT_LIFETIME_MS: u64 = 60_000;
+    /// Paid-pin storage tier used by the publication coordinator.
+    pub const PIN_STORAGE_CLASS: &str = "hot";
+    /// Paid-pin lifetime beyond submission, long enough for the SoraFS ingest deadline.
+    pub const PIN_RETENTION_HORIZON_SECS: u64 = 30 * 24 * 60 * 60;
+    /// Operator ceiling for one paid-pin retention request.
+    pub const MAX_PIN_RETENTION_HORIZON_SECS: u64 = 365 * 24 * 60 * 60;
+    /// Resolve the exact paid-pin transaction account from the qualified ingress broker.
+    pub const PIN_TRANSACTION_AUTHORITY: &str = "ingress_broker";
+
+    /// Parse the fixed default private TLS bind address.
+    #[must_use]
+    pub fn private_tls_bind() -> std::net::SocketAddr {
+        PRIVATE_TLS_BIND
+            .parse()
+            .expect("literal private TLS bind address")
     }
 }
 /// Embedded Soracloud runtime-manager defaults.
@@ -900,6 +943,8 @@ pub mod kura {
     };
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
+    /// Full context values remain separate from the compact R proof (16 MiB per carrier).
+    pub const NATIVE_CONTEXT_ARCHIVE_MAX_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
     /// Number of blocks cached in memory to accelerate lookups.
     pub const BLOCKS_IN_MEMORY: NonZeroUsize = nonzero!(1024_usize);
     /// Requested allocation bytes retained by State's block-hash generations.
@@ -2431,10 +2476,6 @@ pub mod torii {
     /// Allows long finality walks and large proof responses without an artificial
     /// per-client bandwidth bottleneck. This is a token budget, not an allocation.
     pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(1024 * 1024 * 1024); // 1 GiB
-    /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
-    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes = Bytes(128 * 1024 * 1024); // 128 MiB
-    /// Per-account memory budget for retained `/v1/zk/ivm/prove` job state.
-    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER: Bytes = Bytes(32 * 1024 * 1024); // 32 MiB
     /// Maximum page size accepted by proof listing endpoints.
     pub const PROOF_MAX_LIST_LIMIT: u32 = 200;
     /// Wall-clock timeout applied to proof list/count handlers (milliseconds).
@@ -2814,22 +2855,10 @@ pub mod torii {
     pub fn zk_prover_keys_dir() -> PathBuf {
         data_dir().join("zk_prover").join("keys")
     }
-    /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
-    ///
-    /// This limit applies to `POST /v1/zk/ivm/prove` (non-consensus helper).
-    pub const ZK_IVM_PROVE_MAX_INFLIGHT: usize = 1;
-    /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
-    ///
-    /// This limit applies to `POST /v1/zk/ivm/prove` (non-consensus helper).
-    pub const ZK_IVM_PROVE_MAX_QUEUE: usize = 16;
-    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
-    pub const ZK_IVM_TOOLING_TIMEOUT_MS: u64 = 60_000;
-    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
-    pub const ZK_IVM_PROVE_JOB_TTL_SECS: u64 = 30 * 60; // 30 minutes
-    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
-    pub const ZK_IVM_PROVE_JOB_MAX_ENTRIES: usize = 1_024;
-    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one account.
-    pub const ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER: usize = 32;
+    /// Maximum concurrent IVM contract simulation and view workers.
+    pub const IVM_TOOLING_MAX_INFLIGHT: usize = 1;
+    /// Wall-clock timeout for synchronous IVM simulation and view tooling.
+    pub const IVM_TOOLING_TIMEOUT_MS: u64 = 60_000;
     /// Allowlisted backend prefixes for the background prover worker.
     #[must_use]
     pub fn zk_prover_allowed_backends() -> Vec<String> {
@@ -3826,8 +3855,10 @@ pub mod pipeline {
     pub const CACHE_SIZE: usize = 128;
     /// Maximum decoded instructions retained per cached entry (0 = unlimited).
     pub const IVM_CACHE_MAX_DECODED_OPS: usize = 8_000_000;
-    /// Approximate byte budget for all cached pre-decode entries combined.
+    /// Aggregate IVM preparation/runtime allocation retention budget (0 disables).
     pub const IVM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+    /// Finite requested allocation credits for active IVM execution (zero denies allocation).
+    pub const IVM_EXECUTION_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GiB
     /// Rayon worker cap for prover/trace verification (0 = number of physical cores).
     pub const IVM_PROVER_THREADS: usize = 0;
     /// Ed25519-specific batch size (0 disables batching).
@@ -3925,16 +3956,39 @@ pub mod norito {
 }
 /// Hardware acceleration defaults (Metal/CUDA usage in IVM and helpers).
 pub mod accel {
+    /// Complete default process attempt envelope; State execution memory is separate.
+    pub const RESOURCE_LIMITS: iroha_accel::RegistryLimits = iroha_accel::RegistryLimits::STANDARD;
     /// Enable SIMD acceleration (NEON/AVX/SSE) when available.
     pub const ENABLE_SIMD: bool = true;
     /// Enable CUDA backend when compiled and available.
     pub const ENABLE_CUDA: bool = true;
     /// Enable Metal backend on macOS when compiled and available.
     pub const ENABLE_METAL: bool = true;
-    /// Maximum number of GPUs to initialize (0 = auto/no cap).
-    pub const MAX_GPUS: usize = 0;
+    /// Optional IVM device-selection cap; Some(0) explicitly opts out.
+    pub const MAX_GPUS: Option<usize> = None;
     /// Heuristic: minimum number of leaves to use GPU for Merkle leaves hashing.
     pub const MERKLE_MIN_LEAVES_GPU: usize = 8192;
+    // Separate process attempt envelope, independent of State destination funding.
+    /// Aggregate ordinary host backing bytes. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const HOST_BYTES: usize = RESOURCE_LIMITS.work.host_bytes;
+    /// Aggregate pinned host backing bytes. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const PINNED_BYTES: usize = RESOURCE_LIMITS.work.pinned_bytes;
+    /// Aggregate requested device backing bytes. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const DEVICE_BYTES: usize = RESOURCE_LIMITS.work.device_bytes;
+    /// Concurrently retained complete work aggregates. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const IN_FLIGHT: usize = RESOURCE_LIMITS.work.in_flight;
+    /// Variable shared Rust control and policy metadata bytes. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const METADATA_BYTES: usize = RESOURCE_LIMITS.metadata_bytes;
+    /// Lifetime-observed physical device records, including quarantine. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const OBSERVED_DEVICES: usize = RESOURCE_LIMITS.devices;
+    /// Ordinal probes per discovery pass. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const DISCOVERY_ORDINALS: u32 = RESOURCE_LIMITS.discovery_ordinals;
+    /// Retained native module owners. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const MODULES: usize = RESOURCE_LIMITS.modules;
+    /// Retained native stream owners. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const STREAMS: usize = RESOURCE_LIMITS.streams;
+    /// Immutable artifact bytes admitted per module. Zero denies admission of this resource; no profile is required to supply the default.
+    pub const ARTIFACT_BYTES: usize = RESOURCE_LIMITS.artifact_bytes;
 }
 /// Zero-knowledge subsystem defaults used by Torii and the host runtime.
 pub mod zk {
@@ -4112,7 +4166,7 @@ pub mod sumeragi {
         time::Duration,
     };
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 4;
+    pub const PROTOCOL_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// The view-zero round deadline is ten signed block-cadence intervals.

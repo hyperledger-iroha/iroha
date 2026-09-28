@@ -40,7 +40,7 @@ selected through platform discovery or a process-global client:
 - **`sdk.norito`** — Norito binary codec (TypeAdapter, NoritoCodec, NoritoEncoder/Decoder, compression)
 - **`sdk.core.model`** — transaction models, 84 instruction types, InstructionBox, Executable (sealed class)
 - **`sdk.crypto`** — Blake2b/2s/3, Ed25519, IrohaHash, and Argon2id key export (JCA + direct BouncyCastle dependency)
-- **`sdk.gpu`** — one bounded batch CUDA API for both JVM languages, with explicit backend injection/native loading; device qualification runs through `cudaHardwareTest`, separately from host tests
+- **`sdk.gpu`** — one bounded batch acceleration API for both JVM languages, with explicit backend injection/native loading and automatic CPU/GPU operation selection; `cudaHardwareTest` remains an open gate until JNI per-family completion receipts are implemented
 - **`sdk.crypto.keystore.attestation`**, **`KeyAttestation`** — Android-free evidence records, certificate verification and governed revocation policy shared with Android clients and offline JVM tooling
 - **`sdk.address`** — account/asset address encoding (IH58, Bech32M)
 - **`sdk.tx`** — transaction building, signing, offline envelopes, norito adapters

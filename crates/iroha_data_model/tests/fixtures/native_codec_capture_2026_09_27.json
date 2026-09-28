@@ -1,0 +1,17 @@
+{
+  "build_log_sha256": "0b1602e89d5c68514d1df63773e40b10aba2b4ef6e306e532f5bb899d0ae993d",
+  "cargo_lock_sha256": "ab1063db1c6f48849b687cc6d002f5eb4cf7f49a81f9b3c007d124ff72a5a26d",
+  "codec_rows": 1776,
+  "harness_sha256": "9036db87a25daf0be543b4ef4d7249e23191310c62d73807fb28ad6239c5626d",
+  "logs": {
+    "compiled_owner_list": "dd6bdf23e1c25e34511788d026b8670677517c007294ba519bd4b3926abe49b5",
+    "records": "2c71a318f10289c25fc710c521eb5cc6fb4ee35fdf9d41ba482efd2a17f0e253",
+    "schema": "bcc41a167eda44733a6ca793466b0d10cc1288fd406afaf9223c6bb746431064",
+    "wire_ids": "ae51b153c2e9fb7b889f15a01f1c18c5ef58b5ae4fba835f67d318c75e35d65c"
+  },
+  "record_cases": 360,
+  "record_rows": 324,
+  "schema": 1,
+  "scope": "Compiled maintenance identities and current typed frame roundtrips; not a release-build attestation.",
+  "source_ledger_sha256": "9f04b7138578d1fd4ae0f643533372a9be8060cf140bf87e82790f85c4e0dbeb"
+}

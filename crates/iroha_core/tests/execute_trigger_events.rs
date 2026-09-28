@@ -65,7 +65,7 @@ fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
     let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
     let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");

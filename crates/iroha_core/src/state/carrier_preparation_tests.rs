@@ -101,7 +101,7 @@ fn state_for(genesis: &SignedBlock, nexus: &iroha_config::parameters::actual::Ne
     );
     let state = Box::new(state);
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     state
@@ -458,3 +458,6 @@ mod state_acquisition_drop_tests;
 
 #[path = "direct_commit_refusal_tests.rs"]
 mod direct_commit_refusal_tests;
+
+#[path = "direct_commit_musubi_scratch_tests.rs"]
+mod direct_commit_musubi_scratch_tests;

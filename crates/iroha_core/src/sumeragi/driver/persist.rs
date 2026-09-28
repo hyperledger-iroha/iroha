@@ -302,16 +302,18 @@ pub fn reconcile_store_id<R: RecordStore + ?Sized>(
 ///    every key of the log is durably marked imported;
 /// 2. a key without a key entry is recorded as imported;
 /// 3. installation event (rule 2) of every `(instance, key)` the log lacks: the initial record
-///    `{instance, key, height: genesis_height}` is written first — only for a key generated on
+///    `{instance, epoch: genesis_epoch, key, height: genesis_height}` is written first — only for a key generated on
 ///    this node or when the operator asserts it never signed for the instance
 ///    (`assert_fresh`), and never over an existing record file — then the entry.
 ///
 /// # Errors
 /// A store failure; the driver does not start.
+#[allow(clippy::too_many_arguments)] // authenticated genesis context is an independent required input
 pub fn install_records<R: RecordStore + ?Sized>(
     store: &R,
     crypto: &dyn Crypto,
     instance: &Hash32,
+    genesis_epoch: iroha_sumeragi::types::EpochId,
     keys: &[(PublicKey, bool)],
     genesis_height: u64,
     assert_fresh: bool,
@@ -353,7 +355,13 @@ pub fn install_records<R: RecordStore + ?Sized>(
         if !started {
             let absent = store.load(instance, key)? == RecordState::Absent;
             if absent && (generated || assert_fresh) {
-                let record = SafetyRecord::fresh(*instance, key.clone(), genesis_height, None);
+                let record = SafetyRecord::fresh(
+                    *instance,
+                    genesis_epoch,
+                    key.clone(),
+                    genesis_height,
+                    None,
+                );
                 let bytes = record
                     .encode(crypto)
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -386,10 +394,46 @@ mod tests {
         let key = PublicKey::new(vec![1; 32]).unwrap();
         Write::Record(Box::new(SafetyRecord::fresh(
             Hash32::ZERO,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             key,
             height,
             None,
         )))
+    }
+
+    #[test]
+    fn initial_record_binds_the_supplied_authenticated_genesis_epoch() {
+        let crypto = FakeCrypto::new();
+        let store = FakeRecords::default();
+        let instance = Hash32([0x81; 32]);
+        let key = PublicKey::new(vec![0x82; 32]).unwrap();
+        let epoch = iroha_sumeragi::types::EpochId {
+            epoch: 7,
+            context: Hash32([0x83; 32]),
+        };
+        store.install_key(&key, true, 1);
+        let mut id = 1;
+        let found = install_records(
+            &store,
+            &crypto,
+            &instance,
+            epoch,
+            &[(key, false)],
+            20,
+            false,
+            &mut || {
+                id += 1;
+                id
+            },
+        )
+        .unwrap();
+        let RecordState::Present(bytes) = &found[0].1 else {
+            panic!("generated key receives its initial record")
+        };
+        let record = SafetyRecord::decode(&crypto, bytes).unwrap();
+        assert_eq!(record.epoch, epoch);
+        assert_eq!(record.height, 20);
+        assert_eq!(record.instance, instance);
     }
 
     #[test]
@@ -448,6 +492,7 @@ mod tests {
         let mut queue = PersistQueue::new(Backoff::default());
         let other = Box::new(SafetyRecord::fresh(
             Hash32::ZERO,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             PublicKey::new(vec![2; 32]).unwrap(),
             1,
             None,
@@ -607,6 +652,7 @@ mod tests {
             &store,
             &crypto,
             &i0,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(k.clone(), false)],
             0,
             false,
@@ -620,6 +666,7 @@ mod tests {
             &store,
             &crypto,
             &i1,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(k.clone(), false)],
             0,
             false,
@@ -632,6 +679,7 @@ mod tests {
             &store,
             &crypto,
             &i1,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(k.clone(), true)],
             0,
             false,
@@ -646,6 +694,7 @@ mod tests {
             &store,
             &crypto,
             &i1,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(k.clone(), false)],
             0,
             false,
@@ -659,6 +708,7 @@ mod tests {
             &store,
             &crypto,
             &i1,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(k.clone(), false)],
             0,
             true,
@@ -670,9 +720,15 @@ mod tests {
             "operator assertion"
         );
         // Never over an existing record file.
-        let bytes = SafetyRecord::fresh(i0, k.clone(), 9, None)
-            .encode(&crypto)
-            .unwrap();
+        let bytes = SafetyRecord::fresh(
+            i0,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
+            k.clone(),
+            9,
+            None,
+        )
+        .encode(&crypto)
+        .unwrap();
         store.replace_records();
         store.write(&i0, &k, &bytes).unwrap();
         store.restore_log(Vec::new());
@@ -681,6 +737,7 @@ mod tests {
             &store,
             &crypto,
             &i0,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(k.clone(), false)],
             0,
             false,
@@ -694,6 +751,7 @@ mod tests {
             &store,
             &crypto,
             &i0,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(other.clone(), false)],
             0,
             false,

@@ -38,7 +38,6 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/ipa",
     "halo2/pasta/kaigi-authorization-v1",
     "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-replay-binding-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -148,7 +147,6 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
         "halo2/ipa"
         | "halo2/pasta/kaigi-authorization-v1"
         | "halo2/pasta/kaigi-usage-v1"
-        | "halo2/pasta/ivm-replay-binding-v1"
         | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
@@ -978,7 +976,7 @@ mod tests {
     }
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
-        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 8);
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 7);
         let mut unique = std::collections::BTreeSet::new();
         for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(unique.insert(label), "duplicate registry label: {label}");
@@ -1004,6 +1002,12 @@ mod tests {
             "halo2/ipa::ivm-replay-binding-v1",
             "halo2/ipa/ivm-replay-binding-v1",
             "halo2/pasta/ipa/ivm-replay-binding-v1",
+            "halo2/pasta/ivm-replay-binding-v1",
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa/ivm-execution-v1",
+            "halo2/pasta/ipa/ivm-execution-v1",
+            "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/ivm_execution_v1",
             "halo2/pasta/ivm-replay-binding-v1/",
             "halo2/pasta/ivm-replay-binding-v1\0",
@@ -1136,7 +1140,7 @@ mod tests {
         for circuit_id in [
             "stark/fri/poseidon-x7-goldilocks-6x64-v1:generic_binding_v1",
             "halo2/ipa::transfer_v1",
-            "halo2/pasta/ivm-replay-binding-v1",
+            "halo2/pasta/kaigi-usage-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1:public_relation_v1",
         ] {
             let mut envelope = valid_open_verify_admission_envelope();

@@ -233,12 +233,12 @@ Requirements:
 SDK sources together, executes the test mains listed in the script, and finally
 invokes `scripts/check_android_fixtures.py` to guard parity.
 
-## CUDA acceleration
+## Automatic native acceleration
 
-CUDA computation is owned by the Kotlin/JVM `CudaAccelerators` API. Kotlin and
+Native computation is owned by the Kotlin/JVM `Accelerators` API. Kotlin and
 Java callers use explicit backend construction and the same bounded batch
 operations. Native setup and the separately required hardware test are recorded
-in [the CUDA bridge contract](gpu_operator_guide.md).
+in [the native bridge contract](gpu_operator_guide.md).
 
 ## Pending Work
 

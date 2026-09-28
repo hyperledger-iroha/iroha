@@ -267,43 +267,49 @@ fn captured_prepaid_refusals_return_original_owner_for_exact_retry() {
             Err::<(), _>(())
         })
         .unwrap_err();
-    let wait = release.unwrap();
-    let mut future = wait.wait_for_release();
-    assert!(
-        std::pin::Pin::new(&mut future)
-            .poll(&mut Context::from_waker(Waker::noop()))
-            .is_ready()
-    );
-    let journal = journal.unwrap();
-    assert_eq!(
-        journal
-            .touched_entries()
-            .next()
-            .unwrap()
-            .after
-            .unwrap()
-            .pointer(),
-        pointer
-    );
-    let clone = budget.clone();
-    without_allocations(|| {
-        clone.with_deferred_refund_notifications(|scope| {
-            assert_eq!(
-                prepare(journal, scope, &storage).publish().into_admission(),
-                73
-            );
-        })
-    });
-    marker(storage.view().get(&7), 0x32);
-    drop((storage, foreign));
-    reclaimed_since(0);
+    {
+        let wait = release.unwrap();
+        let mut future = std::pin::pin!(wait.wait_for_release());
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+        let journal = journal.unwrap();
+        assert_eq!(
+            journal
+                .touched_entries()
+                .next()
+                .unwrap()
+                .after
+                .unwrap()
+                .pointer(),
+            pointer
+        );
+        let clone = budget.clone();
+        without_allocations(|| {
+            clone.with_deferred_refund_notifications(|scope| {
+                assert_eq!(
+                    prepare(journal, scope, &storage).publish().into_admission(),
+                    73
+                );
+            })
+        });
+        marker(storage.view().get(&7), 0x32);
+        drop((storage, foreign));
+        reclaimed_since(0);
+        assert_eq!(
+            budget.reserved_bytes(),
+            concread::release::ReleaseNotification::allocation_layout::<AllocationCharge>().size(),
+            "the completed wait future still retains the original release source",
+        );
+    }
     assert_eq!(
         budget.reserved_bytes(),
-        concread::release::ReleaseNotification::allocation_layout::<AllocationCharge>().size(),
-        "the completed future still owns the original charged notification"
+        0,
+        "the final notification owner has left scope"
     );
-    without_allocations(|| drop(future));
-    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]

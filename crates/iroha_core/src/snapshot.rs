@@ -55,6 +55,46 @@ pub(crate) use startup_recovery::{StartupRecoveryPublisher, channel as startup_r
 pub use errors::TryReadError;
 use errors::TryWriteError;
 
+#[cfg(test)]
+mod state_snapshot_decode_error_tests {
+    use super::*;
+    use crate::state::deserialize::StateRestoreError;
+
+    #[test]
+    fn snapshot_reader_preserves_local_resource_errors_and_format_errors() {
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::Serialization(json::Error::InvalidUtf8)),
+            TryReadError::Serialization(json::Error::InvalidUtf8)
+        ));
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::VmInitialization(
+                ivm::VMError::ExecutionDeferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                )
+            )),
+            TryReadError::StateVmInitialization(_)
+        ));
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::Admission(
+                crate::state::StateAdmissionError::History(
+                    crate::state::BlockHashAdmissionError::Capacity(
+                        mv::allocation::AllocationRefusal::DemandOverflow
+                    )
+                )
+            )),
+            TryReadError::StateAdmission(crate::state::StateAdmissionError::History(_))
+        ));
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::ExecutionDeferred(
+                crate::execution_attempt::ExecutionDeferred::from(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                )
+            )),
+            TryReadError::StateExecutionDeferred(_)
+        ));
+    }
+}
+
 /// A finite snapshot observation failed before it acquired immutable bytes.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SnapshotCaptureError {
@@ -305,10 +345,6 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     state.prev_commit_topology.json_serialize(out);
-    out.push(',');
-    json::write_json_string("lane_consensus_contexts", out);
-    out.push(':');
-    json::JsonSerialize::json_serialize(&state.lane_consensus_contexts, out);
     out.push('}');
 }
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
@@ -384,10 +420,6 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     state.prev_commit_topology.json_serialize(out);
-    out.push(',');
-    json::write_json_string("lane_consensus_contexts", out);
-    out.push(':');
-    json::JsonSerialize::json_serialize(&state.lane_consensus_contexts, out);
     out.push('}');
 }
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
@@ -2790,6 +2822,7 @@ fn validate_snapshot_wsv_checkpoint(
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle<F>(
+    execution_budget: &AllocationBudget,
     generation: &BoundSnapshotGeneration,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -2890,6 +2923,7 @@ where
         )?;
         let seed = KuraSeed {
             operation_index_budget: operation_index_budget.clone(),
+            execution_budget: execution_budget.clone(),
             kura: Arc::clone(kura),
             lane_manifests: Arc::clone(lane_manifests),
             query_handle: live_query_store.clone(),
@@ -2974,6 +3008,7 @@ where
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     let seed = KuraSeed {
         operation_index_budget: operation_index_budget.clone(),
+        execution_budget: execution_budget.clone(),
         kura: Arc::clone(kura),
         lane_manifests: Arc::clone(lane_manifests),
         query_handle: live_query_store.clone(),
@@ -3112,6 +3147,9 @@ where
 ///
 /// # Errors
 ///
+/// The execution pool is the startup owner later retained by State; snapshot
+/// read-buffer custody remains separately admitted.
+///
 /// Returns all ordinary snapshot read errors, plus
 /// [`TryReadError::ZkConfigInstall`] when the decoded committed confidential-policy transitions
 /// are incompatible with the actual configured limits.
@@ -3119,6 +3157,7 @@ where
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn try_read_snapshot(
+    execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -3135,6 +3174,7 @@ pub fn try_read_snapshot(
 ) -> Result<Box<State>, TryReadError> {
     let bootstrap_policy = SnapshotBootstrapPolicy::default();
     try_read_snapshot_with_bootstrap_policy(
+        execution_budget,
         store_dir,
         kura,
         lane_manifests,
@@ -3155,6 +3195,8 @@ pub fn try_read_snapshot(
     )
 }
 /// Read and verify a snapshot with an explicit audited hash-only bootstrap policy.
+/// The caller supplies the original execution pool before State exists; restore
+/// and its subsequent runtime caches retain that exact owner.
 ///
 /// The policy is fail-closed: a bootstrap envelope or signature bypass is accepted only when the
 /// payload's exact SHA-256 digest and terminal height match the configured authorization.
@@ -3162,6 +3204,7 @@ pub fn try_read_snapshot(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn try_read_snapshot_with_bootstrap_policy(
+    execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -3180,6 +3223,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     try_read_snapshot_with_initializer(
+        execution_budget,
         store_dir,
         kura,
         lane_manifests,
@@ -3207,6 +3251,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
 fn try_read_snapshot_with_initializer<F>(
+    execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -3253,6 +3298,7 @@ where
         };
         let live_query_store = live_query_store_lazy();
         let outcome = try_read_snapshot_bundle(
+            execution_budget,
             &generation,
             kura,
             lane_manifests,
@@ -3505,6 +3551,11 @@ fn snapshot_generation_is_canonical_for_gc(
         Err(TryReadError::PayloadAllocatorFailure { requested_bytes }) => {
             Err(TryWriteError::PayloadAllocatorFailure { requested_bytes })
         }
+        Err(
+            error @ (TryReadError::StateVmInitialization(_)
+            | TryReadError::StateAdmission(_)
+            | TryReadError::StateExecutionDeferred(_)),
+        ) => Err(TryWriteError::RestartValidation(error)),
         Err(_) => Ok(false),
     }
 }
@@ -4427,6 +4478,7 @@ fn validate_generated_snapshot_for_restart_with_policy(
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     let seed = KuraSeed {
         operation_index_budget: state.world.operation_index_budget().clone(),
+        execution_budget: state.ivm_execution_budget(),
         kura: state.kura_handle(),
         lane_manifests: state.lane_manifests.read().clone(),
         query_handle: state.query_handle.clone(),

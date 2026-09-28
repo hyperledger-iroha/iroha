@@ -73,10 +73,10 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   goldens pass. The wallet's real transfer/full/change controls also pass; final
   source-bound reruns and packaged SDK qualification remain open.
 - `zk::verify_for_relation` requires an explicit semantic role and returns typed
-  failures. IVM and Kaigi consumers use it; mandatory IVM replay remains.
-  Data-model docs now state validators observe execution and gas through replay.
-  The first-release registry, schema, circuit, proof helpers and keygen command
-  use `ivm-replay-binding-v1`; retired execution-proof labels are rejected.
+  failures for its admitted relations, including Kaigi. Binding-only IVM relations,
+  registries, proof helpers and keygen commands are retired. Production IVM proof
+  admission remains closed pending the complete native execution relation and
+  finalized State authority; neither replay nor supplied commitments replace it.
   All Halo2 envelopes and key records require full canonical CIDs. Torii shares
   Core identity validation, and built-in key records emit the complete CID.
   Cross-SDK labels and native alias/admission regressions are being validated.

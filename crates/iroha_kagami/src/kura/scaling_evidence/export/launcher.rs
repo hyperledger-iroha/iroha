@@ -27,14 +27,13 @@ struct RequestV1 {
 
 #[derive(norito::Encode, norito::Decode)]
 struct PlanV1 {
+    chain_id: iroha_model_base::chain::ChainId,
     network_id: NetworkId,
-    first_context: HeightContextId,
+    genesis_epoch_context_id: [u8; 32],
     first_height: u64,
     last_height: u64,
-    nexus_amx_context_hash: Hash,
-    execution_policy_hash: Hash,
+    lane_policy: SumeragiLanePolicy,
     active_lanes: Vec<NativeWorkloadLane>,
-    lane_authorities: MergeLaneAuthorityCatalogV1,
     scheduled: Vec<ScheduledV1>,
 }
 
@@ -60,8 +59,8 @@ struct LimitsV1 {
 #[derive(norito::Encode, norito::Decode)]
 struct BindingV1 {
     height: u64,
-    finality_hash: Hash,
-    contexts_hash: Hash,
+    carrier_hash: Hash,
+    lane_evidence_hash: Hash,
     query_hashes: Vec<Hash>,
 }
 
@@ -181,14 +180,13 @@ impl RequestV1 {
         Ok(Self {
             version: 1,
             plan: PlanV1 {
+                chain_id: plan.chain_id,
                 network_id: plan.network_id,
-                first_context: plan.first_context,
+                genesis_epoch_context_id: plan.genesis_epoch_context_id,
                 first_height: plan.first_height,
                 last_height: plan.last_height,
-                nexus_amx_context_hash: plan.nexus_amx_context_hash,
-                execution_policy_hash: plan.execution_policy_hash,
+                lane_policy: plan.lane_policy,
                 active_lanes: plan.active_lanes,
-                lane_authorities: plan.lane_authorities,
                 scheduled: plan
                     .scheduled
                     .into_iter()
@@ -212,8 +210,8 @@ impl RequestV1 {
                 .into_iter()
                 .map(|b| BindingV1 {
                     height: b.height,
-                    finality_hash: b.finality_hash,
-                    contexts_hash: b.contexts_hash,
+                    carrier_hash: b.carrier_hash,
+                    lane_evidence_hash: b.lane_evidence_hash,
                     query_hashes: b.query_hashes,
                 })
                 .collect(),
@@ -237,14 +235,14 @@ impl RequestV1 {
             leaves_per_carrier: usize::try_from(self.limits.leaves_per_carrier)?,
         };
         let plan = TrustedRunPlan {
+            chain_id: self.plan.chain_id,
             network_id: self.plan.network_id,
-            first_context: self.plan.first_context,
+            genesis_epoch_context_id: self.plan.genesis_epoch_context_id,
             first_height: self.plan.first_height,
             last_height: self.plan.last_height,
-            nexus_amx_context_hash: self.plan.nexus_amx_context_hash,
-            execution_policy_hash: self.plan.execution_policy_hash,
+            lane_policy: self.plan.lane_policy,
             active_lanes: self.plan.active_lanes,
-            lane_authorities: self.plan.lane_authorities,
+
             scheduled: self
                 .plan
                 .scheduled
@@ -262,8 +260,8 @@ impl RequestV1 {
             .into_iter()
             .map(|b| HeightInputBinding {
                 height: b.height,
-                finality_hash: b.finality_hash,
-                contexts_hash: b.contexts_hash,
+                carrier_hash: b.carrier_hash,
+                lane_evidence_hash: b.lane_evidence_hash,
                 query_hashes: b.query_hashes,
             })
             .collect();

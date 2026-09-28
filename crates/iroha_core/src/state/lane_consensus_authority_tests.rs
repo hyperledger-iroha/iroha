@@ -125,7 +125,7 @@ state_test! { sync lane_opening_authority_uses_completed_pending_manifest_projec
             peer_id: PeerId::new(key.public_key().clone()),
             torii_url: None,
         }).collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
         BTreeMap::from([(primary.id, LaneManifestStatus {
             lane: primary.id,
             alias: primary.alias.clone(),

@@ -44,6 +44,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced codec json-to-norito`↴](#kagami-advanced-codec-json-to-norito)
 * [`kagami advanced kura`↴](#kagami-advanced-kura)
 * [`kagami advanced kura scaling-evidence`↴](#kagami-advanced-kura-scaling-evidence)
+* [`kagami advanced kura scaling-evidence collect`↴](#kagami-advanced-kura-scaling-evidence-collect)
 * [`kagami advanced kura scaling-evidence stopped-tip`↴](#kagami-advanced-kura-scaling-evidence-stopped-tip)
 * [`kagami advanced kura scaling-evidence facts`↴](#kagami-advanced-kura-scaling-evidence-facts)
 * [`kagami advanced kura scaling-evidence prepare`↴](#kagami-advanced-kura-scaling-evidence-prepare)
@@ -927,11 +928,53 @@ Prepare, export or independently replay canonical scaling evidence
 
 ###### **Subcommands:**
 
+* `collect` — Collect complete native carriers and actual query proofs from a stopped store
 * `stopped-tip` — Observe a stopped store's durable height under retained original genesis
 * `facts` — Authenticate original launch inputs and publish canonical preparation facts
 * `prepare` — Prepare two canonical transports from independently retained launch facts
 * `export` — Authenticate an immutable Kura interval and publish one canonical proof
 * `replay` — Reauthenticate a canonical proof and emit its complete ordered rows
+
+
+
+## `kagami advanced kura scaling-evidence collect`
+
+Collect complete native carriers and actual query proofs from a stopped store
+
+**Usage:** `kagami advanced kura scaling-evidence collect --invocation-id <INVOCATION_ID> --chain-id <CHAIN_ID> --network-id <NETWORK_ID> --genesis-epoch-context-id <GENESIS_EPOCH_CONTEXT_ID> --signed-genesis <SIGNED_GENESIS> --signed-genesis-sha256 <SIGNED_GENESIS_SHA256> --signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES> --context <CONTEXT> --context-sha256 <CONTEXT_SHA256> --context-max-bytes <CONTEXT_MAX_BYTES> --block-store <BLOCK_STORE> --merge-log <MERGE_LOG> --carrier-out <CARRIER_OUT> --queries-out <QUERIES_OUT> --carrier-max-bytes <CARRIER_MAX_BYTES> --queries-max-bytes <QUERIES_MAX_BYTES> --total-max-bytes <TOTAL_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES> --max-total-leaves <MAX_TOTAL_LEAVES> --max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER> --first-height <FIRST_HEIGHT> --last-height <LAST_HEIGHT> --max-committed-blocks <MAX_COMMITTED_BLOCKS> --max-store-data-bytes <MAX_STORE_DATA_BYTES> --max-carrier-bytes <MAX_CARRIER_BYTES> --max-merge-log-bytes <MAX_MERGE_LOG_BYTES> --max-merge-frames <MAX_MERGE_FRAMES> --reader-max-output-bytes <READER_MAX_OUTPUT_BYTES> --max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES> --owner-uid <OWNER_UID>`
+
+###### **Options:**
+
+* `--invocation-id <INVOCATION_ID>` — Independently selected lowercase SHA-256 invocation identity
+* `--chain-id <CHAIN_ID>` — Independent original chain identity
+* `--network-id <NETWORK_ID>` — Independent original genesis network identity
+* `--genesis-epoch-context-id <GENESIS_EPOCH_CONTEXT_ID>` — Independent native epoch context identity from the original signed genesis
+* `--signed-genesis <SIGNED_GENESIS>` — Absolute original canonical signed genesis path
+* `--signed-genesis-sha256 <SIGNED_GENESIS_SHA256>` — Raw SHA-256 of the independently retained original genesis
+* `--signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES>` — Maximum original genesis bytes
+* `--context <CONTEXT>` — Absolute original canonical genesis epoch context path
+* `--context-sha256 <CONTEXT_SHA256>` — Raw SHA-256 of the independently retained original epoch context
+* `--context-max-bytes <CONTEXT_MAX_BYTES>` — Maximum original epoch context and each archived complete context projection
+* `--block-store <BLOCK_STORE>` — Exact stopped canonical Kura store root
+* `--merge-log <MERGE_LOG>` — Exact stopped canonical merge log path
+* `--carrier-out <CARRIER_OUT>` — New complete carrier/context vector destination
+* `--queries-out <QUERIES_OUT>` — New complete actual query vector destination
+* `--carrier-max-bytes <CARRIER_MAX_BYTES>` — Maximum complete carrier/context vector bytes
+* `--queries-max-bytes <QUERIES_MAX_BYTES>` — Maximum complete query vector bytes
+* `--total-max-bytes <TOTAL_MAX_BYTES>` — Aggregate original inputs and output byte reservations
+* `--reply-max-bytes <REPLY_MAX_BYTES>` — Complete reply bytes including its final newline
+* `--max-total-leaves <MAX_TOTAL_LEAVES>` — Maximum complete Network query count across all native Decision carriers
+* `--max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER>` — Maximum complete Network input and typed output count per carrier
+* `--first-height <FIRST_HEIGHT>` — First required carrier height, inclusive
+* `--last-height <LAST_HEIGHT>` — Last required carrier height, inclusive
+* `--max-committed-blocks <MAX_COMMITTED_BLOCKS>` — Maximum complete journal height admitted before reading
+* `--max-store-data-bytes <MAX_STORE_DATA_BYTES>` — Maximum underlying blocks.data bytes
+* `--max-carrier-bytes <MAX_CARRIER_BYTES>` — Maximum canonical wire bytes for one carrier
+* `--max-merge-log-bytes <MAX_MERGE_LOG_BYTES>` — Maximum complete merge-log bytes
+* `--max-merge-frames <MAX_MERGE_FRAMES>` — Maximum frames in the complete merge log
+* `--reader-max-output-bytes <READER_MAX_OUTPUT_BYTES>` — Maximum cumulative carrier and merge-entry bytes returned by the reader
+* `--max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES>` — Maximum cumulative owned allocation per decoder invocation
+* `--owner-uid <OWNER_UID>` — Independently expected Unix owner of the store directories and files
 
 
 
@@ -968,7 +1011,7 @@ Observe a stopped store's durable height under retained original genesis
 
 Authenticate original launch inputs and publish canonical preparation facts
 
-**Usage:** `kagami advanced kura scaling-evidence facts --invocation-id <INVOCATION_ID> --manifest <MANIFEST> --manifest-sha256 <MANIFEST_SHA256> --manifest-max-bytes <MANIFEST_MAX_BYTES> --signed-genesis <SIGNED_GENESIS> --signed-genesis-sha256 <SIGNED_GENESIS_SHA256> --signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES> --peer-config <PEER_CONFIG> <PEER_CONFIG> <PEER_CONFIG> <PEER_CONFIG> --peer-config-sha256 <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> --peer-config-max-bytes <PEER_CONFIG_MAX_BYTES> --context <CONTEXT> --context-sha256 <CONTEXT_SHA256> --context-max-bytes <CONTEXT_MAX_BYTES> --journal <JOURNAL> --journal-sha256 <JOURNAL_SHA256> --journal-max-bytes <JOURNAL_MAX_BYTES> --finality <FINALITY> --finality-sha256 <FINALITY_SHA256> --finality-max-bytes <FINALITY_MAX_BYTES> --queries <QUERIES> --queries-sha256 <QUERIES_SHA256> --queries-max-bytes <QUERIES_MAX_BYTES> --chain-id <CHAIN_ID> --network-id <NETWORK_ID> --chain-discriminant <CHAIN_DISCRIMINANT> --genesis-public-key <GENESIS_PUBLIC_KEY> --validator <VALIDATOR> <VALIDATOR> <VALIDATOR> <VALIDATOR> --lanes <LANES> --workload-seed <WORKLOAD_SEED> --pair-index <PAIR_INDEX> --account <ACCOUNT> <ACCOUNT> <ACCOUNT> <ACCOUNT>... --rate-numerator <RATE_NUMERATOR> --rate-denominator <RATE_DENOMINATOR> --warmup-ns <WARMUP_NS> --measurement-ns <MEASUREMENT_NS> --drain-ns <DRAIN_NS> --submission-lag-bound-ns <SUBMISSION_LAG_BOUND_NS> --preparation-lookahead <PREPARATION_LOOKAHEAD> --preparation-concurrency <PREPARATION_CONCURRENCY> --preparation-ahead-ns <PREPARATION_AHEAD_NS> --max-submissions <MAX_SUBMISSIONS> --max-in-flight <MAX_IN_FLIGHT> --max-status-requests <MAX_STATUS_REQUESTS> --poll-interval-ns <POLL_INTERVAL_NS> --journal-max-requests <JOURNAL_MAX_REQUESTS> --resource-interval-ns <RESOURCE_INTERVAL_NS> --resource-response-deadline-ns <RESOURCE_RESPONSE_DEADLINE_NS> --resource-max-start-lag-ns <RESOURCE_MAX_START_LAG_NS> --proof-max-bytes <PROOF_MAX_BYTES> --verification-input-max-bytes <VERIFICATION_INPUT_MAX_BYTES> --verification-output-max-bytes <VERIFICATION_OUTPUT_MAX_BYTES> --max-heights <MAX_HEIGHTS> --max-requests <MAX_REQUESTS> --max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER> --first-height <FIRST_HEIGHT> --last-height <LAST_HEIGHT> --max-committed-blocks <MAX_COMMITTED_BLOCKS> --max-store-data-bytes <MAX_STORE_DATA_BYTES> --max-carrier-bytes <MAX_CARRIER_BYTES> --max-merge-log-bytes <MAX_MERGE_LOG_BYTES> --max-merge-frames <MAX_MERGE_FRAMES> --reader-max-output-bytes <READER_MAX_OUTPUT_BYTES> --max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES> --owner-uid <OWNER_UID> --block-store <BLOCK_STORE> --merge-log <MERGE_LOG> --facts-output <FACTS_OUTPUT> --source-max-bytes <SOURCE_MAX_BYTES> --facts-max-bytes <FACTS_MAX_BYTES> --total-max-bytes <TOTAL_MAX_BYTES> --assembly-decode-max-bytes <ASSEMBLY_DECODE_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES>`
+**Usage:** `kagami advanced kura scaling-evidence facts --invocation-id <INVOCATION_ID> --manifest <MANIFEST> --manifest-sha256 <MANIFEST_SHA256> --manifest-max-bytes <MANIFEST_MAX_BYTES> --signed-genesis <SIGNED_GENESIS> --signed-genesis-sha256 <SIGNED_GENESIS_SHA256> --signed-genesis-max-bytes <SIGNED_GENESIS_MAX_BYTES> --peer-config <PEER_CONFIG> <PEER_CONFIG> <PEER_CONFIG> <PEER_CONFIG> --peer-config-sha256 <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> <PEER_CONFIG_SHA256> --peer-config-max-bytes <PEER_CONFIG_MAX_BYTES> --context <CONTEXT> --context-sha256 <CONTEXT_SHA256> --context-max-bytes <CONTEXT_MAX_BYTES> --journal <JOURNAL> --journal-sha256 <JOURNAL_SHA256> --journal-max-bytes <JOURNAL_MAX_BYTES> --carrier <CARRIER> --carrier-sha256 <CARRIER_SHA256> --carrier-max-bytes <CARRIER_MAX_BYTES> --queries <QUERIES> --queries-sha256 <QUERIES_SHA256> --queries-max-bytes <QUERIES_MAX_BYTES> --chain-id <CHAIN_ID> --network-id <NETWORK_ID> --chain-discriminant <CHAIN_DISCRIMINANT> --genesis-public-key <GENESIS_PUBLIC_KEY> --validator <VALIDATOR> <VALIDATOR> <VALIDATOR> <VALIDATOR> --lanes <LANES> --workload-seed <WORKLOAD_SEED> --pair-index <PAIR_INDEX> --account <ACCOUNT> <ACCOUNT> <ACCOUNT> <ACCOUNT>... --rate-numerator <RATE_NUMERATOR> --rate-denominator <RATE_DENOMINATOR> --warmup-ns <WARMUP_NS> --measurement-ns <MEASUREMENT_NS> --drain-ns <DRAIN_NS> --submission-lag-bound-ns <SUBMISSION_LAG_BOUND_NS> --preparation-lookahead <PREPARATION_LOOKAHEAD> --preparation-concurrency <PREPARATION_CONCURRENCY> --preparation-ahead-ns <PREPARATION_AHEAD_NS> --max-submissions <MAX_SUBMISSIONS> --max-in-flight <MAX_IN_FLIGHT> --max-status-requests <MAX_STATUS_REQUESTS> --poll-interval-ns <POLL_INTERVAL_NS> --journal-max-requests <JOURNAL_MAX_REQUESTS> --resource-interval-ns <RESOURCE_INTERVAL_NS> --resource-response-deadline-ns <RESOURCE_RESPONSE_DEADLINE_NS> --resource-max-start-lag-ns <RESOURCE_MAX_START_LAG_NS> --proof-max-bytes <PROOF_MAX_BYTES> --verification-input-max-bytes <VERIFICATION_INPUT_MAX_BYTES> --verification-output-max-bytes <VERIFICATION_OUTPUT_MAX_BYTES> --max-heights <MAX_HEIGHTS> --max-requests <MAX_REQUESTS> --max-leaves-per-carrier <MAX_LEAVES_PER_CARRIER> --first-height <FIRST_HEIGHT> --last-height <LAST_HEIGHT> --max-committed-blocks <MAX_COMMITTED_BLOCKS> --max-store-data-bytes <MAX_STORE_DATA_BYTES> --max-carrier-bytes <MAX_CARRIER_BYTES> --max-merge-log-bytes <MAX_MERGE_LOG_BYTES> --max-merge-frames <MAX_MERGE_FRAMES> --reader-max-output-bytes <READER_MAX_OUTPUT_BYTES> --max-decode-allocation-bytes <MAX_DECODE_ALLOCATION_BYTES> --owner-uid <OWNER_UID> --block-store <BLOCK_STORE> --merge-log <MERGE_LOG> --facts-output <FACTS_OUTPUT> --source-max-bytes <SOURCE_MAX_BYTES> --facts-max-bytes <FACTS_MAX_BYTES> --total-max-bytes <TOTAL_MAX_BYTES> --assembly-decode-max-bytes <ASSEMBLY_DECODE_MAX_BYTES> --reply-max-bytes <REPLY_MAX_BYTES>`
 
 ###### **Options:**
 
@@ -982,15 +1025,15 @@ Authenticate original launch inputs and publish canonical preparation facts
 * `--peer-config <PEER_CONFIG>` — Four original final peer config absolute paths, in independently selected validator order
 * `--peer-config-sha256 <PEER_CONFIG_SHA256>` — Four independently pinned raw config SHA-256 values, in the same order
 * `--peer-config-max-bytes <PEER_CONFIG_MAX_BYTES>` — Maximum bytes for each of the four original peer configs
-* `--context <CONTEXT>` — Original independent canonical genesis HeightContext absolute path
+* `--context <CONTEXT>` — Original independent canonical genesis ValidatorEpochContextV1 absolute path
 * `--context-sha256 <CONTEXT_SHA256>` — Independently pinned raw SHA-256 of the original context
 * `--context-max-bytes <CONTEXT_MAX_BYTES>` — Maximum original context bytes, at most 8388608
 * `--journal <JOURNAL>` — Original complete signed-request collector journal absolute path
 * `--journal-sha256 <JOURNAL_SHA256>` — Independently pinned raw SHA-256 of the complete original journal
 * `--journal-max-bytes <JOURNAL_MAX_BYTES>` — Maximum complete original journal bytes
-* `--finality <FINALITY>` — Original canonical Vec<FinalizedNativeContextV1> absolute path
-* `--finality-sha256 <FINALITY_SHA256>` — Independently pinned raw SHA-256 of the complete finality vector
-* `--finality-max-bytes <FINALITY_MAX_BYTES>` — Maximum complete finality vector bytes
+* `--carrier <CARRIER>` — Original canonical Vec<NativeHeightEvidenceV1> absolute path
+* `--carrier-sha256 <CARRIER_SHA256>` — Independently pinned raw SHA-256 of the complete native carrier/context vector
+* `--carrier-max-bytes <CARRIER_MAX_BYTES>` — Maximum complete native carrier/context vector bytes
 * `--queries <QUERIES>` — Original canonical Vec<CommittedTransaction> absolute path, preserving every query
 * `--queries-sha256 <QUERIES_SHA256>` — Independently pinned raw SHA-256 of the complete query vector
 * `--queries-max-bytes <QUERIES_MAX_BYTES>` — Maximum complete query vector bytes

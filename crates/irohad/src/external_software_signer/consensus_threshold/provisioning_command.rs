@@ -1,14 +1,15 @@
 //! Offline, authenticated and atomic publication of current plus pending beacon custody.
 
 use super::*;
-use crate::beacon_bootstrap::{Directory, read_public_bytes_bounded};
+use crate::beacon_bootstrap::{Directory, FinalityLimitsArgs, read_public_bytes_bounded};
 use clap::Parser;
+use iroha_core::sumeragi::native_journal::NativeJournalCursor;
 use iroha_core::validator_committee_evidence::{
     COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1, ValidatorCommitteeProvisioningEvidenceV1,
     verify_validator_committee_provisioning_evidence_v1,
 };
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::consensus_v2::HeightContextId;
+use iroha_crypto::Hash;
+use iroha_model_base::chain::ChainId;
 use iroha_model_base::peer::PeerId;
 use std::{
     ffi::{OsStr, OsString},
@@ -38,11 +39,9 @@ struct Args {
     /// Independently supplied genesis-derived checked network identity.
     #[arg(long)]
     network_id: NetworkId,
-    /// Independently pinned context hash at anchor-height, as 64 hexadecimal digits.
-    #[arg(long)]
-    trusted_context_id: Hash,
-    #[arg(long)]
-    anchor_height: u64,
+    /// Explicit bounds for source bytes and cumulative decoded allocation.
+    #[command(flatten)]
+    finality_limits: FinalityLimitsArgs,
     #[arg(long)]
     target_epoch: u64,
     /// Exact frozen attempt identifier, as 64 hexadecimal digits.
@@ -96,25 +95,39 @@ pub(crate) fn dispatch_if_requested() -> bool {
 }
 
 fn run(args: Args) -> Result<(), &'static str> {
+    let limits = args
+        .finality_limits
+        .checked()
+        .map_err(|_| "invalid finality admission limits")?;
+    let chain_id = ChainId::from(args.chain_id.as_str());
+    let cursor = NativeJournalCursor::new(chain_id.clone(), args.network_id, limits)
+        .map_err(|_| "invalid native chain configuration")?;
     let transition_id: [u8; 32] = hex::decode(&args.transition_id)
         .map_err(|_| "invalid transition identifier")?
         .try_into()
         .map_err(|_| "invalid transition identifier")?;
-    let evidence_bytes =
-        read_public_bytes_bounded(&args.evidence, COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1)
-            .map_err(|_| "untrusted evidence file")?;
+    let evidence_bytes = read_public_bytes_bounded(
+        &args.evidence,
+        limits
+            .journal_bytes
+            .min(COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1),
+    )
+    .map_err(|_| "untrusted evidence file")?;
     let evidence: ValidatorCommitteeProvisioningEvidenceV1 = norito::decode_canonical_with_limits(
         &evidence_bytes,
-        norito::canonical_decode_limits(evidence_bytes.len()),
+        limits
+            .decode_limits()
+            .map_err(|_| "invalid finality admission limits")?,
     )
     .map_err(|_| "noncanonical evidence")?;
     let verified = verify_validator_committee_provisioning_evidence_v1(
         &evidence,
+        &chain_id,
         args.network_id,
-        HeightContextId(HashOf::from_untyped_unchecked(args.trusted_context_id)),
-        args.anchor_height,
         args.target_epoch,
         transition_id,
+        limits,
+        cursor.attestations(),
     )
     .map_err(|_| "evidence is not authorized by the independently pinned incumbent chain")?;
     // No private descriptor is opened until every public authorization and target binding passes.
@@ -157,7 +170,7 @@ fn run(args: Args) -> Result<(), &'static str> {
     let target_index = verified
         .transition()
         .preparation
-        .roster
+        .committee
         .iter()
         .position(|seat| seat.validator == args.local_validator)
         .map(|index| u16::try_from(index + 1).map_err(|_| "invalid target index"))

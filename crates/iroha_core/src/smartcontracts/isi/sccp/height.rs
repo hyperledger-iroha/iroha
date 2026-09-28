@@ -113,7 +113,7 @@ impl SccpHeightInputsV1 {
     /// # Errors
     ///
     /// Fails when `height` precedes genesis, the schedule lacks `height` (or `height + 1` at a
-    /// boundary), or the scheduled epoch length is zero.
+    /// boundary), or a required epoch is still pending boundary authorization.
     pub fn from_sumeragi_schedule(
         world: &(impl WorldReadOnly + ?Sized),
         height: u64,
@@ -128,18 +128,24 @@ impl SccpHeightInputsV1 {
         }
         let schedule = world.consensus_schedule();
         let current = schedule
-            .get(height)
-            .ok_or(SccpHeightInputsError::Unscheduled(height))?;
-        let epoch_length = current.params.epoch_length_blocks;
-        let (epoch, epoch_end_height) = sumeragi_epoch(height, genesis_height, epoch_length)?;
+            .ready(height)
+            .map_err(|_| SccpHeightInputsError::Unscheduled(height))?;
+        let epoch = current.epoch.authorization.epoch;
+        let epoch_end_height = current.epoch.authorization.last_height;
         let next_roster = if height == epoch_end_height {
             let next_height = height
                 .checked_add(1)
                 .ok_or(SccpHeightInputsError::Overflow)?;
             let next = schedule
-                .get(next_height)
-                .ok_or(SccpHeightInputsError::Unscheduled(next_height))?;
-            Some(next.committee.clone())
+                .ready(next_height)
+                .map_err(|_| SccpHeightInputsError::Unscheduled(next_height))?;
+            Some(
+                next.epoch
+                    .committee
+                    .iter()
+                    .map(|member| member.validator.clone())
+                    .collect(),
+            )
         } else {
             None
         };
@@ -148,7 +154,12 @@ impl SccpHeightInputsV1 {
             height,
             epoch,
             epoch_end_height,
-            roster: current.committee.clone(),
+            roster: current
+                .epoch
+                .committee
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect(),
             next_roster,
         })
     }
@@ -197,20 +208,9 @@ pub fn sumeragi_epoch(
 mod tests {
     use super::*;
     use crate::{
-        smartcontracts::isi::sccp::test_support::{blank_state, header, peer},
+        smartcontracts::isi::sccp::test_support::{blank_state, header},
         sumeragi::schedule::{ChainParamsRecord, ConsensusSchedule, ScheduledConfig},
     };
-
-    fn config(committee: Vec<PeerId>, epoch_length: u64) -> ScheduledConfig {
-        ScheduledConfig {
-            height: 0,
-            committee,
-            params: ChainParamsRecord {
-                epoch_length_blocks: epoch_length,
-                ..ChainParamsRecord::default()
-            },
-        }
-    }
 
     #[test]
     fn sumeragi_epochs_start_after_genesis_and_have_fixed_length() {
@@ -243,52 +243,60 @@ mod tests {
     }
 
     #[test]
-    fn schedule_inputs_carry_the_next_committee_only_at_a_boundary() {
+    fn schedule_inputs_reject_an_unauthorized_successor_at_the_boundary() {
+        use crate::sumeragi::schedule::{RetainedConsensusSchedule, ScheduledSlot};
         let state = blank_state();
-        let mut block = state.block(header(4));
-        let committee = |seeds: &[u8]| seeds.iter().map(|seed| peer(*seed)).collect::<Vec<_>>();
-        *block.world.consensus_schedule.get_mut() = ConsensusSchedule::genesis(
-            4,
-            [
-                config(committee(&[1, 2, 3, 4]), 4),
-                config(committee(&[1, 2, 3, 5]), 4),
-                config(committee(&[1, 2, 3, 6]), 4),
-            ],
+        let signed = crate::sumeragi::epoch::tests::genesis_fixture(
+            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
+            5,
+            false,
         );
+        let epoch = crate::sumeragi::epoch::genesis_epoch(&signed).unwrap();
+        let roster = epoch
+            .committee
+            .iter()
+            .map(|member| member.validator.clone())
+            .collect::<Vec<_>>();
+        let params = ChainParamsRecord::from_parameters(&Default::default());
+        let graph = ConsensusSchedule::from_owned_entries(vec![
+            ScheduledSlot::Ready(ScheduledConfig {
+                height: 4,
+                epoch: epoch.clone(),
+                params,
+            }),
+            ScheduledSlot::Ready(ScheduledConfig {
+                height: 5,
+                epoch: epoch.clone(),
+                params,
+            }),
+            ScheduledSlot::PendingBoundary {
+                height: 6,
+                boundary_height: 5,
+                predecessor_context_id: epoch.context_id().unwrap(),
+                params,
+            },
+        ])
+        .unwrap();
+        let retained =
+            RetainedConsensusSchedule::admit(&graph, &state.ivm_execution_budget()).unwrap();
+        let mut block = state.block(header(4));
+        *block.world.consensus_schedule.get_mut() = retained;
         let inner =
             SccpHeightInputsV1::from_sumeragi_schedule(&block.world, 4, 1, ConsensusMode::Npos)
-                .expect("scheduled height");
-        assert_eq!(
-            inner,
-            SccpHeightInputsV1 {
-                mode: ConsensusMode::Npos,
-                height: 4,
-                epoch: 0,
-                epoch_end_height: 5,
-                roster: committee(&[1, 2, 3, 4]),
-                next_roster: None,
-            }
-        );
+                .unwrap();
+        assert_eq!(inner.roster, roster);
+        assert_eq!(inner.epoch, 0);
+        assert_eq!(inner.epoch_end_height, 5);
+        assert_eq!(inner.next_roster, None);
         assert!(!inner.is_boundary());
-        let boundary = SccpHeightInputsV1::from_sumeragi_schedule(
-            &block.world,
-            5,
-            1,
-            ConsensusMode::Permissioned,
-        )
-        .expect("scheduled boundary");
-        assert!(boundary.is_boundary());
-        assert_eq!(boundary.roster, committee(&[1, 2, 3, 5]));
-        assert_eq!(boundary.next_roster, Some(committee(&[1, 2, 3, 6])));
+        assert_eq!(
+            SccpHeightInputsV1::from_sumeragi_schedule(&block.world, 5, 1, ConsensusMode::Npos),
+            Err(SccpHeightInputsError::Unscheduled(6)),
+            "only a certified boundary installs successor authority"
+        );
         assert_eq!(
             SccpHeightInputsV1::from_sumeragi_schedule(&block.world, 7, 1, ConsensusMode::Npos),
             Err(SccpHeightInputsError::Unscheduled(7))
-        );
-        assert_eq!(
-            SccpHeightInputsV1::from_sumeragi_schedule(&block.world, 6, 1, ConsensusMode::Npos)
-                .map(|inputs| inputs.next_roster),
-            Ok(None),
-            "the first height of epoch 1 is no boundary"
         );
     }
 }

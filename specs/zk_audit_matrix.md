@@ -2,7 +2,7 @@
 
 This matrix began as a record of the 2026-04-02 and 2026-05-16 ZK hardening
 passes. Historical risk labels are not current release qualification. The
-standalone-election and Parliament entries below reflect their current source
+standalone-election, Parliament and IVM entries below reflect their current source
 owners; this correction does not constitute a new independent audit or
 revalidate the other entries. Release completion is tracked in the
 [first-release closure](privacy_first_release_closure.md) and the
@@ -17,7 +17,7 @@ it does not assign a blanket low-risk rating to cryptographic implementations.
 | Standalone ZK election ballot / tally | Closed semantic Halo2/Pasta/IPA registry; no admitted ballot or tally circuit | Separate consensus-critical election product, implementation incomplete | Active VK, exact circuit role, VK/schema/envelope and contextual host checks remain mandatory; they cannot supply the missing semantic statement | `world::voting_circuit_matches` and the closed `HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1` reject the current unsupported vote roles before an accepting proof path | Unqualified. No production ballot/tally relation or canonical key owner; toy vote-bool and generic STARK Binding AIR are rejected. See the required bindings below. |
 | Parliament private body ballots / tally | Fixed timed-OVN over BLS12-381 with threshold-BLS release; separate from the Halo2 registry | Consensus-critical Parliament lifecycle | Exact session, registered participant, frozen survivor corpus, release identity, phase/deadline and finalized-release bindings; complete ordered ballot corpus and aggregate count checks | `iroha_crypto::timed_ovn`; Core `governance::timed_ovn`, `tle_release` and `parliament::reducer_ballot` | Real protocol and lifecycle owners exist. Independent timed-OVN/threshold-BLS review, signer/custody qualification and source-bound four-validator release evidence remain required; implementation presence is not an audit result. |
 | Confidential transfer / unshield | Fixed Halo2/Pasta/IPA relations | Retained native proof builders and verification | Canonical key, public instances, ownership, membership, range and conservation | `iroha_core::zk::verify_for_relation` over the guarded verifier | Note commitments remain public and linkable. The optional second input repair removes empty-leaf membership for absence; changed keys and full-capacity/adversarial/native regressions require qualification. Generic legacy monetary instructions are not a second production privacy protocol. |
-| `IvmProved` admission | Registry-backed `halo2/ipa` or canonical STARK/FRI | Consensus-critical | VK/schema/circuit/manifest binding plus exact public commitments and mandatory deterministic replay | `verify_for_relation(IvmReplayBinding, ...)` followed by full IVM replay | The circuit binds supplied hashes; it does not prove execution. Replay establishes correctness and reveals execution/gas to validators. Succinct execution verification remains unimplemented. |
+| `IvmProved` admission | Closed until one complete native STARK execution relation is qualified | Consensus-critical | Core rejects proof-backed execution and trigger registration; reserved IVM identities are rejected by generic proof surfaces | No production IVM execution-proof verifier is admitted | Unqualified. A canonical public statement exists, but complete finalized-State ownership, the constrained execution relation, local proving and transactional dependency checks remain open. |
 | Kaigi privacy authorization / usage | Fixed `halo2/ipa` relations | Consensus-critical for Kaigi privacy-mode flows | Active VK, canonical circuit/schema, exact public call/subject/role/sequence or host/segment/billing context | `verify_for_relation(KaigiAuthorization/KaigiUsage, ...)` after contextual checks | Dedicated circuits and context binding exist; independent relation, privacy and implementation qualification remain required. A generic binding proof cannot authorize these roles. |
 | RAM-LFE execution receipts | Resolver signature or policy-published proof metadata | Non-consensus helper / application-facing | Policy, payload hash, canonical envelope and key/schema binding, node resource limits | Signature verification or guarded native proof verification | Signature mode has an explicit signer trust model. Proof mode's four single-row columns do not match an admitted compiled Halo2 relation. Policy registration/activation and stateless receipt validation now reject unavailable proof mode before expensive work; the semantic program relation remains unimplemented. |
 | Identifier receipts | RAM-LFE attestation plus signed output opening | Consensus-critical claim admission / application-facing verification | Policy/program linkage, opening signature, opaque identifier/receipt hash | Signature verification or the shared RAM-LFE verifier | Shared checks avoid verifier-policy drift but do not supply RAM-LFE's missing semantic proof relation. Qualify signature and proof modes separately. |
@@ -132,12 +132,10 @@ introduced by this documentation correction.
   Application callers require an explicit `ProofRelation` through
   `verify_for_relation`, then enforce their authenticated public context and
   replay state. Typed privacy protocols retain their dedicated verifiers.
-- STARK `ivm-replay-binding-v1` dispatch uses a dedicated binding AIR context after
-  authenticating the exact circuit, VK, schema and public-input digest. It
-  reconstructs the full deterministic trace and zero-composition commitments
-  within the exact reconstruction domain cap; auxiliary composition is rejected.
-  The generic AIR verifier still rejects reserved IVM circuits, and `IvmProved`
-  admission always replays the VM to check execution semantics.
+- The former IVM binding AIR and Halo2 registration are retired. Generic AIR
+  verification still rejects reserved IVM identities, while Core rejects
+  `IvmProved` before effects. Deterministic replay or matching supplied
+  commitments cannot establish the missing private execution relation.
 - The pre-release decode-only `/v1/zk/verify` and `/v1/zk/submit-proof`
   routes were removed instead of retaining success responses that could be
   confused with cryptographic or ledger acceptance.

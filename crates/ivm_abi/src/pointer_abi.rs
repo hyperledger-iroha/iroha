@@ -41,8 +41,6 @@ pub enum PointerType {
     DataSpaceId = 0x000A,
     /// Descriptor of an atomic cross-transaction (AXT) envelope.
     AxtDescriptor = 0x000B,
-    /// Capability handle allowing guarded access to an asset DS inside an AXT.
-    AssetHandle = 0x000C,
     /// Proof blob (deterministic Norito or compressed proof bytes).
     ProofBlob = 0x000D,
     /// Soracloud host request envelope.
@@ -55,6 +53,8 @@ pub enum PointerType {
     Int = 0x0011,
     /// Canonical exact Kotodama `decimal` value.
     Decimal = 0x0012,
+    /// Canonical issuer-signed AXT anchored spend, including its claimed source receipt.
+    AxtAnchoredSpendV1 = 0x0013,
     /// Test-only pointer type used to exercise policy failures.
     #[cfg(test)]
     TestOnly = 0x0FFE,
@@ -73,13 +73,13 @@ impl PointerType {
             0x0009 => Some(Self::NoritoBytes),
             0x000A => Some(Self::DataSpaceId),
             0x000B => Some(Self::AxtDescriptor),
-            0x000C => Some(Self::AssetHandle),
             0x000D => Some(Self::ProofBlob),
             0x000E => Some(Self::SoracloudRequest),
             0x000F => Some(Self::SoracloudResponse),
             0x0010 => Some(Self::Quantity),
             0x0011 => Some(Self::Int),
             0x0012 => Some(Self::Decimal),
+            0x0013 => Some(Self::AxtAnchoredSpendV1),
             #[cfg(test)]
             0x0FFE => Some(Self::TestOnly),
             _ => None,
@@ -99,13 +99,13 @@ impl PointerType {
             Self::NoritoBytes,
             Self::DataSpaceId,
             Self::AxtDescriptor,
-            Self::AssetHandle,
             Self::ProofBlob,
             Self::SoracloudRequest,
             Self::SoracloudResponse,
             Self::Quantity,
             Self::Int,
             Self::Decimal,
+            Self::AxtAnchoredSpendV1,
             #[cfg(test)]
             Self::TestOnly,
         ]
@@ -182,13 +182,13 @@ fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerTy
             PointerType::NoritoBytes,
             PointerType::DataSpaceId,
             PointerType::AxtDescriptor,
-            PointerType::AssetHandle,
             PointerType::ProofBlob,
             PointerType::SoracloudRequest,
             PointerType::SoracloudResponse,
             PointerType::Quantity,
             PointerType::Int,
             PointerType::Decimal,
+            PointerType::AxtAnchoredSpendV1,
         ])
     });
     let SyscallPolicy::AbiV1 = policy;
@@ -255,7 +255,6 @@ pub fn render_pointer_types_markdown_table() -> String {
             PointerType::AxtDescriptor as u16,
             PointerType::AxtDescriptor,
         ),
-        (PointerType::AssetHandle as u16, PointerType::AssetHandle),
         (PointerType::ProofBlob as u16, PointerType::ProofBlob),
         (
             PointerType::SoracloudRequest as u16,
@@ -268,6 +267,10 @@ pub fn render_pointer_types_markdown_table() -> String {
         (PointerType::Quantity as u16, PointerType::Quantity),
         (PointerType::Int as u16, PointerType::Int),
         (PointerType::Decimal as u16, PointerType::Decimal),
+        (
+            PointerType::AxtAnchoredSpendV1 as u16,
+            PointerType::AxtAnchoredSpendV1,
+        ),
     ];
     all.sort_by_key(|(id, _)| *id);
     let mut out = String::new();
@@ -316,11 +319,15 @@ mod tests {
         assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::Quantity));
         assert_eq!(PointerType::from_u16(0x0011), Some(PointerType::Int));
         assert_eq!(PointerType::from_u16(0x0012), Some(PointerType::Decimal));
-        assert_eq!(PointerType::from_u16(0x0013), None);
+        assert_eq!(
+            PointerType::from_u16(0x0013),
+            Some(PointerType::AxtAnchoredSpendV1)
+        );
         for ty in [
             PointerType::Quantity,
             PointerType::Int,
             PointerType::Decimal,
+            PointerType::AxtAnchoredSpendV1,
         ] {
             assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
         }
@@ -351,15 +358,17 @@ mod tests {
     #[test]
     fn envelope_rejects_unassigned_numeric_pointer_id() {
         let payload = b"canonical";
-        let mut envelope = Vec::new();
-        envelope.extend_from_slice(&0x0013_u16.to_be_bytes());
-        envelope.push(1);
-        envelope.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        envelope.extend_from_slice(payload);
-        envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
-        assert!(matches!(
-            validate_tlv_bytes(&envelope),
-            Err(VMError::NoritoInvalid)
-        ));
+        for type_id in [0x000C_u16, 0x0014_u16] {
+            let mut envelope = Vec::new();
+            envelope.extend_from_slice(&type_id.to_be_bytes());
+            envelope.push(1);
+            envelope.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            envelope.extend_from_slice(payload);
+            envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+            assert!(matches!(
+                validate_tlv_bytes(&envelope),
+                Err(VMError::NoritoInvalid)
+            ));
+        }
     }
 }

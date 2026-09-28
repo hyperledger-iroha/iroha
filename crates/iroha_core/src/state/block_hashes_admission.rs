@@ -11,7 +11,7 @@ use concread::bptree::{
 /// Local admission for original State storage and committed-history owners.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateAdmissionError {
-    /// Original finite-credit refusal from an admitted World index.
+    /// Original refusal from a World field, prepaid shell or successor inventory.
     #[error(transparent)]
     Storage(#[from] StateStorageAdmissionError),
     /// Original block-hash history admission.

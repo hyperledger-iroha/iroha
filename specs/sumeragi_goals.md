@@ -5,7 +5,7 @@ Sumeragi v2 runtime with the rewritten Sumeragi core and retire every v2 artifac
 Supersedes [the v2 liveness redesign goals](sumeragi_liveness_redesign_goals.md) (L1–L6),
 which are retired unfinished: their target was reconciling v2 lifecycle owners, and the
 rewrite removes those owners instead.
-Required working directory: `/Users/takemiyamakoto/dev/iroha`. Required branch:
+Required working directory: `/Users/takemiyamakoto/soramitsudev/iroha`. Required branch:
 `optimizations`.
 
 Protocol contract: [specs/sumeragi.md](sumeragi.md). Implementation:
@@ -23,7 +23,7 @@ the cutover. Why and how it was built: [2026-09-25 record](../docs/history/2026-
 | Finality | One core instance per chain. Dataspaces and lanes keep DS-local finality; cross-dataspace AMX uses two-phase commit through the global chain (spec §11). |
 | Provenance | In-house protocol and code; no external consensus library. |
 | Compatibility | None. Fresh wire, storage and genesis; Taira is reset. |
-| Scale | 4 validators now, about 20 at launch. Quorum is `n − f` for any `n ≥ 1`. |
+| Scale | The global production committee is exactly `3f + 1` with `1 <= f <= 10` (4 through 31), and every certificate contains exactly `2f + 1` equal validator votes. Candidate and observer pools do not contribute voting seats. The generic simulator exercises additional sizes; those runs do not qualify global production committees. |
 
 ## Goals
 
@@ -36,10 +36,45 @@ the cutover. Why and how it was built: [2026-09-25 record](../docs/history/2026-
 | S5 | Dataspace and lane instances | Open | Several cores per node, instance-id derivation, per-instance committees and records, O9 isolation (one stalled instance never delays another). |
 | S6 | AMX two-phase commit | Open | Begin, prepare/escrow, relay, decision by deadline, settle; foreign-committee tracking and handoff proofs (spec §11); O-AMX oracle in the simulator. |
 | S7 | Taira reset and qualification | Open | Fresh genesis and operator runbook (spec §14.5); 24 h soak at n = 4 and n = 22 with 10–30 % loss, delay spikes, `kill -9` and disk-full injection; O-AGR, O-SIGN, O-LIVE and O-PERF computed from node logs. Release gate. |
-| S8 | Evidence and committee scheduling | Open | Evidence → penalties; NPoS election schedules committees with the lag-2 rule (spec §10); committee history retained (with proofs of possession) so the certified-chain reader verifies every historical `CommitQC` instead of reporting `CommittedLocally` for rotated-away committees (spec §12.7). |
+| S8 | Evidence and committee scheduling | Open; complete historical key/PoP records and prefix verifier implemented, Core qualification pending | Evidence → penalties; authenticated E+2 elections, a complete E+1 preparation interval and atomic activation/retention under the validator staking requirements below. Qualify every historical `CommitQC` against the genesis-anchored authority prefix (spec §12.7), including rotated-away and revoked keys, without a local-trust fallback. |
 | S9 | Full state root in `R` | Open | `R`'s post-state root commits to the complete World state (a Merkleized state or an incremental full-state accumulator), not only to the witnessed write set, and an event root is added; replaces the deviation recorded in spec Appendix E, E51. |
 
 S2 and S3 come before S4. S5 and S6 build on S4. S7 gates the release.
+
+### Validator staking integration requirements
+
+The [validator staking completion plan](staking_validator_completion.md) remains
+active across the consensus replacement. Replacing runtime owners does not waive
+the original liveness acceptance criteria: silent authors, saturation,
+final-transaction progress, authenticated loss, lane retirement and restart must
+be qualified on the production path. The rewrite's simulator passes alone do not
+close those outcomes.
+
+- Global membership comes from authenticated prepared elections, with E+2 frozen
+  at the end of E and E+1 reserved for keys and beacon DKG. The lag-2 storage window
+  is not a substitute for this full-epoch preparation policy. Registration adds
+  candidates only; exact voting geometry alone does not authenticate a transition.
+- Activation publishes the complete ordered committee, Pasta authority and beacon
+  session together after every target seat proves custody and the current exact
+  quorum certifies the boundary. Failed preparation requires certified retention
+  of the current generation and cancellation of that attempt. It cannot shrink or
+  reroll the frozen roster, and does not require fresh incumbent keys.
+- Authority generations and scheduling epochs are separate authenticated records.
+  Every signature binds its epoch and complete context. Leader scheduling retains
+  fresh authenticated epoch-boundary randomness.
+- Signed RS16 availability remains mandatory. Raw full-body dissemination is not
+  the qualified replacement. Original resource-funded execution must survive
+  validation, publication, application and restart under the sole production owner.
+- Bonds, rewards, fees and withdrawals use the immutable network-authenticated real
+  XOR asset with exact scoped custody; no placeholder token or implicit funding.
+  Retained exit requests keep voting and slashing obligations until an
+  authenticated replacement takes effect.
+
+These requirements are not yet implemented end to end in the new native driver.
+One unchanged candidate must pass actual disposable 4→7→4 transitions with
+noncommittee-sized candidate pools, all-seat restart and the full monetary,
+formal, DA, workspace and SDK gates. Qualification does not authorize live
+network deployment or value-moving transactions.
 
 ## Guardrails
 
@@ -78,20 +113,18 @@ because runtime tests pin `SumeragiV2InFlightFirstRelease.tla`.
 These are the open questions of spec §15. The implementation uses the stated default until
 the owner decides otherwise.
 
-1. **Committee lag.** Is a lag of 2 heights acceptable for NPoS epochs? Default: a committee
-   or parameter change decided in block `h` binds at `h + 2`, which keeps apply and storage
-   off the critical path.
+1. **Committee preparation.** Decided for validator staking: freeze E+2 at the end of E
+   and prepare throughout E+1. The native lag-2 height window must carry this authenticated
+   epoch policy; it cannot activate every registered key at `h + 2`. Integration is open.
 2. **No empty blocks.** Decided: idle instances never create blocks. Empty or missed builds
    wait for queued transactions, with a bounded `payload_retry_interval` (default 5 s).
    Decoded application payloads must contain at least one network entrypoint.
 3. **Crashed leader under load.** View 0 currently allows
    `payload_retry_interval + build_timeout` for a proposal. A shorter wait after a busy
    parent is a future latency optimization; neither timeout nor retry creates a block.
-4. **Predictable schedule.** Are leaders and proxy tails that are known ahead of time
-   acceptable? Default: round-robin over a per-committee permutation. It prevents seed
-   grinding and gives slot fairness, but lets an attacker aim a DoS at upcoming leaders;
-   view change and demotion bound the cost. The alternative seeds each round from the
-   previous leader's unique BLS signature.
+4. **Schedule randomness.** Validator staking requires fresh authenticated epoch-boundary
+   randomness for leader scheduling. The topology consumes the authenticated epoch seed;
+   preparation must not preselect or reroll boundary randomness. Network qualification remains open.
 5. **Demotion.** Default: only leaders of failed views are demoted, for `W = 128` heights,
    at most `f` at a time, with slot substitution. Silent set-A members and proxy tails are not
    demoted. Confirm.
@@ -100,10 +133,9 @@ the owner decides otherwise.
    yet, and it must not compare against local clocks.
 7. **Execution divergence.** Is a halt acceptable for launch? Default: `ApplyDiverged` halts
    the instance; recovery needs a state-snapshot path that no goal covers yet.
-8. **Payload size.** Is leader bandwidth enough for launch blocks? Default: the leader sends
-   the full payload (at most `max_block_bytes`, 4 MiB) to `n − 1` peers, set A first; at
-   n = 22 its uplink caps block size. Relay through set A and erasure coding are deferred
-   (spec §14).
+8. **Payload availability.** Signed RS16 `PayloadManifest`/`PayloadChunk` availability
+   is mandatory for the first release. The native full-body transport still needs that
+   integration and maintained DA qualification; erasure coding is not deferred.
 9. **AMX epoch length.** What epoch length should AMX-participating instances use (handoff
    cadence for light clients, spec §11)? Default: `epoch_length` is 3 600 heights, one hour at
    1 s blocks.

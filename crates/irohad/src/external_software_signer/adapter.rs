@@ -239,7 +239,8 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
             | SignerRoleV1::ReleaseManifest
             | SignerRoleV1::FinalPromotionProvenance
             | SignerRoleV1::FinalPromotionAccountTransaction
-            | SignerRoleV1::TopologyApproval => {
+            | SignerRoleV1::TopologyApproval
+            | SignerRoleV1::MusubiProviderAttestation => {
                 return Err(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch);
             }
         };
@@ -312,7 +313,7 @@ impl crate::RuntimeProviderBrokerBackendRegistryV1 for ExternalSoftwareSignerNat
             .attach_to(crate::RuntimeProviderBrokerBackendsV1::new()))
     }
 }
-fn map_client_error(
+pub(super) fn map_client_error(
     error: ExternalSoftwareSignerClientErrorV1,
 ) -> ExternalSoftwareSignerAdapterErrorV1 {
     match error {

@@ -455,6 +455,7 @@ macro_rules! impl_musubi_instruction_box {
 impl_musubi_instruction_box!(
     RegisterMusubiNamespaceBindingV1,
     RegisterMusubiArchiveV1,
+    AdvanceMusubiPinOutboxV1,
     RegisterMusubiProviderBundleAttestationV1,
     AddMusubiArchiveLocationV1,
     RetireMusubiArchiveLocationV1,
@@ -518,6 +519,12 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeContractLifecycleGov
 impl_direct_instruction_box!(crate::isi::governance::ProposeContractEmergencyHold);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierPolicyInstallV1);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseInstallV1);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseActivateV1);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]

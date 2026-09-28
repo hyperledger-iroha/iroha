@@ -705,7 +705,16 @@ fn det_s16_cross_instance_replay_core() {
     // A certificate genuinely signed for another instance, relabelled with this instance.
     let other = Hash32([0x22; 32]);
     let value = (h.bh(&b), result_of(&b));
-    let msg = preimage::vote_preimage(VoteKind::Commit, &other, 1, 0, &value.0, &value.1, false);
+    let msg = preimage::vote_preimage(
+        VoteKind::Commit,
+        &other,
+        &crate::testing::TEST_EPOCH.id,
+        1,
+        0,
+        &value.0,
+        &value.1,
+        false,
+    );
     let signers = h.others(3, &[]);
     let sigs: Vec<Signature> = signers
         .iter()
@@ -794,7 +803,14 @@ fn det_s19_wrong_parent_rejected() {
     let ad = preimage::att_digest(&h.v.crypto, None, p.parent_qc.as_ref());
     p.sig = h
         .signer_of(&h.key_at(leader))
-        .sign(&preimage::prop_preimage(&I, 2, 0, &bh, &ad));
+        .sign(&preimage::prop_preimage(
+            &I,
+            &crate::testing::TEST_EPOCH.id,
+            2,
+            0,
+            &bh,
+            &ad,
+        ));
     let out = h.deliver(leader, WireMessage::Proposal(Box::new(p)));
     assert!(matches!(
         &evidence(&out)[..],
@@ -932,7 +948,14 @@ fn det_s21_forged_commitqc_via_parent_qc() {
             payload: Some(b2.payload.clone()),
             sig: h
                 .signer_of(&h.key_at(leader2))
-                .sign(&preimage::prop_preimage(&I, 2, 0, &bh, &ad)),
+                .sign(&preimage::prop_preimage(
+                    &I,
+                    &crate::testing::TEST_EPOCH.id,
+                    2,
+                    0,
+                    &bh,
+                    &ad,
+                )),
         }
     };
     let bad = make(&h, forged(h.qc_q(VoteKind::Commit, 0, &b1)));
@@ -1077,12 +1100,13 @@ fn det_s24_local_cqc_not_exposed_before_durable() {
 /// A `Status` carrying an echo for `key`, signed by the holder of `signer` over
 /// `echo_preimage(h.nonce, height)` (a forgery when `signer ≠ key`).
 fn echo_status(h: &H, key: &PublicKey, signer: &PublicKey, height: u64) -> WireMessage {
-    let msg = preimage::echo_preimage(&I, h.nonce, height);
+    let msg = preimage::echo_preimage(&I, &crate::testing::TEST_EPOCH.id, h.nonce, height);
     let sig = h.signer_of(signer).sign(&msg);
     WireMessage::Status(Box::new(Status {
         instance: I,
         height,
         echo: Some(Echo {
+            epoch: crate::testing::TEST_EPOCH.id,
             nonce: h.nonce,
             key: key.clone(),
             sig,
@@ -1293,7 +1317,7 @@ fn det_s31c_abstaining_node_does_not_answer() {
     assert_eq!(answered.len(), 1);
     let e = &answered[0];
     assert_eq!((e.nonce, &e.key), (0x77, &key));
-    let msg = preimage::echo_preimage(&I, 0x77, 3);
+    let msg = preimage::echo_preimage(&I, &crate::testing::TEST_EPOCH.id, 0x77, 3);
     assert!(h.v.crypto.verify(&key, &msg, &e.sig));
     // At most once per peer per rebroadcast_interval.
     h.now += h.local.rebroadcast_interval / 2;
@@ -1583,11 +1607,21 @@ fn det_s33_key_rotation_restart() {
     assert_eq!(h.core.timeout_view, Some(0));
     // No key ever signed at a height where it is not a member.
     for record in h.log.signatures_by(&keys[3]) {
-        let height = u64::from_be_bytes(record.preimage[13 + 32..13 + 40].try_into().unwrap());
+        let height = u64::from_be_bytes(
+            record.preimage
+                [preimage::TAG_SIG.len() + 1 + 32 + 40..preimage::TAG_SIG.len() + 1 + 32 + 48]
+                .try_into()
+                .unwrap(),
+        );
         assert!(height < 4);
     }
     for record in h.log.signatures_by(&keys[4]) {
-        let height = u64::from_be_bytes(record.preimage[13 + 32..13 + 40].try_into().unwrap());
+        let height = u64::from_be_bytes(
+            record.preimage
+                [preimage::TAG_SIG.len() + 1 + 32 + 40..preimage::TAG_SIG.len() + 1 + 32 + 48]
+                .try_into()
+                .unwrap(),
+        );
         assert!(height >= 4);
     }
 
@@ -1895,4 +1929,43 @@ fn det_s38_forged_votes_never_pooled() {
         h.deliver(signer, WireMessage::Vote(vote));
     }
     assert_eq!(h.core.stage, 0);
+}
+
+/// MS42: a consumed original publication is a local recovery halt, never a retry or invalid block.
+#[test]
+fn det_s42_original_publication_recovery_halts() {
+    let mut h = H::new(4, pick::set_a(0));
+    let out = h.fire(Event::PublicationRecoveryRequired { height: 1 });
+    let reason = HaltReason::PublicationRecoveryRequired { height: 1 };
+    assert_eq!(halts(&out), vec![reason]);
+    assert_eq!(h.core.status().halted, Some(reason));
+    assert_eq!(h.core.next_wakeup(), Millis::MAX);
+    for event in [
+        Event::Tick,
+        Event::PayloadReady { req: 0 },
+        Event::PublicationRecoveryRequired { height: 1 },
+    ] {
+        assert!(
+            h.fire(event).is_empty(),
+            "halted instance signs and schedules nothing"
+        );
+    }
+    // The existing halt state still serves peers; it does not become another execution owner.
+    let out = h.deliver(
+        1,
+        WireMessage::SyncRequest(crate::message::SyncRequest {
+            instance: I,
+            from_height: 1,
+            max_count: 1,
+            max_bytes: 1024,
+        }),
+    );
+    assert!(
+        out.iter()
+            .any(|action| matches!(action, Action::ServeBlocks { .. }))
+    );
+    assert!(
+        out.iter()
+            .all(|action| matches!(action, Action::ServeBlocks { .. }))
+    );
 }

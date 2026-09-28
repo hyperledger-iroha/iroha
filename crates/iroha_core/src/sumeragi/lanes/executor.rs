@@ -17,13 +17,13 @@ use iroha_data_model::{
 use iroha_sumeragi::{
     api::ExecOutcome,
     message::{Block, Qc},
-    types::{Hash32, HeightConfig},
+    types::{AppliedConfig, ConfigSlot, Hash32, HeightConfig},
 };
 
 use super::{
     Admission, AnchorView, LANE_DEDUP_WINDOW, LaneBatch, LaneChainView, TransactionCheck, admit,
 };
-use crate::sumeragi::driver::traits::{BlockStore, Executor};
+use crate::sumeragi::driver::traits::{BlockStore, Executor, PublicationError};
 
 /// The global chain as a lane executor sees it: anchors, and a way to wait for one.
 pub trait AnchorSource: AnchorView + Send + Sync {
@@ -241,7 +241,11 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
             .retain(|hash, executed| executed.height != height || keep.contains(hash));
     }
 
-    fn prepare(&mut self, block: &Block, commit_qc: &Qc) -> Result<Option<Hash32>, String> {
+    fn prepare(
+        &mut self,
+        block: &Block,
+        commit_qc: &Qc,
+    ) -> Result<Option<Hash32>, PublicationError> {
         let hash = commit_qc.block_hash;
         if let Some(executed) = self.cache.get(&hash)
             && executed.parent == self.applied.block_hash
@@ -249,20 +253,21 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
             return Ok((executed.result == commit_qc.result).then_some(executed.result));
         }
         let Some(parent) = self.parent_state(block) else {
-            return Err("the committed lane block's parent is not applied".into());
+            return Err(PublicationError::Retryable(
+                "the committed lane block's parent is not applied".into(),
+            ));
         };
         match self.run(block, &hash, parent) {
             ExecOutcome::Valid(result) => Ok((result == commit_qc.result).then_some(result)),
             ExecOutcome::Invalid | ExecOutcome::Cancelled => Ok(None),
-            ExecOutcome::Failed(reason) => Err(reason),
+            ExecOutcome::Failed(reason) => Err(PublicationError::Retryable(reason)),
         }
     }
 
-    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<HeightConfig, String> {
-        let executed = self
-            .cache
-            .remove(&commit_qc.block_hash)
-            .ok_or_else(|| "the committed lane block is not prepared".to_string())?;
+    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<AppliedConfig, PublicationError> {
+        let executed = self.cache.remove(&commit_qc.block_hash).ok_or_else(|| {
+            PublicationError::Retryable("the committed lane block is not prepared".into())
+        })?;
         self.applied = Applied {
             height: block.header.height,
             block_hash: commit_qc.block_hash,
@@ -270,7 +275,9 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
         };
         let height = self.applied.height;
         self.cache.retain(|_, executed| executed.height > height);
-        Ok(self.config.clone())
+        Ok(AppliedConfig::Continuation {
+            after_next: ConfigSlot::Ready(self.config.clone()),
+        })
     }
 
     fn build(
@@ -470,6 +477,7 @@ mod tests {
         Block {
             header: CoreHeader {
                 instance: Hash32([1; 32]),
+                epoch: lane_height_config(&record()).unwrap().epoch.id,
                 height,
                 origin_view: 0,
                 parent_hash: parent,
@@ -488,6 +496,7 @@ mod tests {
         Qc {
             kind: VoteKind::Commit,
             instance: block.header.instance,
+            epoch: block.header.epoch,
             height: block.header.height,
             view: 0,
             block_hash: block.hash(&FakeCrypto::new()),

@@ -15,7 +15,7 @@ use super::{
         exec::{ExecDone, ExecOp, ExecSched},
         persist::Backoff,
         run_exec,
-        traits::{BlockStore, Executor},
+        traits::{BlockStore, Executor, PublicationError},
     },
     block, commit_qc,
     fakes::{FakeBlocks, FakeExecutor},
@@ -27,6 +27,7 @@ const RG: Hash32 = Hash32([0xa1; 32]);
 
 fn config() -> HeightConfig {
     HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
         committee: Committee::new(vec![PublicKey::new(vec![1; 32]).unwrap()]).unwrap(),
         params: ChainParams::default(),
     }
@@ -450,14 +451,38 @@ fn every_execute_is_answered_exactly_once() {
 struct Panicking;
 
 impl Executor for Panicking {
+    fn build_control_witness(
+        &mut self,
+        _: &iroha_sumeragi::api::ControlWitnessContext,
+    ) -> Result<(iroha_sumeragi::types::ControlWitness, bool), PublicationError> {
+        panic!("boom")
+    }
+    fn drive_control(
+        &mut self,
+        _: &iroha_sumeragi::api::ApplicationControlContext,
+    ) -> Result<Option<iroha_sumeragi::message::ApplicationControl>, PublicationError> {
+        panic!("boom")
+    }
+    fn receive_application_control(
+        &mut self,
+        _: &iroha_sumeragi::types::PublicKey,
+        _: &iroha_sumeragi::message::ApplicationControl,
+    ) -> Result<(), PublicationError> {
+        panic!("boom")
+    }
+
     fn execute(&mut self, _: &Block, _: &Hash32) -> Option<ExecOutcome> {
         panic!("boom")
     }
     fn discard(&mut self, _: u64, _: &[Hash32]) {}
-    fn prepare(&mut self, _: &Block, _: &Qc) -> Result<Option<Hash32>, String> {
+    fn prepare(&mut self, _: &Block, _: &Qc) -> Result<Option<Hash32>, PublicationError> {
         panic!("boom")
     }
-    fn commit(&mut self, _: &Block, _: &Qc) -> Result<HeightConfig, String> {
+    fn commit(
+        &mut self,
+        _: &Block,
+        _: &Qc,
+    ) -> Result<iroha_sumeragi::types::AppliedConfig, PublicationError> {
         panic!("boom")
     }
     fn build(&mut self, _: u64, _: u64, _: u32, _: u32) -> (Vec<u8>, bool) {
@@ -466,7 +491,7 @@ impl Executor for Panicking {
     fn reject(&mut self, _: u64, _: u64, _: &Hash32) {}
 }
 
-/// Executor panics are local failures (`Failed`, retried apply, `EMPTY` build), never
+/// Executor panics are local failures (`Failed`, recovery-required publication, `EMPTY` build), never
 /// invalidity, and never kill the executor thread.
 #[test]
 fn executor_panics_become_local_failures() {
@@ -491,11 +516,11 @@ fn executor_panics_become_local_failures() {
     });
     assert!(matches!(
         run_exec(&mut exec, &blocks, ExecOp::Prepare(commit.clone())),
-        ExecDone::Prepared(Err(_))
+        ExecDone::Prepared(Err(PublicationError::RecoveryRequired(_)))
     ));
     assert!(matches!(
         run_exec(&mut exec, &blocks, ExecOp::Commit(commit)),
-        ExecDone::Committed(Err(_))
+        ExecDone::Committed(Err(PublicationError::RecoveryRequired(_)))
     ));
     let built = run_exec(
         &mut exec,
@@ -544,6 +569,26 @@ impl Overlay {
 }
 
 impl Executor for Overlay {
+    fn build_control_witness(
+        &mut self,
+        _: &iroha_sumeragi::api::ControlWitnessContext,
+    ) -> Result<(iroha_sumeragi::types::ControlWitness, bool), PublicationError> {
+        Ok((iroha_sumeragi::types::ControlWitness::empty(), false))
+    }
+    fn drive_control(
+        &mut self,
+        _: &iroha_sumeragi::api::ApplicationControlContext,
+    ) -> Result<Option<iroha_sumeragi::message::ApplicationControl>, PublicationError> {
+        Ok(None)
+    }
+    fn receive_application_control(
+        &mut self,
+        _: &iroha_sumeragi::types::PublicKey,
+        _: &iroha_sumeragi::message::ApplicationControl,
+    ) -> Result<(), PublicationError> {
+        Ok(())
+    }
+
     fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
         self.other("execute");
         self.inner.execute(block, block_hash)
@@ -552,20 +597,30 @@ impl Executor for Overlay {
         self.other("discard");
         self.inner.discard(height, keep);
     }
-    fn prepare(&mut self, block: &Block, commit_qc: &Qc) -> Result<Option<Hash32>, String> {
+    fn prepare(
+        &mut self,
+        block: &Block,
+        commit_qc: &Qc,
+    ) -> Result<Option<Hash32>, PublicationError> {
         self.calls.push("prepare");
         let result = self.inner.prepare(block, commit_qc);
         self.prepared = matches!(result, Ok(Some(_))).then_some(commit_qc.block_hash);
         result
     }
-    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<HeightConfig, String> {
+    fn commit(
+        &mut self,
+        block: &Block,
+        commit_qc: &Qc,
+    ) -> Result<iroha_sumeragi::types::AppliedConfig, PublicationError> {
         self.calls.push("commit");
         if self.prepared.take() != Some(commit_qc.block_hash) {
-            return Err("no prepared overlay".to_owned());
+            return Err(PublicationError::Retryable(
+                "no prepared overlay".to_owned(),
+            ));
         }
         if self.fail_commits > 0 {
             self.fail_commits -= 1;
-            return Err("injected".to_owned());
+            return Err(PublicationError::Retryable("injected".to_owned()));
         }
         self.inner.commit(block, commit_qc)
     }
@@ -807,4 +862,386 @@ fn discards_merge_and_rejections_are_bounded() {
     let rejected = rig.exec.state.lock().rejected.clone();
     assert_eq!(rejected.len(), 64);
     assert_eq!(rejected[0], Hash32([136; 32]), "the oldest were dropped");
+}
+
+/// A terminal prepare/commit answer stops every executor queue and creates no retry deadline.
+#[test]
+fn terminal_publication_errors_stop_all_scheduled_work() {
+    for failure_in_commit in [false, true] {
+        let mut rig = Rig::new();
+        let (block, bh, result) = child(1, (G, RG), 1);
+        rig.sched.commit(block.clone(), commit_qc(&block, result));
+        assert!(matches!(rig.start(), Some(ExecOp::Prepare(_))));
+        if failure_in_commit {
+            rig.sched.done(0, ExecDone::Prepared(Ok(Some(result))));
+            assert!(matches!(rig.start(), Some(ExecOp::Append(_))));
+            rig.sched.done(0, ExecDone::Appended(true));
+            assert!(matches!(rig.start(), Some(ExecOp::Commit(_))));
+        }
+        // These queues must not invoke the worker after the terminal answer.
+        rig.sched.execute(99, bh, block.clone());
+        rig.sched.discard(2, Vec::new());
+        rig.sched.build(88, 1, 1, 1024, 10);
+        rig.sched.reject(1, 0, bh);
+        let error = PublicationError::RecoveryRequired("original owner consumed".into());
+        let answer = if failure_in_commit {
+            ExecDone::Committed(Err(error))
+        } else {
+            ExecDone::Prepared(Err(error))
+        };
+        assert_eq!(rig.sched.done(0, answer), None);
+        assert_eq!(
+            rig.sched.halted(),
+            Some(iroha_sumeragi::api::HaltReason::PublicationRecoveryRequired { height: 1 })
+        );
+        assert_eq!(rig.sched.applied(), 0);
+        assert_eq!(rig.sched.wakeup(), Millis::MAX);
+        assert_eq!(rig.sched.outstanding(), 0);
+        let events = rig.sched.take_events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::PublicationRecoveryRequired { height: 1 }))
+                .count(),
+            1
+        );
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Event::BlockApplied { .. } | Event::ApplyDiverged { .. }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Executed {
+                req: 99,
+                outcome: ExecOutcome::Cancelled,
+                ..
+            }
+        )));
+        for now in [0, 1, 1000, Millis::MAX - 1] {
+            rig.sched.transactions_available();
+            assert!(rig.sched.next(now).is_none());
+        }
+        assert!(rig.sched.take_events().is_empty());
+    }
+}
+
+/// A different certified R does not replace a held original execution before divergence.
+#[test]
+fn cached_result_mismatch_diverges_without_reexecution() {
+    let mut rig = Rig::new();
+    let (block, hash, result) = child(1, (G, RG), 1);
+    rig.sched.execute(1, hash, block.clone());
+    rig.drain();
+    assert_eq!(rig.exec.executions(&hash), 1);
+    rig.sched
+        .commit(block.clone(), commit_qc(&block, Hash32([0x77; 32])));
+    rig.drain();
+    assert_eq!(rig.exec.executions(&hash), 1);
+    assert_eq!(rig.sched.applied(), 0);
+    assert!(rig.events.iter().any(|event| matches!(event, Event::ApplyDiverged { local_result, .. } if *local_result == result)));
+}
+
+/// The driver transports the original typed application result verbatim. Refusal must not
+/// manufacture a successor from the last committee or publish a partial boundary.
+#[test]
+fn original_boundary_config_survives_retry_and_is_delivered_atomically() {
+    use iroha_sumeragi::types::{AppliedConfig, ConfigSlot, EpochId};
+    let mut next = config();
+    next.epoch.id = EpochId {
+        epoch: 1,
+        context: Hash32([0x73; 32]),
+    };
+    next.epoch.first_height = 2;
+    next.epoch.last_height = 8;
+    next.epoch.leader_seed = Hash32([0x74; 32]);
+    let mut after_next = next.clone();
+    after_next.params.max_block_bytes -= 1;
+    let outputs = [
+        AppliedConfig::Continuation {
+            after_next: ConfigSlot::PendingBoundary {
+                boundary_height: 2,
+                predecessor: iroha_sumeragi::testing::TEST_EPOCH.id,
+            },
+        },
+        AppliedConfig::Boundary { next, after_next },
+    ];
+    for original in outputs {
+        let mut rig = Rig::new();
+        let (block, block_hash, result) = child(1, (G, RG), 1);
+        let certificate = commit_qc(&block, result);
+        rig.sched.commit(block.clone(), certificate.clone());
+        let mut refused = false;
+        loop {
+            let op = rig.start().expect("original publication remains scheduled");
+            if let ExecOp::Commit(commit) = op {
+                assert_eq!(commit.block, block);
+                assert_eq!(commit.qc, certificate);
+                if !refused {
+                    rig.sched.done(
+                        rig.now,
+                        ExecDone::Committed(Err(PublicationError::Retryable(
+                            "physical refusal".into(),
+                        ))),
+                    );
+                    assert!(
+                        rig.sched
+                            .take_events()
+                            .iter()
+                            .all(|event| !matches!(event, Event::BlockApplied { .. }))
+                    );
+                    assert_eq!(rig.sched.applied(), 0);
+                    rig.now += 1_000;
+                    refused = true;
+                } else {
+                    assert_eq!(
+                        rig.sched
+                            .done(rig.now, ExecDone::Committed(Ok(Box::new(original.clone())))),
+                        Some(1)
+                    );
+                    break;
+                }
+            } else {
+                rig.finish(op);
+            }
+        }
+        let applied: Vec<_> = rig
+            .sched
+            .take_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::BlockApplied {
+                    height,
+                    block_hash: hash,
+                    header,
+                    config,
+                } => Some((height, hash, header, config)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            applied,
+            vec![(1, block_hash, Box::new(block.header), original)]
+        );
+        assert_eq!(rig.sched.applied(), 1);
+        assert_eq!(rig.blocks.height(), 1);
+    }
+}
+
+fn control_context(height: u64, view: u64) -> iroha_sumeragi::api::ControlWitnessContext {
+    iroha_sumeragi::api::ControlWitnessContext {
+        height,
+        view,
+        epoch: iroha_sumeragi::testing::TEST_EPOCH.id,
+        parent_hash: G,
+        parent_result: RG,
+    }
+}
+fn partial_context(height: u64) -> iroha_sumeragi::api::ApplicationControlContext {
+    iroha_sumeragi::api::ApplicationControlContext {
+        instance: Hash32([5; 32]),
+        epoch: iroha_sumeragi::testing::TEST_EPOCH.id,
+        height,
+        parent_hash: G,
+        parent_result: RG,
+    }
+}
+fn partial(height: u64) -> iroha_sumeragi::message::ApplicationControl {
+    iroha_sumeragi::message::ApplicationControl {
+        context: partial_context(height),
+        bytes: iroha_sumeragi::types::ControlWitness::try_from_slice(
+            b"proof-carrying partial fixture",
+        )
+        .unwrap(),
+    }
+}
+
+#[test]
+fn control_build_refusal_keeps_exact_request_and_does_not_block_transaction_work() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    let context = control_context(1, 3);
+    sched.build_control(17, context);
+    sched.build(17, 1, 3, 1024, 100);
+    assert_eq!(
+        sched.next(0),
+        Some(ExecOp::BuildControlWitness { req: 17, context })
+    );
+    sched.done(
+        0,
+        ExecDone::ControlWitnessBuilt(Err(PublicationError::Retryable("awaiting shares".into()))),
+    );
+    assert!(
+        sched.take_events().is_empty(),
+        "no invented empty control response"
+    );
+    assert_eq!(sched.wakeup(), 10);
+    assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 17, .. })));
+    sched.done(
+        0,
+        ExecDone::Built {
+            payload: vec![1],
+            attest: false,
+        },
+    );
+    assert!(sched.next(9).is_none());
+    assert_eq!(
+        sched.next(10),
+        Some(ExecOp::BuildControlWitness { req: 17, context })
+    );
+    let witness =
+        iroha_sumeragi::types::ControlWitness::try_from_slice(b"canonical pulse").unwrap();
+    sched.done(10, ExecDone::ControlWitnessBuilt(Ok((witness, true))));
+    assert!(sched.take_events().iter().any(|event| matches!(event, Event::ControlWitnessBuilt { req: 17, context: exact, witness: bytes, attest: true } if *exact == context && *bytes == witness)));
+}
+
+#[test]
+fn control_build_view_change_cancels_queued_and_running_retry() {
+    for success in [false, true] {
+        let mut sched = ExecSched::new(0, Backoff::default());
+        let context = control_context(1, 1);
+        sched.build_control(3, context);
+        assert!(matches!(
+            sched.next(0),
+            Some(ExecOp::BuildControlWitness { req: 3, .. })
+        ));
+        sched.retain_control_round(Some((1, 2)));
+        let done = if success {
+            Ok((iroha_sumeragi::types::ControlWitness::empty(), false))
+        } else {
+            Err(PublicationError::Retryable("awaiting old shares".into()))
+        };
+        sched.done(0, ExecDone::ControlWitnessBuilt(done));
+        assert!(sched.take_events().is_empty());
+        assert!(sched.next(10_000).is_none());
+        assert_eq!(sched.wakeup(), u64::MAX);
+        sched.build_control(4, control_context(1, 2));
+        sched.retain_control_round(None);
+        assert!(sched.next(10_000).is_none());
+    }
+}
+
+#[test]
+fn all_validator_control_waits_for_applied_parent_and_shares_do_not_starve_work() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    sched.retain_control_round(Some((2, 0)));
+    sched.drive_control(partial_context(2));
+    sched.receive_control(PublicKey::new(vec![2; 32]).unwrap(), partial(2));
+    assert!(sched.next(0).is_none());
+    let mut sched = ExecSched::new(1, Backoff::default());
+    sched.retain_control_round(Some((2, 0)));
+    sched.drive_control(partial_context(2));
+    sched.build(9, 2, 0, 64, 100);
+    for index in 1..=4 {
+        let key = PublicKey::new(vec![index; 32]).unwrap();
+        sched.receive_control(key.clone(), partial(2));
+        sched.receive_control(key, partial(2)); // one retained input per sender
+    }
+    assert_eq!(sched.queued_ops(), 6);
+    assert_eq!(
+        sched.next(0),
+        Some(ExecOp::DriveApplicationControl(partial_context(2)))
+    );
+    sched.done(0, ExecDone::ApplicationControlDriven(Ok(Some(partial(2)))));
+    assert!(matches!(sched.next(0), Some(ExecOp::Build { req: 9, .. })));
+    sched.done(
+        0,
+        ExecDone::Built {
+            payload: Vec::new(),
+            attest: false,
+        },
+    );
+    assert!(matches!(
+        sched.next(0),
+        Some(ExecOp::ReceiveApplicationControl { .. })
+    ));
+    sched.done(0, ExecDone::ApplicationControlReceived(Ok(())));
+    sched.retain_control_round(Some((2, 1))); // partials survive a view change
+    assert_eq!(sched.queued_ops(), 3);
+    sched.retain_control_round(Some((3, 0))); // old-source partials do not survive a height
+    assert_eq!(sched.queued_ops(), 0);
+}
+
+#[test]
+fn application_control_ingress_has_a_hard_protocol_cap() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    sched.retain_control_round(Some((1, 0)));
+    for index in 0..iroha_sumeragi::types::MAX_COMMITTEE_SIZE + 1 {
+        let mut bytes = vec![0xAB; 32];
+        bytes[..8].copy_from_slice(&(index as u64).to_le_bytes());
+        sched.receive_control(PublicKey::new(bytes).unwrap(), partial(1));
+    }
+    assert_eq!(
+        sched.queued_ops(),
+        iroha_sumeragi::types::MAX_COMMITTEE_SIZE
+    );
+    sched.retain_control_round(None);
+    assert_eq!(sched.queued_ops(), 0);
+    assert!(sched.next(0).is_none());
+}
+
+#[test]
+fn control_worker_unwind_requires_recovery_and_cannot_invent_empty() {
+    let blocks = FakeBlocks::default();
+    for op in [
+        ExecOp::BuildControlWitness {
+            req: 4,
+            context: control_context(1, 0),
+        },
+        ExecOp::DriveApplicationControl(partial_context(1)),
+        ExecOp::ReceiveApplicationControl {
+            from: PublicKey::new(vec![1; 32]).unwrap(),
+            message: partial(1),
+        },
+    ] {
+        let done = run_exec(&mut Panicking, &blocks, op);
+        assert!(matches!(
+            done,
+            ExecDone::ControlWitnessBuilt(Err(PublicationError::RecoveryRequired(_)))
+                | ExecDone::ApplicationControlDriven(Err(PublicationError::RecoveryRequired(_)))
+                | ExecDone::ApplicationControlReceived(Err(PublicationError::RecoveryRequired(_)))
+        ));
+    }
+}
+
+#[test]
+fn due_control_build_progresses_under_replenished_drive_and_partial_ingress() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    let context = control_context(1, 0);
+    sched.build_control(71, context);
+    for step in 0..3 {
+        // The queues are replenished after every completion, including the previously served
+        // kind: a fixed drive/inbox/build priority would never reach the due witness build.
+        sched.drive_control(partial_context(1));
+        sched.receive_control(PublicKey::new(vec![1; 32]).unwrap(), partial(1));
+        match (step, sched.next(0).unwrap()) {
+            (0, ExecOp::DriveApplicationControl(_)) => {
+                sched.done(0, ExecDone::ApplicationControlDriven(Ok(None)));
+            }
+            (1, ExecOp::ReceiveApplicationControl { .. }) => {
+                sched.done(0, ExecDone::ApplicationControlReceived(Ok(())));
+            }
+            (
+                2,
+                ExecOp::BuildControlWitness {
+                    req: 71,
+                    context: exact,
+                },
+            ) => {
+                assert_eq!(exact, context);
+                sched.done(
+                    0,
+                    ExecDone::ControlWitnessBuilt(Ok((
+                        iroha_sumeragi::types::ControlWitness::empty(),
+                        false,
+                    ))),
+                );
+            }
+            other => panic!("control class starved a ready kind: {other:?}"),
+        }
+    }
+    assert!(
+        sched
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, Event::ControlWitnessBuilt { req: 71, .. }))
+    );
 }

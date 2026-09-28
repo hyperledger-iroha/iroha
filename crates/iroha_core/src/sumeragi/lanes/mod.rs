@@ -7,6 +7,8 @@
 //! anchor block's hash and creation time, and the lane record's immutable fields), so every
 //! honest member computes the same `R` whenever it executes.
 
+/// Authentication of original lane certificates and reproduced admission evidence.
+pub mod evidence;
 /// The executor of a lane instance.
 pub mod executor;
 /// The global chain as lane instances use it: applied tip, anchors, checks and the queue.
@@ -36,7 +38,7 @@ use iroha_model_base::topology::LaneId;
 use iroha_sumeragi::{
     crypto::Crypto,
     preimage::{InstanceKind, committee_digest_preimage, instance_id},
-    types::{Committee, Hash32, HeightConfig},
+    types::{Committee, EpochConfig, EpochId, Hash32, HeightConfig},
 };
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
@@ -153,7 +155,15 @@ pub fn lane_height_config(record: &SumeragiLaneRecord) -> Result<HeightConfig, L
     params
         .validate()
         .map_err(|error| LaneError::Schedule(ScheduleError::Params(error)))?;
+    let context = lane_genesis_result(record);
     Ok(HeightConfig {
+        epoch: Box::new(EpochConfig {
+            id: EpochId { epoch: 0, context },
+            authority_generation: context,
+            first_height: 0,
+            last_height: u64::MAX,
+            leader_seed: context,
+        }),
         committee,
         params: params.to_core(),
     })
@@ -527,6 +537,22 @@ mod tests {
     fn the_pinned_committee_forms_the_configuration() {
         let config = lane_height_config(&record(None)).expect("config");
         assert_eq!(config.committee.n(), 4);
+        assert_eq!(config.epoch.id.context, lane_genesis_result(&record(None)));
+        assert!(config.epoch.contains(0));
+        assert!(config.epoch.contains(u64::MAX));
+        let changed = SumeragiLaneRecord {
+            incarnation: [0x91; 32],
+            ..record(None)
+        };
+        assert_ne!(
+            config.epoch.id,
+            lane_height_config(&changed).unwrap().epoch.id
+        );
+        let closed = SumeragiLaneRecord {
+            closing: Some(40),
+            ..record(None)
+        };
+        assert_eq!(config.epoch, lane_height_config(&closed).unwrap().epoch);
         let empty = SumeragiLaneRecord {
             committee: Vec::new(),
             ..record(None)

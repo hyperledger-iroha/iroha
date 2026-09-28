@@ -222,6 +222,35 @@ class MusubiInstructionsV1FixtureTest {
     }
 
     @Test
+    fun `signed pin outbox advance rejects malformed lineage and predecessor`() {
+        val semantic = cases(fixture())
+            .first { it.string("id") == "advance-signed-pin-outbox-inventory" }
+            .objectValue("semantic")
+        val network = NetworkId.parse(semantic.string("network_id"))
+        val authority = semantic.string("pin_authority")
+        val session = fixedBytes32(semantic["session_id"])
+        val inventory = fixedBytes32(semantic["inventory_digest"])
+        val zero = ByteArray(32)
+
+        fun advance(
+            sessionId: ByteArray = session,
+            revision: BigInteger = BigInteger.ZERO,
+            previous: ByteArray = zero,
+            next: ByteArray = inventory,
+        ) = MusubiInstructionsV1.AdvanceMusubiPinOutboxV1(
+            network, authority, sessionId, revision, previous, next,
+        )
+
+        advance()
+        assertFailsWith<IllegalArgumentException> { advance(sessionId = zero) }
+        assertFailsWith<IllegalArgumentException> { advance(next = zero) }
+        assertFailsWith<IllegalArgumentException> { advance(previous = inventory, next = inventory) }
+        assertFailsWith<IllegalArgumentException> { advance(revision = BigInteger.ONE) }
+        assertFailsWith<IllegalArgumentException> { advance(previous = inventory) }
+        assertFailsWith<IllegalArgumentException> { advance(revision = BigInteger.valueOf(-1)) }
+    }
+
+    @Test
     fun `new mutation nested commitments ordering and canonicality are enforced`() {
         val byId = cases(fixture()).associateBy { it.string("id") }
 
@@ -1059,6 +1088,27 @@ class MusubiInstructionsV1FixtureTest {
                     value.toInstructionBox(),
                 )
             }
+            "advance-signed-pin-outbox-inventory" -> {
+                semantic.requireKeys(
+                    "network_id", "pin_authority", "session_id", "expected_revision",
+                    "expected_inventory_digest", "inventory_digest",
+                )
+                val value = MusubiInstructionsV1.AdvanceMusubiPinOutboxV1(
+                    NetworkId.parse(semantic.string("network_id")),
+                    semantic.string("pin_authority"),
+                    fixedBytes32(semantic["session_id"]),
+                    semantic.bigInteger("expected_revision"),
+                    fixedBytes32(semantic["expected_inventory_digest"]),
+                    fixedBytes32(semantic["inventory_digest"]),
+                )
+                MutationEncoding(
+                    MusubiInstructionsV1.AdvanceMusubiPinOutboxV1.WIRE_ID,
+                    MusubiInstructionsV1.AdvanceMusubiPinOutboxV1.SCHEMA_NAME,
+                    value.barePayload(),
+                    value.concreteFrame(),
+                    value.toInstructionBox(),
+                )
+            }
             "register-provider-bundle-attestation" -> {
                 semantic.requireKeys("attestation", "expected_location_revision")
                 val value = MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1(
@@ -1845,6 +1895,7 @@ class MusubiInstructionsV1FixtureTest {
             "retarget-one-character-alias-high-revision",
             "takedown-max-major-prerelease",
             "register-archive-max-bounds-signed-receipt",
+            "advance-signed-pin-outbox-inventory",
             "register-provider-bundle-attestation",
             "add-location-three-signed-providers",
             "publish-delegated-domain-release",

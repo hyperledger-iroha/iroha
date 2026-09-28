@@ -43,6 +43,9 @@ pub use encode_frames::write_frame_with_prefix;
 pub(crate) use encode_writers::ExactSliceWriter;
 use encode_writers::{ExactLengthWriter, LengthCountingWriter};
 pub use fixed_frame::FixedFrameLayout;
+mod byte_sequence;
+#[doc(hidden)]
+pub use byte_sequence::decode_byte_element_sequence_into;
 mod sequence_length;
 pub use sequence_length::SequencePayloadLength;
 #[cfg(test)]
@@ -1680,79 +1683,14 @@ fn plan_binary_sequence_scalar_with_count(
     layout: BinarySequenceLayout,
     count: usize,
 ) -> Result<SequencePlan, Error> {
-    let (declared_count, mut offset) = inspect_seq_len_slice(bytes)?;
-    if declared_count != count {
-        return Err(Error::LengthMismatch);
-    }
     validate_binary_sequence_reservation(bytes, flags, layout, count)?;
-    match layout {
-        BinarySequenceLayout::LengthPrefixed => {
-            let mut spans = try_decode_vec_with_capacity(count)?;
-            for _ in 0..count {
-                let tail = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
-                let (elem_len, header_len) = read_len_from_slice_with_flags(tail, flags)?;
-                let start = offset
-                    .checked_add(header_len)
-                    .ok_or(Error::LengthMismatch)?;
-                let end = start.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
-                if end > bytes.len() {
-                    return Err(Error::LengthMismatch);
-                }
-                spans.push(SequenceSpan { start, end });
-                offset = end;
-            }
-            Ok(SequencePlan {
-                spans,
-                used: offset,
-            })
-        }
-        BinarySequenceLayout::FixedOffsets => {
-            let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let offset_table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-            let offsets_start = offset;
-            let offsets_end = offsets_start
-                .checked_add(offset_table_len)
-                .ok_or(Error::LengthMismatch)?;
-            let offsets = bytes
-                .get(offsets_start..offsets_end)
-                .ok_or(Error::LengthMismatch)?;
-            let first = read_u64_le_at(offsets, 0)?;
-            if first != 0 {
-                return Err(Error::LengthMismatch);
-            }
-            let data_len = read_u64_le_at(offsets, count)?
-                .try_into()
-                .map_err(|_| Error::LengthMismatch)?;
-            let data_start = offsets_end;
-            let data_end = data_start
-                .checked_add(data_len)
-                .ok_or(Error::LengthMismatch)?;
-            if data_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-            let mut spans = try_decode_vec_with_capacity(count)?;
-            let mut prev = 0usize;
-            for idx in 0..count {
-                let next = read_u64_le_at(offsets, idx + 1)?
-                    .try_into()
-                    .map_err(|_| Error::LengthMismatch)?;
-                if next < prev || next > data_len {
-                    return Err(Error::LengthMismatch);
-                }
-                let start = data_start.checked_add(prev).ok_or(Error::LengthMismatch)?;
-                let end = data_start.checked_add(next).ok_or(Error::LengthMismatch)?;
-                spans.push(SequenceSpan { start, end });
-                prev = next;
-            }
-            if prev != data_len {
-                return Err(Error::LengthMismatch);
-            }
-            Ok(SequencePlan {
-                spans,
-                used: data_end,
-            })
-        }
-    }
+    let mut spans = try_decode_vec_with_capacity(count)?;
+    let used =
+        byte_sequence::visit_binary_sequence_with_count(bytes, flags, layout, count, |span| {
+            spans.push(span);
+            Ok(())
+        })?;
+    Ok(SequencePlan { spans, used })
 }
 fn validate_binary_sequence_reservation(
     bytes: &[u8],
@@ -1786,6 +1724,10 @@ fn validate_binary_sequence_reservation(
             let table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
             let table_end = offset.checked_add(table_len).ok_or(Error::LengthMismatch)?;
             let offsets = bytes.get(offset..table_end).ok_or(Error::LengthMismatch)?;
+            // Refuse a malformed first offset before allocating a span plan.
+            if read_u64_le_at(offsets, 0)? != 0 {
+                return Err(Error::LengthMismatch);
+            }
             let data_len = read_u64_le_at(offsets, count)?
                 .try_into()
                 .map_err(|_| Error::LengthMismatch)?;
@@ -2891,8 +2833,7 @@ impl<'a> DecodeFromSlice<'a> for () {
 // DecodeFromSlice for primitives and common types
 impl<'a> DecodeFromSlice<'a> for u8 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let b = *bytes.first().ok_or(Error::LengthMismatch)?;
-        Ok((b, 1))
+        byte_sequence::read_byte_value(bytes).map(|byte| (byte, 1))
     }
 }
 impl<'a> DecodeFromSlice<'a> for i8 {
@@ -3952,6 +3893,13 @@ pub enum Error {
     /// Invalid tag/discriminant during decode (Option/Result/enum).
     #[error("invalid tag {tag} while decoding {context}")]
     InvalidTag { context: &'static str, tag: u8 },
+    /// A decoded value failed its fixed semantic validation. This category owns
+    /// no dynamic diagnostic and does not alter any serialized wire layout.
+    #[error("invalid {context}")]
+    InvalidValue {
+        /// Statically named value family whose validator rejected the input.
+        context: &'static str,
+    },
     /// NonZero value decoded as zero.
     #[error("non-zero value expected")]
     InvalidNonZero,
@@ -4775,7 +4723,7 @@ impl<'a> DeserializePayload<'a> for u8 {
         read_archived_bytes::<_, 1>(archived)[0]
     }
     fn try_deserialize(archived: &'a Archived<u8>) -> Result<Self, Error> {
-        Ok(try_read_archived_bytes::<_, 1>(archived)?[0])
+        byte_sequence::read_byte_value(&try_read_archived_bytes::<_, 1>(archived)?)
     }
 }
 

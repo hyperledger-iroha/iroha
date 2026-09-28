@@ -223,6 +223,20 @@ pub(super) fn adaptive_beacon_fixture_for_session_and_keys(
     }
 }
 
+/// Shape-only native context for primitive/component tests. These values do not authenticate
+/// any native State, block or scheduling epoch; authority tests must supply their actual source.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[doc(hidden)]
+pub fn pulse_context_fixture_v1() -> GlobalThresholdBeaconPulseContextV1 {
+    GlobalThresholdBeaconPulseContextV1 {
+        instance: [0xB1; 32],
+        epoch: 0,
+        epoch_context_id: [0xB2; 32],
+        parent_consensus_hash: [0xB3; 32],
+        parent_result: [0xB4; 32],
+    }
+}
+
 /// Build one fully signed, proof-valid persisted beacon fixture.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 #[doc(hidden)]
@@ -242,7 +256,7 @@ pub fn signed_persisted_pulse_fixture_for_world(
     let (key_record, mut pulses) = signed_pulses_fixture_with_binding(
         network_id,
         &adaptive_fixture_signing_keys(4),
-        &[anchor],
+        &[(anchor, pulse_context_fixture_v1())],
     );
     (
         key_record,
@@ -255,7 +269,10 @@ pub fn signed_persisted_pulse_fixture_for_world(
 pub(crate) fn signed_pulses_fixture_for_roster_and_anchors(
     network_id: NetworkId,
     signing_keys: &[iroha_crypto::KeyPair],
-    anchors: &[GlobalThresholdBeaconChainAnchorV1],
+    anchors: &[(
+        GlobalThresholdBeaconChainAnchorV1,
+        GlobalThresholdBeaconPulseContextV1,
+    )],
 ) -> (
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     Vec<FinalizedGlobalThresholdBeaconPulseV1>,
@@ -272,7 +289,10 @@ pub(crate) fn signed_pulses_fixture_for_roster_and_anchors(
 fn signed_pulses_fixture_with_binding(
     network_id: NetworkId,
     signing_keys: &[iroha_crypto::KeyPair],
-    anchors: &[GlobalThresholdBeaconChainAnchorV1],
+    anchors: &[(
+        GlobalThresholdBeaconChainAnchorV1,
+        GlobalThresholdBeaconPulseContextV1,
+    )],
 ) -> (
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     Vec<FinalizedGlobalThresholdBeaconPulseV1>,
@@ -295,15 +315,19 @@ fn signed_pulses_fixture_with_binding(
     .into();
     let fixture = adaptive_beacon_fixture_for_session_and_keys(dkg_session, signing_keys);
     let mut pulses = Vec::new();
-    for anchor in anchors {
+    for (anchor, context) in anchors {
         let height = anchor
             .height
             .checked_add(1)
             .expect("fixture pulse height fits");
         assert!(height > 4, "fixture pulse follows DKG finalization");
-        let mut aggregator =
-            GlobalThresholdBeaconPulseAggregatorV1::new(fixture.session.clone(), height, *anchor)
-                .expect("open exact world-test pulse reducer");
+        let mut aggregator = GlobalThresholdBeaconPulseAggregatorV1::new(
+            fixture.session.clone(),
+            height,
+            *anchor,
+            *context,
+        )
+        .expect("open exact world-test pulse reducer");
         let payload = aggregator.payload().to_vec();
         for recipient_index in 1_u16..=fixture.session.transcript.session().threshold() {
             let private_contributions = fixture

@@ -7,11 +7,16 @@ use iroha_core::{
         validate_global_threshold_beacon_session_v1,
     },
     state::{StateReadOnly, WorldReadOnly},
+    sumeragi::{attestation::NativePastaVerifier, certified_chain::CertifiedChain},
+    validator_committee_evidence::validate_validator_committee_selection_binding_v1,
 };
 use iroha_data_model::{
-    block::consensus_v2::finality::V2FinalityArtifact,
     nexus::{
         ValidatorCandidateKeysV1, ValidatorCommitteeSelectionStatusV1, ValidatorCommitteeStatusV1,
+    },
+    sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT,
+        NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityArtifact, NativeFinalityLimits,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -35,85 +40,33 @@ fn unavailable() -> Error {
     ))
 }
 
-fn finality_at(state: &impl StateReadOnly, height: u64) -> Result<V2FinalityArtifact, Error> {
-    let index = usize::try_from(height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .ok_or_else(unavailable)?;
-    let block = state.block_by_height(index).ok_or_else(unavailable)?;
-    let artifact = state
-        .kura()
-        .v2_finality_artifact(height)
-        .map_err(|error| {
-            invalid(format!(
-                "invalid durable committee finality at {height}: {error}"
-            ))
-        })?
-        .ok_or_else(unavailable)?;
-    if !block.has_results()
-        || artifact.block_hash != block.hash()
-        || artifact.height_context.network_id != *state.network_id()
-    {
-        return Err(invalid("committee finality differs from committed State"));
-    }
-    artifact
-        .validate_for_header(&block.header())
-        .map_err(|error| invalid(format!("committee finality/header mismatch: {error}")))?;
-    Ok(artifact)
-}
-
-pub(super) fn validate_selection(
-    selection: &ValidatorCommitteeSelectionStatusV1,
-    latest: &V2FinalityArtifact,
-    target_epoch: u64,
-) -> Result<(), Error> {
-    selection.transition.validate().map_err(invalid)?;
-    let preparation = &selection.transition.preparation;
-    let selecting = &selection.selecting_finality;
-    if preparation.target_epoch != target_epoch
-        || preparation.network_id != latest.height_context.network_id
-        || selecting.height_context.network_id != preparation.network_id
-        || selecting.height != preparation.selection_height
-        || selecting.height > latest.height
-        || selecting.subject.parent_block_hash != Some(preparation.selection_anchor)
-    {
-        return Err(invalid("committee selection finality binding differs"));
-    }
-    let snapshot = selecting
-        .height_context
-        .next_epoch_snapshot
-        .as_ref()
-        .ok_or_else(|| invalid("selecting finality lacks the frozen committee preparation"))?;
-    if snapshot.committee_preparation.as_ref() != Some(preparation) {
-        return Err(invalid(
-            "committee preparation differs from selecting finality",
-        ));
-    }
-    preparation
-        .validate_against_preparing_authorization(&snapshot.kagemusha_mint_finality_authorization)
-        .map_err(invalid)?;
-    Ok(())
-}
-
 fn load(
     state: &impl StateReadOnly,
     target_epoch: Option<u64>,
+    limits: NativeFinalityLimits,
 ) -> Result<ValidatorCommitteeStatusV1, Error> {
     let height = u64::try_from(state.height()).map_err(|_| invalid("committee height overflow"))?;
-    let latest_finality = finality_at(state, height)?;
-    let current = latest_finality
-        .height_context
-        .next_epoch_snapshot
+    limits.validate().map_err(invalid)?;
+    if height < 2 || height > limits.block_count as u64 {
+        return Err(unavailable());
+    }
+    let reader = CertifiedChain::new(state).map_err(|error| invalid(error.to_string()))?;
+    let verifier = NativePastaVerifier::new(reader.instance(), *state.network_id());
+    let reader = reader.with_attestation_verifier(&verifier);
+    let latest = reader
+        .certified(height)
+        .map_err(|error| invalid(error.to_string()))?;
+    let latest_finality =
+        NativeFinalityArtifact::from_block(latest.block(), limits).map_err(invalid)?;
+    let outcome = &latest.commitment().schedule;
+    let current = outcome
+        .boundary
         .as_ref()
-        .map_or(
-            &latest_finality
-                .height_context
-                .kagemusha_mint_finality_authorization,
-            |snapshot| &snapshot.kagemusha_mint_finality_authorization,
-        );
+        .map_or(&outcome.current, |boundary| &boundary.next);
     let target_epoch = match target_epoch {
         Some(epoch) => epoch,
         None => current
+            .authorization
             .epoch
             .checked_add(1)
             .ok_or_else(|| invalid("committee target epoch overflow"))?,
@@ -124,25 +77,34 @@ fn load(
         .get(&target_epoch)
         .cloned()
         .map(|transition| {
-            let selecting_finality = finality_at(state, transition.preparation.selection_height)?;
+            let selecting = reader
+                .certified(transition.preparation.selection_height)
+                .map_err(|error| invalid(error.to_string()))?;
+            validate_validator_committee_selection_binding_v1(
+                &transition,
+                &selecting,
+                &latest,
+                target_epoch,
+            )
+            .map_err(invalid)?;
+            let selecting_finality =
+                NativeFinalityArtifact::from_block(selecting.block(), limits).map_err(invalid)?;
             let selection = ValidatorCommitteeSelectionStatusV1 {
                 transition,
                 selecting_finality,
             };
-            validate_selection(&selection, &latest_finality, target_epoch)?;
             Ok::<_, Error>(selection)
         })
         .transpose()?;
     if selected.is_none()
-        && latest_finality
-            .height_context
-            .next_epoch_snapshot
+        && outcome
+            .boundary
             .as_ref()
-            .and_then(|snapshot| snapshot.committee_preparation.as_ref())
+            .and_then(|boundary| boundary.preparation.as_ref())
             .is_some_and(|preparation| preparation.target_epoch == target_epoch)
     {
         return Err(invalid(
-            "finalized committee preparation is absent from committed State",
+            "certified committee preparation is absent from committed State",
         ));
     }
     let network_id = *state.network_id();
@@ -151,7 +113,7 @@ fn load(
     let mut candidate_keys = Vec::new();
     if let Some(selection) = &selected {
         let generation = selection.transition.preparation.authority_generation;
-        for seat in &selection.transition.preparation.roster {
+        for seat in &selection.transition.preparation.committee {
             let key = ValidatorCandidateKeysV1::key_id(network_id, generation, &seat.validator);
             let Some(candidate) = state.world().validator_candidate_keys().get(&key) else {
                 continue;
@@ -177,7 +139,7 @@ fn load(
                 .get(&session_id)
                 .map(|record| {
                     let peers = preparation
-                        .roster
+                        .committee
                         .iter()
                         .map(|seat| seat.validator.clone())
                         .collect::<Vec<_>>();
@@ -260,12 +222,35 @@ pub(super) async fn handler_validator_committee_status(
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let query_limits = app.ordinary_query_policy.limits;
+    let response_limit = usize::try_from(query_limits.max_response_bytes())
+        .map_err(|_| invalid("configured committee response bound is not representable"))?;
+    let limits = NativeFinalityLimits {
+        block_bytes: usize::try_from(query_limits.max_source_item_bytes())
+            .map_err(|_| invalid("configured committee source bound is not representable"))?
+            .min(NATIVE_FINALITY_MAX_BLOCK_BYTES)
+            .min(response_limit),
+        journal_bytes: response_limit.min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
+        block_count: NATIVE_FINALITY_MAX_BLOCK_COUNT,
+        allocated_bytes: usize::try_from(query_limits.execution_headroom_bytes())
+            .map_err(|_| invalid("configured committee decode bound is not representable"))?,
+    };
+    limits.validate().map_err(invalid)?;
     let state = app.state.clone();
     let response =
         routing::run_admitted_blocking(admission, "committee status worker failed", move || {
             let view = state.view();
-            let payload = load(&view, query.target_epoch)?;
-            Ok(crate::utils::respond_with_format(payload, format))
+            let payload = norito::core::with_decode_limits_scope(
+                limits.decode_limits().map_err(invalid)?,
+                || load(&view, query.target_epoch, limits),
+            )?;
+            crate::utils::respond_with_format_bounded(payload, format, response_limit).map_err(
+                |error| {
+                    invalid(format!(
+                        "committee response exceeds its configured bound: {error}"
+                    ))
+                },
+            )
         })
         .await?;
     proof_response_with_exact_egress(

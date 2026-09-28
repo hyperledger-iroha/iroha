@@ -68,3 +68,23 @@ path = "tests/admitted_map_custody.rs"
 [[test]]
 name = "charged_buffer_custody"
 path = "tests/charged_buffer_custody.rs"
+
+# Physical allocation/refund ordering for original prepaid shared ownership.
+[[test]]
+name = "charged_shared_custody"
+path = "tests/charged_shared_custody.rs"
+
+# Actual allocator/refusal and same-source custody of prepaid Cell publication identities.
+[[test]]
+name = "cell_successor_custody"
+path = "tests/cell_successor_custody.rs"
+
+# Atomic initial Cell funding and allocator-refusal cleanup of real physical shells.
+[[test]]
+name = "cell_initial_custody"
+path = "tests/cell_initial_custody.rs"
+
+# Physical original Cell writer backing and same-charge allocator-refusal retries.
+[[test]]
+name = "cell_generation_backing"
+path = "tests/cell_generation_backing.rs"

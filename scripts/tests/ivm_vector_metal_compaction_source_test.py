@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Fail closed on the IVM vector/Metal source compaction.
 
-The guard authenticates the clean opening and landed source images, records the
-measured syntax-work reduction, preserves every public/test selector, and pins
-the callback-free Metal buffer/dispatch mapping and deterministic CPU fallback
-order.  It intentionally uses only the Python standard library.
+The guard retains immutable evidence for the reviewed source compaction and
+checks the final V1 embedded-kernel, process-owner and quarantine behavior.
+Unchanged buffer mappings, CPU algorithms and fallback order remain sealed;
+production completion receipts are checked separately from startup self-tests.
+It intentionally uses only the Python standard library.
 """
 
 from __future__ import annotations
@@ -39,6 +40,15 @@ POSTIMAGE_AST_ERRORS = 1
 MINIMUM_LINE_REDUCTION = 1_000
 MINIMUM_AST_NODE_REDUCTION = 10_000
 
+# The historical AST counts above describe POSTIMAGE_BLOB only. They are not
+# qualification or compiler-work evidence for the subsequently expanded V1 code.
+CURRENT_SHA256 = "b03ad2f8c3a2b14f04c7bb01a24e3dfa1fa61adee67bba88feeb82bdbd4cf2ed"
+CURRENT_LINES = 4262
+CURRENT_PUBLIC_API_SHA256 = "9234fa228c5872a112cd10b69c1cb2108e83df8e521b616838cee6ce97c486f5"
+CURRENT_TEST_SUFFIX_SHA256 = "e52ddbf6e279dce76098500ffe7e54928ddf09ed8de7c19bca4754ae115f1fcc"
+CURRENT_INCLUDE_PATHS = ("../metal/v1/ivm_kernels.metallib",)
+CURRENT_CFG_COUNT = 179
+
 EXPECTED_CFG_COUNT = 160
 EXPECTED_TARGET_FEATURE_COUNT = 3
 EXPECTED_MAX_LINE_LENGTH = 264
@@ -63,7 +73,11 @@ EXPECTED_DISPATCH_CALL_SHA256 = (
 )
 
 EXPECTED_TESTS = (
-    ("metal_acceleration_speed", ("#[test]",)),
+    (
+        "completed_metal_work_is_rejected_after_owner_quarantine",
+        ('#[cfg(all(target_os = "macos", feature = "metal"))]', "#[test]"),
+    ),
+    ("fixed_width_operations_skip_gpu_launch", ("#[test]",)),
     (
         "metal_sha256_merkle_helpers_return_none_without_metal_feature",
         ('#[cfg(not(all(target_os = "macos", feature = "metal")))]', "#[test]"),
@@ -74,6 +88,10 @@ EXPECTED_TESTS = (
     ),
     (
         "metal_sha256_pairs_reduce_matches_cpu",
+        ('#[cfg(all(target_os = "macos", feature = "metal"))]', "#[test]"),
+    ),
+    (
+        "metal_merkle_root_matches_canonical_hash_markers",
         ('#[cfg(all(target_os = "macos", feature = "metal"))]', "#[test]"),
     ),
     (
@@ -159,6 +177,10 @@ EXPECTED_DISPATCH_CALLS = (
     ("&ctx.queue", "&ctx.aesdec_rounds", "&[&buf_states,&buf_rks,&buf_out,&buf_n]", "states.len()asNSUInteger", "1", '"metalaesdecroundsbatch"'),
 )
 
+# None denotes startup self-tests or explicit test-only diagnostic kernels.
+# "receipt" is supplied by public wrappers and is None during calibration.
+EXPECTED_DISPATCH_RECEIPTS = ('None', 'None', 'None', 'None', 'None', 'None', 'None', 'None', 'None', 'None', 'None', 'None', 'Some(MetalKernel::Add64)', 'Some(MetalKernel::Add32)', 'Some(kernel)', 'Some(MetalKernel::Sha256)', 'receipt', 'receipt', 'receipt', 'None', 'None', 'None', 'None', 'Some(MetalKernel::AesEnc)', 'Some(MetalKernel::AesDec)', 'Some(MetalKernel::Keccak)', 'receipt', 'receipt', 'receipt', 'receipt')
+
 EXPECTED_OUTPUT_CALLS = (
     ("&device", "a.len()*core::mem::size_of::<u32>()"),
     ("&device", "a.len()*core::mem::size_of::<u64>()"),
@@ -231,7 +253,7 @@ EXPECTED_EXTERNAL_CALL_SITES = {
 EXPECTED_SEAM_COUNTS = {
     "fn_bounds": 2,
     "function_pointers": 1,
-    "closures": 112,
+    "closures": 119,
     "macro_definitions": 0,
     "action_types": 0,
     "path_relocations": 0,
@@ -486,10 +508,27 @@ def _validate_source(
     )
     _require(PREIMAGE_AST_ERRORS == POSTIMAGE_AST_ERRORS == 1, "AST error ledger changed")
 
-    _require(len(source.splitlines()) == POSTIMAGE_LINES, "postimage line count changed")
+    compacted = _blob(POSTIMAGE_BLOB)
+    _require(_git_blob(compacted) == POSTIMAGE_BLOB, "compaction blob identity changed")
+    _require(_sha256(compacted) == POSTIMAGE_SHA256, "compaction SHA-256 changed")
+    _require(len(compacted.splitlines()) == POSTIMAGE_LINES, "compaction line count changed")
+    _require(
+        _sha256(_public_api(compacted)) == EXPECTED_PUBLIC_API_SHA256,
+        "historical compaction API changed",
+    )
+    _require(
+        _sha256(_include_inventory(compacted)) == EXPECTED_INCLUDE_SHA256,
+        "historical compaction includes changed",
+    )
+    historical_test_marker = '#[cfg(test)]\nmod tests'
+    _require(
+        _sha256(compacted[compacted.index(historical_test_marker) :])
+        == EXPECTED_TEST_SUFFIX_SHA256,
+        "historical compaction test evidence changed",
+    )
     if authenticate:
-        _require(_git_blob(source) == POSTIMAGE_BLOB, "postimage blob identity changed")
-        _require(_sha256(source) == POSTIMAGE_SHA256, "postimage SHA-256 changed")
+        _require(len(source.splitlines()) == CURRENT_LINES, "current source line count changed")
+        _require(_sha256(source) == CURRENT_SHA256, "current V1 source SHA-256 changed")
     _require(
         source.count('unsafe extern "C" {') == POSTIMAGE_AST_ERRORS,
         "known tree-sitter error sentinel changed",
@@ -504,7 +543,7 @@ def _validate_source(
         "multiple statements were packed onto a line",
     )
     _require(
-        len(re.findall(r"(?m)^\s*#\[cfg\(", source)) == EXPECTED_CFG_COUNT,
+        len(re.findall(r"(?m)^\s*#\[cfg\(", source)) == CURRENT_CFG_COUNT,
         "cfg inventory changed",
     )
     _require(
@@ -516,16 +555,26 @@ def _validate_source(
     test_marker = '#[cfg(test)]\nmod tests'
     _require(test_marker in source, "test module marker is missing")
     _require(
-        _sha256(source[source.index(test_marker) :]) == EXPECTED_TEST_SUFFIX_SHA256,
+        _sha256(source[source.index(test_marker) :]) == CURRENT_TEST_SUFFIX_SHA256,
         "direct test module changed",
     )
-    _require(_sha256(_public_api(source)) == EXPECTED_PUBLIC_API_SHA256, "public API changed")
-    _require(_public_api(source) == _public_api(preimage), "public API differs from opening")
-    _require(
-        _sha256(_include_inventory(source)) == EXPECTED_INCLUDE_SHA256,
-        "source/fixture include inventory changed",
+    _require(_sha256(_public_api(source)) == CURRENT_PUBLIC_API_SHA256, "V1 API changed")
+    retained_api = tuple(
+        entry for entry in _public_api(preimage) if entry[0] != "bit_pipe_compile_count"
     )
-    _require(_include_inventory(source) == _include_inventory(preimage), "source was relocated")
+    added_api_names = {
+        "metal_merkle_prefer_gpu", "metal_batch_prefer_gpu",
+        "metal_merkle_root", "gpu_launch_eligible",
+    }
+    _require(
+        tuple(entry for entry in _public_api(source) if entry[0] not in added_api_names)
+        == retained_api,
+        "retained vector API changed",
+    )
+    _require(
+        _include_inventory(source) == CURRENT_INCLUDE_PATHS,
+        "embedded artifact include inventory changed",
+    )
     _require(_seam_counts(source) == EXPECTED_SEAM_COUNTS, "forbidden seam inventory changed")
 
     expected_headers = {
@@ -542,7 +591,7 @@ def _validate_source(
             "fnmetal_dispatch(queue:&ProtocolObject<dynMTLCommandQueue>,pipeline:"
             "&ProtocolObject<dynMTLComputePipelineState>,buffers:"
             "&[&ProtocolObject<dynMTLBuffer>],grid_width:NSUInteger,"
-            "threadgroup_width:NSUInteger,context:&str,)->Option<()>"
+            "threadgroup_width:NSUInteger,context:&str,receipt:Option<MetalKernel>,)->Option<()>"
         ),
     }
     for name, expected in expected_headers.items():
@@ -599,17 +648,32 @@ impl MetalBufferElement for u64 {}"""
     )
     _require(_sha256(output_calls) == EXPECTED_OUTPUT_CALL_SHA256, "output call map changed")
     dispatch_calls = _calls(source, "metal_dispatch")
-    _require(dispatch_calls == EXPECTED_DISPATCH_CALLS, "ordered Metal dispatch rows changed")
+    _require(all(len(row) == 7 for row in dispatch_calls), "Metal dispatch arity changed")
+    dispatch_mapping = tuple(row[:-1] for row in dispatch_calls)
+    _require(dispatch_mapping == EXPECTED_DISPATCH_CALLS, "ordered Metal dispatch rows changed")
     _require(
-        _sha256(dispatch_calls) == EXPECTED_DISPATCH_CALL_SHA256,
+        _sha256(dispatch_mapping) == EXPECTED_DISPATCH_CALL_SHA256,
         "Metal dispatch row digest changed",
     )
+    _require(
+        tuple(row[-1] for row in dispatch_calls) == EXPECTED_DISPATCH_RECEIPTS,
+        "Metal accepted-completion receipt map changed",
+    )
     dispatch = _function(source, "metal_dispatch")
+    _require(
+        "    encoder.endEncoding();\n    command_buffer.commit();" in dispatch,
+        "Metal dispatch statements were packed onto one line",
+    )
     _require_order(
         dispatch,
         (
-            "let command_buffer = queue.commandBuffer()?;",
-            "let encoder = command_buffer.computeCommandEncoder()?;",
+            "if !metal_runtime_allowed() { return None; }",
+            "let Some(command_buffer) = queue.commandBuffer() else {",
+            'record_metal_disable(format!("{context} could not create a command buffer"));',
+            "return None;",
+            "let Some(encoder) = command_buffer.computeCommandEncoder() else {",
+            'record_metal_disable(format!("{context} could not create a compute encoder"));',
+            "return None;",
             "encoder.setComputePipelineState(pipeline);",
             "for (index, buffer) in buffers.iter().copied().enumerate()",
             "encoder.setBuffer_offset_atIndex(Some(buffer), 0, index);",
@@ -618,7 +682,10 @@ impl MetalBufferElement for u64 {}"""
             "width: threadgroup_width,",
             "encoder.endEncoding();",
             "command_buffer.commit();",
-            "finalize_command_buffer(&command_buffer, context).then_some(())",
+            "let completed = finalize_command_buffer(&command_buffer, context);",
+            "let accepted = metal_dispatch_result_allowed(completed, metal_runtime_allowed());",
+            "metal_receipts::record_completion(receipt, accepted);",
+            "accepted.then_some(())",
         ),
         "Metal encode/commit/wait",
     )
@@ -679,8 +746,77 @@ impl MetalBufferElement for u64 {}"""
     for name, anchors in auto_orders.items():
         _require_order(_function(source, name), anchors, f"{name} assertion/fallback")
 
+    _validate_v1_behavior(source)
+
     if check_external_calls:
         _require(_external_call_sites() == EXPECTED_EXTERNAL_CALL_SITES, "external call-site set changed")
+
+
+def _validate_v1_behavior(source: str) -> None:
+    """Check source-level V1 ownership, receipt and public geometry contracts."""
+
+    for retired in ("newLibraryWithSource_options_error", "bit_pipe_compile_count", "static METAL_STATE: std::cell::RefCell", "metal_acceleration_speed"):
+        _require(retired not in source, f"retired Metal path returned: {retired}")
+    _require_order(
+        _function(source, "bundled_metal_library"),
+        (
+            "if sha2::Sha256::digest(METAL_KERNELS).as_slice() != METAL_KERNELS_SHA256 {",
+            'record_metal_disable("embedded Metal library digest mismatch");',
+            "return None;",
+            "dispatch2::DispatchData::from_static_bytes(METAL_KERNELS)",
+            "device.newLibraryWithData_error(&data).ok()",
+        ),
+        "authenticated embedded Metal library",
+    )
+    _require(
+        "static METAL_STATE: metal_owner::ProcessOwner<MetalState> = metal_owner::ProcessOwner::new();" in source,
+        "Metal lost its process owner",
+    )
+    _require_order(
+        _function(source, "with_metal_state"),
+        ("if !metal_runtime_allowed()", "return None;", "METAL_STATE.acquire(MetalState::new)?", "Some(f(&state))"),
+        "Metal owner acquisition",
+    )
+    _require(
+        _compact(_function(source, "metal_dispatch_result_allowed"))
+        == "fnmetal_dispatch_result_allowed(completed:bool,backend_allowed:bool)->bool{completed&&backend_allowed}",
+        "quarantined or failed Metal result may be published",
+    )
+    _require(
+        "const MIN_GPU_TRANSFER_BYTES: usize = 4 * 1024;" in source,
+        "public transfer floor changed",
+    )
+    _require(
+        _compact(_function(source, "gpu_launch_eligible"))
+        == "pub(crate)fngpu_launch_eligible(transfer_bytes:usize)->bool{transfer_bytes>=MIN_GPU_TRANSFER_BYTES}",
+        "GPU selection no longer depends only on public transfer geometry",
+    )
+    for name in ("vadd32", "vadd64", "vand", "vxor", "vor"):
+        function = _function(source, name)
+        _require(
+            function.count("gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)") == 2,
+            f"{name} lost a public workload gate",
+        )
+    _require(
+        _function(source, "sha256_compress").count("gpu_launch_eligible(SHA256_BLOCK_TRANSFER_BYTES)") == 2,
+        "single-block SHA lost a public workload gate",
+    )
+    for name in ("metal_aesenc_rounds_batch_with_receipt", "metal_aesdec_rounds_batch_with_receipt"):
+        _require(
+            "let nrounds = u32::try_from(round_keys.len()).ok()?;" in _function(source, name),
+            f"{name} silently narrows the public round count",
+        )
+    merkle = _function(source, "metal_sha256_pairs_reduce_with_receipt")
+    _require(merkle.count("if canonical_merkle {") == 3, "canonical Merkle marker sites changed")
+    _require_order(
+        merkle,
+        (
+            "if digests.len() == 1", "root[31] |= 1;", "return Some(root);",
+            "while count > 1", "for node in cur.chunks_exact_mut(32)", "node[31] |= 1;",
+            "metal_dispatch(", "root.copy_from_slice(&cur[..32]);", "root[31] |= 1;", "Some(root)",
+        ),
+        "canonical Merkle hash markers",
+    )
 
 
 class IvmVectorMetalCompactionSourceTest(unittest.TestCase):
@@ -690,7 +826,9 @@ class IvmVectorMetalCompactionSourceTest(unittest.TestCase):
         self.source = _read_source()
 
     def _rejected(self, old: str, new: str, *, count: int = 1) -> None:
+        _validate_source(self.source, authenticate=False)
         self.assertEqual(self.source.count(old), count)
+        self.assertNotEqual(old, new)
         mutated = self.source.replace(old, new, 1)
         with self.assertRaises(GuardError):
             _validate_source(mutated, authenticate=False)
@@ -699,7 +837,10 @@ class IvmVectorMetalCompactionSourceTest(unittest.TestCase):
         _validate_source(self.source, authenticate=True, check_external_calls=True)
 
     def test_rejects_test_identity_drift(self) -> None:
-        self._rejected("fn metal_acceleration_speed()", "fn metal_acceleration_speed_changed()")
+        self._rejected(
+            "fn fixed_width_operations_skip_gpu_launch()",
+            "fn fixed_width_operations_skip_gpu_launch_changed()",
+        )
 
     def test_rejects_input_bound_or_prefix_drift(self) -> None:
         self._rejected(
@@ -766,10 +907,34 @@ fn metal_input_buffer""",
         )
         self._rejected('#[target_feature(enable = "sha2")]', "#[cfg(any())]")
 
+    def test_rejects_quarantine_or_receipt_drift(self) -> None:
+        self._rejected("completed && backend_allowed", "completed || backend_allowed")
+        self._rejected(
+            "metal_receipts::record_completion(receipt, accepted);",
+            "metal_receipts::record_completion(receipt, completed);",
+        )
+        self._rejected("Some(MetalKernel::Add64)", "None")
+
+    def test_rejects_public_workload_gate_drift(self) -> None:
+        self._rejected(
+            "if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)",
+            "if true",
+            count=10,
+        )
+        self._rejected("transfer_bytes >= MIN_GPU_TRANSFER_BYTES", "transfer_bytes < MIN_GPU_TRANSFER_BYTES")
+
+    def test_rejects_embedded_library_or_owner_drift(self) -> None:
+        self._rejected("METAL_STATE.acquire(MetalState::new)?", "MetalState::new()?")
+        self._rejected("!= METAL_KERNELS_SHA256", "== METAL_KERNELS_SHA256")
+
+    def test_rejects_merkle_marker_or_round_bound_drift(self) -> None:
+        self._rejected("node[31] |= 1;", "node[31] |= 0;")
+        self._rejected("u32::try_from(round_keys.len()).ok()?", "round_keys.len() as u32", count=2)
+
     def test_rejects_line_minification(self) -> None:
         self._rejected(
-            "let command_buffer = queue.commandBuffer()?;\n    let encoder = command_buffer.computeCommandEncoder()?;",
-            "let command_buffer = queue.commandBuffer()?; let encoder = command_buffer.computeCommandEncoder()?;",
+            "    encoder.endEncoding();\n    command_buffer.commit();",
+            "    encoder.endEncoding(); command_buffer.commit();",
         )
 
 

@@ -516,9 +516,17 @@ pub fn payload_mints(payload: &[u8]) -> bool {
 }
 
 /// The simulator's `exec` of a block (§4.1, §4.2): `Invalid` if its header flag differs from
-/// the application's flag rule ([`payload_mints`]), otherwise [`reference_exec`].
-pub fn block_exec(parent_result: &Hash32, block: &Block) -> ExecOutcome {
-    if block.header.attest != payload_mints(&block.payload) {
+/// the application's payload-or-boundary flag rule ([`payload_mints`]), otherwise [`reference_exec`].
+pub fn block_exec(
+    parent_result: &Hash32,
+    block: &Block,
+    epoch: &crate::types::EpochConfig,
+) -> ExecOutcome {
+    if block.header.epoch != epoch.id
+        || !epoch.contains(block.header.height)
+        || block.header.attest
+            != (payload_mints(&block.payload) || block.header.height == epoch.last_height)
+    {
         return ExecOutcome::Invalid;
     }
     reference_exec(parent_result, &block.payload)
@@ -607,6 +615,8 @@ mod tests {
         let mut barrier = Barrier::default();
         let block = Block {
             header: BlockHeader {
+                control_witness: crate::types::ControlWitness::empty(),
+                epoch: crate::testing::TEST_EPOCH.id,
                 instance: Hash32::ZERO,
                 height: 1,
                 origin_view: 0,
@@ -626,8 +636,13 @@ mod tests {
                 .hold(Action::Halt(crate::api::HaltReason::SafetyRecordCorrupt))
                 .is_some()
         );
-        let record =
-            SafetyRecord::fresh(Hash32::ZERO, PublicKey::new(vec![1; 32]).unwrap(), 0, None);
+        let record = SafetyRecord::fresh(
+            Hash32::ZERO,
+            crate::testing::TEST_EPOCH.id,
+            PublicKey::new(vec![1; 32]).unwrap(),
+            0,
+            None,
+        );
         let (r, t2) = io.write(0, 5, Write::Record(Box::new(record), Vec::new()));
         barrier.persisting(r);
         assert!(t2 >= t1 + 5);
@@ -658,6 +673,8 @@ mod tests {
         assert!(!payload_mints(&[]));
         assert!(!payload_mints(&[TX_TAG, 0, 0]), "truncated");
         let header = BlockHeader {
+            control_witness: crate::types::ControlWitness::empty(),
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: Hash32::ZERO,
             height: 1,
             origin_view: 0,
@@ -678,19 +695,35 @@ mod tests {
         };
         let parent = Hash32([1; 32]);
         assert_eq!(
-            block_exec(&parent, &block(false, Vec::new())),
+            block_exec(
+                &parent,
+                &block(false, Vec::new()),
+                &crate::testing::TEST_EPOCH
+            ),
             reference_exec(&parent, &[])
         );
         assert_eq!(
-            block_exec(&parent, &block(true, Vec::new())),
+            block_exec(
+                &parent,
+                &block(true, Vec::new()),
+                &crate::testing::TEST_EPOCH
+            ),
             ExecOutcome::Invalid
         );
         assert_eq!(
-            block_exec(&parent, &block(false, payload.clone())),
+            block_exec(
+                &parent,
+                &block(false, payload.clone()),
+                &crate::testing::TEST_EPOCH
+            ),
             ExecOutcome::Invalid
         );
         assert_eq!(
-            block_exec(&parent, &block(true, payload.clone())),
+            block_exec(
+                &parent,
+                &block(true, payload.clone()),
+                &crate::testing::TEST_EPOCH
+            ),
             reference_exec(&parent, &payload)
         );
     }

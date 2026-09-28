@@ -3,18 +3,24 @@
 The CUDA source kernels in this directory are optional acceleration paths. Their
 outputs must remain bit-identical to the scalar implementation; the PTX build
 path must never silently substitute a placeholder.
+The build script pins exactly ten production `.cu` families and rejects missing
+or extra sources. A deleted kernel cannot silently shrink the bundled artifact
+inventory.
 
 `IVM_CUDA_PTX_MODE` selects the build-time artifact policy:
 
-- `bundled` (default) copies the checked-in `cuda/<kernel>.ptx` bytes into
-  Cargo's output directory. Missing or structurally invalid PTX fails the
-  build.
+- `bundled` (default) verifies the signed ten-family manifest and copies its
+  already-verified `cuda/<kernel>.ptx` bytes into Cargo's output directory.
+  Missing, altered, or structurally invalid PTX fails the build. This path
+  does not invoke `nvcc` or require a CUDA driver.
 - `generate` explicitly invokes `nvcc` for every `.cu` source and writes PTX
   only into Cargo's output directory. This mode is for qualification runners,
-  not ordinary or release builds.
-- `check` invokes `nvcc`, validates both outputs, requires every generated file
-  to be byte-identical to its checked-in counterpart, and then installs the
-  checked-in bytes.
+  not ordinary or release builds; every non-debug profile, including `deploy`,
+  rejects it.
+- `check` verifies the signed bundle, checks the exact `nvcc --version` output,
+  flags and target against the manifest, invokes `nvcc`, requires every
+  generated file to be byte-identical to its signed counterpart, then installs
+  the verified bytes.
 
 Generation and checking use `IVM_CUDA_NVCC` (or `NVCC`),
 `IVM_CUDA_GENCODE`, and `IVM_CUDA_NVCC_EXTRA`. The default generation target is
@@ -22,26 +28,146 @@ Generation and checking use `IVM_CUDA_NVCC` (or `NVCC`),
 artifact still requires a pinned CUDA image and toolchain; the default alone is
 not provenance.
 
+`bundled` and `check` also require `IVM_CUDA_TRUSTED_KEY_SHA256`: a reviewed,
+lowercase SHA-256 fingerprint of the raw Ed25519 public key. This is a release
+build trust input, not a runtime feature switch or a value copied from the
+bundle. The fixed-order LF-terminated `cuda/provenance.v1` contains the pinned
+CUDA image SHA-256, SHA-256 of exact `nvcc --version` output, exact compiler
+flags, target profile, two independent-generation digests, and source/PTX
+SHA-256 pairs for all ten families in the build-script order. Its signature is
+`cuda/provenance.v1.sig` (64 raw bytes); the corresponding public key is
+`cuda/provenance.v1.pub` (32 raw bytes). The build verifies that signature and
+fingerprint before reading artifacts. Symlinks, extra manifest fields, changed
+source/PTX bytes and divergent generation digests are rejected.
+The environment-supplied fingerprint is only a qualification input until the
+release pipeline pins the actual signer identity in reviewed source or a signed
+release manifest; setting it manually does not qualify a signer or artifact.
+The build exposes the signed `cuda_image_sha256` claim as
+`IVM_CUDA_SIGNED_IMAGE_SHA256` to the compiled IVM crate. A release runner must
+compare it with an independently measured, pinned toolkit image; this build
+value alone is not an image attestation.
+
+The generation digest is SHA-256 over
+`ivm-cuda-ptx-generation-v1\0` followed, in pinned family order, by each
+stem's little-endian `u16` byte length, stem bytes, little-endian `u64` PTX byte
+length, and PTX bytes. The signed two-run values must both equal this digest.
+This checks the signed claim against the bundle; the release runner must also
+retain evidence that two clean builds used the pinned image and really produced
+those bytes. The `check` mode verifies one local regeneration; it is not a
+substitute for two-run evidence or GPU parity.
+
 Examples:
 
 ```sh
 IVM_CUDA_PTX_MODE=generate cargo build -p ivm --features cuda
-IVM_CUDA_PTX_MODE=check cargo build -p ivm --features cuda
+IVM_CUDA_TRUSTED_KEY_SHA256=<reviewed-fingerprint> IVM_CUDA_PTX_MODE=check cargo build -p ivm --features cuda
 ```
+
+## Reproducible candidate generation
+
+`scripts/build_ivm_cuda_bundle.py` is the offline candidate producer. It reads
+the ten pinned `.cu` files into one source snapshot, compiles every family in
+two clean output directories with identical exact flags, rejects divergent PTX,
+and writes a fresh candidate directory only after signing the fixed-order
+manifest. It does not run during Cargo builds or node startup. The signer key
+must be supplied explicitly as a PEM file outside the repository and is never
+copied into the candidate. The tool requires Python 3.10+, a pinned `nvcc`, and
+OpenSSL with Ed25519 support. It never downloads a toolkit or a kernel.
+
+```sh
+python3 scripts/build_ivm_cuda_bundle.py \
+  --nvcc /absolute/path/to/pinned/nvcc \
+  --openssl /absolute/path/to/openssl \
+  --cuda-image-sha256 <independently-measured-image-sha256> \
+  --signing-key /private/path/outside/repository/ed25519.pem \
+  --output-dir /private/staging/ivm-cuda-candidate
+```
+
+The script prints the candidate path, raw-public-key fingerprint, and common
+two-run generation digest. On Linux it mirrors `build.rs`'s default `g++-12`
+selection; `--host-compiler` and repeated `--extra-flag` inputs are available
+when the pinned qualification image uses a different exact compiler command
+(`--extra-flag=--fmad=false` for a flag beginning with `-`).
+The output contains the ten source snapshots, ten PTX files,
+`provenance.v1`, `provenance.v1.sig`, and `provenance.v1.pub`. The Ed25519
+signature covers the exact LF-terminated manifest bytes, while the manifest
+binds the independently supplied image digest, exact `nvcc --version` bytes,
+flags, target, two PTX-generation digests, and every source/PTX digest. The
+signing preimage is inspectable directly as `provenance.v1`; the generation
+preimage is specified above and reproduced in the script tests.
+
+Before promoting a candidate, reviewers must measure and pin the actual CUDA
+image independently, approve the signer fingerprint as a release build input,
+retain the two clean-run logs and candidate digest inventory, and qualify each
+kernel on the intended GPU/driver profiles. Copying the candidate into this
+directory and setting `IVM_CUDA_TRUSTED_KEY_SHA256` before those checks would
+only make the build admit a self-consistent signature; it would not establish
+release qualification. Use `IVM_CUDA_PTX_MODE=check` to reproduce the reviewed
+PTX bytes with the same toolkit and flags, followed by bundled-mode hardware
+tests. The checked-in PTX and ordinary release CUDA feature remain gated until
+these inputs and tests exist.
 
 ## Release blocker
 
-TODO: reproducibly generate and check in all 11 real artifacts:
-`add.ptx`, `aes.ptx`, `bitonic_sort.ptx`, `bn254.ptx`, `poseidon.ptx`,
+TODO: reproducibly generate and check in all 10 real artifacts:
+`aes.ptx`, `bitonic_sort.ptx`, `bn254.ptx`, `poseidon.ptx`,
 `sha256.ptx`, `sha256_leaves.ptx`, `sha256_pairs_reduce.ptx`, `sha3.ptx`,
 `signature.ptx`, and `vector.ptx`.
 
-TODO: attach a signed manifest binding each PTX digest to its `.cu` source
-digest, the pinned CUDA image digest, exact `nvcc` version and flags, target
-profile, and two clean byte-identical generation runs. Until both TODOs are
-closed, the default `bundled` CUDA build intentionally fails closed.
+TODO: check in the signed manifest, raw signature and reviewed public key
+fingerprint from release signing infrastructure. The verifier and exact
+source/PTX admission gate are implemented, but no production signature or
+two-run evidence exists yet. Until both TODOs are closed, the default `bundled`
+CUDA build intentionally fails closed.
 
-TODO: remove `add.cu`/`vector_add_f32` or bind it to an explicit
-non-consensus diagnostic artifact class before signing that manifest. All
-consensus-facing kernels still require real-hardware scalar parity, malformed
-input, and failure-path qualification.
+All kernels still require real-hardware scalar parity, malformed input, and
+failure-path qualification. The artifact inventory contains only integer and
+field kernels.
+
+## Required hardware qualification
+
+Run `cargo test --locked -p ivm --test cuda_hardware --features
+cuda-hardware-tests -- --nocapture` on each qualified CUDA runner. This separate
+process compares all ten kernel families with scalar references on every usable
+discovered device. Missing hardware, unavailable kernels, CPU fallback, and zero
+completed kernel batches fail the test. `IVM_CUDA_RECEIPT` lines record completed
+kernel batches on the calling thread; admission self-tests and memory transfers
+do not count. A receipt must accompany matching output, not replace it.
+
+The nightly workflow first runs this test against a generated diagnostic
+candidate. Its separate release gate requires `check` mode to reproduce every
+checked-in PTX byte and then reruns hardware qualification in `bundled` mode.
+Missing checked-in artifacts fail that gate. The emitted SHA-256 inventory and
+hardware logs are evidence inputs, not a substitute for the signed provenance
+manifest above. The `cuda-hardware-tests` feature exposes device-selection hooks
+for this dedicated qualification process and must not ship in node builds.
+
+Device discovery skips devices whose context cannot be initialized and applies
+`[accel].max_gpus` to usable devices. Each context owns admission and quarantine
+state for its production kernels. Golden tests run on the exact selected device
+and must complete real kernel work before that kernel is admitted. Failed kernel
+admission or execution excludes that device/kernel pair; other kernels and
+devices remain candidates. Context and stream faults exclude the affected device.
+Task assignment uses operation identity and public workload dimensions only;
+operand limbs, digest state, and signature bytes do not select a device.
+Task scopes pin their manager generation and device so nested dispatch cannot
+switch owners while buffers are live. A timed-out device retains its context and
+allocations without retaining healthy device owners. Rebuilt contexts receive
+fresh admission state; existing borrowers retain their original state.
+
+TODO: qualify this admission and quarantine matrix on real multi-device hosts,
+including injected per-kernel failure, context failure, and stream timeout, before
+claiming hardware readiness. Driverless policy tests establish state transitions
+and selection behavior, not successful GPU execution.
+
+The patched `cust_raw` boundary resolves driver entry points at runtime and keeps
+the library alive for the process lifetime. CUDA-enabled binaries have no native
+CUDA link dependency. Linux uses the system `libcuda.so.1` loader path (including
+the WSL system directory); Windows restricts `nvcuda.dll` lookup to System32.
+Missing drivers and missing symbols return CUDA errors and preserve CPU fallback.
+The driverless CI job exercises real dynamic loading with a small test library,
+builds `cust`, and proves that public bindings start without a driver. See
+[`vendor/cust_raw/UPSTREAM.md`](../../../../vendor/cust_raw/UPSTREAM.md).
+
+TODO: qualify complete ordinary default-target packaging after the PTX and signed
+provenance gates pass. Do not enable default CUDA before those artifacts exist.

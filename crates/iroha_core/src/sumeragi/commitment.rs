@@ -7,8 +7,12 @@
 //!   root, the KAGEMUSHA top-up root and count, the exact result-bearing block wire (length and
 //!   hash; it carries every transaction result and trigger output) and the network-input and
 //!   typed-output Merkle commitments;
-//! - `committee_digest(C_{h+2})` and `ChainParams_{h+2}`: the configuration the block schedules
-//!   (§10.1, [`super::schedule`]).
+//! - the exact current native epoch and complete successor schedule, retaining every ordered
+//!   BLS key, original PoP, immutable Pasta generation and epoch authorization;
+//! - the mandatory complete lane-context set proof against the exact ordinary-write root;
+//! - the finalized beacon pulse consumed by execution and the atomic epoch-boundary decision.
+//!   Chain parameters retain lag two; authority beyond a boundary stays unavailable until that
+//!   boundary is certified and applied (§10.1, [`super::schedule`]).
 //!
 //! The canonical preimage is stored as `CommitCertificate.result_preimage` next to the block, so a
 //! proof (§11) or a KAGEMUSHA attestation (§3.7) can disclose it and anyone can re-hash it
@@ -22,6 +26,9 @@
 //! Every function here is pure and deterministic: the inputs are the execution witness, the
 //! executed block and the scheduled configuration; no clock, no node configuration and no
 //! hash-map iteration order enter `R`. Each sparse Merkle tree is built once per block.
+//! The shared result codec and complete epoch graph are owned by
+//! [`iroha_data_model::sumeragi_finality`]; this module produces those canonical values from
+//! Core's execution witnesses and retained schedule without defining a parallel wire layout.
 
 use std::collections::BTreeMap;
 
@@ -39,41 +46,31 @@ use iroha_data_model::{
         KagemushaOperationKindV1, KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1,
     },
 };
-use iroha_sumeragi::types::{Hash32, HeightConfig};
+#[cfg(test)]
+use iroha_data_model::{
+    consensus::FinalizedGlobalThresholdBeaconPulseV1, parameter::system::ConsensusMode,
+};
+#[cfg(test)]
+use iroha_sumeragi::types::Hash32;
+#[cfg(test)]
+use norito::NoritoDeserialize;
+use norito::NoritoSerialize;
 use thiserror::Error;
 
+use super::schedule::NativeExecutionInputs;
+#[cfg(test)]
+use super::schedule::ScheduleOutcome;
 use crate::exec_witness::{
     roots::{parent_state_from_witness, witness_pairs},
     smt::compute_post_state_root,
 };
+use iroha_data_model::sumeragi_finality::NativeLaneStateProof;
+use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
 
 pub use iroha_data_model::sumeragi_finality::{
-    ExecutionCommitment, ExecutionResultCommitment, RESULT_TAG, chain_hash, result_of_preimage,
+    CommitmentError, ExecutionCommitment, ExecutionResultCommitment, MAX_RESULT_PREIMAGE_BYTES,
+    RESULT_TAG, chain_hash, result_of_preimage,
 };
-
-/// Why `R` could not be computed. Every variant is a deterministic function of the executed
-/// block and its witness (a local bug, never the proposer's fault alone).
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum CommitmentError {
-    /// The executed block carries no execution result.
-    #[error("the executed block has no execution result")]
-    MissingResult,
-    /// The executed block already carries a commit certificate.
-    #[error("the executed block already carries a commit certificate")]
-    CertifiedBlock,
-    /// The block's outputs or their Merkle cache are malformed.
-    #[error("malformed execution outputs: {0}")]
-    InvalidOutputs(String),
-    /// The result-bearing block wire is empty or above the protocol bound.
-    #[error("the executed block wire length {0} is out of range")]
-    WireLength(u64),
-    /// The witness carries malformed or duplicate KAGEMUSHA receipts.
-    #[error("invalid KAGEMUSHA top-ups: {0}")]
-    KagemushaTopUps(String),
-    /// A Norito encoding or decoding failure.
-    #[error("encoding: {0}")]
-    Encoding(String),
-}
 
 /// The execution commitment of `executed` (the result-bearing block, without a certificate)
 /// whose execution produced `witness`.
@@ -137,20 +134,179 @@ pub fn execution_commitment(
     })
 }
 
-/// `R` of a block (§4.1): its execution commitment bound to the configuration `next` it
-/// schedules for `h + 2`. Returns the commitment, its canonical preimage and `R`.
+/// `R` of an executed block bound to its complete native schedule and finalized pulse.
+/// The returned owner retains the original execution inputs. Encode only after storing this
+/// owner beside the original overlay, so resource refusal retries encoding without execution.
 ///
 /// # Errors
 /// See [`CommitmentError`].
-pub fn execution_result(
+#[allow(unsafe_code)]
+pub(crate) fn execution_result(
     witness: &ExecWitness,
     executed: &SignedBlock,
-    next: &HeightConfig,
-) -> Result<(ExecutionResultCommitment, Vec<u8>, Hash32), CommitmentError> {
-    let commitment = ExecutionResultCommitment::new(execution_commitment(witness, executed)?, next);
-    let preimage = commitment.preimage().map_err(|error| CommitmentError::Encoding(error.to_string()))?;
-    let result = result_of_preimage(&preimage);
-    Ok((commitment, preimage, result))
+    inputs: RetainedPayload<NativeExecutionInputs>,
+    native_lanes: NativeLaneStateProof,
+) -> Result<RetainedPayload<ExecutionResultCommitment>, CommitmentError> {
+    let height = executed.header().height().get();
+    let execution = execution_commitment(witness, executed)?;
+    // SAFETY: only the two original canonical fields move, without clone, growth, sharing or
+    // extraction. The new height, slim execution commitment and fixed context proof contain
+    // no owned allocations.
+    // The original allocation ledger follows the whole R owner through publication and drop.
+    let commitment = unsafe {
+        inputs.map_payload(|inputs| ExecutionResultCommitment {
+            height,
+            execution,
+            schedule: inputs.schedule,
+            beacon: inputs.beacon,
+            native_lanes,
+        })
+    };
+    commitment.get().validate()?;
+    if commitment.get().beacon.as_ref().is_some_and(|pulse| {
+        Some(pulse.finalized_chain_anchor.block_hash) != executed.header().prev_block_hash()
+    }) {
+        return Err(CommitmentError::Beacon(
+            "pulse anchor differs from executed parent".into(),
+        ));
+    }
+    Ok(commitment)
+}
+
+/// A result preimage could not be encoded; resource refusal is local and preserves the result.
+/// Callers must never turn a finite-pool refusal into a deterministic invalid-block verdict.
+#[derive(Debug, Error)]
+pub enum ResultPreimageError {
+    /// Encoding was offered a different pool than the retained original result allocations.
+    #[error("result preimage budget differs from original execution source")]
+    ForeignBudget,
+    /// The canonical preimage exceeds the fixed protocol bound.
+    #[error("result preimage exceeds its byte bound: {0}")]
+    PreimageLength(usize),
+    /// Original-pool admission or allocator refusal; retains its exact typed release hint.
+    #[error("result preimage allocation: {0}")]
+    Allocation(#[from] ChargedBufferError),
+    /// A canonical serializer or bounded writer failed; no partial output is returned.
+    #[error("result preimage encoding: {0}")]
+    Encoding(#[from] norito::Error),
+}
+
+impl ResultPreimageError {
+    /// Whether retrying this same immutable result after local capacity/allocator recovery is safe.
+    /// Source, protocol-size and serializer errors require correction instead of an encoding loop.
+    #[must_use]
+    pub const fn is_local_refusal(&self) -> bool {
+        matches!(self, Self::Allocation(_))
+    }
+}
+
+/// Encode into one exactly admitted original-pool allocation while borrowing the retained R.
+/// Both success and refusal leave the original R and its ledger with the caller. The returned
+/// buffer must stay owned until the actual final certificate bytes are destroyed; copying or
+/// extracting it into an uncharged certificate does not transfer that custody.
+///
+/// The canonical nonpacked layout streams this fixed record graph, its byte/element sequences,
+/// public keys and borrowed bounded numeric fields. The root schema identity is a static literal.
+/// No output-sized staging Vec or copied epoch graph is constructed.
+///
+/// # Errors
+/// Returns a source mismatch, protocol bound, exact original-pool refusal or codec failure.
+/// The caller must retain its original executed block and overlay when retrying allocation.
+pub(crate) fn encode_result_preimage(
+    commitment: &RetainedPayload<ExecutionResultCommitment>,
+    budget: &AllocationBudget,
+) -> Result<ChargedBuffer<u8>, ResultPreimageError> {
+    if !commitment.belongs_to(budget) {
+        return Err(ResultPreimageError::ForeignBudget);
+    }
+    encode_canonical_part(commitment.get(), budget, MAX_RESULT_PREIMAGE_BYTES)
+}
+
+/// An immutable consensus artifact whose canonical frame is carried by a certificate.
+/// This selects a writer only: no alternate layout, decoder or storage tag is introduced.
+pub(crate) enum CertificatePart<'a> {
+    /// Complete context-bound block header.
+    Header(&'a iroha_sumeragi::message::BlockHeader),
+    /// Complete context-bound exact-quorum receipt.
+    Qc(&'a iroha_sumeragi::message::Qc),
+}
+
+/// Count and encode a certificate header or QC into exact original-pool backing.
+/// The supplied protocol bound is checked before any output allocation. The caller retains
+/// earlier successfully encoded parts across a later refusal; no result preimage is copied.
+///
+/// # Errors
+/// Returns a protocol-size, original-pool admission/allocator or canonical encoding failure.
+pub(crate) fn encode_certificate_part(
+    part: CertificatePart<'_>,
+    budget: &AllocationBudget,
+    max_bytes: usize,
+) -> Result<ChargedBuffer<u8>, ResultPreimageError> {
+    match part {
+        CertificatePart::Header(value) => {
+            encode_canonical_part(&HeaderFrame(value), budget, max_bytes)
+        }
+        CertificatePart::Qc(value) => encode_canonical_part(&QcFrame(value), budget, max_bytes),
+    }
+}
+
+// These writer-only borrows preserve the declared canonical frame identities while avoiding
+// allocating schema-name Strings. All payload serialization remains owned by the core types.
+struct HeaderFrame<'a>(&'a iroha_sumeragi::message::BlockHeader);
+struct QcFrame<'a>(&'a iroha_sumeragi::message::Qc);
+macro_rules! borrowed_certificate_frame {
+    ($name:ident, $identity:literal) => {
+        impl norito::core::SerializePayload for $name<'_> {
+            fn serialize(&self, out: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+                norito::core::SerializePayload::serialize(self.0, out)
+            }
+            fn encoded_len_hint(&self) -> Option<usize> {
+                norito::core::SerializePayload::encoded_len_hint(self.0)
+            }
+            fn encoded_len_exact(&self) -> Option<usize> {
+                norito::core::SerializePayload::encoded_len_exact(self.0)
+            }
+        }
+        impl norito::NoritoSchema for $name<'_> {
+            fn nominal_name() -> String {
+                $identity.to_owned()
+            }
+            fn static_frame_name() -> Option<&'static str> {
+                Some($identity)
+            }
+        }
+    };
+}
+borrowed_certificate_frame!(HeaderFrame, "iroha_sumeragi::BlockHeader");
+borrowed_certificate_frame!(QcFrame, "iroha_sumeragi::Qc");
+
+fn encode_canonical_part<T: NoritoSerialize>(
+    value: &T,
+    budget: &AllocationBudget,
+    max_bytes: usize,
+) -> Result<ChargedBuffer<u8>, ResultPreimageError> {
+    let length = norito::canonical_frame_len(value)?;
+    if length > max_bytes {
+        return Err(ResultPreimageError::PreimageLength(length));
+    }
+    let mut buffer = ChargedBuffer::new(length, budget)?;
+    norito::core::write_canonical_to_writer(value, &mut ResultPreimageWriter(&mut buffer))?;
+    if buffer.as_slice().len() != length {
+        return Err(ResultPreimageError::Encoding(norito::Error::LengthMismatch));
+    }
+    Ok(buffer)
+}
+
+/// Fixed-capacity destination which cannot replace or grow its charged allocation.
+struct ResultPreimageWriter<'a>(&'a mut ChargedBuffer<u8>);
+impl std::io::Write for ResultPreimageWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.append(bytes)?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The KAGEMUSHA top-up root and count of the witness (`None` without top-ups), from the
@@ -205,13 +361,23 @@ fn kagemusha_top_ups(witness: &ExecWitness) -> Result<Option<(Hash, u32)>, Commi
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
-    use iroha_data_model::block::consensus::ExecKv;
-    use iroha_sumeragi::types::{ChainParams, Committee, PublicKey};
-
     use super::*;
-    use crate::block::ValidBlock;
-
+    use crate::{
+        block::ValidBlock,
+        sumeragi::{
+            crypto::{BlsCrypto, core_key},
+            schedule::{ChainParamsRecord, ScheduledConfig, ScheduledSlot},
+        },
+    };
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
+    use iroha_data_model::{
+        NetworkId,
+        block::{BlockHeader, consensus::ExecKv, consensus_v2::ValidatorPower},
+        isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+        sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochContextV1},
+    };
+    use iroha_model_base::peer::PeerId;
+    use iroha_sumeragi::types::ChainParams;
     fn kv(key: &str, value: &str) -> ExecKv {
         ExecKv {
             key: key.as_bytes().to_vec(),
@@ -239,45 +405,137 @@ mod tests {
         ValidBlock::new_dummy(key.private_key()).into()
     }
 
-    fn committee(bytes: &[u8]) -> Committee {
-        Committee::new(
-            bytes
-                .iter()
-                .map(|b| PublicKey::new(vec![*b; 48]).expect("key"))
-                .collect(),
-        )
-        .expect("committee")
+    fn with_context_write(
+        mut witness: ExecWitness,
+        network: NetworkId,
+        height: u64,
+    ) -> ExecWitness {
+        let contexts = iroha_data_model::sumeragi_lanes::SumeragiLaneState::default();
+        let commitment =
+            iroha_data_model::sumeragi_finality::SumeragiLaneStateCommitment::from_state(
+                network, height, &contexts,
+            )
+            .unwrap();
+        witness.writes.push(ExecKv {
+            key: iroha_data_model::sumeragi_finality::SUMERAGI_LANE_STATE_WITNESS_KEY.to_vec(),
+            value: norito::encode_canonical(&commitment).unwrap(),
+        });
+        witness
     }
 
-    fn next() -> HeightConfig {
-        HeightConfig {
-            committee: committee(&[1, 2, 3, 4]),
-            params: ChainParams::default(),
+    fn context_proof(witness: &ExecWitness) -> NativeLaneStateProof {
+        let budget = AllocationBudget::new(1024 * 1024);
+        NativeLaneStateProof::from_witness(witness, &budget).unwrap()
+    }
+
+    fn result_for_test(
+        witness: &ExecWitness,
+        executed: &SignedBlock,
+        schedule: ScheduleOutcome,
+        beacon: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+    ) -> Result<(ExecutionResultCommitment, Vec<u8>, Hash32), CommitmentError> {
+        let height = executed.header().height().get();
+        let witness = with_context_write(witness.clone(), schedule.current.network_id, height);
+        let native_lanes = context_proof(&witness);
+        let commitment = ExecutionResultCommitment::new(
+            height,
+            execution_commitment(&witness, executed)?,
+            schedule,
+            beacon,
+            native_lanes,
+        )?;
+        let preimage = commitment.preimage()?;
+        let result = result_of_preimage(&preimage);
+        Ok((commitment, preimage, result))
+    }
+
+    fn members(bytes: &[u8]) -> Vec<(PublicKey, Vec<u8>)> {
+        let mut members = bytes
+            .iter()
+            .map(|byte| {
+                let key = KeyPair::from_seed(vec![*byte; 32], Algorithm::BlsNormal);
+                (
+                    key.public_key().clone(),
+                    bls_normal_pop_prove(key.private_key()).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(key, _)| core_key(key).unwrap());
+        members
+    }
+
+    fn epoch(bytes: &[u8]) -> ValidatorEpochContextV1 {
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"commitment fixture",
+            )),
+        );
+        let committee = members(bytes)
+            .into_iter()
+            .map(|(key, pop)| ValidatorCommitteeMemberV1 {
+                validator: PeerId::new(key),
+                proof_of_possession: pop,
+            })
+            .collect::<Vec<_>>();
+        let roster = committee
+            .iter()
+            .map(|member| ValidatorPower {
+                validator: member.validator.clone(),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let authority =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authority(network_id, 0, &roster);
+        let authorization =
+            KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, u64::MAX).unwrap();
+        ValidatorEpochContextV1 {
+            version: 1,
+            network_id,
+            mode: ConsensusMode::Permissioned,
+            authority,
+            authorization,
+            committee,
+            leader_seed: [0x31; 32],
         }
+    }
+
+    fn outcome(current: ValidatorEpochContextV1) -> ScheduleOutcome {
+        let params = ChainParamsRecord::from_core(&ChainParams::default());
+        ScheduleOutcome {
+            height: 2,
+            current: current.clone(),
+            boundary: None,
+            next: ScheduledSlot::Ready(ScheduledConfig {
+                height: 3,
+                epoch: current.clone(),
+                params,
+            }),
+            after_next: ScheduledSlot::Ready(ScheduledConfig {
+                height: 4,
+                epoch: current,
+                params,
+            }),
+        }
+    }
+    fn next() -> ScheduleOutcome {
+        outcome(epoch(&[1, 2, 3, 4]))
     }
 
     #[test]
     fn result_is_deterministic_across_independent_computations() {
-        let key = KeyPair::random();
-        let block = executed(&key);
-        // Two independent computations over separately built but equal inputs.
-        let (first, first_preimage, first_r) =
-            execution_result(&sample_witness(), &block.clone(), &next()).expect("R");
-        let (second, second_preimage, second_r) =
-            execution_result(&sample_witness(), &block, &next()).expect("R");
+        let block = executed(&KeyPair::random());
+        let (first, preimage, result) =
+            result_for_test(&sample_witness(), &block.clone(), next(), None).unwrap();
+        let (second, second_preimage, second_result) =
+            result_for_test(&sample_witness(), &block, next(), None).unwrap();
         assert_eq!(first, second);
-        assert_eq!(first_preimage, second_preimage);
-        assert_eq!(first_r, second_r);
-        assert_eq!(result_of_preimage(&first_preimage), first_r);
-        assert_eq!(first.result().expect("R"), first_r);
-        // The preimage decodes canonically back to the commitment.
-        assert_eq!(
-            ExecutionResultCommitment::decode(&first_preimage).expect("decode"),
-            first
-        );
-        assert!(ExecutionResultCommitment::decode(&first_preimage[1..]).is_err());
-        // The chain hash is the LSB-marked iroha hash (every core hash is a valid iroha hash).
-        assert_eq!(first_r.0[31] & 1, 1);
+        assert_eq!(preimage, second_preimage);
+        assert_eq!(result, second_result);
+        assert_eq!(result_of_preimage(&preimage), result);
+        assert_eq!(first.result().unwrap(), result);
+        assert_eq!(ExecutionResultCommitment::decode(&preimage).unwrap(), first);
+        assert!(ExecutionResultCommitment::decode(&preimage[1..]).is_err());
+        assert_eq!(result.0[31] & 1, 1);
     }
 
     #[test]
@@ -287,7 +545,7 @@ mod tests {
             vec![kv("balance/bob", "3"), kv("balance/alice", "10")],
             vec![kv("balance/bob", "6"), kv("balance/alice", "7")],
         );
-        let with_incidental = witness(
+        let incidental = witness(
             vec![
                 kv("balance/alice", "10"),
                 kv("balance/bob", "3"),
@@ -295,16 +553,16 @@ mod tests {
             ],
             sample_witness().writes,
         );
-        let base = execution_result(&sample_witness(), &block, &next())
-            .expect("R")
+        let base = result_for_test(&sample_witness(), &block, next(), None)
+            .unwrap()
             .2;
         assert_eq!(
-            execution_result(&reordered, &block, &next()).expect("R").2,
+            result_for_test(&reordered, &block, next(), None).unwrap().2,
             base
         );
         assert_eq!(
-            execution_result(&with_incidental, &block, &next())
-                .expect("R")
+            result_for_test(&incidental, &block, next(), None)
+                .unwrap()
                 .2,
             base
         );
@@ -312,26 +570,19 @@ mod tests {
 
     #[test]
     fn every_bound_input_changes_r() {
-        let key = KeyPair::random();
-        let block = executed(&key);
-        let base = execution_result(&sample_witness(), &block, &next())
-            .expect("R")
-            .2;
-        let r_of = |witness: &ExecWitness, block: &SignedBlock, next: &HeightConfig| {
-            execution_result(witness, block, next).expect("R").2
+        let block = executed(&KeyPair::random());
+        let r_of = |witness: &ExecWitness, block: &SignedBlock, next: ScheduleOutcome| {
+            result_for_test(witness, block, next, None).unwrap().2
         };
-        // A witnessed write.
-        let mut changed_write = sample_witness();
-        changed_write.writes[0].value = b"8".to_vec();
-        assert_ne!(r_of(&changed_write, &block, &next()), base);
-        // A pre-value of a written key.
-        let mut changed_read = sample_witness();
-        changed_read.reads[1].value = b"4".to_vec();
-        assert_ne!(r_of(&changed_read, &block, &next()), base);
-        // An execution result: the same proposal with another result (here the committed
-        // fragment count) has another result-bearing wire.
-        let mut other_result = block.canonical_resultless_proposal();
-        other_result
+        let base = r_of(&sample_witness(), &block, next());
+        let mut write = sample_witness();
+        write.writes[0].value = b"8".to_vec();
+        assert_ne!(r_of(&write, &block, next()), base);
+        let mut read = sample_witness();
+        read.reads[1].value = b"4".to_vec();
+        assert_ne!(r_of(&read, &block, next()), base);
+        let mut other = block.canonical_resultless_proposal();
+        other
             .set_execution_outputs(
                 Vec::new(),
                 1,
@@ -342,19 +593,20 @@ mod tests {
                 Vec::new(),
                 &crate::execution_output_test_support::structural_output_limits(),
             )
-            .expect("install another result");
-        assert_eq!(other_result.hash(), block.hash());
-        assert_ne!(r_of(&sample_witness(), &other_result, &next()), base);
-        let other_signer = executed(&KeyPair::random());
-        assert_ne!(r_of(&sample_witness(), &other_signer, &next()), base);
-        // The next committee.
-        let mut other_committee = next();
-        other_committee.committee = committee(&[1, 2, 3, 5]);
-        assert_ne!(r_of(&sample_witness(), &block, &other_committee), base);
-        let mut smaller = next();
-        smaller.committee = committee(&[1, 2, 3]);
-        assert_ne!(r_of(&sample_witness(), &block, &smaller), base);
-        // Every next chain parameter.
+            .unwrap();
+        assert_eq!(other.hash(), block.hash());
+        assert_ne!(r_of(&sample_witness(), &other, next()), base);
+        assert_ne!(
+            r_of(&sample_witness(), &executed(&KeyPair::random()), next()),
+            base
+        );
+        assert_ne!(
+            r_of(&sample_witness(), &block, outcome(epoch(&[1, 2, 3, 5]))),
+            base
+        );
+        let mut seed = epoch(&[1, 2, 3, 4]);
+        seed.leader_seed[0] ^= 1;
+        assert_ne!(r_of(&sample_witness(), &block, outcome(seed)), base);
         let params = ChainParams::default();
         for changed in [
             ChainParams {
@@ -382,18 +634,368 @@ mod tests {
                 ..params
             },
         ] {
-            let config = HeightConfig {
-                committee: next().committee,
-                params: changed,
+            let mut config = next();
+            let ScheduledSlot::Ready(after) = &mut config.after_next else {
+                unreachable!()
             };
-            assert_ne!(
-                r_of(&sample_witness(), &block, &config),
-                base,
-                "{changed:?}"
-            );
+            after.params = ChainParamsRecord::from_core(&changed);
+            assert_ne!(r_of(&sample_witness(), &block, config), base, "{changed:?}");
         }
     }
 
+    #[test]
+    fn complete_context_rejects_missing_reordered_or_forged_material() {
+        let context = epoch(&[1, 2, 3, 4]);
+        let crypto = BlsCrypto::new();
+        let admit = |context: &ValidatorEpochContextV1, crypto: &BlsCrypto| -> Result<(), String> {
+            context.validate()?;
+            crypto
+                .admit_committee(context.committee.iter().map(|member| {
+                    (
+                        member.validator.public_key(),
+                        member.proof_of_possession.as_slice(),
+                    )
+                }))
+                .map_err(|(_, error)| error.to_string())?;
+            Ok(())
+        };
+        admit(&context, &crypto).unwrap();
+        assert_eq!(crypto.admitted_len(), 4);
+        let frame = norito::encode_canonical(&context).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<ValidatorEpochContextV1>(&frame).unwrap(),
+            context
+        );
+        for mutation in 0..8 {
+            let mut invalid = context.clone();
+            match mutation {
+                0 => invalid.committee.swap(0, 1),
+                1 => invalid.committee[1] = invalid.committee[0].clone(),
+                2 => {
+                    invalid.committee.pop();
+                }
+                3 => invalid.committee[0].proof_of_possession.clear(),
+                4 => invalid.committee[0].proof_of_possession[0] ^= 1,
+                5 => {
+                    invalid.committee[0].proof_of_possession =
+                        invalid.committee[1].proof_of_possession.clone()
+                }
+                6 => invalid.authority.validators[0].eq_proof_public_key = [0xff; 32],
+                _ => invalid.authorization.authority_id[0] ^= 1,
+            }
+            let fresh = BlsCrypto::new();
+            assert!(admit(&invalid, &fresh).is_err());
+            assert_eq!(fresh.admitted_len(), 0, "admission remains all-or-nothing");
+            assert!(
+                admit(&invalid, &crypto).is_err(),
+                "admitted keys cannot mask changed proofs"
+            );
+        }
+        for count in [1usize, 3, 5, 32, 34] {
+            let mut invalid = context.clone();
+            invalid.committee = vec![context.committee[0].clone(); count];
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn result_requires_exact_context_graph_and_bounded_preimage() {
+        let block = executed(&KeyPair::random());
+        let (valid, preimage, _) =
+            result_for_test(&sample_witness(), &block, next(), None).unwrap();
+        assert_eq!(valid.schedule, next());
+        assert_eq!(ExecutionResultCommitment::decode(&preimage).unwrap(), valid);
+        for mutation in 0..5 {
+            let mut invalid = valid.clone();
+            match mutation {
+                0 => invalid.height += 1,
+                1 => invalid.schedule.current.committee[0].proof_of_possession[0] ^= 1,
+                2 => {
+                    invalid.schedule.current.committee.pop();
+                }
+                3 => invalid.schedule.current.leader_seed[0] ^= 1,
+                _ => {
+                    let ScheduledSlot::Ready(next) = &mut invalid.schedule.next else {
+                        unreachable!()
+                    };
+                    next.height += 1;
+                }
+            }
+            assert!(
+                ExecutionResultCommitment::decode(&norito::encode_canonical(&invalid).unwrap())
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            ExecutionResultCommitment::decode(&vec![0; MAX_RESULT_PREIMAGE_BYTES + 1]),
+            Err(CommitmentError::PreimageLength(
+                MAX_RESULT_PREIMAGE_BYTES + 1
+            ))
+        );
+        let mut wide = valid.clone();
+        wide.schedule.current.committee = vec![valid.schedule.current.committee[0].clone(); 97];
+        let frame = norito::encode_canonical(&wide).unwrap();
+        assert!(frame.len() < MAX_RESULT_PREIMAGE_BYTES);
+        assert!(matches!(
+            ExecutionResultCommitment::decode(&frame),
+            Err(CommitmentError::Encoding(_))
+        ));
+        let mut long = valid.clone();
+        long.schedule.current.committee[0]
+            .proof_of_possession
+            .push(0);
+        assert!(matches!(
+            ExecutionResultCommitment::decode(&norito::encode_canonical(&long).unwrap()),
+            Err(CommitmentError::Encoding(_))
+        ));
+        let mut huge = valid;
+        huge.schedule.current.committee[0].proof_of_possession = vec![0; MAX_RESULT_PREIMAGE_BYTES];
+        assert!(matches!(
+            huge.preimage(),
+            Err(CommitmentError::PreimageLength(_))
+        ));
+    }
+
+    #[test]
+    fn maximal_boundary_and_frozen_preparation_fit_the_preimage_bound() {
+        use iroha_data_model::{
+            isi::kagemusha_v1::{
+                BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+                KagemushaMintFinalityEpochDecisionV1,
+            },
+            nexus::{ValidatorCommitteePreparationV1, ValidatorElectionPolicyV1},
+            parameter::system::SumeragiNposParameters,
+            sumeragi::epoch::ValidatorEpochBoundaryV1,
+        };
+        let mut current = epoch(&(1..=31u8).collect::<Vec<_>>());
+        current.mode = ConsensusMode::Npos;
+        current.authorization.last_height = 6;
+        let mut next = current.clone();
+        next.authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &current.authorization,
+                &current.authority,
+                12,
+                BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: [0x41; 32],
+                    transcript_hash: [0x42; 32],
+                }),
+                KagemushaMintFinalityEpochDecisionV1::Retain,
+                [0; 32],
+            );
+        next.leader_seed = [0x32; 32];
+        let mut policy = SumeragiNposParameters::default();
+        policy.max_validators = 31;
+        policy.epoch_length_blocks = std::num::NonZeroU64::new(6).unwrap();
+        policy.evidence_horizon_blocks = 6;
+        policy.slashing_delay_blocks = 6;
+        let anchor =
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"bounded boundary anchor"));
+        let preparation = ValidatorCommitteePreparationV1 {
+            version: 1,
+            network_id: current.network_id,
+            selection_epoch: 0,
+            selection_height: 6,
+            selection_anchor: anchor,
+            target_epoch: 2,
+            first_height: 13,
+            last_height: 18,
+            authority_generation: 1,
+            preparing_authorization_id: next.authorization.authorization_id().unwrap(),
+            election_seed: [0x43; 32],
+            eligibility: ValidatorElectionPolicyV1::from_npos_parameters(&policy).unwrap(),
+            committee: current.committee.clone(),
+        };
+        let params = ChainParamsRecord::from_core(&ChainParams::default());
+        let graph = ScheduleOutcome {
+            height: 6,
+            current: current.clone(),
+            boundary: Some(ValidatorEpochBoundaryV1 {
+                version: 1,
+                height: 6,
+                predecessor_context_id: current.context_id().unwrap(),
+                selection_anchor: anchor,
+                next: next.clone(),
+                preparation: Some(preparation),
+            }),
+            next: ScheduledSlot::Ready(ScheduledConfig {
+                height: 7,
+                epoch: next.clone(),
+                params,
+            }),
+            after_next: ScheduledSlot::Ready(ScheduledConfig {
+                height: 8,
+                epoch: next,
+                params,
+            }),
+        };
+        let block = executed(&KeyPair::random());
+        let witness = with_context_write(sample_witness(), graph.current.network_id, 6);
+        let value = ExecutionResultCommitment::new(
+            6,
+            execution_commitment(&witness, &block).unwrap(),
+            graph,
+            None,
+            context_proof(&witness),
+        )
+        .unwrap();
+        let bytes = value
+            .preimage()
+            .expect("maximal valid graph fits protocol bound");
+        assert!(bytes.len() <= MAX_RESULT_PREIMAGE_BYTES);
+        assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
+    }
+
+    /// Encoding-only fixture with no dynamic payload allocations. Its empty roster deliberately
+    /// grants no signing authority; production first validates the real graph in execution_result.
+    #[allow(unsafe_code)]
+    fn allocation_free_encoding_owner(
+        budget: &AllocationBudget,
+    ) -> RetainedPayload<ExecutionResultCommitment> {
+        let mut current = epoch(&[1, 2, 3, 4]);
+        current.committee = Vec::new();
+        current.authority.validators = Vec::new();
+        let witness = with_context_write(sample_witness(), current.network_id, 2);
+        let execution = execution_commitment(&witness, &executed(&KeyPair::random())).unwrap();
+        let value = ExecutionResultCommitment {
+            height: 2,
+            execution,
+            schedule: outcome(current),
+            beacon: None,
+            native_lanes: context_proof(&witness),
+        };
+        let ledger = ChargedBuffer::new(0, budget).unwrap();
+        // SAFETY: every Vec in this encoding-only payload has zero capacity; every remaining
+        // field is fixed scalar/array storage. There are no dynamic payload allocations to fund.
+        match unsafe { RetainedPayload::try_new(value, ledger, budget) } {
+            Ok(owner) => owner,
+            Err(_) => panic!("empty exact-source ledger"),
+        }
+    }
+
+    #[test]
+    fn charged_preimage_matches_canonical_bytes_and_releases_only_its_actual_buffer() {
+        let budget = AllocationBudget::new(MAX_RESULT_PREIMAGE_BYTES);
+        let owner = allocation_free_encoding_owner(&budget);
+        let before = budget.reserved_bytes();
+        let expected = owner.get().preimage().unwrap();
+        let output = encode_result_preimage(&owner, &budget.clone()).unwrap();
+        assert_eq!(output.as_slice(), expected.as_slice());
+        assert_eq!(
+            result_of_preimage(output.as_slice()),
+            owner.get().result().unwrap()
+        );
+        assert!(output.belongs_to(&budget));
+        assert_eq!(output.capacity(), expected.len());
+        assert_eq!(budget.reserved_bytes(), before + expected.len());
+        drop(output);
+        assert_eq!(budget.reserved_bytes(), before);
+        assert!(owner.belongs_to(&budget));
+    }
+
+    #[test]
+    fn preimage_capacity_refusal_retains_the_same_result_for_retry_and_rejects_foreign_pool() {
+        let budget = AllocationBudget::new(MAX_RESULT_PREIMAGE_BYTES);
+        let owner = allocation_free_encoding_owner(&budget);
+        let pointer = std::ptr::from_ref(owner.get());
+        let length = norito::canonical_frame_len(owner.get()).unwrap();
+        budget.set_limit_bytes(length);
+        let occupied = ChargedBuffer::<u8>::new(1, &budget).unwrap();
+        assert!(matches!(
+            encode_result_preimage(&owner, &budget),
+            Err(ResultPreimageError::Allocation(
+                ChargedBufferError::Admission(mv::allocation::AllocationRefusal::Capacity { .. })
+            ))
+        ));
+        assert_eq!(budget.reserved_bytes(), 1);
+        assert_eq!(std::ptr::from_ref(owner.get()), pointer);
+        let foreign = AllocationBudget::new(length);
+        assert!(matches!(
+            encode_result_preimage(&owner, &foreign),
+            Err(ResultPreimageError::ForeignBudget)
+        ));
+        assert_eq!(foreign.reserved_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), 1);
+        drop(occupied);
+        let output = encode_result_preimage(&owner, &budget).unwrap();
+        assert_eq!(output.as_slice().len(), length);
+        assert_eq!(std::ptr::from_ref(owner.get()), pointer);
+        drop(output);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn charged_preimage_writer_refuses_growth_without_partial_append() {
+        use std::io::Write as _;
+        let budget = AllocationBudget::new(3);
+        let mut bytes = ChargedBuffer::new(3, &budget).unwrap();
+        {
+            let mut writer = ResultPreimageWriter(&mut bytes);
+            writer.write_all(&[1, 2]).unwrap();
+            assert!(writer.write_all(&[3, 4]).is_err());
+            writer.flush().unwrap();
+        }
+        assert_eq!(bytes.as_slice(), &[1, 2]);
+        assert_eq!(budget.reserved_bytes(), 3);
+        drop(bytes);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn digest_only_and_full_committee_retired_result_layouts_are_rejected() {
+        #[derive(norito::NoritoSchema, NoritoSerialize, NoritoDeserialize)]
+        #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionResultCommitment")]
+        struct DigestOnlyResult {
+            execution: ExecutionCommitment,
+            next_committee_digest: [u8; 32],
+            next_params: ChainParamsRecord,
+        }
+        #[derive(norito::NoritoSchema, NoritoSerialize, NoritoDeserialize)]
+        #[norito_schema(name = "iroha_core::sumeragi::commitment::CommitteeMember")]
+        struct RetiredMember {
+            public_key: PublicKey,
+            proof_of_possession: Vec<u8>,
+        }
+        #[derive(norito::NoritoSchema, NoritoSerialize, NoritoDeserialize)]
+        #[norito_schema(name = "iroha_core::sumeragi::commitment::CommitteeAuthority")]
+        struct RetiredAuthority {
+            members: Vec<RetiredMember>,
+        }
+        #[derive(norito::NoritoSchema, NoritoSerialize, NoritoDeserialize)]
+        #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionResultCommitment")]
+        struct FullCommitteeResult {
+            execution: ExecutionCommitment,
+            next_committee: RetiredAuthority,
+            next_params: ChainParamsRecord,
+        }
+        let execution =
+            execution_commitment(&sample_witness(), &executed(&KeyPair::random())).unwrap();
+        let params = ChainParamsRecord::from_core(&ChainParams::default());
+        let digest = DigestOnlyResult {
+            execution,
+            next_committee_digest: [3; 32],
+            next_params: params,
+        };
+        let full = FullCommitteeResult {
+            execution,
+            next_committee: RetiredAuthority {
+                members: members(&[1, 2, 3, 4])
+                    .into_iter()
+                    .map(|(public_key, proof_of_possession)| RetiredMember {
+                        public_key,
+                        proof_of_possession,
+                    })
+                    .collect(),
+            },
+            next_params: params,
+        };
+        for bytes in [
+            norito::encode_canonical(&digest).unwrap(),
+            norito::encode_canonical(&full).unwrap(),
+        ] {
+            assert!(ExecutionResultCommitment::decode(&bytes).is_err());
+        }
+    }
     #[test]
     fn commitment_binds_the_result_bearing_wire_and_roots() {
         let block = executed(&KeyPair::random());
@@ -438,7 +1040,11 @@ mod tests {
             Err(CommitmentError::MissingResult)
         );
         let certified = block.with_commit_certificate(Some(
-            iroha_data_model::block::CommitCertificate::new(vec![1], vec![2], vec![3]),
+            iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+                vec![1],
+                vec![2],
+                vec![3],
+            ),
         ));
         assert_eq!(
             execution_commitment(&sample_witness(), &certified),
@@ -469,6 +1075,91 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn charged_certificate_parts_preserve_core_frames_and_refuse_before_allocation() {
+        use iroha_sumeragi::{
+            message::{BlockHeader as Header, Qc, VoteKind},
+            types::{AggregateSignature, Bitmap, EpochId, SIGNATURE_LEN},
+        };
+        // Codec and resource fixture only; these bytes grant no consensus authority.
+        let epoch = EpochId {
+            epoch: 7,
+            context: Hash32([9; 32]),
+        };
+        let header = Header {
+            instance: Hash32([1; 32]),
+            epoch,
+            height: 23,
+            origin_view: 4,
+            parent_hash: Hash32([2; 32]),
+            parent_result: Hash32([3; 32]),
+            payload_hash: Hash32([4; 32]),
+            payload_len: 0,
+            proposer: 2,
+            skipped_leaders: Vec::new(),
+            attest: true,
+        };
+        let qc = Qc {
+            kind: VoteKind::Commit,
+            instance: header.instance,
+            epoch,
+            height: header.height,
+            view: 5,
+            block_hash: Hash32([5; 32]),
+            result: Hash32([6; 32]),
+            attest: true,
+            signers: Bitmap::from_indices(4, [0, 2, 3]).unwrap(),
+            agg_sig: AggregateSignature([7; SIGNATURE_LEN]),
+            attestations: vec![
+                iroha_sumeragi::message::AttestationSignature::try_from_slice(
+                    &[8; 200]
+                )
+                .unwrap();
+                3
+            ],
+            attestation_witness: Some(
+                iroha_sumeragi::message::ResultWitness::from_untrusted(vec![9; 4096]).unwrap(),
+            ),
+        };
+        let expected_header = norito::encode_canonical(&header).unwrap();
+        let expected_qc = norito::encode_canonical(&qc).unwrap();
+        let budget = AllocationBudget::new(expected_header.len() + expected_qc.len());
+        let header_bytes = encode_certificate_part(
+            CertificatePart::Header(&header),
+            &budget,
+            expected_header.len(),
+        )
+        .unwrap();
+        assert_eq!(header_bytes.as_slice(), expected_header);
+        assert!(header_bytes.belongs_to(&budget));
+        assert!(matches!(
+            encode_certificate_part(CertificatePart::Qc(&qc), &budget, expected_qc.len() - 1),
+            Err(ResultPreimageError::PreimageLength(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), expected_header.len());
+        let mut occupied = ChargedBuffer::new(1, &budget).unwrap();
+        occupied.append(&[0]).unwrap();
+        assert!(matches!(
+            encode_certificate_part(CertificatePart::Qc(&qc), &budget, expected_qc.len()),
+            Err(ResultPreimageError::Allocation(_))
+        ));
+        drop(occupied);
+        let qc_bytes =
+            encode_certificate_part(CertificatePart::Qc(&qc), &budget, expected_qc.len()).unwrap();
+        assert_eq!(qc_bytes.as_slice(), expected_qc);
+        assert!(qc_bytes.belongs_to(&budget));
+        assert_eq!(
+            norito::schema::identity::frame_hash::<HeaderFrame<'_>>(),
+            norito::schema::identity::frame_hash::<Header>()
+        );
+        assert_eq!(
+            norito::schema::identity::frame_hash::<QcFrame<'_>>(),
+            norito::schema::identity::frame_hash::<Qc>()
+        );
+        drop(header_bytes);
+        drop(qc_bytes);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
     #[test]
     fn chain_hash_is_the_iroha_hash() {
         assert_eq!(chain_hash(b"x").0, <[u8; 32]>::from(Hash::new(b"x")));

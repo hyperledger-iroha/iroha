@@ -106,7 +106,7 @@ def build_archive(where):
             path=f'{prefix}/{_PATHS[role]}';raw=(root/path).read_bytes();cap=getattr(allocation.run,role)
             source_rows.append(dict(role=role,label=cap.label,path=path,sha256=sha(raw),bytes=len(raw),max_bytes=cap.max_bytes))
         byrole={row['role']:row for row in source_rows}
-        generation=dict(network_id='hash:'+'E'*63+'1#0000',genesis_hash='hash:'+'E'*63+'1#0000',context_id='hash:'+'F'*63+'1#0000',genesis_public_key='ed0120'+'A'*64,chain_discriminant=753,
+        generation=dict(network_id='hash:'+'E'*63+'1#0000',genesis_hash='hash:'+'E'*63+'1#0000',genesis_epoch_context_id='hash:'+'F'*63+'1#0000',genesis_public_key='ed0120'+'A'*64,chain_discriminant=753,
             anchors_sha256=byrole['genesis_anchors']['sha256'],generator_sha256=images['kagami'],process=native_process,accounts=[dict(index=i,account_id=account) for i,account in enumerate(accounts)])
         ready=[]
         for i,peer in enumerate(fixture.peers):

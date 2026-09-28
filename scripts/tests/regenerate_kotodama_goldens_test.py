@@ -427,6 +427,47 @@ class StagedPublicationTests(unittest.TestCase):
                 MODULE.verify_rendered_tree(publication, rendered)
 
 
+class TestModuleValidationTests(unittest.TestCase):
+    def test_scaffold_pair_and_ordinary_tests_use_the_real_test_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            template = Path("crates/musubi/templates/contract.test.ko")
+            (root / template).parent.mkdir(parents=True)
+            (root / template).write_bytes(b"test-target: ../contracts/coffee-club.ko")
+            contract = root / "crates/musubi/templates/contract.ko"
+            contract.write_bytes(b"contract-source")
+            ordinary = Path("examples/coffee-club/tests/coffee-club.test.ko")
+            observed = []
+
+            def execute(command, cwd):
+                self.assertEqual(command[1:3], ["test", "run"])
+                if Path(command[-1]).is_absolute():
+                    staged = Path(command[-1])
+                    self.assertEqual(staged.read_bytes(), (root / template).read_bytes())
+                    self.assertEqual(
+                        (staged.parent.parent / "contracts/coffee-club.ko").read_bytes(),
+                        contract.read_bytes(),
+                    )
+                    self.assertEqual(cwd, staged.parent.parent)
+                observed.append(command[-1])
+                return "{}"
+
+            with mock.patch.object(MODULE, "run", side_effect=execute):
+                MODULE.validate_additional_test_sources(
+                    Path("koto"), root, [MODULE.TEST_SOURCE, template, ordinary], root
+                )
+            self.assertEqual(len(observed), 2)
+            self.assertIn(ordinary, observed)
+            self.assertEqual((root / template).read_bytes(), b"test-target: ../contracts/coffee-club.ko")
+
+    def test_test_runner_failure_is_not_reclassified_as_a_deployable_source(self) -> None:
+        with mock.patch.object(MODULE, "run", side_effect=MODULE.GoldenError("test failed")):
+            with self.assertRaisesRegex(MODULE.GoldenError, "test failed"):
+                MODULE.validate_additional_test_sources(
+                    Path("koto"), Path("root"), [Path("contract.test.ko")], Path("stage")
+                )
+
+
 class TwoPassTests(unittest.TestCase):
     def test_renderings_bind_sorted_paths_modes_bytes_and_manifest(self) -> None:
         first = (

@@ -1,3 +1,5 @@
+//! Ed25519 signing, strict verification, and bounded ordinary caches.
+
 use crate::{Error, KeyGenOption, ParseError};
 use blake2::{Blake2b, digest::consts::U32};
 use core::convert::TryFrom;
@@ -19,6 +21,9 @@ use std::{
     string::ToString as _,
     vec::Vec,
 };
+mod public_key;
+pub(crate) use public_key::KeyRejection;
+
 const VERIFY_OK_CACHE_LIMIT: usize = 8192;
 // Two exact entries fit in each bucket, so this admits the same bounded
 // working set as the generic cache without an unbounded per-thread footprint.
@@ -56,19 +61,19 @@ fn u64_from_le_chunk(bytes: &[u8], offset: usize) -> u64 {
 #[derive(Clone)]
 enum PublicKeyParseOutcome {
     Valid(Box<PublicKey>),
-    Invalid(ParseError),
+    Invalid(KeyRejection),
 }
 impl PublicKeyParseOutcome {
     fn valid(key: PublicKey) -> Self {
         Self::Valid(Box::new(key))
     }
-    fn invalid(error: ParseError) -> Self {
+    fn invalid(error: KeyRejection) -> Self {
         Self::Invalid(error)
     }
-    fn as_result(&self) -> Result<PublicKey, ParseError> {
+    fn as_result(&self) -> Result<PublicKey, KeyRejection> {
         match self {
             Self::Valid(key) => Ok(**key),
-            Self::Invalid(error) => Err(error.clone()),
+            Self::Invalid(error) => Err(*error),
         }
     }
 }
@@ -100,7 +105,7 @@ impl PublicKeyParseCache {
             inserts: 0,
         }
     }
-    fn get(&mut self, bytes: &[u8; 32]) -> Option<Result<PublicKey, ParseError>> {
+    fn get(&mut self, bytes: &[u8; 32]) -> Option<Result<PublicKey, KeyRejection>> {
         let slot = public_key_parse_fast_index(bytes);
         if let Some(entry) = &self.fast[slot]
             && entry.bytes == *bytes
@@ -436,67 +441,24 @@ impl Ed25519Sha512 {
         Ok(PrivateKey::from_bytes(&seed))
     }
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
-        let bytes: [u8; 32] = payload.try_into().map_err(|_| {
-            ParseError(format!(
-                "the payload size is incorrect: expected {}, but got {}",
-                32,
-                payload.len()
-            ))
-        })?;
+        let bytes = public_key::array(payload).map_err(KeyRejection::into_parse_error)?;
         #[cfg(test)]
         PUBLIC_KEY_PARSE_CACHE_CONSULTED.with(|consulted| consulted.set(true));
         if let Some(result) = PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().get(&bytes)) {
-            return result;
+            return result.map_err(KeyRejection::into_parse_error);
         }
-        let result = Self::parse_public_key_uncached(&bytes);
+        let result = public_key::parse_array(&bytes);
         let outcome = match &result {
             Ok(key) => PublicKeyParseOutcome::valid(*key),
-            Err(err) => PublicKeyParseOutcome::invalid(err.clone()),
+            Err(err) => PublicKeyParseOutcome::invalid(*err),
         };
         PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().insert(bytes, outcome));
-        result
+        result.map_err(KeyRejection::into_parse_error)
     }
     pub(crate) fn parse_public_key_uncached_for_decode(
         payload: &[u8],
-    ) -> Result<PublicKey, ParseError> {
-        let bytes: [u8; 32] = payload.try_into().map_err(|_| {
-            ParseError(format!(
-                "the payload size is incorrect: expected {}, but got {}",
-                32,
-                payload.len()
-            ))
-        })?;
-        Self::parse_public_key_uncached(&bytes)
-    }
-    fn parse_public_key_uncached(bytes: &[u8; 32]) -> Result<PublicKey, ParseError> {
-        if bytes.iter().all(|byte| *byte == 0) {
-            return Err(ParseError(
-                "ed25519 public key material must not be all zero".to_string(),
-            ));
-        }
-        let compressed = CompressedEdwardsY(*bytes);
-        let point = compressed
-            .decompress()
-            .ok_or_else(|| ParseError("invalid ed25519 public key encoding".to_string()))?;
-        let canonical = point.compress();
-        // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
-        // byte representation to keep deterministic I105/in-memory forms in sync).
-        if canonical.as_bytes() != bytes {
-            return Err(ParseError(
-                "non-canonical ed25519 public key encoding".to_string(),
-            ));
-        }
-        if point.is_small_order() {
-            return Err(ParseError(
-                "ed25519 public key is small-order (weak); rejected".to_string(),
-            ));
-        }
-        if !point.is_torsion_free() {
-            return Err(ParseError(
-                "ed25519 public key is outside the prime-order subgroup; rejected".to_string(),
-            ));
-        }
-        Ok(PublicKey::from(point))
+    ) -> Result<PublicKey, KeyRejection> {
+        public_key::parse(payload)
     }
     pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
         match payload.len() {
@@ -1140,6 +1102,33 @@ mod test {
         );
     }
     #[test]
+    fn typed_decode_rejections_preserve_public_categories_and_precedence() {
+        let mixed = mixed_torsion_public_key();
+        for (bytes, reason) in [
+            (&[][..], KeyRejection::Length(0)),
+            (&[0; 31][..], KeyRejection::Length(31)),
+            (&[0; 32][..], KeyRejection::AllZero),
+            (&ED25519_INVALID_ENCODING[..], KeyRejection::Encoding),
+            (
+                &ED25519_NON_CANONICAL_IDENTITY[..],
+                KeyRejection::NonCanonical,
+            ),
+            (&ED25519_SMALL_ORDER_POINT[..], KeyRejection::SmallOrder),
+            (&mixed[..], KeyRejection::Torsion),
+        ] {
+            assert_eq!(
+                Ed25519Sha512::parse_public_key_uncached_for_decode(bytes).unwrap_err(),
+                reason
+            );
+            for _ in 0..2 {
+                assert_eq!(
+                    Ed25519Sha512::parse_public_key(bytes).unwrap_err(),
+                    reason.into_parse_error()
+                );
+            }
+        }
+    }
+    #[test]
     fn parse_public_key_cache_does_not_store_wrong_lengths() {
         reset_public_key_parse_cache_for_tests();
         for _ in 0..2 {
@@ -1163,7 +1152,7 @@ mod test {
             bytes[..8].copy_from_slice(&idx.to_le_bytes());
             cache.insert(
                 bytes,
-                PublicKeyParseOutcome::invalid(ParseError("cached rejection".into())),
+                PublicKeyParseOutcome::invalid(KeyRejection::Encoding),
             );
         }
         assert_eq!(cache.map.len(), 20_000);
@@ -1185,33 +1174,28 @@ mod test {
             public_key_parse_fast_index(&first),
             public_key_parse_fast_index(&colliding)
         );
-        cache.insert(
-            first,
-            PublicKeyParseOutcome::invalid(ParseError("first rejection".into())),
-        );
+        cache.insert(first, PublicKeyParseOutcome::invalid(KeyRejection::AllZero));
         assert!(
             cache.get(&colliding).is_none(),
             "a colliding fast slot must not return another key's negative verdict"
         );
         cache.insert(
             colliding,
-            PublicKeyParseOutcome::invalid(ParseError("second rejection".into())),
+            PublicKeyParseOutcome::invalid(KeyRejection::Encoding),
         );
         assert_eq!(
             cache
                 .get(&first)
                 .expect("first exact entry remains present")
-                .expect_err("first entry is a cached rejection")
-                .0,
-            "first rejection"
+                .expect_err("first entry is a cached rejection"),
+            KeyRejection::AllZero
         );
         assert_eq!(
             cache
                 .get(&colliding)
                 .expect("second exact entry is present")
-                .expect_err("second entry is a cached rejection")
-                .0,
-            "second rejection"
+                .expect_err("second entry is a cached rejection"),
+            KeyRejection::Encoding
         );
     }
     #[test]
@@ -1220,9 +1204,11 @@ mod test {
         let (pk, _) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(vec![0x6A; 32]));
         let public_key = CryptoPublicKey::new(crate::PublicKeyFull::Ed25519(pk));
         let compact = public_key.0.clone();
-        let first = crate::PublicKeyFull::try_from(&compact).expect("compact key converts");
+        let first = crate::PublicKeyMaterial::try_from(&compact).expect("compact key converts");
         match first {
-            crate::PublicKeyFull::Ed25519(parsed) => assert_eq!(parsed.to_bytes(), pk.to_bytes()),
+            crate::PublicKeyMaterial::Decoded(crate::PublicKeyFull::Ed25519(parsed)) => {
+                assert_eq!(parsed.to_bytes(), pk.to_bytes())
+            }
             _ => panic!("compact Ed25519 key converted to a non-Ed25519 full key"),
         }
         assert_eq!(
@@ -1233,9 +1219,11 @@ mod test {
                 inserts: 1,
             }
         );
-        let second = crate::PublicKeyFull::try_from(&compact).expect("compact key converts");
+        let second = crate::PublicKeyMaterial::try_from(&compact).expect("compact key converts");
         match second {
-            crate::PublicKeyFull::Ed25519(parsed) => assert_eq!(parsed.to_bytes(), pk.to_bytes()),
+            crate::PublicKeyMaterial::Decoded(crate::PublicKeyFull::Ed25519(parsed)) => {
+                assert_eq!(parsed.to_bytes(), pk.to_bytes())
+            }
             _ => panic!("compact Ed25519 key converted to a non-Ed25519 full key"),
         }
         assert_eq!(

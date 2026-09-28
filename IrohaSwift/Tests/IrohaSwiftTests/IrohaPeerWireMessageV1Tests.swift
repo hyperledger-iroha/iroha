@@ -90,7 +90,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertEqual(readUInt32BE(encoded, 16), UInt32(canonical.count))
 
         var canonicalPreimage = Data("IROHA-PEER-PAYLOAD-V1\0".utf8)
-        canonicalPreimage.append(contentsOf: [0, 1, 2, 0, 1])
+        canonicalPreimage.append(contentsOf: [0, 1, IrohaPeerWireKindV1.payment.rawValue, 0, 1])
         canonicalPreimage.append(canonical)
         let canonicalHash = Blake2b.hash256(canonicalPreimage)
         XCTAssertEqual(Data(encoded[20..<52]), canonicalHash)

@@ -190,7 +190,7 @@ fn inactive_first_capture_rejects_even_empty_inventory_after_ordinary_witness_wa
 #[test]
 fn content_failure_survives_resynchronization_retry_getters_and_commit() {
     let _guard = exec_witness::exec_witness_guard();
-    for replay_at_commit in [false, true] {
+    {
         let state = state();
         exec_witness::start_block();
         let mut block = state.block(header());
@@ -212,7 +212,6 @@ fn content_failure_survives_resynchronization_retry_getters_and_commit() {
         assert_eq!(assert_raw_content_failure(&block), first_error);
         assert_getters_refuse(&mut block, &first_error);
         assert_eq!(block.fastpq_source_inventory(), Err(first_error.as_str()));
-        block.authenticated_replay_commit = replay_at_commit;
         assert!(matches!(
             block.commit(),
             Err(TransactionsBlockError::FastpqSourceInventory)
@@ -385,7 +384,7 @@ fn private_path_only_changes_survive_first_repeat_and_ordered_capture_extraction
 fn directly_mutated_cached_public_bundles_cannot_commit_without_recapture_or_getters() {
     let _guard = exec_witness::exec_witness_guard();
     for missing_digest in [false, true] {
-        for replay_at_commit in [false, true] {
+        {
             let state = state();
             exec_witness::start_block();
             let mut block = state.block(header());
@@ -399,7 +398,6 @@ fn directly_mutated_cached_public_bundles_cannot_commit_without_recapture_or_get
             );
             assert_eq!(cached_outputs(&block), [true; 3]);
             assert!(block.fastpq_source_inventory.as_ref().unwrap().is_ok());
-            block.authenticated_replay_commit = replay_at_commit;
             assert!(matches!(
                 block.commit(),
                 Err(TransactionsBlockError::FastpqSourceInventory)
@@ -482,7 +480,7 @@ fn cached_prebuilt_batches_reject_recapture_and_every_first_getter_with_sticky_f
 fn cached_prebuilt_batches_cannot_commit_without_recapture_or_getters() {
     let _guard = exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
-        for replay_at_commit in [false, true] {
+        {
             let state = state();
             exec_witness::start_block();
             let mut block = state.block(header());
@@ -512,7 +510,6 @@ fn cached_prebuilt_batches_cannot_commit_without_recapture_or_getters() {
                 .push(unexpected_prebuilt_batch());
             assert_eq!(cached_outputs(&block), [true, with_transfer, true]);
             assert!(block.fastpq_source_inventory.as_ref().unwrap().is_ok());
-            block.authenticated_replay_commit = replay_at_commit;
             assert!(matches!(
                 block.commit(),
                 Err(TransactionsBlockError::FastpqSourceInventory)

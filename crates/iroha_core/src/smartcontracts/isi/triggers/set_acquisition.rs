@@ -27,9 +27,18 @@ macro_rules! trigger_acquisition {
                 $(if let Some(field) = self.$field.as_mut() { field.release(); })+
             }
 
-            fn into_block(mut self) -> Self::Block {
+            fn is_initialized(&self) -> bool {
+                true $(&& self.$field.as_ref().is_some_and(BlockAcquisition::is_initialized))+
+            }
+
+            fn into_block(mut self) -> Self::Block { self.take_block() }
+
+            fn take_block(&mut self) -> Self::Block {
+                // Validate every original slot before the first inert field move.
+                // A refusal leaves all custody here for aggregate release.
+                assert!(self.is_initialized(), "complete original trigger acquisition");
                 SetBlock { publication: AggregatePublication::Executing, fields: Some(SetBlockFields {
-                    $($field: BlockField::new(self.$field.take().expect("original trigger slot").into_block()),)+
+                    $($field: BlockField::new(self.$field.as_mut().expect("original trigger slot").take_block()),)+
                 }) }
             }
         }
@@ -40,7 +49,43 @@ macro_rules! trigger_acquisition {
             }
         }
 
-        impl SetBlock<'_> {
+        impl<'set> SetBlock<'set> {
+            pub(crate) fn begin_freeze(&mut self) {
+                self.publication.begin_freeze();
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.begin_freeze();)+
+            }
+            pub(crate) fn finish_freeze(&mut self) {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.finish_freeze();)+
+                self.publication.finish_freeze();
+            }
+            pub(crate) fn install_frozen_publication(
+                &mut self, target: &'set Set,
+                scope: &mv::allocation::OwnedAllocationScope,
+            ) -> Result<(), mv::storage::AdmittedStorageError> {
+                self.publication.begin_reacquisition();
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.install_frozen_publication(&target.$field, scope)?;)+
+                Ok(())
+            }
+            pub(crate) fn try_prepare_frozen_publication(&mut self)
+                -> Result<(), mv::PublicationPreparationError<core::convert::Infallible>> {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.try_prepare_frozen_publication()?;)+
+                self.publication.finish_reacquisition();
+                Ok(())
+            }
+            pub(crate) fn recover_installed_frozen_publication(&mut self) {
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.recover_installed_frozen_publication();)+
+                self.publication.recover_reacquisition();
+            }
+            pub(crate) fn retire_frozen_cleanup(&mut self) {
+                self.publication.assert_frozen();
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.retire_frozen_cleanup();)+
+            }
             pub(crate) fn prepare_publication(&mut self) {
                 self.publication.begin_preparation();
                 let fields = self.fields.as_mut().expect("original trigger block fields");

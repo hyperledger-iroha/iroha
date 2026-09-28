@@ -4,10 +4,9 @@ mod axt_golden;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::nexus::{
     AssetHandle, AxtAssetIncarnationV1, AxtBinding, AxtDescriptor, AxtHandleCounterRecord,
-    AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyBinding,
-    AxtPolicyEntry, AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec, AxtValidationError,
-    GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent, SpendOp, TouchManifest,
-    UniversalAccountId, validate_descriptor,
+    AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
+    AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec, AxtValidationError, GroupBinding,
+    HandleBudget, HandleSubject, TouchManifest, UniversalAccountId, validate_descriptor,
 };
 use iroha_data_model::{NetworkId, asset::id::AssetDefinitionId, block::BlockHeader};
 use iroha_model_base::domain::DomainId;
@@ -155,22 +154,6 @@ fn sample_handle_replay_key() -> AxtHandleReplayKey {
     let handle = sample_handle(sample_binding(&descriptor));
     AxtHandleReplayKey::from_handle(DataSpaceId::new(7), &handle)
 }
-fn sample_intent() -> RemoteSpendIntent {
-    RemoteSpendIntent {
-        asset_dsid: DataSpaceId::new(7),
-        op: SpendOp {
-            asset_definition_id: sample_asset_definition_id(),
-            kind: "transfer".into(),
-            from: encoded_account(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
-            ),
-            to: encoded_account(
-                "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D",
-            ),
-            amount: Some(Quantity::from(250_u64)),
-        },
-    }
-}
 #[test]
 fn descriptor_roundtrip_matches_golden() {
     let descriptor = sample_descriptor();
@@ -313,13 +296,6 @@ fn print_golden_vectors() {
             write: vec!["ledger/ready".into()],
         },
     };
-    let handle_fragment = AxtHandleFragment {
-        handle,
-        intent: sample_intent(),
-        proof: None,
-        amount: Some(Quantity::from(250_u64)),
-        amount_commitment: None,
-    };
     let snapshot_entries = snapshot.entries.clone();
     let snapshot_fragment = AxtPolicySnapshot {
         version: AxtPolicySnapshot::compute_version(&snapshot_entries),
@@ -330,14 +306,6 @@ fn print_golden_vectors() {
         hex::encode(
             norito::to_bytes(&touch_fragment)
                 .expect("encode touch fragment")
-                .as_slice(),
-        )
-    );
-    println!(
-        "handle fragment: {}",
-        hex::encode(
-            norito::to_bytes(&handle_fragment)
-                .expect("encode handle fragment")
                 .as_slice(),
         )
     );

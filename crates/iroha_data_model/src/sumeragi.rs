@@ -5,6 +5,15 @@
 //! The driver fills it from `Core::status()`; hashes become 32-byte arrays and core keys the
 //! validators' consensus [`PublicKey`]s. The data model does not depend on the core crate.
 
+/// Sole first-release native consensus wire version, including mandatory epoch context.
+pub const PROTOCOL_VERSION: u16 = 8;
+
+/// Canonical validator generations, scheduling epochs, and frozen boundary results.
+pub mod epoch;
+
+/// Canonical native finality source frames and explicit bounded decoding.
+pub mod finality;
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
@@ -47,6 +56,8 @@ pub enum SumeragiHaltReason {
     SafetyViolation(u64),
     /// Local apply disagrees with a certified result at this height (O3).
     ApplyDiverged(u64),
+    /// Original publication was consumed, possibly visible, or lost; this node needs recovery.
+    PublicationRecoveryRequired(u64),
     /// The driver violated its contract with the core (§6.13).
     DriverAnomaly,
 }
@@ -56,7 +67,9 @@ impl SumeragiHaltReason {
     #[must_use]
     pub const fn height(self) -> Option<u64> {
         match self {
-            Self::SafetyViolation(height) | Self::ApplyDiverged(height) => Some(height),
+            Self::SafetyViolation(height)
+            | Self::ApplyDiverged(height)
+            | Self::PublicationRecoveryRequired(height) => Some(height),
             Self::SafetyRecordCorrupt | Self::SafetyRecordInconsistent | Self::DriverAnomaly => {
                 None
             }
@@ -133,6 +146,13 @@ pub struct SumeragiFootprint {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi::SumeragiStatus")]
 pub struct SumeragiStatus {
+    /// Exact native wire revision of the running owner.
+    pub protocol_version: u16,
+    /// Signed-genesis native consensus configuration fingerprint, excluding local resources.
+    pub config_fingerprint: iroha_crypto::Hash,
+    /// Same-applied-cut native beacon readiness, absent while its observation is unavailable.
+    #[norito(required)]
+    pub beacon_horizon: Option<BeaconHorizonStatusV1>,
     /// Instance id `I` (§1.8).
     #[norito(
         with = "crate::json_helpers::fixed_bytes_hex",
@@ -180,6 +200,38 @@ pub struct SumeragiStatus {
     pub footprint: SumeragiFootprint,
 }
 
+/// Native beacon readiness facts from the sole production pulse owner.
+/// This local observation confers no finality or signing authority.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::Encode,
+    norito::Decode,
+    iroha_schema::IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::sumeragi::BeaconHorizonStatusV1")]
+pub struct BeaconHorizonStatusV1 {
+    /// Frozen scheduling interval; zero for permissioned consensus.
+    pub epoch_length_blocks: u64,
+    /// Earliest mandatory pulse within the currently authenticated epoch.
+    #[norito(required)]
+    pub next_required_pulse_height: Option<u64>,
+    /// Actual committed active session pointer, if installed.
+    #[norito(required)]
+    pub active_session_id: Option<[u8; 32]>,
+    /// The authenticated active transcript covers the required pulse.
+    pub session_covers_next_pulse: bool,
+    /// Actual current validator custody probe succeeded; always false for observers.
+    pub local_provider_ready: bool,
+}
+
 impl SumeragiStatus {
     /// Whether the instance halted and the node must be restarted after repair.
     #[must_use]
@@ -215,6 +267,9 @@ mod tests {
             .public_key()
             .clone();
         SumeragiStatus {
+            protocol_version: PROTOCOL_VERSION,
+            config_fingerprint: iroha_crypto::Hash::new(b"native status configuration fixture"),
+            beacon_horizon: None,
             instance: [7; 32],
             height: 12,
             view: 1,
@@ -304,6 +359,7 @@ mod tests {
             SumeragiHaltReason::SafetyRecordInconsistent,
             SumeragiHaltReason::SafetyViolation(5),
             SumeragiHaltReason::ApplyDiverged(6),
+            SumeragiHaltReason::PublicationRecoveryRequired(7),
             SumeragiHaltReason::DriverAnomaly,
         ] {
             let json = norito::json::to_json(&reason).expect("json");
@@ -323,6 +379,10 @@ mod tests {
     fn halt_reason_height() {
         assert_eq!(SumeragiHaltReason::SafetyViolation(3).height(), Some(3));
         assert_eq!(SumeragiHaltReason::ApplyDiverged(4).height(), Some(4));
+        assert_eq!(
+            SumeragiHaltReason::PublicationRecoveryRequired(7).height(),
+            Some(7)
+        );
         assert_eq!(SumeragiHaltReason::SafetyRecordCorrupt.height(), None);
         assert_eq!(SumeragiHaltReason::SafetyRecordInconsistent.height(), None);
         assert_eq!(SumeragiHaltReason::DriverAnomaly.height(), None);
@@ -366,5 +426,44 @@ mod tests {
             ..status
         };
         assert_eq!(behind.apply_lag(), 0);
+    }
+    #[test]
+    fn native_readiness_fields_roundtrip_and_reject_missing_first_release_fields() {
+        let mut status = sample_status();
+        status.beacon_horizon = Some(BeaconHorizonStatusV1 {
+            epoch_length_blocks: 64,
+            next_required_pulse_height: Some(63),
+            active_session_id: Some([9; 32]),
+            session_covers_next_pulse: true,
+            local_provider_ready: true,
+        });
+        let bytes = norito::encode_canonical(&status).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<SumeragiStatus>(&bytes).unwrap(),
+            status
+        );
+        let text = norito::json::to_json(&status).unwrap();
+        assert_eq!(
+            norito::json::from_str::<SumeragiStatus>(&text).unwrap(),
+            status
+        );
+        let value: norito::json::Value = norito::json::from_str(&text).unwrap();
+        for key in [
+            "protocol_version",
+            "config_fingerprint",
+            "beacon_horizon",
+            "leader",
+            "proxy_tail",
+            "high_qc_view",
+            "signer",
+            "halted",
+        ] {
+            let mut changed = value.clone();
+            changed.as_object_mut().unwrap().remove(key);
+            assert!(
+                norito::json::from_value::<SumeragiStatus>(changed).is_err(),
+                "missing {key}"
+            );
+        }
     }
 }

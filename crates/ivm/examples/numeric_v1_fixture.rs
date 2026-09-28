@@ -456,7 +456,18 @@ pub fn render_fixture() -> String {
             "envelope",
             "int",
             "unknown_type",
-            envelope(0x0013, 2, &canonical_int_frame),
+            envelope(0x000c, 2, &canonical_int_frame),
+        ),
+        invalid(
+            "anchored_axt_pointer_type",
+            "envelope",
+            "int",
+            "wrong_type",
+            envelope(
+                PointerType::AxtAnchoredSpendV1 as u16,
+                2,
+                &canonical_int_frame,
+            ),
         ),
         invalid(
             "known_nonnumeric_pointer_precedes_version",

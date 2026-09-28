@@ -78,7 +78,9 @@ pub mod payload;
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
-pub use commit_certificate::CommitCertificate;
+pub use commit_certificate::{
+    CertificateAdmissionError, ChargedCertificateParts, CommitCertificate,
+};
 pub use execution_context::{
     AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
     BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
@@ -517,42 +519,66 @@ impl SignedBlock {
     ///
     /// # Errors
     /// The block is not a resultless proposal with a lane merge section and no merged
-    /// entrypoints yet, or `contexts` does not align with `merged`.
+    /// entrypoints yet, or `contexts` does not align with `merged`. Rejection returns
+    /// the original proposal, merged inputs, contexts, and reason without mutation.
     pub fn with_merged_entrypoints(
-        &self,
+        mut self,
         merged: Vec<TransactionEntrypoint>,
         contexts: Vec<ExternalExecutionContext>,
-    ) -> Result<Self, &'static str> {
-        if !self.is_resultless_proposal() {
-            return Err("only a resultless proposal takes merged entrypoints");
-        }
-        if merged.len() != contexts.len() {
-            return Err("merged entrypoints and contexts differ in length");
-        }
-        let count = u32::try_from(merged.len()).map_err(|_| "too many merged entrypoints")?;
-        let mut payload = self.payload.clone();
-        let Some(context) = payload.execution_context.as_mut() else {
-            return Err("the block carries no lane merge section");
+    ) -> Result<
+        Self,
+        (
+            Self,
+            Vec<TransactionEntrypoint>,
+            Vec<ExternalExecutionContext>,
+            &'static str,
+        ),
+    > {
+        // All protocol validation precedes mutation. A rejected merge returns the
+        // same proposal and both original input vectors, without cloning a graph.
+        let check = (|| {
+            if !self.is_resultless_proposal() {
+                return Err("only a resultless proposal takes merged entrypoints");
+            }
+            if merged.len() != contexts.len() {
+                return Err("merged entrypoints and contexts differ in length");
+            }
+            let count = u32::try_from(merged.len()).map_err(|_| "too many merged entrypoints")?;
+            let context = self
+                .payload
+                .execution_context
+                .as_ref()
+                .ok_or("the block carries no lane merge section")?;
+            let section = context
+                .lane_merge
+                .as_ref()
+                .ok_or("the block carries no lane merge section")?;
+            if section.merged_count != 0 {
+                return Err("the block already carries merged entrypoints");
+            }
+            if context.external.len() != self.payload.external_entrypoints.len() {
+                return Err("existing contexts do not align with the entrypoints");
+            }
+            Ok(count)
+        })();
+        let count = match check {
+            Ok(count) => count,
+            Err(reason) => return Err((self, merged, contexts, reason)),
         };
-        let Some(section) = context.lane_merge.as_mut() else {
-            return Err("the block carries no lane merge section");
-        };
-        if section.merged_count != 0 {
-            return Err("the block already carries merged entrypoints");
-        }
-        section.merged_count = count;
-        if context.external.len() != payload.external_entrypoints.len() {
-            return Err("existing contexts do not align with the entrypoints");
-        }
+        let context = self
+            .payload
+            .execution_context
+            .as_mut()
+            .expect("checked context");
+        context
+            .lane_merge
+            .as_mut()
+            .expect("checked merge section")
+            .merged_count = count;
         context.external.extend(contexts);
-        payload.external_entrypoints.extend(merged);
-        Self::refresh_entrypoint_roots(&mut payload);
-        Ok(Self {
-            signatures: self.signatures.clone(),
-            payload,
-            result: None,
-            commit_certificate: None,
-        })
+        self.payload.external_entrypoints.extend(merged);
+        Self::refresh_entrypoint_roots(&mut self.payload);
+        Ok(self)
     }
 
     fn refresh_entrypoint_roots(payload: &mut BlockPayload) {
@@ -596,6 +622,51 @@ impl SignedBlock {
         enforce_payload_len_limit(payload_len)?;
         Ok(payload_len)
     }
+    /// Compare this exact borrowed resultless proposal with its canonical complete wire.
+    ///
+    /// The canonical encoder writes directly into a byte-comparison sink; this does not copy
+    /// the payload, decode a second block, or omit signatures or proposal context fields.
+    ///
+    /// # Errors
+    /// Returns canonical encoding or archive-limit errors. A differing frame returns false.
+    pub fn matches_resultless_proposal_wire(&self, wire: &[u8]) -> Result<bool, NoritoFrameError> {
+        if !self.is_resultless_proposal() || wire.first() != Some(&self.version()) {
+            return Ok(false);
+        }
+        self.checked_resultless_payload_len()?;
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: None,
+            commit_certificate: None,
+        };
+        struct Compare<'a> {
+            expected: &'a [u8],
+            position: usize,
+            equal: bool,
+        }
+        impl std::io::Write for Compare<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let end = self
+                    .position
+                    .checked_add(bytes.len())
+                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
+                self.equal &= self.expected.get(self.position..end) == Some(bytes);
+                self.position = end;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut compare = Compare {
+            expected: &wire[1..],
+            position: 0,
+            equal: true,
+        };
+        norito::core::write_canonical_to_writer(&proposal, &mut compare)?;
+        Ok(compare.equal && compare.position == compare.expected.len())
+    }
     /// Consume the original block and discard its execution result and finality certificate.
     ///
     /// This preserves the proposal payload and signatures without cloning any
@@ -626,8 +697,9 @@ impl SignedBlock {
     /// Attach (or with `None`, remove) the Sumeragi finality proof and return the previous one.
     ///
     /// Neither the block hash, the canonical proposal wire nor the executed block wire hash
-    /// changes. The certificate is not verified here; `iroha_core` verifies it against the
-    /// committee of the block's height before storing or serving the block.
+    /// changes. This setter grants neither finality nor allocation authority. Core verifies
+    /// the exact committee and result independently; production publication also requires
+    /// original-pool admission of the immutable certificate storage.
     pub fn set_commit_certificate(
         &mut self,
         certificate: Option<CommitCertificate>,
@@ -645,24 +717,25 @@ impl SignedBlock {
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        let (prefix, payload) = self.borrowed_resultless_wire_parts()?;
-        Ok(Hash::new_from_chunks(&[&prefix, &payload]))
-    }
-    /// Encode the resultless proposal by borrowing the exact signed layout, including the
-    /// signature set and payload. The frame still uses the canonical `SignedBlock` schema ID.
-    /// Keep the version/header prefix separate so hashing does not copy the complete payload.
-    fn borrowed_resultless_wire_parts(&self) -> Result<(Vec<u8>, Vec<u8>), NoritoFrameError> {
+        self.checked_resultless_payload_len()?;
         let proposal = SignedBlockOutputCandidate {
             signatures: OutputFieldRef(&self.signatures),
             payload: OutputFieldRef(&self.payload),
             result: None,
             commit_certificate: None,
         };
-        let payload = encode_signed_block_payload(&proposal);
-        let mut prefix = Vec::with_capacity(1 + norito::core::Header::SIZE);
-        prefix.push(self.version());
-        write_signed_block_header(&payload, &mut prefix)?;
-        Ok((prefix, payload))
+        let mut codec_error = None;
+        let hash = Hash::new_from_writer(|writer| {
+            writer.write_all(&[self.version()])?;
+            norito::core::write_canonical_to_writer(&proposal, writer).map_err(|error| {
+                codec_error = Some(error);
+                std::io::Error::other("canonical proposal encoding failed")
+            })
+        });
+        if let Some(error) = codec_error {
+            return Err(error);
+        }
+        hash.map_err(NoritoFrameError::from)
     }
     /// Hash this exact canonical block wire, including deterministic execution results.
     ///
@@ -938,6 +1011,31 @@ impl SignedBlock {
     /// Returns [`NoritoFrameError`] if constructing the canonical frame header fails.
     pub fn encode_wire(&self) -> Result<Vec<u8>, NoritoFrameError> {
         self.canonical_wire().map(SignedBlockWire::into_vec)
+    }
+    /// Length and hash of this complete canonical stored frame, including its certificate.
+    /// This streams the original graph without allocating another payload or frame vector.
+    /// Unlike the execution-result identity, this identity also binds the node-local certificate.
+    ///
+    /// # Errors
+    /// Canonical encoding failure or an encoded length that does not fit in `u64`.
+    pub fn canonical_wire_identity(&self) -> Result<(u64, Hash), NoritoFrameError> {
+        let length = norito::canonical_frame_len(self)?
+            .checked_add(1)
+            .and_then(|length| u64::try_from(length).ok())
+            .ok_or(NoritoFrameError::LengthMismatch)?;
+        let mut codec_error = None;
+        let hash = Hash::new_from_writer(|writer| {
+            writer.write_all(&[self.version()])?;
+            norito::core::write_canonical_to_writer(self, writer).map_err(|error| {
+                codec_error = Some(error);
+                std::io::Error::other("canonical stored block encoding failed")
+            })
+        });
+        if let Some(error) = codec_error {
+            return Err(error);
+        }
+        hash.map(|hash| (length, hash))
+            .map_err(NoritoFrameError::from)
     }
     /// Obtain the canonical Norito wire helper for inspecting or framing this block.
     ///
@@ -1611,13 +1709,34 @@ fn decode_framed_versioned_signed_block_inner(
             norito::core::Error::NonCanonicalEncoding,
         ));
     }
-    let canonical = block
-        .canonical_wire()
-        .map_err(|error| VersionError::NoritoCodec(error.to_string()))?;
-    if canonical.as_framed() != raw_for_error {
-        return Err(VersionError::from(
-            norito::core::Error::NonCanonicalEncoding,
-        ));
+    // Authenticate the exact canonical bytes in place. Re-encoding into another payload
+    // and full frame would allocate two unaccounted source-sized buffers during bounded
+    // journal decoding. The canonical writer already counts/checks flags, length and CRC.
+    struct CanonicalSource<'a> {
+        remaining: &'a [u8],
+    }
+    impl std::io::Write for CanonicalSource<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let Some(prefix) = self.remaining.get(..bytes.len()) else {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            };
+            if prefix != bytes {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            self.remaining = &self.remaining[bytes.len()..];
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut canonical = CanonicalSource {
+        remaining: framed_payload,
+    };
+    if norito::core::write_canonical_to_writer(&block, &mut canonical).is_err()
+        || !canonical.remaining.is_empty()
+    {
+        return Err(VersionError::from(NoritoFrameError::NonCanonicalEncoding));
     }
     Ok(block)
 }
@@ -1934,29 +2053,48 @@ mod tests {
             .iter()
             .map(|entrypoint| context(entrypoint, 16))
             .collect();
+        let original_header = proposal.header();
+        let original_merge_pointer = proposal.lane_merge().unwrap().merges.as_ptr();
+        let original_proposal = proposal.clone();
         let executed = proposal
             .with_merged_entrypoints(merged, contexts)
             .expect("expand");
         assert_eq!(executed.merged_entrypoint_count(), 2);
+        assert_eq!(
+            executed.lane_merge().unwrap().merges.as_ptr(),
+            original_merge_pointer,
+            "successful expansion moves the original proposal graph"
+        );
         assert_eq!(executed.payload.external_entrypoints.len(), 3);
         assert_ne!(
             executed.header().merkle_root(),
-            proposal.header().merkle_root(),
+            original_header.merkle_root(),
             "the executed header binds every executed entrypoint"
         );
-        assert_eq!(executed.canonical_resultless_proposal(), proposal);
-        assert!(
-            executed
-                .with_merged_entrypoints(Vec::new(), Vec::new())
-                .is_err(),
-            "merged entrypoints are appended once"
+        assert_eq!(executed.canonical_resultless_proposal(), original_proposal);
+        let own_pointer = executed.payload.external_entrypoints.as_ptr();
+        let (executed, merged, contexts, reason) = executed
+            .with_merged_entrypoints(Vec::new(), Vec::new())
+            .expect_err("merged entrypoints are appended once");
+        assert_eq!(reason, "the block already carries merged entrypoints");
+        assert_eq!(executed.payload.external_entrypoints.as_ptr(), own_pointer);
+        assert!(merged.is_empty());
+        assert!(contexts.is_empty());
+        let merged = vec![transaction("x")];
+        let merged_pointer = merged.as_ptr();
+        let original_pointer = original_proposal.payload.external_entrypoints.as_ptr();
+        let (proposal, merged, contexts, reason) = original_proposal
+            .with_merged_entrypoints(merged, Vec::new())
+            .expect_err("contexts must align");
+        assert_eq!(reason, "merged entrypoints and contexts differ in length");
+        assert_eq!(proposal.header(), original_header);
+        assert_eq!(
+            proposal.payload.external_entrypoints.as_ptr(),
+            original_pointer
         );
-        assert!(
-            proposal
-                .with_merged_entrypoints(vec![transaction("x")], Vec::new())
-                .is_err(),
-            "contexts must align"
-        );
+        assert_eq!(merged.as_ptr(), merged_pointer);
+        assert_eq!(merged.len(), 1);
+        assert!(contexts.is_empty());
     }
     #[test]
     fn block_payload_ordering_includes_execution_context() {
@@ -2508,6 +2646,10 @@ mod tests {
         let proposal = block.clone();
         let header = block.header();
         let proposal_wire_hash = block.canonical_proposal_wire_hash().unwrap();
+        assert_eq!(
+            proposal_wire_hash,
+            Hash::new(proposal.encode_wire().unwrap())
+        );
         fixture::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         assert_eq!(block.header(), header);
         assert_eq!(block.hash(), proposal.hash());
@@ -3106,8 +3248,35 @@ mod tests {
             commit_certificate: None,
         }
     }
+    #[test]
+    fn borrowed_proposal_wire_comparison_binds_every_original_byte() {
+        let block = plain_block_at(2);
+        let bytes = block.encode_wire().unwrap();
+        assert!(block.matches_resultless_proposal_wire(&bytes).unwrap());
+        for index in [0, 1, norito::core::Header::SIZE, bytes.len() - 1] {
+            let mut changed = bytes.clone();
+            changed[index] ^= 1;
+            assert!(!block.matches_resultless_proposal_wire(&changed).unwrap());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(!block.matches_resultless_proposal_wire(&trailing).unwrap());
+        assert!(
+            !block
+                .matches_resultless_proposal_wire(&bytes[..bytes.len() - 1])
+                .unwrap()
+        );
+        assert!(
+            !plain_block_at(3)
+                .matches_resultless_proposal_wire(&bytes)
+                .unwrap()
+        );
+        let certified = block.with_commit_certificate(Some(sample_commit_certificate()));
+        assert!(!certified.matches_resultless_proposal_wire(&bytes).unwrap());
+    }
+
     fn sample_commit_certificate() -> CommitCertificate {
-        CommitCertificate::new(vec![0xA1; 97], vec![0xB2; 140], vec![0xC3; 480])
+        CommitCertificate::from_untrusted_parts(vec![0xA1; 97], vec![0xB2; 140], vec![0xC3; 480])
     }
     #[test]
     fn commit_certificate_accessors() {
@@ -3211,6 +3380,21 @@ mod tests {
         let plain_len = plain.encode_wire().expect("wire").len();
         let certified_len = certified.encode_wire().expect("wire").len();
         assert!(certified_len > plain_len + sample_commit_certificate().payload_len());
+        for block in [&plain, &certified] {
+            let wire = block.encode_wire().unwrap();
+            assert_eq!(
+                block.canonical_wire_identity().unwrap(),
+                (wire.len() as u64, Hash::new(&wire))
+            );
+        }
+        assert_ne!(
+            plain.canonical_wire_identity().unwrap(),
+            certified.canonical_wire_identity().unwrap()
+        );
+        assert_eq!(
+            plain.executed_block_wire_identity().unwrap(),
+            certified.executed_block_wire_identity().unwrap()
+        );
     }
     #[test]
     fn framed_signed_block_uses_v1_layout_flags() {
@@ -3435,9 +3619,9 @@ mod tests {
             let wire = block.encode_wire().expect("wire");
             let expected = (u64::try_from(wire.len()).unwrap(), Hash::new(&wire));
             assert_eq!(block.executed_block_wire_identity().unwrap(), expected);
-            let certified = block
-                .clone()
-                .with_commit_certificate(Some(CommitCertificate::new(vec![1], vec![2], vec![3])));
+            let certified = block.clone().with_commit_certificate(Some(
+                CommitCertificate::from_untrusted_parts(vec![1], vec![2], vec![3]),
+            ));
             assert_eq!(certified.executed_block_wire_identity().unwrap(), expected);
             assert_eq!(certified.executed_block_wire_hash().unwrap(), expected.1);
         }
@@ -3686,7 +3870,7 @@ mod tests {
             },
             touches: Vec::new(),
             proofs: Vec::new(),
-            handles: Vec::new(),
+            spends: Vec::new(),
             commit_height: 1,
         };
         let dsid = iroha_model_base::topology::DataSpaceId::new(9);

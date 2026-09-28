@@ -118,6 +118,56 @@ impl JsonKeyCodec for crate::nexus::AxtHandleReplayKey {
         Ok(decoded)
     }
 }
+// Fresh issuer spend nonces are permanent consensus identities. The complete
+// issuer context is part of the key and must have one exact snapshot spelling.
+impl JsonKeyCodec for crate::nexus::AxtAnchoredSpendReplayKeyV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut encoded = String::new();
+        norito::json::JsonSerialize::json_serialize(self, &mut encoded);
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parser = json::Parser::new(encoded);
+        let decoded: Self = norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+        let mut canonical = String::new();
+        norito::json::JsonSerialize::json_serialize(&decoded, &mut canonical);
+        if canonical != encoded {
+            return Err(json::Error::Message(
+                "AXT spend nonce key must use canonical JSON".into(),
+            ));
+        }
+        decoded.validate().map_err(|error| {
+            json::Error::Message(format!("invalid AXT spend nonce key: {error}"))
+        })?;
+        Ok(decoded)
+    }
+}
+// A physical source-transfer coordinate is a permanent consensus identity.
+// Reject alternate JSON spellings and malformed block/transaction selectors.
+impl JsonKeyCodec for crate::nexus::AxtSourceTransferReplayKeyV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut encoded = String::new();
+        norito::json::JsonSerialize::json_serialize(self, &mut encoded);
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parser = json::Parser::new(encoded);
+        let decoded: Self = norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+        let mut canonical = String::new();
+        norito::json::JsonSerialize::json_serialize(&decoded, &mut canonical);
+        if canonical != encoded {
+            return Err(json::Error::Message(
+                "AXT source transfer replay key must use canonical JSON".into(),
+            ));
+        }
+        decoded.validate().map_err(|error| {
+            json::Error::Message(format!("invalid AXT source transfer replay key: {error}"))
+        })?;
+        Ok(decoded)
+    }
+}
 impl JsonKeyCodec for crate::account::AccountId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);

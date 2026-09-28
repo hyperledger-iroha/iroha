@@ -1,171 +1,118 @@
-# GPU Offloading Design
+# IVM hardware acceleration
 
-Status
-- Metal: SHA‑256 compression and batched leaf hashing/reduction used for Merkle
-  roots are accelerated on macOS; bitwise vector kernels (add/and/xor/or) are
-  wired through `vector::*` helpers with deterministic fallbacks. The exact
-  Metal source strings are sealed under [`src/assets/text_v1/`](../src/assets/text_v1/)
-  and embedded at compile time.
-- CUDA: A `build.rs` script installs checked-in PTX by default and exposes
-  explicit generation and byte-for-byte verification modes; vector helpers,
-  SHA‑256, Merkle leaf hashing/reduction, Keccak, Poseidon2/6 permutations,
-  AES rounds/batches, BN254 add/sub/mul plus the matching batch helpers,
-  Ed25519 verification via the shared batch kernel path, and the scheduler
-  bitonic-sort helper all have explicit CUDA entry points with deterministic
-  fallback/disable-path coverage.
-- Python (`iroha_python.gpu`) and Java (`CudaAccelerators`) bindings surface CUDA availability
-  probes together with optional Poseidon helpers and BN254 single/batch wrappers, returning
-  fallbacks when hardware support is missing so applications can branch deterministically.
-- Developers can compare CPU vs CUDA throughput locally via Criterion benches such as `crates/ivm/benches/bench_bn254_cuda.rs` (run with `cargo bench -p ivm --bench bench_bn254_cuda --features bench,cuda`).
+IVM computes the same public result, gas, errors, state effects, event order,
+and verification decision on every hardware class. SIMD is compiled into all
+builds and selected by CPU capability. Ordinary macOS builds now compile the
+Metal backend by default; the Metal feature has target-scoped dependencies and
+is inert on other operating systems. The node's file-loaded `[accel]` policy
+enables the available backends by default and provides operator opt-outs and
+GPU limits. Developer environment shims are ignored by shipping binaries.
 
-## PTX Build Process
+Metal and CUDA may be used only after their own device and kernel admission
+checks pass. A backend failure quarantines the affected candidate, discards its
+unpublished output, and lets the caller recompute from the original input on a
+qualified fallback. Selection and fallback do not change consensus semantics.
+For Merkle leaf hashing and root construction, the qualified Metal owner times
+bounded public synthetic samples at four sizes. The measurements include block
+preparation, buffer transfer, launch, completion, and readback. Every sample is
+checked against the canonical CPU result before the profile may select Metal;
+selection depends only on public leaf count and the qualified CPU path.
+Configured operator floors remain effective. Other helpers still use fixed
+workload thresholds; complete signed cost profiles remain open release work.
+An individual Keccak permutation or AES round runs on the CPU because its
+transfer and launch cost exceeds the work. AES round batches use one GPU batch
+dispatch only after the public transfer-size floor; small Ed25519 batches also
+stay on the CPU. The direct single-operation GPU entrypoints remain in the
+hardware qualification gate. The ARM AES round path now applies the round key
+after MixColumns, matching the scalar V1 operation and passing the hardware
+parity self-test.
 
-CUDA kernels live under [`cuda/`](../cuda/). The default
-`IVM_CUDA_PTX_MODE=bundled` path copies the exact checked-in PTX into Cargo's
-output directory and fails if any source lacks a real, structurally valid
-artifact. `IVM_CUDA_PTX_MODE=generate` explicitly invokes `nvcc` and writes only
-to Cargo's output directory. `IVM_CUDA_PTX_MODE=check` regenerates every kernel,
-requires byte identity with its checked-in counterpart, and then installs the
-checked-in bytes. There is no automatic compiler fallback and no placeholder
-PTX. See [`cuda/README.md`](../cuda/README.md) for the open 11-artifact and
-signed-provenance release blocker.
+## Metal on macOS
 
-Generation and checking accept these build-time controls:
+The process owns Metal discovery, the queue, and compiled pipelines. Concurrent
+workers borrow the same qualified owner. A release drops owner retention outside
+its lock, while existing leases keep in-flight resources alive. The 16 production
+pipeline families cover vector arithmetic and bit operations, SHA-256
+compression and Merkle helpers, Keccak, AES round/batch helpers, and Ed25519
+verification. Startup probes and diagnostic commands produce no production
+execution receipt.
 
-- `IVM_CUDA_NVCC` (or `NVCC`) — selects the CUDA compiler.
-- `IVM_CUDA_GENCODE` — passes a full `-gencode` tuple to `nvcc`.
-  - The current default and nightly qualification profile is
-    `arch=compute_86,code=sm_86`.
-- `IVM_CUDA_NVCC_EXTRA` — additional flags appended verbatim to `nvcc` (testing only).
+Run the required hardware gate on a Metal host:
 
-Determinism note: These knobs may only select how a candidate artifact is
-generated. Release builds consume qualified checked-in bytes, and the
-accelerated results must match scalar golden vectors before the backend is
-enabled.
-
-This document outlines a plan for accelerating selected IVM operations on CUDA GPUs while preserving bit-for-bit determinism across nodes. The VM already provides CPU SIMD paths and Metal compute kernels for some vector helpers. Extending this to CUDA allows heavier workloads to run on up to eight GPUs without altering execution results.
-
-## Candidate Operations
-
-The following hotspots contain tight loops or field arithmetic that map well to massive parallelism:
-
-- **SHA‑256 compression** – [`sha256_compress`](../src/vector.rs) iterates over 64 rounds of 32‑bit arithmetic【F:src/vector.rs†L503-L561】.
-- **Poseidon permutations** – [`poseidon2`](../src/poseidon.rs) and [`poseidon6`](../src/poseidon.rs) use repeated S‑box and MDS matrix steps with field multiplications【F:src/poseidon.rs†L60-L118】【F:src/poseidon.rs†L180-L248】.
-- **Keccak‑f1600** – the `keccak_f1600` function processes a 25‑lane state with many rotations and XORs【F:src/sha3.rs†L1-L63】.
-- **AES round helpers** – `aesenc` and `aesdec` apply S‑boxes and MixColumns over 16‑byte states【F:src/aes.rs†L132-L175】.
-- **Vector helpers** – functions like [`vadd32_slice`](../src/vector.rs) and
-  `vadd64_slice` perform lane-wise arithmetic on large arrays.
-- **BN254 field arithmetic** – accelerated on CUDA via `bn254_add_kernel`, `bn254_sub_kernel`, and `bn254_mul_kernel` (see `crates/ivm/cuda/bn254.cu`) with scalar/SIMD fallbacks for hosts without GPUs; the host wrappers in `crates/ivm/src/cuda.rs` now support both single-element and batch submissions, reuse cached PTX modules per `GpuContext`, and disable the backend on first mismatch. Tests in `crates/ivm/tests/cuda_extra.rs` and the inline CUDA regressions cover GPU vs CPU parity.
-- **Merkle hashing** – `ByteMerkleTree::from_bytes_parallel` hashes leaves and inner nodes in parallel using Rayon threads【F:src/byte_merkle_tree.rs†L72-L98】.
-- **Signature verification** – wrappers in [`signature.rs`] dispatch to Ed25519 or Dilithium libraries to check signatures【F:src/signature.rs†L27-L63】.
-
-## Integration Approach
-
-1. **CUDA Runtime Module** – Introduce an optional `gpu` module that initializes CUDA contexts on start-up. When enabled, the VM loads precompiled PTX kernels for each operation. The existing Rust implementations remain as fallbacks when no GPU is present.
-2. **Kernel Design** – Each kernel mirrors the pure Rust logic so results remain identical. For example, a `sha256_compress_cuda` kernel consumes one 64‑byte block per thread block and writes the updated state. Poseidon kernels operate on small fixed arrays of 64‑bit limbs.
-3. **Work Queues** – The VM dispatcher packages GPU-friendly tasks (e.g., batches of vector additions or sets of Poseidon hashes) and submits them to a queue. After all kernels finish, results are copied back and committed in program order.
-4. **Multi‑GPU Scheduling** – With eight devices available, tasks are striped across GPUs by a deterministic hash of the program counter and call depth. This ensures every node assigns work to the same GPU index for a given instruction sequence. Large batches (e.g., Merkle tree updates) are divided into equal chunks per device.
-5. **Fallback Paths** – If any GPU fails, or the `gpu` feature is disabled, the dispatcher reverts to the existing CPU/Metal paths. The opcode semantics are unchanged so consensus cannot diverge.
-
-## Device Selection
-
-[`GpuManager`](../src/gpu_manager.rs) initializes a context for each detected CUDA device on first use and exposes `device_count()`. `gpu_for_task` maps each task ID to a device index by a deterministic hash, so GPU assignment is purely data-driven and every node maps the same task to the same device.
-Production runtime behaviour is sourced from the node's `[accel]`
-configuration. `enable_cuda` and `enable_metal` select backends, while
-`max_gpus` caps the number of devices (`0` means no cap). The corresponding
-`ACCEL_*` environment names are configuration-input aliases, not a separate
-runtime policy. `IVM_DISABLE_{CUDA,METAL}` and `IVM_FORCE_*_SELFTEST_FAIL` are
-developer/test shims and are ignored by release builds.
-
-SIMD selection is driven by configuration. For deterministic runs or benchmarks,
-set `AccelerationPolicy::with_forced_simd(Some(SimdChoice::Scalar|Sse2|Avx2|Avx512|Neon))`
-via `IvmConfig` or call `ivm::set_forced_simd` in tests; unsupported choices
-fall back to the scalar backend.
-
-## Ensuring Determinism
-
-- **Consensus Integer Arithmetic** – Consensus-facing kernels use fixed-width
-  integers and field limbs matching the CPU code. The legacy
-  `vector_add_f32`/`add.cu` diagnostic helper is not a consensus path.
-  TODO: remove it or give it an explicit non-consensus artifact class before
-  signing the PTX release manifest.
-- **Fixed Reduction Order** – Parallel reductions (e.g., in Merkle hashing) accumulate results in a predetermined order per chunk so thread scheduling cannot change the final digest.
-- **Synchronous Commits** – The VM waits for all kernels in a cycle to finish before applying their outputs to the state. Results are committed sequentially in instruction order as done for CPU execution.
-- **Golden Self‑tests and Auto‑Disable** – On startup/first use, GPU backends (Metal, CUDA) execute small golden vectors (vadd32, SHA‑256, Keccak). Any mismatch disables the backend at runtime and the VM falls back to CPU scalar/SIMD paths, preserving correctness.
-- **Deterministic Work Assignment** – Mapping from instruction index to GPU ID is purely data driven (e.g., `gpu_id = hash(tx_id, instr_index) % 8`). Every node derives the same mapping and thus launches kernels in the same sequence.
-- **Runtime selection + fallbacks** – `AccelerationConfig`, populated from the node's `[accel]` configuration in production, short-circuits GPU use. Developer/test self-test overrides exercise the same fail-closed fallback. CUDA helpers either return `None` (Poseidon/Keccak/BN254/bitonic sort) or a CPU result wrapped in `Some` (AES rounds) so callers always get deterministic outputs. Tests in `crates/ivm/tests/cuda_disable_on_mismatch.rs` cover forced self-test failures and configuration disables for SHA‑256, Poseidon, AES, and the bitonic-sort helper.
-
-## Summary Roadmap
-
-1. Keep the explicit CUDA helper surface stable and directly tested.
-   - `sha256_compress_cuda`, the Merkle helpers, Poseidon2/6, Keccak, AES rounds/batches, BN254 add/sub/mul, Ed25519 batch verification, and `bitonic_sort_pairs` all have focused parity or fallback/disable-path coverage.
-   - On macOS, the matching Metal helpers remain subject to the same deterministic fallback contract.
-2. Continue broader live-hardware validation on dedicated CUDA hosts.
-   - The remaining work in this design slice is operator-side soak, benchmark, and parity reruns on real CUDA hardware rather than missing helper implementations in the current tree.
-3. Keep deterministic multi-GPU task assignment and failure handling aligned across the public helper entry points as new CUDA consumers are added.
-
-By restricting GPU code to deterministic integer operations and committing results in program order, offloading does not alter the VM’s observable behaviour. Nodes without GPUs simply fall back to the existing Rust implementations and produce identical outputs.
-
-## Repository Implementation
-
-The `gpu_manager` module exposes a `GpuManager` that the CUDA helpers use to open CUDA contexts and assign tasks deterministically. Public CUDA helpers now derive a stable task ID from the operation shape (for example: digest count, column count, or block count) and install it as the ambient task scope before launching kernels, so helper traffic no longer collapses onto GPU 0 on multi-GPU hosts. GPU selection still depends only on the resolved task ID:
-
-```rust
-pub fn gpu_for_task(&self, task_id: u64) -> usize {
-    (task_id as usize) % self.gpus.len()
-}
+```sh
+cargo test --locked -p ivm --features metal-hardware-tests --lib required_metal_hardware -- --test-threads=1 --nocapture
 ```
 
-The same routing rule now applies to the raw CUDA golden self-tests used during
-startup and first-use admission, so the probe traffic for Ed25519, SHA-256,
-Keccak, and AES no longer bypasses the task-scoped selection path. The CUDA
-SHA-256 pair-reduction helper also now keeps intermediate Merkle levels on
-device by ping-ponging between two fixed device buffers and copying back only
-the final root digest. The CUDA leaf-hash kernel now emits digest bytes
-directly, and `ByteMerkleTree::root_from_bytes_accel(...)` uses an internal
-CUDA root helper that hashes padded leaves and reduces the Merkle tree on the
-device before the host reads back the final digest. `GpuContext` also now caches
-PTX `Module` handles, a reusable stream, and immutable `u64` device buffers per
-device so repeated helper calls avoid reloading the same PTX, recreating the
-stream, or re-uploading Poseidon constant tables on every dispatch. The BN254
-helpers can also batch many field-element pairs into one kernel launch when
-higher layers have enough work to amortize the transfer.
+The gate fails when Metal is absent, a pipeline falls back to CPU, or parity
+breaks. It compares all 16 families against CPU references at several workload
+sizes, including odd Merkle reductions and valid and invalid signatures.
+`metal_completed_dispatches(MetalKernel)` counts completed production commands;
+the test requires a positive receipt for each family. Completion alone does not
+establish correctness, so the scalar comparisons are mandatory. Local M1 Ultra
+evidence is recorded in `target/kotodama-metal-local-evidence.json`; that
+changing-worktree component run is not an unchanged release-candidate result.
 
-The number of initialised devices is capped by `[accel].max_gpus`, which is
-applied through `GpuManager::set_max_gpus` before device discovery:
+Metal qualification still needs independent per-device admission, signed
+artifact provenance, profile coverage for the other kernels, and mixed-hardware
+validator parity. The process owner loads an embedded precompiled V1 Metal
+library and performs no startup shader compilation. The local optional Xcode
+Metal toolchain built the pinned candidate; release signing and unchanged-
+candidate device qualification remain open.
 
-```rust
-let mut cfg = AccelerationConfig::default();
-cfg.max_gpus = Some(1);
-set_acceleration_config(cfg);
+## CUDA artifacts and runtime
+
+The patched `cust_raw` boundary loads the CUDA driver at runtime. A CPU-only
+machine can start a CUDA-enabled binary without a driver. Linux loads
+`libcuda.so.1` (including the WSL system path); Windows restricts
+`nvcuda.dll` to System32. Missing drivers or symbols leave the CPU path
+available. CUDA is not yet a default Cargo feature because the required ten
+checked-in PTX files and signed provenance are absent.
+
+`build.rs` has three explicit build-time modes:
+
+- `bundled` (default for CUDA builds) copies validated checked-in PTX and fails
+  if any family is missing.
+- `generate` invokes `nvcc` only for a qualification candidate.
+- `check` regenerates every family and requires byte identity with its bundled
+  artifact.
+
+The ten source families are AES, bitonic sort, BN254, Poseidon, SHA-256,
+SHA-256 leaves, SHA-256 pair reduction, SHA-3, signature, and vector. The
+retired floating-point diagnostic kernel is outside this inventory. Startup
+never downloads or compiles kernels. See [the CUDA artifact record](../cuda/README.md)
+for the open pinned-toolchain, two-run reproducibility, signed provenance, and
+real-hardware gates.
+
+The common process acceleration envelope owns CUDA discovery, primary contexts,
+modules, streams, host staging, pinned buffers and device buffers. File-loaded
+`[accel.resource_limits]` supplies finite enabled defaults; explicit zero forbids
+that resource. Admission never waits for capacity. A refused attempt leaves the
+original input available for a complete CPU recomputation. State destinations
+retain their original execution lease; native SDK snapshots and outputs use
+charged process-host owners until the final foreign-runtime copy.
+
+Discovery treats devices independently and checks public launch geometry against
+capabilities. Kernel failures exclude the device/kernel/artifact candidate;
+uncertain context, stream or completion state quarantines the physical device.
+A timed-out attempt retains unsafe-to-free storage and its charges. Late driver
+completion cannot undo that quarantine. Task scopes retain their selected device
+through compound operations. There is no second GPU manager or parallel
+admission registry. Native batch helpers fill caller destinations only after
+complete result validation; ordinary helpers handle qualified CPU fallback.
+
+Metal buffer allocation has not yet migrated fully into this common physical
+envelope. Aggregate CUDA custody controls do not establish aggregate Metal or
+FASTPQ custody. Signed performance profiles, qualified fastest-path selection,
+and complete physical resource qualification remain open.
+
+Run the mandatory CUDA hardware gate on each qualified CUDA runner:
+
+```sh
+cargo test --locked -p ivm --test cuda_hardware --features cuda-hardware-tests -- --nocapture
 ```
 
-Unit tests verify that changing the configured limit invalidates the cached GPU
-manager and applies the new cap. Developer-only environment tests cover the
-release-disabled diagnostic shims separately.
-
-```rust
-#[test]
-fn set_max_gpus_invalidates_cached_manager() {
-    GpuManager::set_max_gpus(Some(1));
-    assert_eq!(test_current_max_gpus(), Some(1));
-}
-```
-
-Parity tests run the same inputs through GPU and CPU paths and compare their
-outputs. Backend choice is a performance decision and is not consensus-visible:
-
-```rust
-struct MockNode { use_cuda: bool }
-
-impl MockNode {
-    fn execute(&self, prog: &[u8]) -> [u32; 8] { /* run IVM and return registers */ }
-}
-
-#[test]
-fn deterministic_across_hardware() {
-    let gpu = MockNode { use_cuda: true };
-    let cpu = MockNode { use_cuda: false };
-    assert_eq!(gpu.execute(&prog), cpu.execute(&prog));
-}
-```
+It requires real completed kernel work on every discovered usable device and
+scalar parity for all ten families. Driverless policy tests establish loading
+and state transitions only; they do not qualify GPU execution. The same
+candidate must then pass CPU/SIMD/Metal/CUDA parity and a four-validator
+mixed-hardware network with mandatory DA/RBC before release.

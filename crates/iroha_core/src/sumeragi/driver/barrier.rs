@@ -28,6 +28,9 @@ pub fn gated(action: &Action) -> bool {
             | Action::Execute { .. }
             | Action::DiscardExecution { .. }
             | Action::BuildPayload { .. }
+            | Action::BuildControlWitness { .. }
+            | Action::DriveApplicationControl { .. }
+            | Action::ReceiveApplicationControl { .. }
             | Action::PayloadRejected { .. }
             | Action::LocalFault(_)
     )
@@ -49,12 +52,21 @@ pub fn droppable(action: &Action) -> bool {
 pub fn message_payload_bytes(msg: &WireMessage) -> u64 {
     let len = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
     match msg {
-        WireMessage::Proposal(p) => p.payload.as_ref().map_or(0, |payload| len(payload.len())),
-        WireMessage::BlockResponse(r) => len(r.block.payload.len()),
+        WireMessage::Proposal(p) => p
+            .payload
+            .as_ref()
+            .map_or(0, |payload| len(payload.len()))
+            .saturating_add(len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES)),
+        WireMessage::BlockResponse(r) => len(r.block.payload.len())
+            .saturating_add(len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES)),
+        WireMessage::ApplicationControl(_) => len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES),
         WireMessage::SyncResponse(r) => r
             .blocks
             .iter()
-            .map(|entry| len(entry.block.payload.len()))
+            .map(|entry| {
+                len(entry.block.payload.len())
+                    .saturating_add(len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES))
+            })
             .fold(0, u64::saturating_add),
         _ => 0,
     }
@@ -64,7 +76,9 @@ pub fn message_payload_bytes(msg: &WireMessage) -> u64 {
 fn payload_bytes(action: &Action) -> u64 {
     match action {
         Action::Send { msg, .. } | Action::Broadcast { msg, .. } => message_payload_bytes(msg),
-        Action::CommitBlock { block, .. } => u64::try_from(block.payload.len()).unwrap_or(u64::MAX),
+        Action::CommitBlock { block, .. } => u64::try_from(block.payload.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64),
         _ => 0,
     }
 }
@@ -309,7 +323,7 @@ mod tests {
     fn held_effects_are_bounded() {
         let limits = HeldLimits {
             effects: 4,
-            payload_bytes: 2_500,
+            payload_bytes: 2_500 + 2 * iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64,
         };
         let mut barrier = Barrier::new(limits);
         barrier.persisting(1);
@@ -326,7 +340,13 @@ mod tests {
         assert_eq!(barrier.admit(fetch(7, 1)), None);
         assert_eq!(barrier.admit(fetch(7, 2)), None);
         assert_eq!(barrier.admit(halt.clone()), None);
-        assert_eq!(barrier.size(), (4, 1_000));
+        assert_eq!(
+            barrier.size(),
+            (
+                4,
+                1_000 + iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64
+            )
+        );
         assert_eq!(
             barrier.held().cloned().collect::<Vec<_>>(),
             vec![commit.clone(), send(99), fetch(7, 2), halt.clone()]
@@ -337,7 +357,7 @@ mod tests {
         // Payload bytes: a response of a large block makes the older one go.
         let mut barrier = Barrier::new(HeldLimits {
             effects: 100,
-            payload_bytes: 2_500,
+            payload_bytes: 2_500 + 2 * iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64,
         });
         barrier.persisting(1);
         let response = |h: u64| Action::Send {
@@ -350,7 +370,13 @@ mod tests {
         barrier.admit(commit.clone());
         barrier.admit(response(2));
         barrier.admit(response(3));
-        assert_eq!(barrier.size(), (2, 2_000));
+        assert_eq!(
+            barrier.size(),
+            (
+                2,
+                2_000 + 2 * iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64
+            )
+        );
         assert_eq!(
             barrier.held().cloned().collect::<Vec<_>>(),
             vec![commit, response(3)]

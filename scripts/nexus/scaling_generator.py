@@ -136,7 +136,7 @@ class GenerationReceipt:
     anchors_sha256: str
     anchors_bytes: int
     genesis_hash: str
-    context_id: str
+    genesis_epoch_context_id: str
     network_id: str
     genesis_public_key: str
     chain_discriminant: int
@@ -363,7 +363,7 @@ class FixedGenerator:
             _require(runtime_paths == tuple((field, str(root / relative)) for field, relative in _RUNTIME_PATHS))
             peers.append(GeneratedPeer(role, *addresses, root / 'state', runtime_paths))
         return GenerationReceipt(plan, self._image_binding[3], transport.process,
-            inputs.anchors_sha256, len(transport.stdout), inputs.genesis_hash, inputs.context_id,
+            inputs.anchors_sha256, len(transport.stdout), inputs.genesis_hash, inputs.genesis_epoch_context_id,
             inputs.network_id, facts.genesis_public_key, facts.chain_discriminant,
             tuple(peers), facts.accounts, facts.artifacts)
 

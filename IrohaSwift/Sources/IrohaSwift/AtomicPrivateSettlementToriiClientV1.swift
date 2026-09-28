@@ -896,7 +896,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
                   body["network_id"] as? String == expectedNetworkId,
                   body["payload_digest"] as? String == expectedIdentifier.jsonLiteral,
                   let responder = body["responder"] as? String,
-                  ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(responder),
+                  ToriiCanonicalWire.isCanonicalBlsNormalPeerId(responder),
                   let signature = attestation["signature"] as? String,
                   Self.isCanonicalBLSNormalSignature(signature) else {
                 throw AtomicPrivateSettlementClientErrorV1.invalidResponse
@@ -966,7 +966,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
                   exactLifecycleCode == expectedLifecycleCode,
                   (collected < required ? lifecycleStatus == "collecting" : lifecycleStatus == "audited"),
                   let responder = body["responder"] as? String,
-                  ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(responder),
+                  ToriiCanonicalWire.isCanonicalBlsNormalPeerId(responder),
                   let signature = attestation["signature"] as? String,
                   Self.isCanonicalBLSNormalSignature(signature) else {
                 throw AtomicPrivateSettlementClientErrorV1.invalidResponse

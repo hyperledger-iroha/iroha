@@ -40,6 +40,7 @@ fn bench(leaves: usize, iterations: usize, policy: Policy) -> (Option<Duration>,
     // CPU baseline (Metal disabled) unless acceleration-only policy.
     let cpu = if policy != Policy::AccelOnly {
         ivm::set_acceleration_config(AccelerationConfig {
+            resource_limits: iroha_accel::RegistryLimits::STANDARD,
             enable_simd: true,
             enable_metal: false,
             enable_cuda: false,
@@ -67,6 +68,7 @@ fn bench(leaves: usize, iterations: usize, policy: Policy) -> (Option<Duration>,
     let metal = if policy != Policy::CpuOnly {
         ivm::reset_metal_backend_for_tests();
         ivm::set_acceleration_config(AccelerationConfig {
+            resource_limits: iroha_accel::RegistryLimits::STANDARD,
             enable_simd: true,
             enable_metal: true,
             enable_cuda: false,
@@ -174,6 +176,7 @@ fn main() {
     }
     // Restore defaults (Metal enabled, CUDA state unchanged).
     ivm::set_acceleration_config(AccelerationConfig {
+        resource_limits: iroha_accel::RegistryLimits::STANDARD,
         enable_simd: true,
         enable_metal: true,
         enable_cuda: ivm::cuda_available(),

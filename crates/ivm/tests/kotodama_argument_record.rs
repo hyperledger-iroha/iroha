@@ -170,7 +170,7 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
     vm.set_host(host);
     vm.run()
         .expect("execute shared exact-number argument fixture");
-    assert_eq!(common::decode_i64_register(&vm, 10), -7);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), -7);
 }
 #[test]
 fn compiled_wrapper_decodes_record_and_loads_aligned_words() {
@@ -206,7 +206,7 @@ seiyaku ArgumentRecordRuntime {
         .expect("select run wrapper");
     vm.set_host(host);
     vm.run().expect("execute parameterized wrapper");
-    assert_eq!(common::decode_i64_register(&vm, 10), 41);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 41);
 }
 #[test]
 fn single_json_parameter_is_a_named_record_field_not_the_transport_object() {
@@ -241,8 +241,13 @@ seiyaku JsonArgumentRecordRuntime {
     vm.set_host(host);
     vm.run().expect("execute Json argument wrapper");
     let layout = ivm::sum::SumLayoutV1::option(1).expect("Option<int> layout");
-    let (present, payload) =
-        ivm::sum::read_words(&vm, vm.register(10), layout).expect("read Option<int>");
+    let (present, payload) = ivm::sum::read_words(
+        &vm,
+        vm.public_call_result_word(0)
+            .expect("completed return word"),
+        layout,
+    )
+    .expect("read Option<int>");
     assert!(present);
     assert_eq!(payload.len(), 1);
     assert_eq!(common::decode_i64_word(&vm, payload[0]), 29);
@@ -261,7 +266,12 @@ seiyaku JsonArgumentRecordRuntime {
     vm.set_host(host);
     vm.run().expect("execute numeric-token Json argument");
     assert_eq!(
-        ivm::sum::read_words(&vm, vm.register(10), layout),
+        ivm::sum::read_words(
+            &vm,
+            vm.public_call_result_word(0)
+                .expect("completed return word"),
+            layout
+        ),
         Ok((false, vec![])),
         "typed int getter must reject a JSON number token",
     );
@@ -310,5 +320,5 @@ seiyaku RecursiveArgumentRecordRuntime {
         .expect("select run wrapper");
     vm.set_host(host);
     vm.run().expect("execute recursive wrapper");
-    assert_eq!(common::decode_i64_register(&vm, 10), 48);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 48);
 }

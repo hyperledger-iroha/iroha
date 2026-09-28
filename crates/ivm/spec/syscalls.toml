@@ -323,18 +323,6 @@ ret = "r10=ptr (&NoritoBytes(StatePath))"
 gas = "G_path + bytes"
 
 [[syscall]]
-number = "0x53"
-args = "r10=&NoritoBytes(Norito-framed i64)"
-ret = "r10=i64"
-gas = "G_numeric + bytes"
-
-[[syscall]]
-number = "0x55"
-args = "r10=value:i64"
-ret = "r10=ptr (&NoritoBytes(Norito-framed i64))"
-gas = "G_numeric + bytes"
-
-[[syscall]]
 number = "0x56"
 args = "r10=&Name(base), r11=&NoritoBytes(key)"
 ret = "r10=ptr (&NoritoBytes(StatePath))"
@@ -661,8 +649,8 @@ ret = "u64=0/1"
 gas = "G_verify + bytes"
 
 [[syscall]]
-number = "0xB4"
-args = "r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob?"
+number = "0xB5"
+args = "r10=&AxtAnchoredSpendV1"
 ret = "u64=0"
 gas = "G_axt + bytes"
 
@@ -902,8 +890,8 @@ gas = "G_sysvar + bytes"
 
 [[syscall]]
 number = "0x010026"
-args = "r10=raw &NoritoBytes(EntrypointArgumentRecordV1) or prepared &NoritoBytes(record binding), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
-ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))"
+args = "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
+ret = "r10=aligned owned-HEAP table base (0 if empty), r11=exact word count"
 gas = "G_argument_decode + record + schema + complete materialization"
 
 [[syscall]]
@@ -1092,6 +1080,48 @@ gas = "G_numeric_staged"
 number = "0x010113"
 args = "r10=&Int, r11=&Int"
 ret = "r10=&Int"
+gas = "G_numeric_staged"
+
+[[syscall]]
+number = "0x010114"
+args = "r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1"
+ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero"
+gas = "G_numeric_staged"
+
+[[syscall]]
+number = "0x010115"
+args = "r10=&Int, r11=reserved:0, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1"
+ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero"
+gas = "G_numeric_staged"
+
+[[syscall]]
+number = "0x010116"
+args = "r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1"
+ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero"
+gas = "G_numeric_staged"
+
+[[syscall]]
+number = "0x010117"
+args = "r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1"
+ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero"
+gas = "G_numeric_staged"
+
+[[syscall]]
+number = "0x010118"
+args = "r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1"
+ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero"
+gas = "G_numeric_staged"
+
+[[syscall]]
+number = "0x010119"
+args = "r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1"
+ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero"
+gas = "G_numeric_staged"
+
+[[syscall]]
+number = "0x01011A"
+args = "r10=&Int, r11=&Int, r12=reserved:0, r13=reserved:0, r14=failure_mode:0..1"
+ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero"
 gas = "G_numeric_staged"
 
 # Exact bounded decimal syscalls.

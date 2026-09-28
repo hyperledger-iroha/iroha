@@ -133,7 +133,7 @@ pub fn config_compatibility_v1(
     let (status, config_fingerprint, execution_policy_hash, nexus_amx_context_hash) = match genesis
     {
         Some((block, bootstrap)) => {
-            let (_, _, handshake, _, _) = consensus_caps_from_genesis(block, &caps, &config.sumeragi)
+            let (_, _, handshake, _, _) = consensus_caps_from_genesis(block, &caps)
                 .ok_or_else(|| {
                     Report::new(MainError::Config).attach(
                         "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
@@ -142,7 +142,7 @@ pub fn config_compatibility_v1(
             let context = bootstrap.context();
             (
                 "ready",
-                Some(hex::encode(handshake.config.v2_config_fingerprint)),
+                Some(hex::encode(handshake.config.native_config_fingerprint)),
                 Some(hex_hash(context.execution_policy_hash)),
                 Some(hex_hash(context.nexus_amx_context_hash)),
             )
@@ -387,6 +387,9 @@ fn snapshot_restore_dry_run(
         .verification_public_key
         .as_ref()
         .unwrap_or_else(|| config.common.key_pair.public_key());
+    // Mirror startup: restored State owners retain this configured execution pool.
+    let execution_budget =
+        mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
     let read_buffer_budget =
         mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
     // The same bounded operation-index pool the node's own startup restore uses.
@@ -399,6 +402,7 @@ fn snapshot_restore_dry_run(
     // the caller.
     let block_count = BlockCount(usize::try_from(tip_height).map_err(|error| error.to_string())?);
     let restored = try_read_snapshot_with_bootstrap_policy(
+        &execution_budget,
         config.snapshot.store_dir.resolve_relative_path(),
         &scratch,
         &lane_manifests,

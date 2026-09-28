@@ -15,7 +15,7 @@ pub struct BlockCaptureSlot<'a, V: Value, Admission, C: Send + Sync + 'static = 
 
 #[expect(
     clippy::large_enum_variant,
-    reason = "phases change in place; boxing a variant would allocate on the allocation-free path"
+    reason = "capture phases retain the original block and admission inline without an unadmitted allocation"
 )]
 enum CapturePhase<'a, V: Value, Admission, C: Send + Sync + 'static> {
     Empty,
@@ -63,7 +63,6 @@ impl<'a, V: Value, Admission, C: Send + Sync + 'static> BlockCapture<Admission>
         // Released cleanup-only blocks must never regain journal authority.
         block.writers.as_ref();
         *retained = Some(admit(block)?);
-        let next = NextPublication::new();
         // From here only infallible original-owner moves/native unlocks occur.
         // Any future fallible/user operation belongs above this extraction.
         let CapturePhase::Attached {
@@ -79,6 +78,7 @@ impl<'a, V: Value, Admission, C: Send + Sync + 'static> BlockCapture<Admission>
             predecessor,
             mode,
             publication: _,
+            next,
         } = block;
         let (revert, blocks, cleanup) = writers.detach_retaining();
         self.phase = CapturePhase::Captured(Detached {
@@ -88,7 +88,7 @@ impl<'a, V: Value, Admission, C: Send + Sync + 'static> BlockCapture<Admission>
                 predecessor,
                 mode,
                 dirty,
-                next,
+                next: next.expect("original Cell successor retained before acquisition"),
                 admission,
             },
         });

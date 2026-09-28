@@ -1,9 +1,10 @@
 //! Disposable NPoS qualification of an overfull candidate pool and certified retention.
 //!
-//! Four genesis voters admit four separately running Validator peers. The eight eligible
-//! candidates must freeze one exact seven-seat committee two epochs ahead. One incumbent
-//! selected for that target withholds its fresh Pasta keys, so the current quorum must
-//! cancel that immutable attempt at the preparation cutoff without losing finality.
+//! Four genesis voters admit separately running candidates into pools of five, eight or
+//! eleven. The public rank freezes exactly four or seven seats two epochs ahead, bounded
+//! by the signed seven-seat ceiling. A selected seat withholds fresh Pasta keys in the
+//! retention cases; the eight-candidate case specifically withholds an incumbent. The
+//! current exact quorum must cancel that immutable attempt without losing finality.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::{sandbox, sync::rebind_blocking_client};
@@ -12,7 +13,6 @@ use iroha::{
     crypto::{Hash, KeyPair, SignatureOf},
     data_model::{
         NetworkId,
-        bridge::{BridgeFinalityProof, BridgeFinalityVerifier, verify_bridge_finality_proof},
         isi::{
             consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
             kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
@@ -31,7 +31,7 @@ use iroha::{
         },
         parameter::system::SumeragiNposParameters,
         prelude::*,
-        sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
+        sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
         transaction::FeePaymentIntent,
         validation_fee::ValidationFeePolicyRegistryV1,
     },
@@ -43,6 +43,10 @@ use iroha_core::{
         credential::global_beacon_partial_signer_public_inventory_digest_v1,
         global_threshold_beacon_roster_hash_v1, prove_global_threshold_beacon_seat_readiness_v1,
         validate_global_threshold_beacon_session_v1,
+    },
+    sumeragi::{
+        certified_chain::CertifiedBlock,
+        native_journal::{NativeJournalCursor, with_verified_native_journal},
     },
     validator_committee_evidence::{
         ValidatorCommitteeProvisioningEvidenceV1, ValidatorCommitteeSelectionEvidenceV1,
@@ -110,25 +114,30 @@ fn exact_quorum(seats: usize) -> Result<u32> {
     Ok(u32::try_from(2 * ((seats - 1) / 3) + 1)?)
 }
 
-fn verify_equal_vote_context(
-    proof: &BridgeFinalityProof,
-    expected: &BTreeSet<PeerId>,
-) -> Result<()> {
-    let context = &proof.finality_artifact.height_context;
+fn finality_limits() -> NativeFinalityLimits {
+    NativeFinalityLimits {
+        block_bytes: 32 * 1024 * 1024,
+        journal_bytes: 64 * 1024 * 1024,
+        block_count: 256,
+        allocated_bytes: 512 * 1024 * 1024,
+    }
+}
+
+fn verify_equal_vote_context(proof: &CertifiedBlock, expected: &BTreeSet<PeerId>) -> Result<()> {
+    let context = &proof.commitment().schedule.current;
     let actual = context
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<BTreeSet<_>>();
+    let quorum = usize::try_from(exact_quorum(expected.len())?)?;
     ensure!(
-        context.roster.len() == expected.len()
+        context.committee.len() == expected.len()
             && actual == *expected
-            && context.roster.iter().all(|seat| seat.power == 1)
-            && context.quorum.total_power == u64::try_from(expected.len())?
-            && context.quorum.min_signers == exact_quorum(expected.len())?
-            && proof.finality_artifact.commit_qc.signers.len()
-                == usize::try_from(context.quorum.min_signers)?,
-        "finality is not an exact equal-vote certificate for the expected roster"
+            && proof
+                .commit_qc()
+                .is_some_and(|qc| qc.signers.count_ones() == quorum),
+        "native finality is not an exact equal-vote certificate for the expected roster"
     );
     Ok(())
 }
@@ -136,21 +145,32 @@ fn verify_equal_vote_context(
 fn ranked_target(
     preparation: &ValidatorCommitteePreparationV1,
     pool: &BTreeSet<PeerId>,
+    seats: usize,
 ) -> BTreeSet<PeerId> {
     let mut ranked = pool
         .iter()
         .map(|peer| {
+            // Independent reproduction of the public, network/epoch-bound election rank.
+            let identity = norito::encode_canonical(peer).expect("canonical candidate");
             let rank: [u8; 32] = Hash::new_from_chunks(&[
-                b"sumeragi-v2:validator-seat:v1",
+                b"iroha:validator-seat:v1",
+                &[0],
+                preparation.network_id.as_bytes(),
+                &preparation.selection_epoch.to_le_bytes(),
+                &preparation.target_epoch.to_le_bytes(),
                 &preparation.election_seed,
-                &peer.encode(),
+                &identity,
             ])
             .into();
             (rank, peer.clone())
         })
         .collect::<Vec<_>>();
     ranked.sort();
-    ranked.into_iter().take(7).map(|(_, peer)| peer).collect()
+    ranked
+        .into_iter()
+        .take(seats)
+        .map(|(_, peer)| peer)
+        .collect()
 }
 
 fn validator_xor_escrow(
@@ -234,7 +254,7 @@ fn validator_xor_escrow(
     escrow.ok_or_else(|| eyre!("signed genesis has no exact validator XOR escrow"))
 }
 
-fn admit_four_candidates(
+fn admit_candidates(
     admin: &Client,
     candidates: &[Operator],
     network_id: NetworkId,
@@ -520,43 +540,34 @@ fn read_finality_chain(
     network_id: NetworkId,
     genesis_voters: &BTreeSet<PeerId>,
     end: u64,
-) -> Result<(BridgeFinalityProof, BridgeFinalityProof)> {
-    let (anchor, genesis_hash): (
-        BridgeFinalityProof,
-        iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
-    ) = v2_bridge_finality_unavailable(client, 1)?;
+) -> Result<(CertifiedBlock, CertifiedBlock)> {
+    let (_, blocks) =
+        read_contiguous_finality_chain(client, network_id, network_id.into_genesis_hash(), end)?;
+    let genesis = blocks
+        .first()
+        .ok_or_else(|| eyre!("missing signed genesis"))?;
+    let epoch = &genesis.commitment().schedule.current;
     ensure!(
-        genesis_hash == network_id.into_genesis_hash(),
-        "initial finality anchor must be the independently built signed genesis"
+        epoch.authority.generation == 0
+            && epoch
+                .committee
+                .iter()
+                .map(|seat| seat.validator.clone())
+                .collect::<BTreeSet<_>>()
+                == *genesis_voters,
+        "actual signed genesis differs from independently built initial authority"
     );
-    verify_equal_vote_context(&anchor, genesis_voters)?;
-    ensure!(
-        anchor
-            .finality_artifact
-            .height_context
-            .kagemusha_mint_finality_authority
-            .generation
-            == 0,
-        "signed genesis must own the initial authority generation"
-    );
-    let mut verifier =
-        BridgeFinalityVerifier::with_context(network_id, anchor.finality_artifact.context_id());
-    let mut selection = None;
-    let mut cutoff = None;
-    for height in 1..=end {
-        let proof: BridgeFinalityProof = v2_bridge_finality_unavailable(client, height)?;
-        verifier.verify(&proof)?;
-        if height == SELECTION {
-            selection = Some(proof.clone());
-        }
-        if height == CUTOFF {
-            cutoff = Some(proof);
-        }
-    }
-    Ok((
-        selection.ok_or_else(|| eyre!("missing authenticated selection boundary"))?,
-        cutoff.ok_or_else(|| eyre!("missing authenticated preparation cutoff"))?,
-    ))
+    let selection = blocks
+        .iter()
+        .find(|block| block.height() == SELECTION)
+        .ok_or_else(|| eyre!("missing native selecting boundary"))?
+        .clone();
+    let cutoff = blocks
+        .iter()
+        .find(|block| block.height() == CUTOFF)
+        .ok_or_else(|| eyre!("missing native cutoff"))?
+        .clone();
+    Ok((selection, cutoff))
 }
 
 fn read_genesis_dkg_finality_chain(
@@ -564,57 +575,12 @@ fn read_genesis_dkg_finality_chain(
     genesis: &GenesisBlock,
     chain_id: &str,
     end: u64,
-) -> Result<Vec<SumeragiFinalityProof>> {
+) -> Result<NativeFinalityJournal> {
     ensure!(
-        (1..=4).contains(&end),
-        "genesis DKG proof end is outside h1–h4"
+        (2..=4).contains(&end),
+        "genesis DKG phase must have actual H2–H4 finality"
     );
-    read_current_finality_chain(client, genesis, chain_id, end)
-}
-
-/// Read the current embedded-certificate finality chain `1..=end` from `client`, admitting each
-/// proof into a verifier anchored on the signed genesis this harness built and the committee that
-/// genesis registers, never on a genesis or committee the node supplies.
-fn read_current_finality_chain(
-    client: &Client,
-    genesis: &GenesisBlock,
-    chain_id: &str,
-    end: u64,
-) -> Result<Vec<SumeragiFinalityProof>> {
-    ensure!(
-        (1..=256).contains(&end),
-        "committee proof end exceeds its disposable bound"
-    );
-    let validators = iroha_core::sumeragi::schedule::genesis_validators(genesis)?
-        .into_iter()
-        .map(|(peer, proof_of_possession)| FinalityValidator {
-            public_key: peer.public_key().clone(),
-            proof_of_possession,
-        })
-        .collect();
-    let mut verifier = SumeragiFinalityVerifier::new(&genesis.0, chain_id, validators)?;
-    (1..=end)
-        .map(|height| {
-            client.client().get_next_sumeragi_finality_proof(
-                NonZeroU64::new(height).expect("finality heights start at one"),
-                &mut verifier,
-            )
-        })
-        .collect()
-}
-
-/// Read a Sumeragi v2 bridge-finality proof of `height` from `client`: always an error.
-///
-/// Validator-committee selection and provisioning evidence still carry v2 finality artifacts
-/// (height contexts with the v2 roster, quorum, next-epoch snapshot and KAGEMUSHA epoch
-/// authorization). The current node never writes them, so these reads already failed at
-/// runtime; its bridge-finality route serves the embedded-certificate `SumeragiFinalityProof`.
-/// TODO(C3): port committee evidence onto the certified chain (F4) and these checks with it.
-fn v2_bridge_finality_unavailable<T>(client: &Client, height: u64) -> Result<T> {
-    Err(eyre!(
-        "{} no longer serves Sumeragi v2 bridge-finality proofs (height {height})",
-        client.client().to_builder().torii_url
-    ))
+    Ok(read_contiguous_finality_chain(client, network_id, signed_genesis_hash, end)?.0)
 }
 
 fn read_contiguous_finality_chain(
@@ -622,29 +588,60 @@ fn read_contiguous_finality_chain(
     network_id: NetworkId,
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
     end: u64,
-) -> Result<(Hash, Vec<BridgeFinalityProof>)> {
+) -> Result<(NativeFinalityJournal, Vec<CertifiedBlock>)> {
     ensure!(
-        (1..=256).contains(&end),
-        "committee proof end exceeds its disposable bound"
+        (2..=256).contains(&end),
+        "committee proof cut exceeds its explicit disposable bound"
     );
-    let (anchor, observed_hash): (
-        BridgeFinalityProof,
-        iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
-    ) = v2_bridge_finality_unavailable(client, 1)?;
     ensure!(
-        observed_hash == signed_genesis_hash && anchor.block_header.hash() == signed_genesis_hash,
-        "h1 finality anchor differs from the retained signed genesis"
+        network_id.into_genesis_hash() == signed_genesis_hash,
+        "network differs from independent signed genesis"
     );
-    let mut verifier =
-        BridgeFinalityVerifier::with_context(network_id, anchor.finality_artifact.context_id());
-    let trusted_context = Hash::from(anchor.finality_artifact.context_id().0);
-    let mut proofs = Vec::with_capacity(usize::try_from(end)?);
-    for height in 1..=end {
-        let proof: BridgeFinalityProof = v2_bridge_finality_unavailable(client, height)?;
-        verifier.verify(&proof)?;
-        proofs.push(proof);
-    }
-    Ok((trusted_context, proofs))
+    // The iterable read has an explicit count bound; no discarded suffix is treated as a trust root.
+    let mut source = client
+        .client()
+        .query(FindBlocks)
+        .with_pagination(iroha::data_model::query::parameters::Pagination::new(
+            NonZeroU64::new(257),
+            0,
+        ))
+        .execute_all()?;
+    ensure!(
+        source.len() <= 256,
+        "disposable source outgrew configured qualification prefix"
+    );
+    source.retain(|block| block.header().height().get() <= end);
+    source.sort_by_key(|block| block.header().height());
+    ensure!(
+        source.len() == usize::try_from(end)?,
+        "native source lacks complete signed-genesis prefix"
+    );
+    let limits = finality_limits();
+    let journal = NativeFinalityJournal {
+        blocks: source
+            .iter()
+            .map(|block| {
+                NativeFinalityArtifact::from_block(block, limits).map_err(|error| eyre!(error))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let cursor = NativeJournalCursor::new(client.client().chain().clone(), network_id, limits)
+        .map_err(|error| eyre!(error))?;
+    let blocks = with_verified_native_journal(
+        &journal,
+        client.client().chain(),
+        &network_id,
+        limits,
+        cursor.attestations(),
+        |reader| {
+            reader
+                .walk(1, end)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())
+        },
+    )
+    .map_err(|error| eyre!(error))?;
+    Ok((journal, blocks))
 }
 
 async fn stage_genesis_brokers(
@@ -816,7 +813,7 @@ fn prove_exact_target_readiness(
         .ok_or_else(|| eyre!("readiness requires complete prepared credentials"))?;
     let roster = transition
         .preparation
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
@@ -895,7 +892,13 @@ async fn execute_rotation_preparation(
     })
     .await
     .wrap_err("rotation selection status worker panicked")??;
-    let observed = status.latest_finality.height;
+    let observed = status
+        .latest_finality
+        .decode_block(finality_limits())
+        .map_err(|error| eyre!(error))?
+        .header()
+        .height()
+        .get();
     ensure!(
         status
             .selected
@@ -905,34 +908,44 @@ async fn execute_rotation_preparation(
             && observed + 4 < preparation.first_height - 1,
         "rotation status missed the immutable preparation window"
     );
-    let current_roster = status
-        .latest_finality
-        .height_context
-        .roster
-        .iter()
-        .map(|seat| seat.validator.clone())
-        .collect::<Vec<_>>();
     let target = preparation
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
     let target_seats = exact_process_roster(network, &target)?;
-    let authorizing_seats = exact_process_roster(network, &current_roster)?;
-    let (trusted_context, finality_chain) = spawn_blocking({
+    let (finality_journal, certified_chain) = spawn_blocking({
         let admin = admin.clone();
         move || read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, observed)
     })
     .await
     .wrap_err("selection finality worker panicked")??;
+    let latest = certified_chain
+        .last()
+        .ok_or_else(|| eyre!("missing observed native tip"))?;
+    ensure!(
+        NativeFinalityArtifact::from_block(latest.block(), finality_limits())
+            .map_err(|error| eyre!(error))?
+            == status.latest_finality,
+        "status source differs from authenticated native tip"
+    );
+    let current_roster = latest
+        .commitment()
+        .schedule
+        .current
+        .committee
+        .iter()
+        .map(|seat| seat.validator.clone())
+        .collect::<Vec<_>>();
+    let authorizing_seats = exact_process_roster(network, &current_roster)?;
     let selection_evidence = ValidatorCommitteeSelectionEvidenceV1 {
         status,
-        finality_chain,
+        finality_journal,
     };
     let input = DisposableRotationProofInput {
         network_id,
-        trusted_context_id: trusted_context,
-        anchor_height: 1,
+        chain_id: network.chain_id(),
+        finality_limits: finality_limits(),
         target_epoch,
         transition_id,
     };
@@ -962,9 +975,13 @@ async fn execute_rotation_preparation(
                     "rotation DKG public phase missed exact h{height} observation"
                 );
                 spawn_blocking(move || {
-                    read_current_finality_chain(&admin, &genesis, &chain_id, height)?
-                        .pop()
-                        .ok_or_else(|| eyre!("missing exact rotation phase finality"))
+                    Ok(read_contiguous_finality_chain(
+                        &admin,
+                        network_id,
+                        signed_genesis_hash,
+                        height,
+                    )?
+                    .0)
                 })
                 .await
                 .wrap_err("rotation phase finality worker panicked")?
@@ -1083,31 +1100,34 @@ async fn execute_rotation_preparation(
             && prepared_status.pending_beacon_session.as_ref() == Some(&dkg.public_session),
         "prepared status lacks exact public target credentials"
     );
-    let proof_end = prepared_status.latest_finality.height;
-    let (custody_trust, custody_chain) = spawn_blocking({
+    let proof_end = prepared_status
+        .latest_finality
+        .decode_block(finality_limits())
+        .map_err(|error| eyre!(error))?
+        .header()
+        .height()
+        .get();
+    let (custody_journal, _) = spawn_blocking({
         let admin = admin.clone();
         move || read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, proof_end)
     })
     .await
     .wrap_err("custody finality worker panicked")??;
-    ensure!(
-        custody_trust == trusted_context,
-        "custody evidence changed the independent genesis context pin"
-    );
     let custody_evidence = ValidatorCommitteeProvisioningEvidenceV1 {
         status: prepared_status,
-        finality_chain: custody_chain,
+        finality_journal: custody_journal,
         beacon_finalization: certificate,
     };
+    let proof_cursor = NativeJournalCursor::new(network.chain_id(), network_id, finality_limits())
+        .map_err(|error| eyre!(error))?;
     verify_validator_committee_provisioning_evidence_v1(
         &custody_evidence,
+        &network.chain_id(),
         network_id,
-        iroha::data_model::block::consensus_v2::HeightContextId(
-            iroha::crypto::HashOf::from_untyped_unchecked(trusted_context),
-        ),
-        1,
         target_epoch,
         preparation.transition_id().map_err(|error| eyre!(error))?,
+        finality_limits(),
+        proof_cursor.attestations(),
     )
     .map_err(|error| eyre!("native custody evidence was not independently authorized: {error}"))?;
     let mut prepared = Vec::with_capacity(target.len());
@@ -1130,8 +1150,7 @@ async fn execute_rotation_preparation(
                 retained,
                 DisposablePendingCustodyInput {
                     network_id,
-                    trusted_context_id: trusted_context,
-                    anchor_height: 1,
+                    finality_limits: finality_limits(),
                     target_epoch,
                     transition_id,
                     local_validator: seat.validator.clone(),
@@ -1212,12 +1231,12 @@ async fn run_custody_or_activation_scenario(
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
 ) -> Result<()> {
     ensure!(
-        scenario != QualificationScenario::WithheldIncumbentKeys,
+        !scenario.withholds_keys(),
         "custody scenario cannot withhold fresh generation keys"
     );
     let missing = if scenario == QualificationScenario::MissingTargetCustody {
         first_preparation
-            .roster
+            .committee
             .iter()
             .map(|seat| &seat.validator)
             .find(|peer| !genesis_voters.contains(*peer))
@@ -1306,12 +1325,12 @@ async fn run_custody_or_activation_scenario(
         .ok_or_else(|| eyre!("first cutoff lacks authenticated finality"))?;
     verify_equal_vote_context(cutoff, genesis_voters)?;
     let snapshot = cutoff
-        .finality_artifact
-        .height_context
-        .next_epoch_snapshot
+        .commitment()
+        .schedule
+        .boundary
         .as_ref()
         .ok_or_else(|| eyre!("first cutoff lacks certified epoch effect"))?;
-    let decision = &snapshot.kagemusha_mint_finality_authorization;
+    let decision = &snapshot.next.authorization;
     ensure!(
         decision.epoch == 2
             && decision.transition_id
@@ -1325,7 +1344,8 @@ async fn run_custody_or_activation_scenario(
             decision.decision == KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
                 && decision.authority_generation == 0
                 && snapshot
-                    .roster
+                    .next
+                    .committee
                     .iter()
                     .map(|seat| &seat.validator)
                     .collect::<BTreeSet<_>>()
@@ -1348,7 +1368,7 @@ async fn run_custody_or_activation_scenario(
                 && !transition.readiness.iter().any(|row| {
                     usize::try_from(row.validator_index)
                         .ok()
-                        .and_then(|index| first_preparation.roster.get(index))
+                        .and_then(|index| first_preparation.committee.get(index))
                         .is_some_and(|seat| seat.validator == withheld)
                 })
                 && transition.outcome.as_ref() == Some(decision),
@@ -1360,7 +1380,8 @@ async fn run_custody_or_activation_scenario(
         decision.decision == KagemushaMintFinalityEpochDecisionV1::Activate
             && decision.authority_generation == 1
             && snapshot
-                .roster
+                .next
+                .committee
                 .iter()
                 .map(|seat| seat.validator.clone())
                 .collect::<Vec<_>>()
@@ -1383,12 +1404,7 @@ async fn run_custody_or_activation_scenario(
     let seven_set = first.target.iter().cloned().collect::<BTreeSet<_>>();
     verify_equal_vote_context(seven, &seven_set)?;
     ensure!(
-        seven
-            .finality_artifact
-            .height_context
-            .kagemusha_mint_finality_authority
-            .generation
-            == 1,
+        seven.commitment().schedule.current.authority.generation == 1,
         "seven-seat activation did not publish the new Pasta generation"
     );
     let status = spawn_blocking({
@@ -1405,7 +1421,7 @@ async fn run_custody_or_activation_scenario(
         .preparation
         .clone();
     let return_target = return_preparation
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<BTreeSet<_>>();
@@ -1465,12 +1481,12 @@ async fn run_custody_or_activation_scenario(
         .ok_or_else(|| eyre!("return boundary lacks finality"))?;
     verify_equal_vote_context(return_boundary, &seven_set)?;
     let return_snapshot = return_boundary
-        .finality_artifact
-        .height_context
-        .next_epoch_snapshot
+        .commitment()
+        .schedule
+        .boundary
         .as_ref()
         .ok_or_else(|| eyre!("return boundary lacks certified epoch effect"))?;
-    let return_decision = &return_snapshot.kagemusha_mint_finality_authorization;
+    let return_decision = &return_snapshot.next.authorization;
     ensure!(
         return_decision.decision == KagemushaMintFinalityEpochDecisionV1::Activate
             && return_decision.epoch == 3
@@ -1480,7 +1496,8 @@ async fn run_custody_or_activation_scenario(
                     .transition_id()
                     .map_err(|error| eyre!(error))?
             && return_snapshot
-                .roster
+                .next
+                .committee
                 .iter()
                 .map(|seat| seat.validator.clone())
                 .collect::<Vec<_>>()
@@ -1501,11 +1518,7 @@ async fn run_custody_or_activation_scenario(
         .ok_or_else(|| eyre!("four-seat return lacks finality"))?;
     verify_equal_vote_context(four, &return_target)?;
     ensure!(
-        four.finality_artifact
-            .height_context
-            .kagemusha_mint_finality_authority
-            .generation
-            == 2,
+        four.commitment().schedule.current.authority.generation == 2,
         "4→7→4 did not complete the second authenticated signing generation"
     );
     Ok(())
@@ -1514,14 +1527,40 @@ async fn run_custody_or_activation_scenario(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QualificationScenario {
     WithheldIncumbentKeys,
+    FiveCandidateRetention,
+    ElevenCandidateRetention,
     MissingTargetCustody,
     ActivateSevenThenReturnFour,
 }
 
 impl QualificationScenario {
+    fn pool_size(self) -> usize {
+        match self {
+            Self::FiveCandidateRetention => 5,
+            Self::ElevenCandidateRetention => 11,
+            _ => 8,
+        }
+    }
+
+    fn withholds_keys(self) -> bool {
+        matches!(
+            self,
+            Self::WithheldIncumbentKeys
+                | Self::FiveCandidateRetention
+                | Self::ElevenCandidateRetention
+        )
+    }
+
+    fn selected_seats(self) -> usize {
+        let available = self.pool_size().min(7);
+        3 * ((available - 1) / 3) + 1
+    }
+
     fn seed(self) -> &'static str {
         match self {
             Self::WithheldIncumbentKeys => "npos-eight-candidates-withheld-keys",
+            Self::FiveCandidateRetention => "npos-five-candidates-retention",
+            Self::ElevenCandidateRetention => "npos-eleven-candidates-retention",
             Self::MissingTargetCustody => "npos-eight-candidates-missing-custody",
             Self::ActivateSevenThenReturnFour => "npos-eight-candidates-seven-then-four",
         }
@@ -1530,6 +1569,10 @@ impl QualificationScenario {
 
 async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<()> {
     init_instruction_registry();
+    let pool_size = scenario.pool_size();
+    let seats = scenario.selected_seats();
+    let supplementary = pool_size - 4;
+    let registry_capacity = i64::try_from(pool_size.max(7))?;
     let xor: AssetDefinitionId = defaults::nexus::staking::stake_asset_id().parse()?;
     ensure!(
         xor.to_string() == TAIRA_XOR,
@@ -1549,17 +1592,19 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         .with_npos_consensus()
         .with_disposable_mint_finality_custody()
         .with_npos_genesis_bootstrap(1_000_u64.into())
-        .with_committee_validator_p2p_bootstrap(CommitteeValidatorP2pBootstrap::new(4)?)?
+        .with_committee_validator_p2p_bootstrap(CommitteeValidatorP2pBootstrap::new(
+            supplementary,
+        )?)?
         .with_config_layer(|layer| {
             // Admission may retain a larger candidate pool than the seven-seat
             // consensus ceiling; the authenticated election selects exactly 3f+1.
-            layer.write(["nexus", "staking", "max_validators"], 8_i64);
+            layer.write(["nexus", "staking", "max_validators"], registry_capacity);
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos.into_custom_parameter(),
         )));
     let network = sandbox::build_network_or_skip(builder, scenario.seed()).ok_or_else(|| {
-        eyre!("committee qualification requires an actual eight-process disposable network")
+        eyre!("committee qualification requires an actual {pool_size}-process disposable network")
     })?;
     let result = async {
         let genesis_bundle = network.native_genesis_provisioning_bundle()?;
@@ -1572,22 +1617,12 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         let admin = rebind_blocking_client(&network.client(), |builder| {
             builder.transaction_status_timeout = WAIT;
         });
-        let genesis = network.genesis();
-        let chain_id = network.chain_id().to_string();
-        let genesis_anchor = spawn_blocking({
-            let admin = admin.clone();
-            let genesis = genesis.clone();
-            let chain_id = chain_id.clone();
-            move || read_genesis_dkg_finality_chain(&admin, &genesis, &chain_id, 1)
-        })
-        .await
-        .wrap_err("genesis DKG anchor worker panicked")??
-        .pop()
-        .ok_or_else(|| eyre!("missing genesis finality anchor"))?;
+        let network_id = network.network_id();
+        let block_hash = genesis_bundle.block_hash;
         let network_ref = &network;
         let genesis_dkg = run_disposable_genesis_dkg(
             &network,
-            &genesis_anchor,
+            finality_limits(),
             5,
             |height| {
                 let admin = admin.clone();
@@ -1606,9 +1641,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                         "genesis DKG public phase missed exact h{height} observation"
                     );
                     spawn_blocking(move || {
-                        read_genesis_dkg_finality_chain(&admin, &genesis, &chain_id, height)?
-                            .pop()
-                            .ok_or_else(|| eyre!("missing exact genesis phase finality"))
+                        read_genesis_dkg_finality_chain(&admin, network_id, block_hash, height)
                     })
                     .await
                     .wrap_err("genesis phase finality worker panicked")?
@@ -1640,8 +1673,8 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         network.start_all().await?;
         network.ensure_blocks(5).await?;
         ensure!(
-            network.validators().len() == 4 && network.committee_validators().len() == 4,
-            "fixture must start four genesis voters and four separate candidate processes"
+            network.validators().len() == 4 && network.committee_validators().len() == supplementary,
+            "fixture must start four genesis voters and the exact separate candidate pool"
         );
         let network_id = network.network_id();
         let genesis_voters = network
@@ -1655,7 +1688,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             .chain(network.committee_validators())
             .map(|peer| peer.id())
             .collect::<BTreeSet<_>>();
-        ensure!(pool.len() == 8, "all candidate BLS keys must be distinct");
+        ensure!(pool.len() == pool_size, "all candidate BLS keys must be distinct");
         let pasta = network
             .validators()
             .iter()
@@ -1663,14 +1696,14 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             .map(|peer| peer.disposable_mint_finality_keys(0))
             .collect::<Result<Vec<_>>>()?;
         ensure!(
-            pasta.iter().map(|keys| keys.eq_proof_public_key).collect::<BTreeSet<_>>().len() == 8
+            pasta.iter().map(|keys| keys.eq_proof_public_key).collect::<BTreeSet<_>>().len() == pool_size
                 && pasta
                     .iter()
                     .map(|keys| keys.ep_proof_public_key)
                     .collect::<BTreeSet<_>>()
                     .len()
-                    == 8,
-            "all eight processes must hold independent real Pasta signing custody"
+                    == pool_size,
+            "all processes must hold independent real Pasta signing custody"
         );
         let escrow = validator_xor_escrow(&network.genesis(), &xor)?;
         ensure!(escrow.definition == xor, "genesis escrow must hold actual XOR");
@@ -1717,7 +1750,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                 .map(|operator| Operator::clone(operator))
                 .collect::<Vec<_>>();
             move || -> Result<u64> {
-                admit_four_candidates(&admin, &candidates, network_id, &xor, &escrow)?;
+                admit_candidates(&admin, &candidates, network_id, &xor, &escrow)?;
                 Ok(admin.status().get()?.blocks)
             }
         })
@@ -1736,7 +1769,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         let preparation = selected.transition.preparation.clone();
         preparation.validate().map_err(|error| eyre!(error))?;
         let target = preparation
-            .roster
+            .committee
             .iter()
             .map(|seat| seat.validator.clone())
             .collect::<BTreeSet<_>>();
@@ -1748,28 +1781,33 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                 && preparation.first_height == TARGET_FIRST
                 && preparation.last_height == TARGET_LAST
                 && preparation.authority_generation == 1
-                && target.len() == 7
-                && target == ranked_target(&preparation, &pool)
+                && target.len() == seats
+                && target == ranked_target(&preparation, &pool, seats)
                 && target.is_subset(&pool),
-            "selection must freeze the exact ranked seven of eight for E+2"
+            "selection must freeze the exact public rank and 3f+1 size for the full candidate pool"
         );
         ensure!(
-            target.intersection(&genesis_voters).count() >= 3,
-            "seven of eight must include at least three incumbents"
+            target.intersection(&genesis_voters).count() >= seats.saturating_sub(supplementary),
+            "selected incumbent overlap must satisfy the actual candidate pool geometry"
         );
-        for (seat, pop) in preparation.roster.iter().zip(&preparation.validator_set_pops) {
+        for seat in &preparation.committee {
             ensure!(
-                operators.get(&seat.validator).is_some_and(|operator| operator.pop == *pop),
+                operators.get(&seat.validator).is_some_and(|operator| operator.pop == seat.proof_of_possession),
                 "frozen seat must carry its real BLS possession proof"
             );
         }
-        let withheld = if scenario == QualificationScenario::WithheldIncumbentKeys {
+        let withheld = if scenario.withholds_keys() {
             Some(
                 target
                     .intersection(&genesis_voters)
                     .next()
+                    .or_else(|| {
+                        (scenario != QualificationScenario::WithheldIncumbentKeys)
+                            .then(|| target.iter().next())
+                            .flatten()
+                    })
                     .cloned()
-                    .ok_or_else(|| eyre!("selected target has no incumbent to withhold keys"))?,
+                    .ok_or_else(|| eyre!("selected target lacks the required withholding seat"))?,
             )
         } else {
             None
@@ -1803,14 +1841,14 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         .await
         .wrap_err("preparation status worker panicked")??;
         ensure!(
-            progress.candidate_keys.len() == if withheld.is_some() { 6 } else { 7 }
+            progress.candidate_keys.len() == seats - usize::from(withheld.is_some())
                 && progress.selected.as_ref().is_some_and(|row| row.transition.preparation == preparation),
             "selected key publications differ from the exact frozen committee"
         );
         if let Some(withheld) = &withheld {
             ensure!(
                 progress.candidate_keys.iter().all(|row| row.keys.validator != *withheld),
-                "one selected incumbent must be genuinely missing its fresh generation keys"
+                "the selected withholding seat must genuinely lack its fresh generation keys"
             );
         } else {
             return run_custody_or_activation_scenario(
@@ -1835,43 +1873,37 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         })
         .await
         .wrap_err("boundary finality worker panicked")??;
-        verify_bridge_finality_proof(&selection_proof, &network_id)?;
-        verify_bridge_finality_proof(&cutoff_proof, &network_id)?;
         verify_equal_vote_context(&selection_proof, &genesis_voters)?;
         verify_equal_vote_context(&cutoff_proof, &genesis_voters)?;
         ensure!(
-            selection_proof.finality_artifact == selected.selecting_finality,
+            NativeFinalityArtifact::from_block(selection_proof.block(), finality_limits()).map_err(|error| eyre!(error))? == selected.selecting_finality,
             "committee status must attach the exact authenticated selecting certificate"
         );
         let selected_snapshot = selection_proof
-            .finality_artifact
-            .height_context
-            .next_epoch_snapshot
+            .commitment().schedule.boundary
             .as_ref()
             .ok_or_else(|| eyre!("selection boundary lacks a finalized next-epoch snapshot"))?;
         ensure!(
-            selected_snapshot.committee_preparation.as_ref() == Some(&preparation),
-            "seven-seat preparation must be frozen in the incumbent boundary QC"
+            selected_snapshot.preparation.as_ref() == Some(&preparation),
+            "the complete selected preparation must be frozen in the incumbent boundary QC"
         );
         let cutoff_snapshot = cutoff_proof
-            .finality_artifact
-            .height_context
-            .next_epoch_snapshot
+            .commitment().schedule.boundary
             .as_ref()
             .ok_or_else(|| eyre!("cutoff lacks an incumbent-certified next epoch"))?;
-        let authorization = &cutoff_snapshot.kagemusha_mint_finality_authorization;
+        let authorization = &cutoff_snapshot.next.authorization;
         ensure!(
             authorization.decision == KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
                 && authorization.epoch == 2
                 && authorization.authority_generation == 0
                 && authorization.transition_id == selected_id
-                && cutoff_snapshot.kagemusha_mint_finality_authority
-                    == selection_proof.finality_artifact.height_context.kagemusha_mint_finality_authority
-                && cutoff_snapshot.roster == selection_proof.finality_artifact.height_context.roster,
+                && cutoff_snapshot.next.authority
+                    == selection_proof.commitment().schedule.current.authority
+                && cutoff_snapshot.next.committee == selection_proof.commitment().schedule.current.committee,
             "a missing target key must cancel this exact attempt while retaining all four incumbent seats"
         );
         let replacement = cutoff_snapshot
-            .committee_preparation
+            .preparation
             .as_ref()
             .ok_or_else(|| eyre!("next selection must create a new E+3 attempt"))?;
         ensure!(
@@ -1909,6 +1941,16 @@ async fn overfull_pool_freezes_seven_then_missing_incumbent_keys_certify_four_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn five_candidates_freeze_exact_four_and_certify_retention_without_reroll() -> Result<()> {
+    run_overfull_qualification(QualificationScenario::FiveCandidateRetention).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn eleven_candidates_freeze_exact_seven_and_certify_retention_without_reroll() -> Result<()> {
+    run_overfull_qualification(QualificationScenario::ElevenCandidateRetention).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn complete_keys_and_dkg_but_missing_target_custody_certifies_four_retained() -> Result<()> {
     run_overfull_qualification(QualificationScenario::MissingTargetCustody).await
 }
@@ -1927,7 +1969,7 @@ fn exact_quorum_uses_only_three_f_plus_one_equal_vote_geometry() {
 }
 
 #[test]
-fn v2_bridge_finality_reads_fail_explicitly() {
+fn native_finality_rejects_wrong_independent_genesis_before_query() {
     let config = iroha::config::Config {
         chain: "committee-transition-unit".into(),
         network_id: NetworkId::from_genesis_hash(iroha::crypto::HashOf::from_untyped_unchecked(
@@ -1946,11 +1988,18 @@ fn v2_bridge_finality_reads_fail_explicitly() {
         sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
         sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
     };
+    let network_id = config.network_id;
     let client = Client::new(config).unwrap();
-    let error = v2_bridge_finality_unavailable::<()>(&client, 7).expect_err("never served");
-    let message = error.to_string();
+    let error = read_contiguous_finality_chain(
+        &client,
+        network_id,
+        iroha::crypto::HashOf::from_untyped_unchecked(Hash::new(b"another signed genesis")),
+        2,
+    )
+    .expect_err("foreign independent source is rejected before any query");
     assert!(
-        message.contains("committee-transition.invalid") && message.contains("height 7"),
-        "{message}"
+        error
+            .to_string()
+            .contains("network differs from independent signed genesis")
     );
 }

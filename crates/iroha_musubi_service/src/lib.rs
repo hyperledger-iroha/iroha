@@ -1066,6 +1066,10 @@ pub struct MusubiProviderReadbackRequestV1 {
     pub network_id: NetworkId,
     /// Account publishing the release.
     pub publisher: AccountId,
+    /// Registry-policy revision of the exact successful native archive registration.
+    pub expected_policy_revision: u64,
+    /// Finalized immutable registration to authenticate before selecting a provider target.
+    pub finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1,
     /// Exact finalized location and provider selected for readback.
     pub location: MusubiArchiveLocationV1,
     /// Provider whose endpoint must serve the complete archive.
@@ -1100,17 +1104,39 @@ impl MusubiProviderReadbackRequestV1 {
                 "MUSUBI_PROVIDER_READBACK_REQUEST_INVALID",
             )
         })?;
+        self.finalized_registration.validate().map_err(|_| {
+            MusubiPublicationRuntimeTransportErrorV1::permanent(
+                "MUSUBI_PROVIDER_READBACK_REQUEST_INVALID",
+            )
+        })?;
         if self.version != 1
             || self.operation_id.iter().all(|byte| *byte == 0)
             || self.network_id.as_bytes()[31] & 1 != 1
+            || self.expected_policy_revision == 0
+            || self.finalized_registration.network_id != self.network_id
+            || self.finalized_registration.registration.archive_id != self.commitment.archive_id()
+            || self.finalized_registration.registration.commitment != self.commitment
+            || self.finalized_registration.registration.registered_by != self.publisher
             || self.location.archive_id != self.commitment.archive_id()
+            || self.location.finalized_height
+                < self
+                    .finalized_registration
+                    .registration
+                    .registered_at_height
             || self.location.state == MusubiArchiveLocationStateV1::Retired
             || self
                 .location
                 .providers
                 .binary_search(&self.provider)
                 .is_err()
-            || self.semantic_release_digest.is_zero()
+            || self.semantic_release_digest
+                != self
+                    .finalized_registration
+                    .registration
+                    .staging_receipt
+                    .payload
+                    .binding
+                    .semantic_release_manifest_digest
             || self.verification_lock_digest.is_zero()
         {
             return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
@@ -1596,9 +1622,38 @@ pub trait MusubiSeedIngressBackendV1: Send {
         plan: &CarBuildPlan,
         car: &[u8],
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1>;
+    /// Re-read the retained exact CAR before replaying a completed journal receipt.
+    ///
+    /// This check must not recreate a missing record: a completed receipt only remains usable
+    /// while its original durable seed custody is still intact.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed failure if the retained operation, binding, plan, or CAR is absent,
+    /// substituted, or temporarily unreadable.
+    fn verify_staged_car(
+        &self,
+        operation_id: [u8; 32],
+        binding: &MusubiSeedIngressReceiptBindingV1,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &CarBuildPlan,
+        car: &[u8],
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1>;
 }
 /// Backend coordinating permanent pins, replication, and finalized provider completions.
 pub trait MusubiStorageCoordinationBackendV1: Send {
+    /// Recheck current finalized registration before replaying a cached response.
+    ///
+    /// This read-only check must neither pin nor submit a replication order. A response
+    /// retained in the journal is not evidence that its registration remains in the
+    /// daemon's current finalized State and Kura history.
+    ///
+    /// # Errors
+    /// Refuses absent, substituted, or locally unavailable finalized registration.
+    fn verify_current_registration(
+        &self,
+        request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1>;
     /// Coordinate or idempotently return evidence for one exact immutable request.
     ///
     /// The backend must independently retrieve the exact transaction, prove that its sole
@@ -1619,6 +1674,18 @@ pub trait MusubiStorageCoordinationBackendV1: Send {
 }
 /// Backend performing complete provider-specific archive and bundle verification.
 pub trait MusubiProviderReadbackBackendV1: Send {
+    /// Recheck the current finalized location, provider authority, and admitted endpoint before
+    /// replaying an earlier complete readback from the journal.
+    ///
+    /// This read-only check must not fetch a CAR or mutate provider state. A historical readback
+    /// response alone cannot establish that its target remains currently admitted.
+    ///
+    /// # Errors
+    /// Returns a closed retryable or permanent failure when the current target cannot be proven.
+    fn verify_current_target(
+        &self,
+        request: &MusubiProviderReadbackRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1>;
     /// Read, parse, and verify one exact committed CAR through the selected provider.
     ///
     /// # Errors
@@ -2462,6 +2529,15 @@ impl MusubiPublicationPrivateServiceV1 {
             .map_err(seed_ingress_journal_error)?
         {
             MusubiPublicationJournalBeginV1::Cached(response) => {
+                self.seed_ingress
+                    .verify_staged_car(
+                        metadata.value.operation_id,
+                        &metadata.value.binding,
+                        &metadata.value.commitment,
+                        &verified_body.plan,
+                        verified_body.car,
+                    )
+                    .map_err(seed_ingress_backend_error)?;
                 let receipt: MusubiSeedIngressReceiptV1 = decode_cached_response(&response)
                     .map_err(|error| {
                         error.ingest_deadletter(MusubiIngestDeadletterReasonV1::ReceiptInvalid)
@@ -2664,6 +2740,14 @@ impl MusubiPublicationPrivateServiceV1 {
                     )
                     .integrity_failure(MusubiIntegritySurfaceV1::Other)
                 })?;
+                self.storage
+                    .verify_current_registration(&decoded.value)
+                    .map_err(|error| {
+                        service_backend_error(
+                            MusubiPublicationServiceErrorCodeV1::StorageCoordinationUnavailable,
+                            error,
+                        )
+                    })?;
                 return Ok(response);
             }
             MusubiPublicationJournalBeginV1::Execute => {}
@@ -2747,6 +2831,14 @@ impl MusubiPublicationPrivateServiceV1 {
                     )
                     .integrity_failure(MusubiIntegritySurfaceV1::ProviderReadback)
                 })?;
+                self.readback
+                    .verify_current_target(&decoded.value)
+                    .map_err(|error| {
+                        service_backend_error(
+                            MusubiPublicationServiceErrorCodeV1::ProviderReadbackUnavailable,
+                            error,
+                        )
+                    })?;
                 return Ok(response);
             }
             MusubiPublicationJournalBeginV1::Execute => {}

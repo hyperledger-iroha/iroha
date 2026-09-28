@@ -39,27 +39,29 @@ use iroha_core::{
         },
     },
     kura::{BlockIndex, BlockStore, Kura},
-    sumeragi::startup::genesis_committee_peers,
+    sumeragi::{
+        certified_chain::CertifiedBlock,
+        native_journal::{NativeJournalCursor, with_verified_native_journal},
+        startup::genesis_committee_peers,
+    },
 };
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
     Level, NetworkId,
     account::{AccountId, address::ChainDiscriminantGuard},
-    block::{
-        SignedBlock,
-        consensus_v2::{BeaconHorizonStatusV1, SumeragiV2Status},
-        decode_framed_signed_block,
-    },
     consensus::GlobalThresholdBeaconChainAnchorV1,
     isi::{InstructionBox, Log, consensus_keys::ApplyThresholdKeyLifecycleCertificateV1},
     parameter::system::{Parameters, SumeragiNposParameters},
+    sumeragi::{
+        BeaconHorizonStatusV1, SumeragiStatus,
+        finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
+    },
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
 use iroha_genesis::{RawGenesisTransaction, validate_prepared_genesis_bundle};
 use iroha_model_base::{metadata::Metadata, peer::PeerId};
 use iroha_test_network::{init_instruction_registry, read_on_dedicated_thread};
 use norito::json::{self, Value};
-use rand::{TryRngCore as _, rngs::OsRng};
 use std::{
     collections::BTreeSet,
     fs,
@@ -738,7 +740,7 @@ async fn wait_for_mesh(
     }
 }
 
-/// Signed beacon horizon of every validator (see [`sumeragi_statuses`]).
+/// Native local beacon readiness of every validator (see [`sumeragi_statuses`]).
 async fn beacon_horizons(
     clients: &[Client],
     nodes: &[PeerId],
@@ -750,46 +752,25 @@ async fn beacon_horizons(
         .collect())
 }
 
-/// The Sumeragi v2 status each validator signs, for its committed tip and a fresh challenge,
-/// into a public finality attestation (`/v1/bridge/finality/attestation/{height}`).
-/// A failed read (including a tip that moved between the two reads) is retried for at most
-/// [`STATUS_RETRY`]; the last error is returned. The current node signs a
-/// `SumeragiFinalityAttestation` whose status has no protocol version or beacon horizon, so
-/// every read fails after verifying the node's signature (the v2 status was never published by
-/// the current node, so this read failed before as well).
-async fn sumeragi_statuses(clients: &[Client], nodes: &[PeerId]) -> Result<Vec<SumeragiV2Status>> {
+/// Read native process diagnostics from every validator under the configured operator identity.
+/// These observations do not certify execution; `verify_pulse` separately checks each actual
+/// canonical Kura prefix under signed genesis and native quorum/Pasta authority.
+/// A failed read is retried for at most [`STATUS_RETRY`]; the last error is returned.
+async fn sumeragi_statuses(clients: &[Client], nodes: &[PeerId]) -> Result<Vec<SumeragiStatus>> {
     ensure!(clients.len() == nodes.len(), "one node identity per client");
     try_join_all(clients.iter().zip(nodes).map(|(client, node)| async move {
         let give_up = Instant::now() + STATUS_RETRY;
         loop {
-            let read = async {
-                let height = NonZeroU64::new(client.status().get().await?.blocks)
-                    .ok_or_else(|| eyre!("no committed block yet"))?;
-                let mut challenge = [0_u8; 32];
-                OsRng
-                    .try_fill_bytes(&mut challenge)
-                    .map_err(|error| eyre!("challenge entropy: {error}"))?;
-                let (client, node) = (client.clone(), node.clone());
-                read_on_dedicated_thread(move || {
-                    // The I105 discriminant is thread-local.
-                    let _discriminant = ChainDiscriminantGuard::enter(369);
-                    client
-                        .get_sumeragi_finality_attestation(height, challenge, &node)
-                        .map_err(|error| eyre!("{error:?}"))
-                        .and_then(|attestation| {
-                            // TODO(S3): the current node's signed status carries no protocol
-                            // version or beacon horizon; re-source the compatibility values and
-                            // horizons this proof checks from the current node.
-                            Err(eyre!(
-                                "validator {} signed a current status at height {} without the \
-                                 Sumeragi v2 protocol version and beacon horizon",
-                                attestation.body.node_id,
-                                attestation.body.status.committed_height
-                            ))
-                        })
-                })
-                .await
-            }
+            let (client, node) = (client.clone(), node.clone());
+            let read = read_on_dedicated_thread(move || {
+                let _discriminant = ChainDiscriminantGuard::enter(369);
+                let status = client.get_sumeragi_status()?;
+                ensure!(
+                    status.signer.as_ref() == Some(node.public_key()) && !status.is_halted(),
+                    "native diagnostic source does not report the expected running validator"
+                );
+                Ok::<_, color_eyre::Report>(status)
+            })
             .await;
             match read {
                 Ok(status) => return Ok::<_, color_eyre::Report>(status),
@@ -807,7 +788,7 @@ async fn sumeragi_statuses(clients: &[Client], nodes: &[PeerId]) -> Result<Vec<S
 fn ensure_compatibility_matches(
     reports: &[Value],
     genesis_hashes: (&str, &str),
-    statuses: &[SumeragiV2Status],
+    statuses: &[SumeragiStatus],
 ) -> Result<()> {
     ensure!(reports.len() == statuses.len(), "one report per validator");
     let text = |report: &Value, key: &str| -> Result<String> {
@@ -936,15 +917,44 @@ async fn install(
     }
 }
 
-fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
-    let mut index = [BlockIndex {
-        start: 0,
-        length: 0,
-    }];
-    store.read_block_indices(height - 1, &mut index)?;
-    let mut bytes = vec![0; usize::try_from(index[0].length)?];
-    store.read_block_data(index[0].start, &mut bytes)?;
-    Ok(decode_framed_signed_block(&bytes)?)
+fn native_finality_limits() -> NativeFinalityLimits {
+    NativeFinalityLimits {
+        block_bytes: 32 * 1024 * 1024,
+        journal_bytes: 64 * 1024 * 1024,
+        block_count: 256,
+        allocated_bytes: 512 * 1024 * 1024,
+    }
+}
+
+fn journal_from_store(store: &mut BlockStore, height: u64) -> Result<NativeFinalityJournal> {
+    let limits = native_finality_limits();
+    ensure!(
+        (2..=u64::try_from(limits.block_count)?).contains(&height),
+        "native finality needs a bounded H2+ prefix"
+    );
+    let mut blocks = Vec::with_capacity(usize::try_from(height)?);
+    let mut total = 0_usize;
+    for at in 1..=height {
+        let mut index = [BlockIndex {
+            start: 0,
+            length: 0,
+        }];
+        store.read_block_indices(at - 1, &mut index)?;
+        let length = usize::try_from(index[0].length)?;
+        total = total
+            .checked_add(length)
+            .ok_or_else(|| eyre!("native journal length overflow"))?;
+        ensure!(
+            length > 0 && length <= limits.block_bytes && total <= limits.journal_bytes,
+            "native source exceeds configured bounds before allocation"
+        );
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length)?;
+        bytes.resize(length, 0);
+        store.read_block_data(index[0].start, &mut bytes)?;
+        blocks.push(NativeFinalityArtifact { block_wire: bytes });
+    }
+    Ok(NativeFinalityJournal { blocks })
 }
 
 /// Verify the mandatory pulse at `pulse_height` in every stopped validator's Kura against the
@@ -969,12 +979,39 @@ fn verify_pulse(
         let mut store = BlockStore::open_read_only(
             Kura::canonical_storage_paths(config.kura.store_dir.value()).0,
         )?;
-        let anchor = read_block(&mut store, pulse_height - 1)?;
-        let block = read_block(&mut store, pulse_height)?;
-        let pulse = block
-            .npos_consensus_effects()
-            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref())
-            .ok_or_else(|| eyre!("no beacon pulse at mandatory height {pulse_height}"))?;
+        let network = NetworkId::from_genesis_hash(config.genesis.expected_hash);
+        ensure!(
+            network == record.session.network_id,
+            "profile source network differs"
+        );
+        let journal = journal_from_store(&mut store, pulse_height)?;
+        let cursor = NativeJournalCursor::new(
+            config.common.chain.clone(),
+            network,
+            native_finality_limits(),
+        )
+        .map_err(|error| eyre!(error))?;
+        let certified = with_verified_native_journal(
+            &journal,
+            &config.common.chain,
+            &network,
+            native_finality_limits(),
+            cursor.attestations(),
+            |reader| {
+                reader
+                    .walk(1, pulse_height)
+                    .collect::<std::result::Result<Vec<CertifiedBlock>, _>>()
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .map_err(|error| eyre!(error))?;
+        let anchor = certified[usize::try_from(pulse_height - 2)?].block();
+        let source = &certified[usize::try_from(pulse_height - 1)?];
+        let block = source.block();
+        let pulse =
+            source.commitment().beacon.as_ref().ok_or_else(|| {
+                eyre!("no native beacon pulse at mandatory height {pulse_height}")
+            })?;
         ensure!(pulse.height == pulse_height, "pulse height differs");
         beacon::verify_finalized_global_threshold_beacon_pulse_v1(
             &session,
@@ -1259,7 +1296,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             )?;
             eprintln!("check-config compatibility values equal the live network's");
             // Before the install `/readyz` is 503 (its public body is a generic envelope) and
-            // the signed horizon names no active session.
+            // the native readiness horizon names no active session.
             let horizons = beacon_horizons(&clients, &nodes).await?;
             for (offset, horizon) in (0_u16..).zip(&horizons) {
                 let code = readyz(api + offset).await?;

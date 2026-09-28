@@ -37,13 +37,14 @@ def collection(ready_setup, monkeypatch):
         p.before_spawn(argv)
         get = lambda flag: argv[argv.index(flag) + 1]
         context = next(a for a in c.inputs.generation.artifacts if a.path == 'genesis-context.nrt')
-        reply = dict(version=1, operation='collect_scaling_inputs', invocation_id=get('--invocation-id'),
-            client_config_sha256=c.inputs.roles[0].client_config_sha256,
-            committed_height=100, finality_count=100, query_count=8,
+        genesis = next(a for a in c.inputs.generation.artifacts if a.path == 'genesis.signed.nrt')
+        reply = dict(version=1, operation='collect_native_inputs', invocation_id=get('--invocation-id'),
+            genesis_sha256=genesis.sha256, genesis_bytes=genesis.bytes,
+            committed_height=100, carrier_count=100, query_count=8,
             context_sha256=context.sha256, context_bytes=context.bytes)
-        for role in ('finality', 'queries'):
+        for role in ('carrier', 'queries'):
             path = Path(get('--' + role + '-out'))
-            stage = path.with_name(path.name + '.collecting')
+            stage = path.with_name(path.name + '.publishing')
             digest, length = write(stage, ('test-native-vector-' + role).encode())
             stage.rename(path)
             reply[role + '_sha256'], reply[role + '_bytes'] = digest, length
@@ -71,34 +72,36 @@ def test_exact_command_and_complete_pair_keep_original_inputs_owned(collection):
     p = collection
     value = owner(p)
     receipt = value.run()
-    assert receipt.stopped_height == receipt.finality_count == 100 and receipt.query_count == 8
-    assert receipt.process.pid == 2000 and receipt.cli_sha256 == p.c.images[1].sha256
+    assert receipt.stopped_height == receipt.carrier_count == 100 and receipt.query_count == 8
+    assert receipt.process.pid == 2000 and receipt.kagami_sha256 == p.c.images[1].sha256
     assert receipt.anchors_sha256 == p.c.inputs.anchors_sha256
     argv, options = p.c.commands.calls[0]
     fd = p.c.inputs.client_fd(0)
-    assert argv[:10] == (str(p.c.images[1].path), '--machine', '--config-fd', str(fd),
-        '--config-source-path', str(p.c.inputs.roles[0].client_config), '--output-format', 'json',
-        'tx', 'collect-scaling-inputs')
-    flags = dict(zip(argv[10::2], argv[11::2], strict=True))
-    assert len(flags) == 27 and len(argv) == 64
-    assert flags == {'--invocation-id': receipt.invocation_id, '--network-id': p.c.inputs.network_id,
-        '--client-config-sha256': receipt.client_config_sha256, '--client-config-max-bytes': '65536',
-        '--deadline-monotonic-ns': str(value._original_end), '--block-store': str(p.stopped.block_store),
-        '--merge-log': str(p.stopped.merge_log), '--context': str(p.c.inputs.input_directory / 'genesis-context.nrt'),
+    assert argv[:7] == (str(p.c.images[1].path), '--ui-mode', 'plain', 'advanced',
+        'kura', 'scaling-evidence', 'collect')
+    flags = dict(zip(argv[7::2], argv[8::2], strict=True))
+    assert len(flags) == 30 and len(argv) == 67
+    assert flags == {'--invocation-id': receipt.invocation_id,
+        '--chain-id': p.c.inputs.generation.chain_id, '--network-id': p.c.inputs.network_id,
+        '--genesis-epoch-context-id': p.c.inputs.genesis_epoch_context_id,
+        '--signed-genesis': str(p.c.inputs.input_directory / 'genesis.signed.nrt'),
+        '--signed-genesis-sha256': receipt.genesis_sha256, '--signed-genesis-max-bytes': '65536',
+        '--block-store': str(p.stopped.block_store), '--merge-log': str(p.stopped.merge_log),
+        '--context': str(p.c.inputs.input_directory / 'genesis-context.nrt'),
         '--context-sha256': receipt.context_sha256, '--context-max-bytes': '65536',
-        '--finality-out': str(receipt.finality.path), '--queries-out': str(receipt.queries.path),
-        '--finality-max-bytes': '65536', '--queries-max-bytes': '65536', '--total-max-bytes': str(4 * 65536),
-        '--reply-max-bytes': '4096', '--last-height': '100', '--max-committed-blocks': '100',
+        '--carrier-out': str(receipt.carrier.path), '--queries-out': str(receipt.queries.path),
+        '--carrier-max-bytes': '65536', '--queries-max-bytes': '65536', '--total-max-bytes': str(4 * 65536),
+        '--reply-max-bytes': '4096', '--first-height': '1', '--last-height': '100', '--max-committed-blocks': '100',
         '--max-store-data-bytes': str(8 * 1024 * 1024), '--max-carrier-bytes': '65536',
-        '--max-merge-log-bytes': '65536', '--max-merge-frames': '100', '--max-input-bytes': '65536',
-        '--max-total-leaves': '1000', '--max-leaves-per-carrier': '100', '--max-decode-bytes': str(1024 * 1024),
-        '--max-value-decode-bytes': '65536'}
+        '--max-merge-log-bytes': '65536', '--max-merge-frames': '100', '--reader-max-output-bytes': '65536',
+        '--max-total-leaves': '1000', '--max-leaves-per-carrier': '100',
+        '--max-decode-allocation-bytes': '65536', '--owner-uid': str(os.geteuid())}
     assert options == dict(stdin=command.subprocess.DEVNULL, stdout=command.subprocess.PIPE,
-        stderr=command.subprocess.PIPE, cwd='/', env={}, close_fds=True, pass_fds=(fd,), shell=False,
+        stderr=command.subprocess.PIPE, cwd='/', env={}, close_fds=True, pass_fds=(), shell=False,
         start_new_session=False, bufsize=0)
     assert len(value._commands._children) == 1 and value._phase == 'collected'
     assert p.c.commands.children[0].returncode == 0
-    for artifact in (receipt.finality, receipt.queries):
+    for artifact in (receipt.carrier, receipt.queries):
         assert artifact == p.outputs.artifact(artifact.role)
         assert hashlib.sha256(os.pread(p.outputs.descriptor(artifact.role), artifact.bytes, 0)).hexdigest() == artifact.sha256
     assert os.fstat(fd).st_size > 0 and 'PRIVATE' not in repr(receipt)
@@ -108,7 +111,7 @@ def test_exact_command_and_complete_pair_keep_original_inputs_owned(collection):
     with pytest.raises(vector.VectorCollectionError): value.run()
 
 
-@pytest.mark.parametrize('field,bad', [('client_config_max_bytes', 0), ('client_config_max_bytes', 1024 * 1024 + 1),
+@pytest.mark.parametrize('field,bad', [('signed_genesis_max_bytes', 0), ('signed_genesis_max_bytes', 32 * 1024 * 1024 + 1),
     ('context_max_bytes', 0), ('context_max_bytes', 8 * 1024 * 1024 + 1), ('total_max_bytes', 1),
     ('total_max_bytes', 256 * 1024 * 1024 + 1), ('reply_max_bytes', True), ('reply_max_bytes', 4097),
     ('max_total_leaves', 0), ('max_total_leaves', 1000001), ('max_leaves_per_carrier', 1001),
@@ -142,11 +145,11 @@ def test_resolved_original_peer3_paths_cannot_be_replaced_by_config_root_or_othe
 
 
 @pytest.mark.parametrize('field,bad', [('version', True), ('version', 2), ('operation', 'pending'),
-    ('invocation_id', 'a' * 64), ('client_config_sha256', 'a' * 64), ('context_sha256', 'a' * 64),
+    ('invocation_id', 'a' * 64), ('genesis_sha256', 'a' * 64), ('genesis_bytes', True), ('genesis_bytes', 999), ('context_sha256', 'a' * 64),
     ('context_bytes', True), ('context_bytes', 999), ('committed_height', True), ('committed_height', 99),
-    ('finality_count', True), ('finality_count', 99), ('query_count', -1), ('query_count', 1001),
-    ('finality_sha256', 'A' * 64), ('queries_sha256', 'a' * 64), ('finality_bytes', 0),
-    ('finality_bytes', 65537), ('queries_bytes', True), ('queries_bytes', 65537)])
+    ('carrier_count', True), ('carrier_count', 99), ('query_count', -1), ('query_count', 1001),
+    ('carrier_sha256', 'A' * 64), ('queries_sha256', 'a' * 64), ('carrier_bytes', 0),
+    ('carrier_bytes', 65537), ('queries_bytes', True), ('queries_bytes', 65537)])
 def test_exact_terminal_reply_cannot_mint_a_partial_pair(collection, field, bad):
     p = collection; p.change_reply = lambda value: value.__setitem__(field, bad)
     value = owner(p)
@@ -171,7 +174,7 @@ def test_reply_is_one_exact_bounded_closed_json_object(collection, kind):
         if kind == 'missing_newline': return raw[:-1]
         if kind == 'second_line': return raw + b'{}\n'
         if kind == 'prefix': return b' ' + raw
-        if kind == 'nonascii': return raw.replace(b'collect_scaling_inputs', 'priv\u00e9'.encode())
+        if kind == 'nonascii': return raw.replace(b'collect_native_inputs', 'priv\u00e9'.encode())
         if kind == 'nested': return raw.replace(b'"query_count":8', b'"query_count":{}')
         if kind == 'oversize': return b' ' * 4097
         return b'{'
@@ -204,16 +207,16 @@ def test_child_or_runtime_failure_never_publishes_a_receipt_and_cannot_retry(col
 
 @pytest.mark.parametrize('kind', ['config_bytes', 'context_bytes', 'config_inode', 'context_inode', 'output_inode'])
 def test_original_input_and_output_custody_survives_success(collection, kind):
-    p = collection; value = owner(p); receipt = value.run()
+    p = collection; original_fd = p.c.inputs.client_fd(0); value = owner(p); receipt = value.run()
     path = (p.c.inputs.roles[0].client_config if kind.startswith('config') else
-            p.c.inputs.input_directory / 'genesis-context.nrt' if kind.startswith('context') else receipt.finality.path)
+            p.c.inputs.input_directory / 'genesis-context.nrt' if kind.startswith('context') else receipt.carrier.path)
     raw = path.read_bytes()
     if kind.endswith('inode'):
         replacement = path.with_name(path.name + '.foreign'); replacement.write_bytes(raw)
         replacement.chmod(0o600); replacement.replace(path)
     else: path.write_bytes(raw + b'PRIVATE')
     with pytest.raises(vector.VectorCollectionError): value.validate()
-    assert os.fstat(p.c.inputs.client_fd(0) if not kind.startswith(('config', 'context')) else value._client[3]).st_size > 0
+    assert os.fstat(original_fd).st_size > 0
 
 
 def test_caller_dataclass_mutation_cannot_expand_owned_caps_or_retarget_store(collection):
@@ -230,7 +233,7 @@ def test_caller_dataclass_mutation_cannot_expand_owned_caps_or_retarget_store(co
     assert argv[argv.index('--block-store') + 1] != '/PRIVATE'
     assert argv[argv.index('--last-height') + 1] == '100'
     assert argv[argv.index('--context-max-bytes') + 1] == '65536'
-    assert receipt.finality_count == 100
+    assert receipt.carrier_count == 100
 
 
 def test_later_pair_digest_failure_keeps_first_fd_but_makes_entire_pair_unavailable(collection):
@@ -238,11 +241,11 @@ def test_later_pair_digest_failure_keeps_first_fd_but_makes_entire_pair_unavaila
     p.change_reply = lambda reply: reply.__setitem__('queries_sha256', 'a' * 64)
     value = owner(p)
     with pytest.raises(vector.VectorCollectionError): value.run()
-    assert 'finality' in p.outputs._files and os.fstat(p.outputs._files['finality'].fd).st_size > 0
+    assert 'carrier' in p.outputs._files and os.fstat(p.outputs._files['carrier'].fd).st_size > 0
     assert value._receipt is None and p.outputs._failed
-    with pytest.raises(outputs.NativeOutputError): p.outputs.artifact('finality')
+    with pytest.raises(outputs.NativeOutputError): p.outputs.artifact('carrier')
     assert value.cleanup(p.c.clock.end()) == ()
-    assert os.fstat(value._client[3]).st_size > 0
+    assert os.fstat(p.c.inputs.client_fd(0)).st_size > 0
 
 
 @pytest.mark.parametrize('phase', ['before_child', 'after_native_files', 'after_pair_capture'])
@@ -257,7 +260,7 @@ def test_original_runtime_guard_is_required_across_every_publication_boundary(co
     p.outputs.complete = complete
     def guard():
         if (phase == 'before_child' or
-            phase == 'after_native_files' and (p.outputs.directory / 'finality.nrt').exists() or
+            phase == 'after_native_files' and (p.outputs.directory / 'carrier.nrt').exists() or
             phase == 'after_pair_capture' and captured):
             raise RuntimeError('PRIVATE original runtime lost')
         p.c.inputs.validate()

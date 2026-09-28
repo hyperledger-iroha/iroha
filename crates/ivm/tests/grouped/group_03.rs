@@ -28,8 +28,6 @@ mod gas_schedule;
 mod gas_schedule_hash;
 #[path = "../gpu_determinism.rs"]
 mod gpu_determinism;
-#[path = "../gpu_manager.rs"]
-mod gpu_manager;
 #[path = "../hardware_determinism.rs"]
 mod hardware_determinism;
 #[path = "../host_roundtrip.rs"]

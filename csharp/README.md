@@ -20,7 +20,7 @@ require the packaged ABI-24 Rust bridge for the current runtime identifier. Priv
 and native SoraFS validation use the same bridge. Transport-only anonymous reads do
 not construct account identities.
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+Binding-only IVM verifier labels are retired and rejected. Production proof-backed IVM invocation remains closed until the complete native execution relation and finalized State authority are implemented and qualified.
 
 Privacy archive queries and validation run on the caller's ordinary stack. They
 do not create enlarged-stack threads. Native result bounds, owned input snapshots

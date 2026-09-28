@@ -23,7 +23,7 @@ fn artifact_predecode_uses_header_version() {
     let (_m2, d2) = cache
         .get_or_predecode_artifact(&artifact)
         .expect("decode artifact again");
-    assert!(std::sync::Arc::ptr_eq(&d1, &d2));
+    assert!(ivm::cache_memory::SharedAllocation::ptr_eq(&d1, &d2));
 }
 #[test]
 fn artifact_predecode_rejects_generic_test_profile() {

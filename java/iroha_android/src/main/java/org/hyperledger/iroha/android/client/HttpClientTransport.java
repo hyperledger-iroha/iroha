@@ -1484,7 +1484,8 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetches the complete manifest via `GET /v1/contracts/code/{code_hash}`. */
   @Override
-  public CompletableFuture<ContractManifestRecord> getContractManifest(final String codeHash) {
+  public CompletableFuture<org.hyperledger.iroha.sdk.client.ContractManifestRecord>
+      getContractManifest(final String codeHash) {
     if (codeHash == null || codeHash.length() != 64) {
       throw new IllegalArgumentException("codeHash must contain exactly 64 hex characters");
     }
@@ -1493,7 +1494,10 @@ public final class HttpClientTransport implements IrohaClient {
         buildJsonGetRequest(
             "/v1/contracts/code/" + encodePathSegment(normalizedCodeHash),
             Collections.emptyMap());
-    return fetchJson(request, ContractJsonParser::parseManifestRecord, "contract manifest");
+    return fetchJson(
+        request,
+        org.hyperledger.iroha.sdk.client.ContractJsonParser::parseManifestRecord,
+        "contract manifest");
   }
 
   /** Resolves an account alias via `POST /v1/aliases/resolve`. */

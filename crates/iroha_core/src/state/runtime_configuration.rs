@@ -1,15 +1,49 @@
 impl State {
+    /// Return a handle to the original State-owned execution allocation pool.
+    ///
+    /// Cloning this handle preserves pool identity across pipeline reloads;
+    /// observed counters do not grant an execution reservation.
+    pub(crate) fn ivm_execution_budget(&self) -> mv::allocation::AllocationBudget {
+        self.pipeline_ivm_prepared_cache
+            .read()
+            .execution_budget()
+            .clone()
+    }
+
     /// Update pipeline preferences using a loaded configuration.
     pub fn set_pipeline(&mut self, pipeline: iroha_config::parameters::actual::Pipeline) {
+        let execution_budget = self.ivm_execution_budget();
         self.pipeline = pipeline;
         self.pipeline_parallelism = PipelineParallelism::new(&self.pipeline);
         self.stateless_validation_cache
             .lock()
             .set_cap(self.pipeline.stateless_cache_cap);
-        *self.trigger_ivm_cache.lock() = IvmCache::with_capacity(self.pipeline.cache_size);
-        *self.contract_query_ivm_cache.lock() = IvmCache::with_capacity(self.pipeline.cache_size);
-        *self.pipeline_ivm_prepared_cache.write() =
-            PreparedContractCache::with_capacity(self.pipeline.cache_size);
+        // Keep all former borrowers and fresh caches on the same original
+        // budget. A reload may shrink below already reserved bytes; that only
+        // defers new local admission until the final old borrower releases.
+        // The scope holds refund wakes until all physical cache guards drop.
+        execution_budget.with_deferred_refund_notifications(|_| {
+            execution_budget.set_limit_bytes(self.pipeline.ivm_execution_max_bytes);
+            *self.trigger_ivm_cache.lock() = IvmCache::with_prepared_contract_cache(
+                self.pipeline.cache_size,
+                PreparedContractCache::with_execution_budget(
+                    self.pipeline.cache_size,
+                    execution_budget.clone(),
+                ),
+            );
+            *self.contract_query_ivm_cache.lock() = IvmCache::with_prepared_contract_cache(
+                self.pipeline.cache_size,
+                PreparedContractCache::with_execution_budget(
+                    self.pipeline.cache_size,
+                    execution_budget.clone(),
+                ),
+            );
+            *self.pipeline_ivm_prepared_cache.write() =
+                PreparedContractCache::with_execution_budget(
+                    self.pipeline.cache_size,
+                    execution_budget.clone(),
+                );
+        });
         // Configure the IVM global pre-decode cache from pipeline settings.
         ivm::ivm_cache::configure_limits(ivm::ivm_cache::CacheLimits {
             capacity: self.pipeline.cache_size,

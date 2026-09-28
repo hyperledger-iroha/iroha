@@ -97,6 +97,9 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::governance::ProposeContractLifecycleGovernance);
         $macro!(iroha_data_model::isi::governance::ProposeContractEmergencyHold);
         $macro!(iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
+        $macro!(iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1);
+        $macro!(iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1);
+        $macro!(iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1);
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
         $macro!(iroha_data_model::isi::governance::UpdatePlainConviction);

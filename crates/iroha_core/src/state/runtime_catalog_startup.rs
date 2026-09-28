@@ -1,4 +1,44 @@
 impl State {
+    /// Install a frozen manifest source against the startup or replay catalog.
+    ///
+    /// The caller must supply the catalog reconstructed from configured genesis
+    /// authority or the authenticated replay state. Validation and publication
+    /// share the State write generation, so a rejected source changes neither
+    /// the manifest nor the derived privacy registry.
+    ///
+    /// # Errors
+    /// Rejects status-only registries, altered source bodies or digests,
+    /// mismatched catalog bindings, and incomplete active-lane coverage.
+    pub fn install_materialized_lane_manifests_for_catalog(
+        &self,
+        manifests: &LaneManifestRegistryHandle,
+        catalog: &LaneCatalog,
+        governance: &iroha_config::parameters::actual::GovernanceCatalog,
+    ) -> Result<(), LaneLifecycleError> {
+        let mut publication_notice = self.state_view_publication();
+        let mut releases = LaneLifecycleReleases::new(self);
+        let mut state_write_release = self.state_write_lock.defer_notifications();
+        let _state_write_lock = state_write_release.lock();
+        let publication = publication_notice.begin();
+        manifests
+            .canonical_materialized_authority_preimage(catalog, governance)
+            .map_err(runtime_catalog_invalid)?;
+        manifests
+            .validate_active_coverage_for_catalog(catalog)
+            .map_err(|error| LaneLifecycleError::ManifestPolicyUnavailable {
+                lane: error.lane,
+                reason: error.message(),
+            })?;
+        let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
+        self.install_prepared_lane_manifests_in_publication(
+            Arc::clone(manifests),
+            privacy,
+            &publication,
+            &mut releases,
+        );
+        Ok(())
+    }
+
     /// Install a semantic-preserving manifest refresh without racing a catalog publication.
     pub(crate) fn install_lane_manifests_if_consensus_compatible(
         &self,
@@ -11,19 +51,29 @@ impl State {
         let mut state_write_release = self.state_write_lock.defer_notifications();
         let _state_write_lock = state_write_release.lock();
         let publication = publication_notice.begin();
-        if !manifests.is_bound_to_catalog(&self.nexus_ownership_projection().lane_catalog) {
+        let nexus = self.nexus_ownership_projection();
+        let Ok(candidate_bytes) = manifests
+            .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
+        else {
             return false;
-        }
+        };
         {
             let current = releases.manifests.read();
-            if current.consensus_policy_digest() != manifests.consensus_policy_digest()
-                || current.baseline_consensus_policy_digest()
-                    != manifests.baseline_consensus_policy_digest()
-            {
+            let Ok(current_bytes) = current
+                .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
+            else {
+                return false;
+            };
+            if current_bytes != candidate_bytes {
                 return false;
             }
         }
-        self.install_prepared_lane_manifests_in_publication(manifests, privacy, &publication, &mut releases);
+        self.install_prepared_lane_manifests_in_publication(
+            manifests,
+            privacy,
+            &publication,
+            &mut releases,
+        );
         true
     }
 
@@ -67,6 +117,9 @@ impl State {
         baseline: &LaneManifestRegistryHandle,
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
+        baseline
+            .validate_materialized_source_projection()
+            .map_err(runtime_catalog_invalid)?;
         let runtime = runtime_catalog_from_world(&self.world.view())?;
         let expected_dataspaces =
             runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, runtime.as_ref())?;
@@ -108,6 +161,9 @@ impl State {
                 lane: error.lane,
                 reason: error.message(),
             })?;
+        registry
+            .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
+            .map_err(runtime_catalog_invalid)?;
         Ok(Arc::new(registry))
     }
 }

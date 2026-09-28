@@ -68,10 +68,9 @@ Each entry in `SampleAccounts.json` supports the following fields:
    Populate the exact `CONNECT_NETWORK_ID` and token values exported by
    `/v1/connect/session`; the app key, nonce, and SID remain freshly derived in memory.
 5. Verify hardware acceleration defaults: `App.swift` calls
-   `DemoAccelerationConfig.load().apply()` so the demo picks up either the
-   `NORITO_ACCEL_CONFIG_PATH` environment override or a bundled
-   `acceleration.{json,toml}`/`client.{json,toml}` file. Remove/adjust these inputs if you
-   want to force a CPU fallback before running.
+   `try DemoAccelerationConfig.load().apply()` to read a bundled
+   `acceleration.{json,toml}`/`client.{json,toml}` file. Set explicit file opt-outs to
+   force CPU execution. Malformed present policy stops startup.
 6. Build and launch the application. The home screen prompts for Torii URL/token if not
    already set via `.env`.
 7. Initiate a "Connect" session to subscribe to account updates or approve requests.
@@ -80,13 +79,10 @@ Each entry in `SampleAccounts.json` supports the following fields:
 ### Hardware acceleration toggles (Metal / NEON)
 
 `DemoAccelerationConfig` mirrors the Rust node configuration so developers can exercise
-Metal/NEON paths without hard-coding thresholds. The loader searches the following
-locations on launch:
-
-1. `NORITO_ACCEL_CONFIG_PATH` (defined in `.env`/scheme arguments) — absolute path or
-   `tilde`-expanded pointer to an `iroha_config` JSON/TOML file.
-2. Bundled config files named `acceleration.{json,toml}` or `client.{json,toml}`.
-3. If neither source is available, the default settings (`AccelerationSettings()`) remain.
+Metal/NEON paths with explicit file policy. The demo loads bundled
+`acceleration.{json,toml}` or `client.{json,toml}` files. SDK callers can supply a
+configuration URL. If no file exists, enabled backend defaults and finite process
+resource ceilings apply. Runtime environment variables do not select this policy.
 
 Example `acceleration.toml` snippet:
 
@@ -97,10 +93,10 @@ merkle_min_leaves_metal = 256
 prefer_cpu_sha2_max_leaves_aarch64 = 128
 ```
 
-Leaving the fields `nil` inherits the workspace defaults. Negative numbers are ignored,
-and missing `[accel]` sections fall back to deterministic CPU behaviour. When running on
-a simulator without Metal support the bridge silently keeps the scalar path even if the
-config requests Metal.
+Omitted optional counts inherit native defaults; explicit zero stays zero.
+Negative, overflowing or malformed resource limits are configuration errors.
+Use `[accel.resource_limits]` for process host, pinned, device and concurrency
+ceilings. Unsupported or unqualified hardware uses deterministic CPU execution.
 
 ## Integration tests
 

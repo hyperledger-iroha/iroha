@@ -802,6 +802,10 @@ impl OwnedNativeCarrierValidator {
         let carrier =
             match carrier.prepare_journals(journal_shells, |_| Ok::<_, Infallible>(admission)) {
                 Ok(journals) => RetainedCarrier::Validated(journals),
+                Err(crate::state::CarrierJournalPreparationError::ProjectionPreparation {
+                    carrier,
+                    ..
+                }) => RetainedCarrier::Capturing(carrier),
                 Err(error) => {
                     return Err(LocalValidationRefusal::RecoveryRequired(error.to_string()).into());
                 }
@@ -810,6 +814,20 @@ impl OwnedNativeCarrierValidator {
             carrier,
             evidence_ready: false,
         })
+    }
+
+    fn projection_refusal(
+        &self,
+        error: crate::execution_attempt::ExecutionDeferred,
+    ) -> LocalValidationRefusal {
+        if let Some(AllocationRefusal::Capacity { release, .. }) = error.allocation_refusal() {
+            return LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(
+                "original_da_projection_pool",
+                release.clone(),
+                self.service.queue.sumeragi_waker(),
+            ));
+        }
+        LocalValidationRefusal::RecoveryRequired(error.to_string())
     }
 }
 
@@ -1019,7 +1037,20 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 *owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));
                 Err((owner, refusal))
             }
-            NativeValidationPhase::Executed { carrier, .. } => {
+            NativeValidationPhase::Executed {
+                carrier,
+                evidence_ready,
+            } => {
+                let carrier = match carrier.resume_capture() {
+                    Ok(carrier) => carrier,
+                    Err((carrier, error)) => {
+                        *owner.phase = Some(NativeValidationPhase::Executed {
+                            carrier,
+                            evidence_ready,
+                        });
+                        return Err((owner, self.projection_refusal(error)));
+                    }
+                };
                 let evidence = self
                     .service
                     .kura

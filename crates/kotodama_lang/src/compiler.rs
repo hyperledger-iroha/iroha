@@ -9,6 +9,9 @@
 //! Kotodama targets the IVM bytecode format exclusively. All helpers in this
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
+mod entrypoint_descriptors;
+use entrypoint_descriptors::build_entrypoint_descriptors;
+
 /// Opaque phase boundaries used by the compiler regression benchmark.
 #[doc(hidden)]
 pub mod benchmark;
@@ -27,8 +30,8 @@ use crate::{
         self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
         EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
         EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-        EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, LITERAL_SECTION_MAGIC, LiteralKindV1,
-        ProgramMetadata, encode_literal_descriptor,
+        EmbeddedStateType, LITERAL_SECTION_MAGIC, LiteralKindV1, ProgramMetadata,
+        encode_literal_descriptor,
     },
     pointer_abi::PointerType,
     syscalls,
@@ -68,7 +71,6 @@ use std::{
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
 const LITERAL_SHIFT_REG: u8 = 26;
-const STACK_FRAME_ALIGNMENT: usize = 16;
 /// Default hash-covered execution ceiling emitted for a Kotodama V1 artifact.
 pub const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const KOTODAMA_ABI_VERSION: u8 = 1;
@@ -782,11 +784,6 @@ fn emit_store64(
 fn stack_slot_offset_bytes(frame_prefix: usize, offset: usize) -> i64 {
     frame_prefix.saturating_add(offset) as i64
 }
-fn checked_align_stack_frame_size(size: usize) -> Result<usize, String> {
-    let padding = (STACK_FRAME_ALIGNMENT - size % STACK_FRAME_ALIGNMENT) % STACK_FRAME_ALIGNMENT;
-    size.checked_add(padding)
-        .ok_or_else(|| "Kotodama stack frame alignment overflow".to_owned())
-}
 fn encode_nop() -> u32 {
     encode_addi(0, 0, 0).expect("ADDI x0, x0, 0 must always encode")
 }
@@ -1317,7 +1314,7 @@ enum DataKind {
     NoritoBytes,
     DataSpaceId,
     AxtDescriptor,
-    AssetHandle,
+    AxtAnchoredSpendV1,
     ProofBlob,
     SoracloudRequest,
     SoracloudResponse,
@@ -1344,7 +1341,7 @@ impl DataKind {
             | Self::NoritoBytes
             | Self::DataSpaceId
             | Self::AxtDescriptor
-            | Self::AssetHandle
+            | Self::AxtAnchoredSpendV1
             | Self::ProofBlob
             | Self::SoracloudRequest
             | Self::SoracloudResponse
@@ -1368,7 +1365,7 @@ fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
         NoritoBytes => Some(PointerType::NoritoBytes),
         DataSpaceId => Some(PointerType::DataSpaceId),
         AxtDescriptor => Some(PointerType::AxtDescriptor),
-        AssetHandle => Some(PointerType::AssetHandle),
+        AxtAnchoredSpendV1 => Some(PointerType::AxtAnchoredSpendV1),
         ProofBlob => Some(PointerType::ProofBlob),
         SoracloudRequest => Some(PointerType::SoracloudRequest),
         SoracloudResponse => Some(PointerType::SoracloudResponse),
@@ -1391,7 +1388,7 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
         NoritoBytes => DataKey(DataKind::NoritoBytes, value.to_owned()),
         DataSpaceId => DataKey(DataKind::DataSpaceId, value.to_owned()),
         AxtDescriptor => DataKey(DataKind::AxtDescriptor, value.to_owned()),
-        AssetHandle => DataKey(DataKind::AssetHandle, value.to_owned()),
+        AxtAnchoredSpendV1 => DataKey(DataKind::AxtAnchoredSpendV1, value.to_owned()),
         ProofBlob => DataKey(DataKind::ProofBlob, value.to_owned()),
         SoracloudRequest => DataKey(DataKind::SoracloudRequest, value.to_owned()),
         SoracloudResponse => DataKey(DataKind::SoracloudResponse, value.to_owned()),
@@ -1573,13 +1570,13 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
                 ivm_abi::codec::encode_canonical_norito(&value).ok()?,
             )
         }
-        DRK::AssetHandle => {
+        DRK::AxtAnchoredSpendV1 => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let value: crate::axt::AssetHandle =
+            let value: iroha_data_model::nexus::AxtAnchoredSpendV1 =
                 ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
-            crate::axt::validate_asset_handle(&value).ok()?;
+            value.issuer_payload_v1().ok()?;
             (
-                PointerType::AssetHandle,
+                PointerType::AxtAnchoredSpendV1,
                 ivm_abi::codec::encode_canonical_norito(&value).ok()?,
             )
         }
@@ -1693,12 +1690,12 @@ mod tests {
         HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE, HINT_SKIP_DYNAMIC_STATE_PATH,
         HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups,
         NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
-        checked_align_stack_frame_size, classify_ir_access, collect_dynamic_access_hints,
-        decoded_control_target, emit_addi, emit_get_private_input_arguments, emit_load64,
-        emit_parallel_register_moves, emit_private_numeric_valcom_arguments, emit_store64,
-        encode_addi, encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load,
-        pointer_type_for_kind, push_word, record_isi_access,
-        relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
+        classify_ir_access, collect_dynamic_access_hints, decoded_control_target, emit_addi,
+        emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
+        emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
+        patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
+        record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
+        stack_slot_offset_bytes,
     };
     use crate::{
         ast::BinaryOp,
@@ -1734,38 +1731,6 @@ mod tests {
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let bytes = norito::to_bytes(value).expect("encode alternate-layout test frame");
         format!("0x{}", hex::encode(bytes))
-    }
-    fn sample_asset_handle() -> crate::axt::AssetHandle {
-        use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject};
-        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-        AssetHandle {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-            ])
-            .expect("valid AXT fixture asset id"),
-            scope: vec!["transfer".to_owned()],
-            subject: HandleSubject {
-                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-                origin_dsid: Some(DataSpaceId::new(7)),
-            },
-            budget: HandleBudget {
-                remaining: "1".parse().expect("canonical quantity"),
-                per_use: None,
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![1],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(0),
-            axt_binding: vec![1; 32],
-            manifest_view_root: vec![2; 32],
-            expiry_slot: 1,
-            max_clock_skew_ms: None,
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        }
     }
     fn compile_with_injected_ir(instructions: Vec<ir::Instr>) -> Result<Vec<u8>, String> {
         let options = CompilerOptions::default();
@@ -2077,7 +2042,7 @@ mod tests {
             (NoritoBytes, PointerType::NoritoBytes),
             (DataSpaceId, PointerType::DataSpaceId),
             (AxtDescriptor, PointerType::AxtDescriptor),
-            (AssetHandle, PointerType::AssetHandle),
+            (AxtAnchoredSpendV1, PointerType::AxtAnchoredSpendV1),
             (ProofBlob, PointerType::ProofBlob),
             (SoracloudRequest, PointerType::SoracloudRequest),
             (SoracloudResponse, PointerType::SoracloudResponse),
@@ -2182,93 +2147,12 @@ mod tests {
         }
     }
     #[test]
-    fn capability_pointer_encoding_rejects_context_free_faults() {
-        use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob};
-        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    fn proof_pointer_encoding_rejects_empty_payload() {
+        use crate::axt::ProofBlob;
         fn literal<T: norito::NoritoSerialize>(value: &T) -> String {
             let bytes = norito::to_bytes(value).expect("encode capability literal");
             format!("0x{}", hex::encode(bytes))
         }
-        let valid_handle = AssetHandle {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-            ])
-            .expect("valid AXT fixture asset id"),
-            scope: vec!["transfer".to_owned()],
-            subject: HandleSubject {
-                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-                origin_dsid: Some(DataSpaceId::new(7)),
-            },
-            budget: HandleBudget {
-                remaining: "1".parse().expect("canonical quantity"),
-                per_use: None,
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![1],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(0),
-            axt_binding: vec![1; 32],
-            manifest_view_root: vec![2; 32],
-            expiry_slot: 1,
-            max_clock_skew_ms: None,
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let valid_handle_literal = literal(&valid_handle);
-        assert!(
-            super::encode_pointer_tlv_bytes(ir::DataRefKind::AssetHandle, &valid_handle_literal)
-                .is_some()
-        );
-        assert_eq!(
-            super::decode_asset_handle_literal(&valid_handle_literal),
-            Some(valid_handle.clone())
-        );
-        let alternate_handle_literal = {
-            let alternate_flags =
-                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            literal(&valid_handle)
-        };
-        assert_ne!(alternate_handle_literal, valid_handle_literal);
-        assert!(
-            super::encode_pointer_tlv_bytes(
-                ir::DataRefKind::AssetHandle,
-                &alternate_handle_literal
-            )
-            .is_none()
-        );
-        assert_eq!(
-            super::decode_asset_handle_literal(&alternate_handle_literal),
-            None
-        );
-        let mut malformed_handle = valid_handle.clone();
-        malformed_handle.manifest_view_root.pop();
-        let malformed_handle_literal = literal(&malformed_handle);
-        assert!(
-            super::encode_pointer_tlv_bytes(
-                ir::DataRefKind::AssetHandle,
-                &malformed_handle_literal
-            )
-            .is_none()
-        );
-        assert_eq!(
-            super::decode_asset_handle_literal(&malformed_handle_literal),
-            None
-        );
-        let mut unusable_handle = valid_handle.clone();
-        unusable_handle.budget.per_use = Some("0".parse().expect("zero quantity"));
-        let unusable_handle_literal = literal(&unusable_handle);
-        assert!(
-            super::encode_pointer_tlv_bytes(ir::DataRefKind::AssetHandle, &unusable_handle_literal)
-                .is_none()
-        );
-        assert_eq!(
-            super::decode_asset_handle_literal(&unusable_handle_literal),
-            None
-        );
         let empty_proof_literal = literal(&ProofBlob {
             payload: Vec::new(),
             expiry_slot: None,
@@ -2394,7 +2278,6 @@ mod tests {
             );
         }
     }
-    include!("compiler/tests/axt_remote_spend_access_tests.rs");
     #[test]
     fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
         use ivm_abi::host_payload::{RootsGetRequest, VoteGetTallyRequest, VrfEpochSeedRequest};
@@ -2739,12 +2622,12 @@ mod tests {
     fn stack_frame_alignment_is_checked_and_includes_odd_eight_byte_prefixes() {
         for (unpadded, expected) in [(0, 0), (8, 16), (16, 16), (24, 32), (4097, 4112)] {
             assert_eq!(
-                checked_align_stack_frame_size(unpadded),
+                crate::call_abi::checked_align_stack_frame_size(unpadded),
                 Ok(expected),
                 "unexpected alignment for {unpadded} bytes"
             );
         }
-        assert!(checked_align_stack_frame_size(usize::MAX).is_err());
+        assert!(crate::call_abi::checked_align_stack_frame_size(usize::MAX).is_err());
     }
     #[test]
     fn indexed_literal_fixup_is_one_word() {
@@ -3002,7 +2885,7 @@ mod tests {
         );
     }
     #[test]
-    fn parameterized_entrypoint_emits_one_argument_record_decode() {
+    fn parameterized_entrypoint_uses_the_host_prepared_argument_table() {
         let source = include_str!("compiler/fixtures/v1/c005.ko");
         let bytes = test_mode_compiler()
             .compile_source(source)
@@ -3020,7 +2903,10 @@ mod tests {
                         == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
             })
             .count();
-        assert_eq!(record_decodes, 1, "public payload must be decoded once");
+        assert_eq!(
+            record_decodes, 0,
+            "record preparation happens before guest execution"
+        );
         let typed_getters = [
             syscalls::SYSCALL_JSON_GET_INT,
             syscalls::SYSCALL_JSON_GET_DECIMAL,
@@ -3099,7 +2985,10 @@ mod tests {
                         == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
             })
             .count();
-        assert_eq!(record_decodes, 1, "trigger arguments must be decoded once");
+        assert_eq!(
+            record_decodes, 0,
+            "trigger records are prepared before guest execution"
+        );
         assert!(words.iter().all(|word| {
             instruction::wide::opcode(*word) != instruction::wide::system::SYSTEM
                 || encoding::wide::decode_syscallx(*word) != syscalls::SYSCALL_JSON_GET_QUANTITY
@@ -3124,6 +3013,30 @@ mod tests {
             args: Vec::new(),
             dest: None,
         }
+    }
+    #[test]
+    fn bool_state_map_keys_do_not_emit_public_int_codec_syscalls() {
+        let artifact = Compiler::new()
+            .compile_source(
+                r#"seiyaku Test {
+  state StateMap<bool, int> Foo;
+  kotoage fn main() authorize("Entry") {
+    Foo[true] = 2;
+    let _x = Foo.get(true);
+  }
+}"#,
+            )
+            .expect("compile Bool-key StateMap fixture");
+        let metadata = ProgramMetadata::parse(&artifact).expect("V1 metadata");
+        let retired_bool_codec_words = [
+            encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x53_u8),
+            encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x55_u8),
+        ];
+        let executable = &artifact[metadata.code_offset..];
+        assert!(executable.chunks_exact(4).all(|chunk| {
+            let word = u32::from_le_bytes(chunk.try_into().expect("word"));
+            !retired_bool_codec_words.contains(&word)
+        }));
     }
     #[test]
     fn access_hints_propagate_transitively_through_helper_calls() {
@@ -3185,7 +3098,6 @@ mod tests {
                         actor: Some(ir::Temp(1)),
                         entrypoint: ir::Temp(2),
                         payload: ir::Temp(3),
-                        returns_pointer: false,
                     }],
                 ),
             ],
@@ -4707,7 +4619,7 @@ kotoage fn main() authorize("CompilerFixture") {{
         );
     }
     #[test]
-    fn debug_info_emits_the_single_v1_debug_syscall_and_complete_access() {
+    fn debug_info_emits_full_width_pointer_codec_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c055.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
@@ -4743,10 +4655,9 @@ kotoage fn main() authorize("CompilerFixture") {{
         )
         .to_le_bytes();
         assert!(
-            !code
-                .windows(publish_needle.len())
+            code.windows(publish_needle.len())
                 .any(|window| window == publish_needle),
-            "debug helpers must not publish host input TLVs"
+            "full-width numeric logging must publish the pointer TLV"
         );
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let inspect = entrypoints
@@ -4757,6 +4668,47 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(inspect.access_hints_skipped.is_empty());
         assert_no_ledger_reads(&inspect.read_keys);
         assert!(inspect.write_keys.is_empty());
+    }
+    #[test]
+    fn debug_info_preserves_wide_int_without_retired_syscalls() {
+        let source = r#"
+seiyaku WideInfo {
+  kotoage fn inspect(int value) -> int authorize("WideInfo") {
+    debug::info(value);
+    return value;
+  }
+  kotoage fn boundary() -> int authorize("WideInfo") {
+    let value = 1267650600228229401496703205376;
+    debug::info(value);
+    return value;
+  }
+}
+"#;
+        let artifact = Compiler::new()
+            .compile_source(source)
+            .expect("compile full-width Int logging");
+        let metadata = ProgramMetadata::parse(&artifact).expect("V1 metadata");
+        let code = &artifact[metadata.code_offset..];
+        for syscall in [
+            syscalls::SYSCALL_POINTER_TO_NORITO,
+            syscalls::SYSCALL_DEBUG_LOG,
+        ] {
+            let encoded =
+                encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall as u8)
+                    .to_le_bytes();
+            assert!(
+                code.windows(encoded.len()).any(|window| window == encoded),
+                "expected V1 pointer/log syscall {syscall:#x}"
+            );
+        }
+        for retired in [0x53_u8, 0x55_u8] {
+            let encoded =
+                encoding::wide::encode_sys(instruction::wide::system::SCALL, retired).to_le_bytes();
+            assert!(
+                !code.windows(encoded.len()).any(|window| window == encoded),
+                "retired i64 codec syscall {retired:#x} must not be emitted"
+            );
+        }
     }
     #[test]
     fn debug_surface_rejects_raw_variants_and_invalid_info_arguments() {
@@ -5174,10 +5126,11 @@ kotoage fn apply_batch() authorize("Admin") {{
         }
     }
     #[test]
-    fn axt_capabilities_and_host_calls_are_not_source_apis() {
+    fn raw_axt_capabilities_and_unanchored_proof_are_not_source_apis() {
         for source in [
             "fn main(AxtDescriptor value) {}",
             "fn main(AssetHandle value) {}",
+            "fn main(AxtAnchoredSpendV1 value) {}",
             "fn main(ProofBlob value) {}",
         ] {
             let error = test_mode_compiler()
@@ -5188,13 +5141,55 @@ kotoage fn apply_batch() authorize("Admin") {{
                 "unexpected AXT surface error: {error}"
             );
         }
-        assert_internal_source_names_rejected(&[
-            "axt::begin",
-            "axt::touch",
-            "axt::verify_proof",
-            "axt::use_asset_handle",
-            "axt::commit",
-        ]);
+        assert_internal_source_names_rejected(&["asset_handle", "proof_blob", "axt::verify_proof"]);
+    }
+    #[test]
+    fn signed_axt_spend_source_emits_the_typed_v1_staging_syscall() {
+        let descriptor_fixture: norito::json::Value =
+            norito::json::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json"
+            )))
+            .expect("current descriptor fixture");
+        let descriptor: crate::axt::AxtDescriptor =
+            norito::json::from_value(descriptor_fixture["descriptor"].clone())
+                .expect("ABI descriptor fixture");
+        let spend_fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json"
+        )))
+        .expect("current signed-spend fixture");
+        let spend: iroha_data_model::nexus::AxtAnchoredSpendV1 =
+            norito::json::from_value(spend_fixture["spends"]["happy"][0].clone())
+                .expect("signed spend fixture");
+        let descriptor_hex = canonical_norito_hex(&descriptor);
+        let spend_hex = canonical_norito_hex(&spend);
+        let source = format!(
+            r#"seiyaku SignedAxt {{
+                kotoage fn main() authorize("UseAxt") {{
+                    let descriptor = AxtDescriptor::parse("{descriptor_hex}");
+                    let spend = AxtAnchoredSpendV1::parse("{spend_hex}");
+                    axt::begin(descriptor: descriptor);
+                    axt::stage_anchored_spend(spend: spend);
+                    axt::commit();
+                }}
+            }}"#
+        );
+        let artifact = test_mode_compiler()
+            .compile_source(&source)
+            .expect("typed signed-spend source compiles");
+        let metadata = ProgramMetadata::parse(&artifact).expect("parse program metadata");
+        let code = &artifact[metadata.code_offset..];
+        let encoded = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND)
+                .expect("B5 fits the V1 immediate"),
+        )
+        .to_le_bytes();
+        assert!(
+            code.windows(encoded.len()).any(|window| window == encoded),
+            "source producer must emit the final typed B5 syscall"
+        );
     }
     #[test]
     fn opaque_pointer_abi_types_are_not_source_types() {
@@ -6037,13 +6032,6 @@ seiyaku BallotAccess {
             "numeric::add(left: 1, right: 2)",
             "numeric::rem(left: 1, right: 2)",
             "numeric::ge(left: 1, right: 2)",
-            "math::isqrt(9)",
-            "math::abs(-1)",
-            "math::min(left: 1, right: 2)",
-            "math::max(left: 1, right: 2)",
-            "math::div_ceil(left: 5, right: 2)",
-            "math::gcd(left: 6, right: 4)",
-            "math::mean(left: 1, right: 2)",
         ] {
             let source = format!(
                 "seiyaku CompilerFixture {{ view fn probe() -> int {{ let value = {call}; return 0; }} }}"
@@ -8064,33 +8052,16 @@ seiyaku Test {{
         assert_ne!(write_embedded.entry_pc, 0);
         assert!(
             main_embedded.entry_pc < write_embedded.entry_pc,
-            "entrypoint wrappers must be laid out by symbol, not declaration order"
+            "entrypoint bodies must be laid out by symbol, not declaration order"
         );
         for entrypoint in [main_embedded, write_embedded] {
-            let wrapper_start = parsed.code_offset
-                + usize::try_from(entrypoint.entry_pc).expect("entry PC fits usize");
-            let wrapper_call = u32::from_le_bytes(
-                bytes[wrapper_start..wrapper_start + 4]
-                    .try_into()
-                    .expect("wrapper call word"),
-            );
-            let wrapper_halt = u32::from_le_bytes(
-                bytes[wrapper_start + 4..wrapper_start + 8]
-                    .try_into()
-                    .expect("wrapper halt word"),
-            );
-            assert_eq!(
-                instruction::wide::opcode(wrapper_call),
-                instruction::wide::control::JAL,
-                "CNTR entry `{}` must dispatch through its compiler-owned wrapper",
-                entrypoint.name
-            );
-            assert_eq!(
-                instruction::wide::opcode(wrapper_halt),
-                instruction::wide::control::HALT,
-                "CNTR entry `{}` wrapper must terminate after its linked body returns",
-                entrypoint.name
-            );
+            let callable = embedded
+                .callables
+                .iter()
+                .find(|callable| callable.entry_pc == entrypoint.entry_pc)
+                .expect("every selected entrypoint has one authenticated callable root");
+            assert!(callable.validate());
+            assert!(callable.frame_bytes >= 16);
         }
         let first_word = u32::from_le_bytes(
             bytes[parsed.code_offset..parsed.code_offset + 4]
@@ -9102,7 +9073,7 @@ mod test_mode_tests {
         );
     }
     #[test]
-    fn test_and_production_public_wrappers_use_the_same_argument_boundary() {
+    fn test_and_production_entrypoints_use_the_same_argument_boundary() {
         let source = "seiyaku Demo { view fn run(int count) -> int { return count + 1; } }";
         let mut schemas = Vec::new();
         for mode in [CompilerMode::Test, CompilerMode::Production] {
@@ -9138,8 +9109,8 @@ mod test_mode_tests {
                     .iter()
                     .filter(|number| **number == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD)
                     .count(),
-                1,
-                "both modes must decode the canonical public argument record exactly once"
+                0,
+                "both modes receive the same host-prepared call table"
             );
             for state_access in [
                 syscalls::SYSCALL_STATE_GET,
@@ -9606,12 +9577,20 @@ mod test_mode_tests {
             )
             .is_ok()
         }));
-        assert!(norito_payloads.iter().any(|payload| {
-            ivm_abi::codec::decode_canonical_norito::<
-                ivm_abi::entrypoint::EntrypointArgumentSchemaV1,
-            >(payload)
-            .is_ok()
-        }));
+        assert!(
+            parsed
+                .contract_interface
+                .as_ref()
+                .unwrap()
+                .entrypoints
+                .iter()
+                .any(|entrypoint| {
+                    entrypoint
+                        .argument_schema
+                        .as_ref()
+                        .is_some_and(|schema| schema.validate())
+                })
+        );
         assert!(norito_payloads.iter().any(|payload| {
             ivm_abi::codec::decode_canonical_norito::<ivm_abi::json::JsonConstructionSchemaV1>(
                 payload,
@@ -9671,31 +9650,56 @@ mod test_mode_tests {
         assert!(manifest.abi_hash.is_some());
     }
     #[test]
-    fn leaf_identity_emits_no_frame_or_stack_traffic() {
+    fn leaf_identity_uses_the_same_bounded_table_frame_as_all_functions() {
         let source = include_str!("compiler/fixtures/v1/c186.ko");
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
-            .expect("compile leaf optimization fixture");
+            .expect("compile leaf table fixture");
         let identity = report
             .budget_report
             .iter()
             .find(|entry| entry.function_name == "identity")
-            .expect("identity budget report");
-        assert_eq!(identity.frame_bytes, 0);
+            .unwrap();
         assert_eq!(
-            identity.bytecode_words, 1,
-            "precoloured identity should contain only its register return"
+            identity.frame_bytes, 16,
+            "only saved argument/result bases are needed"
         );
-        let metadata = ProgramMetadata::parse(&artifact).expect("parse leaf artifact");
-        let start = metadata.code_offset + identity.pc_start as usize;
-        let end = metadata.code_offset + identity.pc_end as usize;
-        let word = u32::from_le_bytes(
-            artifact[start..end]
-                .try_into()
-                .expect("identity is exactly one instruction"),
+        let metadata = ProgramMetadata::parse(&artifact).unwrap();
+        let callable = metadata
+            .contract_interface
+            .as_ref()
+            .unwrap()
+            .callables
+            .iter()
+            .find(|callable| callable.entry_pc == identity.pc_start)
+            .unwrap();
+        assert_eq!(callable.argument_words.len(), 1);
+        assert_eq!(callable.result_words.len(), 1);
+        let words = artifact[metadata.code_offset + identity.pc_start as usize
+            ..metadata.code_offset + identity.pc_end as usize]
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            words
+                .iter()
+                .filter(
+                    |word| instruction::wide::opcode(**word) == instruction::wide::memory::LOAD64
+                )
+                .count(),
+            3
         );
         assert_eq!(
-            instruction::wide::opcode(word),
+            words
+                .iter()
+                .filter(
+                    |word| instruction::wide::opcode(**word) == instruction::wide::memory::STORE64
+                )
+                .count(),
+            3
+        );
+        assert_eq!(
+            instruction::wide::opcode(*words.last().unwrap()),
             instruction::wide::control::JALR
         );
     }
@@ -9718,8 +9722,8 @@ mod test_mode_tests {
             .find(|entry| entry.function_name == "run")
             .expect("run implementation budget report");
         assert_eq!(
-            implementation.frame_bytes, 16,
-            "a nested-call leaf needs only its aligned return-address frame"
+            implementation.frame_bytes, 64,
+            "calls reserve only the return link, saved table bases, and reusable outgoing tables"
         );
         let metadata = ProgramMetadata::parse(&artifact).expect("parse call-aware artifact");
         let words = artifact[metadata.code_offset + implementation.pc_start as usize
@@ -9735,7 +9739,11 @@ mod test_mode_tests {
             .iter()
             .filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::STORE64)
             .count();
-        assert_eq!((loads, stores), (1, 1), "{words:08x?}");
+        assert_eq!(
+            (loads, stores),
+            (5, 7),
+            "table traffic includes no additional value spills: {words:08x?}"
+        );
     }
     #[test]
     fn whole_program_dce_removes_unused_private_code_and_extra_dispatch_wrappers() {
@@ -9762,11 +9770,13 @@ mod test_mode_tests {
                 .iter()
                 .any(|function| { function.function_name == "exposed" })
         );
-        assert!(
+        assert_eq!(
             report
                 .budget_report
                 .iter()
-                .any(|function| { function.function_name == "__entrypoint_impl__exposed" })
+                .filter(|function| function.function_name == "exposed")
+                .count(),
+            1
         );
         let metadata = ProgramMetadata::parse(&artifact).expect("parse DCE artifact");
         let entrypoint_count = metadata
@@ -9786,8 +9796,8 @@ mod test_mode_tests {
         let emitted_words = artifact[metadata.code_offset..].len() / 4;
         assert_eq!(
             emitted_words,
-            1 + function_words + 2 * entrypoint_count,
-            "code must contain only PC-zero HALT, reachable function bodies, and one call/HALT dispatch wrapper per public entrypoint"
+            1 + function_words,
+            "code contains only PC-zero HALT and reachable function bodies"
         );
     }
     #[test]
@@ -9832,49 +9842,18 @@ mod test_mode_tests {
             .expect("trigger callback entrypoint");
         assert_eq!(run.triggers.len(), 1);
         for entrypoint in &interface.entrypoints {
-            let wrapper_pc = usize::try_from(entrypoint.entry_pc).expect("entry PC fits usize");
-            let wrapper_start = metadata.code_offset + wrapper_pc;
-            let call = u32::from_le_bytes(
-                artifact[wrapper_start..wrapper_start + 4]
-                    .try_into()
-                    .expect("CNTR wrapper call word"),
-            );
-            assert_eq!(
-                instruction::wide::opcode(call),
-                instruction::wide::control::JAL,
-                "small CNTR wrappers must call their retained body directly"
-            );
-            let (_, link_register, offset_words) = encoding::wide::decode_jump(call);
-            assert_eq!(
-                link_register, 1,
-                "CNTR dispatch must preserve a return link"
-            );
-            let target = decoded_control_target(wrapper_pc, i64::from(offset_words))
-                .expect("valid CNTR wrapper target");
             let body = report
                 .budget_report
                 .iter()
                 .find(|function| function.function_name == entrypoint.name)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "CNTR descriptor `{}` points at a removed function",
-                        entrypoint.name
-                    )
-                });
-            assert_eq!(
-                target,
-                usize::try_from(body.pc_start).expect("function PC fits usize"),
-                "CNTR descriptor `{}` must call its retained function body",
-                entrypoint.name
-            );
-            let halt = u32::from_le_bytes(
-                artifact[wrapper_start + 4..wrapper_start + 8]
-                    .try_into()
-                    .expect("CNTR wrapper halt word"),
-            );
-            assert_eq!(
-                instruction::wide::opcode(halt),
-                instruction::wide::control::HALT
+                .expect("CNTR points to a retained body");
+            assert_eq!(entrypoint.entry_pc, body.pc_start);
+            assert!(
+                interface
+                    .callables
+                    .iter()
+                    .any(|callable| callable.entry_pc == body.pc_start
+                        && callable.frame_bytes == body.frame_bytes)
             );
         }
     }
@@ -9950,7 +9929,7 @@ mod test_mode_tests {
                 (opcode == instruction::wide::memory::LOAD64
                     && destination == split_register
                     && base == crate::regalloc::SP_REG as u8
-                    && i64::from(offset) == split_stack_offset as i64)
+                    && i64::from(offset) == (16 + split_stack_offset) as i64)
                     .then_some(index)
             })
             .collect::<Vec<_>>();
@@ -9983,11 +9962,7 @@ mod test_mode_tests {
             .expect("compile branch optimization fixture");
         let metadata = ProgramMetadata::parse(&artifact).expect("parse branch artifact");
         let function_words = |name: &str| {
-            let implementation = if name == "copied_length" {
-                name.to_owned()
-            } else {
-                format!("__entrypoint_impl__{name}")
-            };
+            let implementation = name.to_owned();
             let budget = report
                 .budget_report
                 .iter()
@@ -10163,7 +10138,7 @@ mod test_mode_tests {
             .expect("compile merge-heavy diamonds and bounded backedges");
         let metadata = ProgramMetadata::parse(&artifact).expect("parse branch stress artifact");
         for name in ["many_diamonds", "bounded_backedges"] {
-            let implementation = format!("__entrypoint_impl__{name}");
+            let implementation = name.to_owned();
             let budget = report
                 .budget_report
                 .iter()
@@ -10214,7 +10189,7 @@ mod test_mode_tests {
             .iter()
             .find(|entry| entry.function_name == "answer")
             .expect("answer budget report");
-        assert_eq!(answer.frame_bytes, 0);
+        assert_eq!(answer.frame_bytes, 16);
         let metadata = ProgramMetadata::parse(&artifact).expect("parse dead-code artifact");
         let words = artifact[metadata.code_offset + answer.pc_start as usize
             ..metadata.code_offset + answer.pc_end as usize]
@@ -10222,8 +10197,8 @@ mod test_mode_tests {
             .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
         assert_eq!(
-            answer.bytecode_words, 2,
-            "only the returned literal load and leaf return should remain; report={answer:?}; words={words:08x?}"
+            words.iter().filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::LDLIT).count(), 1,
+            "only the returned value literal survives; report={answer:?}; words={words:08x?}"
         );
     }
     #[test]
@@ -10745,7 +10720,7 @@ impl Compiler {
                     {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Int);
                     }
-                    if let ir::Instr::EncodeInt { dest, value } = instr
+                    if let ir::Instr::EncodeBoolKey { dest, value } = instr
                         && let Some(raw) = int_const_map.get(&(func_idx, *value)).copied()
                     {
                         let payload = ivm_abi::codec::encode_canonical_norito(&raw)
@@ -11133,7 +11108,7 @@ impl Compiler {
                             ir::DataRefKind::NoritoBytes => "norito_bytes",
                             ir::DataRefKind::DataSpaceId => "dataspace_id",
                             ir::DataRefKind::AxtDescriptor => "axt_descriptor",
-                            ir::DataRefKind::AssetHandle => "asset_handle",
+                            ir::DataRefKind::AxtAnchoredSpendV1 => "axt_anchored_spend_v1",
                             ir::DataRefKind::ProofBlob => "proof_blob",
                             ir::DataRefKind::SoracloudRequest => "soracloud_request",
                             ir::DataRefKind::SoracloudResponse => "soracloud_response",
@@ -11192,8 +11167,17 @@ impl Compiler {
         let mut call_fixups: Vec<(usize, String, String)> = Vec::new();
         let mut deferred_transfers: Vec<DeferredTransfer> = Vec::new();
         let mut func_start_offsets: HashMap<String, usize> = HashMap::new();
-        let mut entrypoint_wrapper_offsets: HashMap<String, usize> = HashMap::new();
         let mut function_debug_seeds: Vec<FunctionDebugSeed> = Vec::new();
+        let signatures = typed
+            .items
+            .iter()
+            .map(|item| {
+                let TypedItem::Function(function) = item;
+                crate::call_abi::CallSignature::for_function(function)
+                    .map(|signature| (function.name.clone(), signature))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        let mut callables = Vec::new();
         let mut function_sources = HashMap::new();
         for item in &typed.items {
             let TypedItem::Function(function) = item;
@@ -11218,11 +11202,9 @@ impl Compiler {
             // Record start offset for call patching
             func_start_offsets.insert(func.name.clone(), code.len());
             let func_base = *func_start_offsets.get(&func.name).unwrap();
-            // Every retained function is callable. Public dispatch enters through a
-            // compiler-owned wrapper recorded in CNTR, never through raw PC 0.
+            // Every retained function has one table ABI and an authenticated callable root.
             let is_entry = false;
             let saves_return_address = !is_entry && regalloc::has_internal_calls(func);
-            let return_address_size = usize::from(saves_return_address) * 8;
             let alloc = regalloc::allocate_with_splitting(func);
             let mut saved_regs: Vec<u8> = if is_entry {
                 Vec::new()
@@ -11233,20 +11215,11 @@ impl Compiler {
                     .map(|register| register as u8)
                     .collect()
             };
-            saved_regs.retain(|register| !regalloc::ARG_REGS.contains(&usize::from(*register)));
+            saved_regs.retain(|register| {
+                !regalloc::CALLER_CLOBBERED_REGS.contains(&usize::from(*register))
+            });
             saved_regs.sort_unstable();
             saved_regs.dedup();
-            let saved_size = saved_regs
-                .len()
-                .checked_mul(8)
-                .ok_or_else(|| "callee-saved stack frame is too large".to_string())?;
-            let spill_base = return_address_size;
-            let save_base = spill_base
-                .checked_add(alloc.frame_size)
-                .ok_or_else(|| "spill stack frame is too large".to_string())?;
-            let state_value_table_base = save_base
-                .checked_add(saved_size)
-                .ok_or_else(|| "callee-saved stack frame is too large".to_string())?;
             let state_value_table_words = func
                 .blocks
                 .iter()
@@ -11257,13 +11230,52 @@ impl Compiler {
                 })
                 .max()
                 .unwrap_or(0);
-            let state_value_table_bytes = state_value_table_words
-                .checked_mul(ivm_abi::state_value::DECODED_STATE_VALUE_WORD_BYTES as usize)
-                .ok_or_else(|| "durable aggregate state scratch frame is too large".to_string())?;
-            let unaligned_local_frame = state_value_table_base
-                .checked_add(state_value_table_bytes)
-                .ok_or_else(|| "durable aggregate state frame is too large".to_string())?;
-            let local_frame = checked_align_stack_frame_size(unaligned_local_frame)?;
+            let mut max_argument_words = 0;
+            let mut max_result_words = 0;
+            for instruction in func.blocks.iter().flat_map(|block| &block.instrs) {
+                if let Instr::Call { callee, args, .. } | Instr::CallMulti { callee, args, .. } =
+                    instruction
+                {
+                    let signature = signatures
+                        .get(callee)
+                        .ok_or_else(|| format!("missing call signature for `{callee}`"))?;
+                    if args.len() != signature.arguments.len() {
+                        return Err(format!(
+                            "call to `{callee}` has an inconsistent argument table"
+                        ));
+                    }
+                    max_argument_words = max_argument_words.max(args.len());
+                    max_result_words = max_result_words.max(signature.results.len());
+                }
+                match instruction {
+                    Instr::InvokeEntrypointAs { .. } => max_result_words = max_result_words.max(1),
+                    Instr::InvokeEntrypointAsMulti { dests, .. } => {
+                        max_result_words = max_result_words.max(dests.len());
+                    }
+                    _ => {}
+                }
+            }
+            let frame = crate::call_abi::CallFrameLayout::new(
+                saves_return_address,
+                alloc.frame_size,
+                saved_regs.len(),
+                state_value_table_words,
+                max_argument_words,
+                max_result_words,
+            )?;
+            let spill_base = frame.spill_base;
+            let save_base = frame.save_base;
+            let state_value_table_base = frame.state_table_base;
+            let local_frame = frame.bytes;
+            let signature = signatures
+                .get(&func.name)
+                .ok_or_else(|| format!("missing function signature for `{}`", func.name))?;
+            callables.push(ivm_abi::call::EmbeddedCallableV1 {
+                entry_pc: func_base as u64,
+                frame_bytes: local_frame as u32,
+                argument_words: signature.arguments.clone(),
+                result_words: signature.results.clone(),
+            });
             let debug_seed_index = function_debug_seeds.len();
             function_debug_seeds.push(FunctionDebugSeed {
                 name: func.name.clone(),
@@ -11301,8 +11313,16 @@ impl Compiler {
                 syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
             );
             let pointer_from_bytes = pointer_from_word.to_le_bytes();
-            let emit_split_reloads = |position: usize, code: &mut Vec<u8>| -> Result<(), String> {
+            let emit_split_reloads = |position: usize,
+                                      tuples: &HashMap<ir::Temp, Vec<ir::Temp>>,
+                                      code: &mut Vec<u8>|
+             -> Result<(), String> {
                 for reload in alloc.reloads_at(position) {
+                    if tuples.contains_key(&reload.temp) {
+                        // Product temporaries are compiler views over leaf words, not runtime
+                        // words. Their unused spill homes have never been initialized.
+                        continue;
+                    }
                     let offset = alloc.stack.get(&reload.temp).ok_or_else(|| {
                         format!(
                             "split temporary {:?} has no canonical spill slot",
@@ -11332,47 +11352,48 @@ impl Compiler {
                     Ok(0)
                 }
             };
-            let emit_values_to_abi_registers =
-                |values: &[ir::Temp], code: &mut Vec<u8>| -> Result<(), String> {
-                    let mut register_moves = Vec::new();
-                    let mut literal_loads = Vec::new();
-                    let mut stack_loads = Vec::new();
-                    let mut zero_loads = Vec::new();
-                    for (index, temp) in values.iter().enumerate() {
-                        let target =
-                            regalloc::ARG_REGS.get(index).copied().ok_or_else(|| {
-                                "ABI argument register window is exhausted".to_owned()
-                            })? as u8;
-                        if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
-                            && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
-                        {
-                            literal_loads.push((target, data_key_for_pointer(kind, &value)));
-                        } else if let Some(source) =
-                            alloc.register_for_use(*temp, allocation_position.get())
-                        {
-                            register_moves.push((target, source as u8));
-                        } else if let Some(offset) = alloc.stack.get(temp) {
-                            stack_loads
-                                .push((target, stack_slot_offset_bytes(spill_base, *offset)));
-                        } else {
-                            zero_loads.push(target);
-                        }
+            let emit_values_to_syscall_registers = |values: &[ir::Temp],
+                                                    code: &mut Vec<u8>|
+             -> Result<(), String> {
+                let mut register_moves = Vec::new();
+                let mut literal_loads = Vec::new();
+                let mut stack_loads = Vec::new();
+                let mut zero_loads = Vec::new();
+                for (index, temp) in values.iter().enumerate() {
+                    let target = regalloc::CALLER_CLOBBERED_REGS
+                        .get(index)
+                        .copied()
+                        .ok_or_else(|| "syscall argument register window is exhausted".to_owned())?
+                        as u8;
+                    if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                        && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
+                    {
+                        literal_loads.push((target, data_key_for_pointer(kind, &value)));
+                    } else if let Some(source) =
+                        alloc.register_for_use(*temp, allocation_position.get())
+                    {
+                        register_moves.push((target, source as u8));
+                    } else if let Some(offset) = alloc.stack.get(temp) {
+                        stack_loads.push((target, stack_slot_offset_bytes(spill_base, *offset)));
+                    } else {
+                        zero_loads.push(target);
                     }
-                    // Consume every register source before a literal or stack
-                    // materialization overwrites an ABI destination. Cycles
-                    // use the dedicated non-allocatable scratch register.
-                    emit_parallel_register_moves(code, register_moves, scratch1)?;
-                    for (target, key) in literal_loads {
-                        emit_literal_load(code, &fixups, target, key);
-                    }
-                    for (target, offset) in stack_loads {
-                        emit_load64(code, &fixups, target, sp, offset, Some(scratch1))?;
-                    }
-                    for target in zero_loads {
-                        push_word(code, encode_addi(target, 0, 0)?);
-                    }
-                    Ok(())
-                };
+                }
+                // Consume every register source before a literal or stack
+                // materialization overwrites an ABI destination. Cycles
+                // use the dedicated non-allocatable scratch register.
+                emit_parallel_register_moves(code, register_moves, scratch1)?;
+                for (target, key) in literal_loads {
+                    emit_literal_load(code, &fixups, target, key);
+                }
+                for (target, offset) in stack_loads {
+                    emit_load64(code, &fixups, target, sp, offset, Some(scratch1))?;
+                }
+                for target in zero_loads {
+                    push_word(code, encode_addi(target, 0, 0)?);
+                }
+                Ok(())
+            };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -11440,6 +11461,22 @@ impl Compiler {
                         let ra = 1u8;
                         emit_store64(&mut code, &fixups, sp, ra, 0, scratch_base)?;
                     }
+                    emit_store64(
+                        &mut code,
+                        &fixups,
+                        sp,
+                        10,
+                        frame.argument_base_slot as i64,
+                        scratch_base,
+                    )?;
+                    emit_store64(
+                        &mut code,
+                        &fixups,
+                        sp,
+                        12,
+                        frame.result_base_slot as i64,
+                        scratch_base,
+                    )?;
                     for (idx, reg) in saved_regs.iter().copied().enumerate() {
                         let offset = (save_base + idx * 8) as i64;
                         emit_store64(&mut code, &fixups, sp, reg, offset, scratch_base)?;
@@ -11466,7 +11503,7 @@ impl Compiler {
                 };
                 for (instruction_index, instr) in bb.instrs.iter().enumerate() {
                     allocation_position.set(next_allocation_position);
-                    emit_split_reloads(next_allocation_position, &mut code)?;
+                    emit_split_reloads(next_allocation_position, &tuple_map, &mut code)?;
                     next_allocation_position = next_allocation_position.saturating_add(1);
                     if fused_relational.is_some() && instruction_index + 1 == bb.instrs.len() {
                         // The terminator emits the signed comparison directly as
@@ -11502,6 +11539,12 @@ impl Compiler {
                             let tuple_items = tuple_map.get(tuple).cloned();
                             if let Some(items) = tuple_items {
                                 if let Some(src_t) = items.get(*index) {
+                                    if let Some(child_items) = tuple_map.get(src_t).cloned() {
+                                        // Selecting a nested product only selects its leaf view;
+                                        // no aggregate register or stack slot exists to copy.
+                                        tuple_map.insert(*dest, child_items);
+                                        continue;
+                                    }
                                     if let (Some(kind), Some(literal)) = (
                                         dataref_kind_map.get(&(func_idx, *src_t)).copied(),
                                         string_map.get(&(func_idx, *src_t)).cloned(),
@@ -11512,11 +11555,7 @@ impl Compiler {
                                         let rs = src_reg(src_t, scratch1, &mut code)?;
                                         emit_addi(&mut code, rd, rs, 0);
                                     }
-                                    if let Some(child_items) = tuple_map.get(src_t).cloned() {
-                                        tuple_map.insert(*dest, child_items);
-                                    } else {
-                                        tuple_map.remove(dest);
-                                    }
+                                    tuple_map.remove(dest);
                                 } else {
                                     // Out of bounds: move zero
                                     emit_addi(&mut code, rd, 0, 0);
@@ -11816,22 +11855,22 @@ impl Compiler {
                                 func.params.iter().position(|p| p == name).ok_or_else(|| {
                                     i18n::translate(self.lang, Message::UnknownParam(name))
                                 })?;
-                            if idx >= regalloc::MAX_ARGUMENT_VALUES {
-                                return Err(format!(
-                                    "too many function parameters: {} > {} (argument `{}` exceeds the ABI v1 register argument limit)",
-                                    func.params.len(),
-                                    regalloc::MAX_ARGUMENT_VALUES,
-                                    name
-                                ));
-                            }
-                            // Lowering emits the complete LoadVar parameter prefix
-                            // before any source instruction. Read the incoming ABI
-                            // register directly; call-free leaves are precoloured so
-                            // this copy disappears entirely.
-                            let incoming = regalloc::ARG_REGS[idx] as u8;
-                            if rd != incoming {
-                                push_word(&mut code, encode_addi(rd, incoming, 0)?);
-                            }
+                            emit_load64(
+                                &mut code,
+                                &fixups,
+                                scratch1,
+                                sp,
+                                frame.argument_base_slot as i64,
+                                Some(scratch2),
+                            )?;
+                            emit_load64(
+                                &mut code,
+                                &fixups,
+                                rd,
+                                scratch1,
+                                (idx * 8) as i64,
+                                Some(scratch2),
+                            )?;
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::Poseidon2 { dest, a, b } => {
@@ -13038,60 +13077,29 @@ impl Compiler {
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::InvokeEntrypointAs {
-                            dest,
                             actor,
                             entrypoint,
                             payload,
-                            returns_pointer,
-                        } => {
-                            if let Some(actor) = actor {
-                                load_pointer(actor, 10, scratch1, DataKind::Blob, &mut code)?;
-                            } else {
-                                push_word(&mut code, encode_addi(10, 0, 0)?);
-                            }
-                            load_pointer(entrypoint, 11, scratch1, DataKind::Blob, &mut code)?;
-                            if let Some(payload_raw) = string_map.get(&(func_idx, *payload)) {
-                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
-                                    emit_literal_load(
-                                        &mut code,
-                                        &fixups,
-                                        12,
-                                        data_key_for_pointer(*kind, payload_raw),
-                                    );
-                                } else {
-                                    let rs_payload = src_reg(payload, scratch1, &mut code)?;
-                                    push_word(&mut code, encode_addi(12, rs_payload, 0)?);
-                                }
-                            } else {
-                                let rs_payload = src_reg(payload, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(12, rs_payload, 0)?);
-                            }
-                            push_word(
-                                &mut code,
-                                encode_addi(13, 0, if *returns_pointer { 1 } else { 0 })?,
-                            );
-                            push_word(&mut code, encode_addi(14, 0, 1)?);
-                            push_syscall(
-                                &mut code,
-                                syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
-                            );
-                            if let Some(dest) = dest {
-                                spill_syscall_result(dest, &mut code)?;
-                            }
+                            ..
                         }
-                        Instr::InvokeEntrypointAsMulti {
-                            dests,
+                        | Instr::InvokeEntrypointAsMulti {
                             actor,
                             entrypoint,
                             payload,
-                            return_pointer_mask,
+                            ..
                         } => {
-                            if dests.len() > regalloc::MAX_RETURN_VALUES {
-                                return Err(format!(
-                                    "too many return values in invoke_entrypoint_as: {} > {}",
-                                    dests.len(),
-                                    regalloc::MAX_RETURN_VALUES
-                                ));
+                            let destinations = match instr {
+                                Instr::InvokeEntrypointAs { dest, .. } => {
+                                    dest.iter().copied().collect::<Vec<_>>()
+                                }
+                                Instr::InvokeEntrypointAsMulti { dests, .. } => dests.clone(),
+                                _ => unreachable!("test invocation selected above"),
+                            };
+                            let result_words = destinations.len().max(1);
+                            if result_words > ivm_abi::call::MAX_CALL_WORDS_V1 {
+                                return Err(
+                                    "test invocation result table exceeds V1 word limit".into()
+                                );
                             }
                             if let Some(actor) = actor {
                                 load_pointer(actor, 10, scratch1, DataKind::Blob, &mut code)?;
@@ -13115,29 +13123,31 @@ impl Compiler {
                                 let rs_payload = src_reg(payload, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(12, rs_payload, 0)?);
                             }
-                            let return_pointer_mask = i16::try_from(*return_pointer_mask)
-                                .map_err(|_| "return pointer mask does not fit ADDI immediate")?;
-                            let return_count = i16::try_from(dests.len())
-                                .map_err(|_| "return count does not fit ADDI immediate")?;
-                            push_word(&mut code, encode_addi(13, 0, return_pointer_mask)?);
-                            push_word(&mut code, encode_addi(14, 0, return_count)?);
+                            emit_bounded_add(
+                                &mut code,
+                                &fixups,
+                                13,
+                                sp,
+                                frame.outgoing_result_base as i64,
+                                LITERAL_SHIFT_REG,
+                            )?;
+                            emit_i64_literal_load(&mut code, &fixups, 14, result_words as i64);
                             push_syscall(
                                 &mut code,
                                 syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
                             );
-                            let mut return_moves = Vec::new();
-                            for (idx, dest) in dests.iter().enumerate() {
-                                let source_reg = (regalloc::RET_REG + idx) as u8;
-                                let (rd, spilled, imm) = dst_reg(dest);
-                                if spilled {
-                                    emit_store64(
-                                        &mut code, &fixups, sp, source_reg, imm, scratch2,
-                                    )?;
-                                } else {
-                                    return_moves.push((rd, source_reg));
-                                }
+                            for (index, destination) in destinations.iter().enumerate() {
+                                let (rd, spilled, imm) = dst_reg(destination);
+                                emit_load64(
+                                    &mut code,
+                                    &fixups,
+                                    rd,
+                                    sp,
+                                    (frame.outgoing_result_base + index * 8) as i64,
+                                    Some(scratch1),
+                                )?;
+                                spill_back(destination, rd, spilled, imm, &mut code)?;
                             }
-                            emit_parallel_register_moves(&mut code, return_moves, scratch1)?;
                         }
                         Instr::ExpectRejectAs {
                             actor,
@@ -13203,71 +13213,92 @@ impl Compiler {
                             push_syscall(&mut code, syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN);
                             spill_syscall_result(dest, &mut code)?;
                         }
-                        Instr::Call { callee, args, dest } => {
-                            if args.len() > regalloc::MAX_ARGUMENT_VALUES {
-                                return Err(format!(
-                                    "call to `{callee}` requires {} flattened argument words, exceeding the Kotodama V1 limit of {}",
-                                    args.len(),
-                                    regalloc::MAX_ARGUMENT_VALUES,
-                                ));
-                            }
-                            emit_values_to_abi_registers(args, &mut code)?;
-                            // Every call occupies one word. Final fixup selects compact JAL or
-                            // the signed-24-bit JALS form without shifting subsequent code.
-                            let at = reserve_word(&mut code);
-                            call_fixups.push((at, callee.clone(), func.name.clone()));
-                            // Move return value if needed
-                            if let Some(d) = dest {
-                                let (rd, spilled, imm) = dst_reg(d);
-                                if spilled {
-                                    emit_store64(&mut code, &fixups, sp, 10, imm, scratch2)?;
-                                } else {
-                                    emit_parallel_register_moves(
+                        Instr::Call { callee, args, .. }
+                        | Instr::CallMulti { callee, args, .. } => {
+                            let signature = signatures
+                                .get(callee)
+                                .ok_or_else(|| format!("missing call signature for `{callee}`"))?;
+                            // Consume every argument before staging descriptor registers. Table
+                            // scratch is disjoint from spills and is reused for each loop call.
+                            for (index, value) in args.iter().enumerate() {
+                                let source = if let Some(kind) =
+                                    dataref_kind_map.get(&(func_idx, *value)).copied()
+                                    && let Some(literal) = string_map.get(&(func_idx, *value))
+                                {
+                                    emit_literal_load(
                                         &mut code,
-                                        vec![(rd, regalloc::RET_REG as u8)],
+                                        &fixups,
                                         scratch1,
-                                    )?;
-                                }
+                                        data_key_for_pointer(kind, literal),
+                                    );
+                                    scratch1
+                                } else {
+                                    src_reg(value, scratch1, &mut code)?
+                                };
+                                emit_store64(
+                                    &mut code,
+                                    &fixups,
+                                    sp,
+                                    source,
+                                    (frame.outgoing_argument_base + index * 8) as i64,
+                                    scratch2,
+                                )?;
                             }
-                        }
-                        Instr::CallMulti {
-                            callee,
-                            args,
-                            dests,
-                        } => {
-                            if dests.len() > regalloc::MAX_RETURN_VALUES {
-                                return Err(format!(
-                                    "too many return values in call to {}: {} > {}",
-                                    callee,
-                                    dests.len(),
-                                    regalloc::MAX_RETURN_VALUES
-                                ));
+                            if args.is_empty() {
+                                push_word(&mut code, encode_addi(10, 0, 0)?);
+                            } else {
+                                emit_bounded_add(
+                                    &mut code,
+                                    &fixups,
+                                    10,
+                                    sp,
+                                    frame.outgoing_argument_base as i64,
+                                    LITERAL_SHIFT_REG,
+                                )?;
                             }
-                            if args.len() > regalloc::MAX_ARGUMENT_VALUES {
-                                return Err(format!(
-                                    "call to `{callee}` requires {} flattened argument words, exceeding the Kotodama V1 limit of {}",
-                                    args.len(),
-                                    regalloc::MAX_ARGUMENT_VALUES,
-                                ));
-                            }
-                            emit_values_to_abi_registers(args, &mut code)?;
-                            // Every call occupies one word. Final fixup selects compact JAL or
-                            // the signed-24-bit JALS form without shifting subsequent code.
+                            emit_i64_literal_load(&mut code, &fixups, 11, args.len() as i64);
+                            emit_bounded_add(
+                                &mut code,
+                                &fixups,
+                                12,
+                                sp,
+                                frame.outgoing_result_base as i64,
+                                LITERAL_SHIFT_REG,
+                            )?;
+                            emit_i64_literal_load(
+                                &mut code,
+                                &fixups,
+                                13,
+                                signature.results.len() as i64,
+                            );
                             let at = reserve_word(&mut code);
                             call_fixups.push((at, callee.clone(), func.name.clone()));
-                            // Spill return words before register shuffles so a
-                            // destination cannot overwrite a later ABI source.
-                            let mut return_moves = Vec::new();
-                            for (i, d) in dests.iter().enumerate() {
-                                let (rd, spilled, imm) = dst_reg(d);
-                                let rs = (regalloc::RET_REG + i) as u8;
-                                if spilled {
-                                    emit_store64(&mut code, &fixups, sp, rs, imm, scratch2)?;
-                                } else {
-                                    return_moves.push((rd, rs));
+                            let destinations = match instr {
+                                Instr::Call { dest, .. } => {
+                                    dest.iter().copied().collect::<Vec<_>>()
                                 }
+                                Instr::CallMulti { dests, .. } => dests.clone(),
+                                _ => unreachable!("call instruction selected above"),
+                            };
+                            if !destinations.is_empty()
+                                && destinations.len() != signature.results.len()
+                            {
+                                return Err(format!(
+                                    "call to `{callee}` has an inconsistent result table"
+                                ));
                             }
-                            emit_parallel_register_moves(&mut code, return_moves, scratch1)?;
+                            for (index, destination) in destinations.iter().enumerate() {
+                                let (rd, spilled, imm) = dst_reg(destination);
+                                emit_load64(
+                                    &mut code,
+                                    &fixups,
+                                    rd,
+                                    sp,
+                                    (frame.outgoing_result_base + index * 8) as i64,
+                                    Some(scratch1),
+                                )?;
+                                spill_back(destination, rd, spilled, imm, &mut code)?;
+                            }
                         }
                         Instr::Poseidon6 { dest, args } => {
                             uses_zk = true;
@@ -13534,7 +13565,10 @@ impl Compiler {
                             let rs = src_reg(cond, scratch1, &mut code)?;
                             let branch_offset = code.len();
                             push_word(&mut code, 0);
-                            emit_values_to_abi_registers(&[*descriptor, *error_code], &mut code)?;
+                            emit_values_to_syscall_registers(
+                                &[*descriptor, *error_code],
+                                &mut code,
+                            )?;
                             code.extend_from_slice(&publish_tlv);
                             for reserved in 12..=15 {
                                 push_word(&mut code, encode_addi(reserved, 0, 0)?);
@@ -13944,7 +13978,7 @@ impl Compiler {
                             limit,
                             ..
                         } => {
-                            emit_values_to_abi_registers(&[*base, *after, *limit], &mut code)?;
+                            emit_values_to_syscall_registers(&[*base, *after, *limit], &mut code)?;
                             if let Some(key) = state_path_literal_data_key(
                                 func_idx,
                                 *base,
@@ -14111,17 +14145,48 @@ impl Compiler {
                             push_syscall(&mut code, syscalls::SYSCALL_STATE_COUNT);
                             spill_syscall_result(dest, &mut code)?;
                         }
-                        Instr::DecodeInt { dest, blob } => {
-                            // r10=&NoritoBytes or &Blob; publish; SCALL; move to dest
-                            load_pointer(blob, 10, scratch1, DataKind::NoritoBytes, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_DECODE_INT);
-                            spill_syscall_result(dest, &mut code)?;
-                        }
-                        Instr::EncodeInt { dest, value } => {
-                            let rv = src_reg(value, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, rv, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_ENCODE_INT);
+                        Instr::EncodeBoolKey { dest, value } => {
+                            // Bool StateMap keys retain the exact canonical
+                            // Norito i64 0/1 bytes without depending on the
+                            // public signed-512 Int codec.
+                            let source = src_reg(value, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(scratch1, source, 0)?);
+                            push_word(&mut code, encode_addi(scratch2, 0, 1)?);
+                            push_word(
+                                &mut code,
+                                encoding::wide::encode_rr(
+                                    instruction::wide::arithmetic::SEQ,
+                                    scratch2,
+                                    scratch1,
+                                    scratch2,
+                                ),
+                            );
+                            // A malformed Bool word still rejects as before.
+                            push_word(&mut code, encode_branch_rv(0x0, scratch1, scratch2, 8)?);
+                            push_syscall_imm8(&mut code, syscalls::SYSCALL_ABORT);
+                            let false_bytes = ivm_abi::codec::encode_canonical_norito(&0_i64)
+                                .expect("canonical false key encodes");
+                            emit_literal_load(
+                                &mut code,
+                                &fixups,
+                                10,
+                                DataKey(
+                                    DataKind::NoritoBytes,
+                                    format!("0x{}", hex::encode(false_bytes)),
+                                ),
+                            );
+                            push_word(&mut code, encode_branch_rv(0x0, scratch2, 0, 8)?);
+                            let true_bytes = ivm_abi::codec::encode_canonical_norito(&1_i64)
+                                .expect("canonical true key encodes");
+                            emit_literal_load(
+                                &mut code,
+                                &fixups,
+                                10,
+                                DataKey(
+                                    DataKind::NoritoBytes,
+                                    format!("0x{}", hex::encode(true_bytes)),
+                                ),
+                            );
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::IntFromI64 { dest, value } | Instr::IntFromU64 { dest, value } => {
@@ -14438,7 +14503,7 @@ impl Compiler {
                             ..
                         } => {
                             if let Some(multiplier) = multiplier {
-                                emit_values_to_abi_registers(
+                                emit_values_to_syscall_registers(
                                     &[*dividend, *multiplier, *divisor, *scale, *mode],
                                     &mut code,
                                 )?;
@@ -14678,32 +14743,71 @@ impl Compiler {
                             syscall,
                             args,
                         } => {
-                            for (idx, arg) in args.iter().enumerate() {
-                                let target = 10u8.checked_add(idx as u8).ok_or_else(|| {
-                                    i18n::translate(
-                                        self.lang,
-                                        Message::SemanticError(
-                                            "direct helper syscall has too many arguments",
-                                        ),
-                                    )
-                                })?;
-                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *arg)).copied()
-                                    && let Some(lit) = string_map.get(&(func_idx, *arg)).cloned()
-                                {
-                                    let key = data_key_for_pointer(kind, &lit);
-                                    emit_literal_load(&mut code, &fixups, target, key);
-                                } else {
-                                    let scratch = if target == scratch1 {
-                                        scratch2
+                            // Typed integer helpers publish each canonical operand before
+                            // invoking the shared, staged full-width implementation.
+                            if matches!(
+                                *syscall,
+                                syscalls::SYSCALL_INT_ISQRT..=syscalls::SYSCALL_INT_MEAN
+                            ) {
+                                for (index, arg) in args.iter().enumerate() {
+                                    if let Some(kind) =
+                                        dataref_kind_map.get(&(func_idx, *arg)).copied()
+                                        && let Some(lit) =
+                                            string_map.get(&(func_idx, *arg)).cloned()
+                                    {
+                                        emit_literal_load(
+                                            &mut code,
+                                            &fixups,
+                                            10,
+                                            data_key_for_pointer(kind, &lit),
+                                        );
                                     } else {
-                                        scratch1
-                                    };
-                                    let r = src_reg(arg, scratch, &mut code)?;
-                                    push_word(&mut code, encode_addi(target, r, 0)?);
+                                        let source = src_reg(arg, scratch1, &mut code)?;
+                                        push_word(&mut code, encode_addi(10, source, 0)?);
+                                    }
+                                    code.extend_from_slice(&publish_tlv);
+                                    if index == 0 && args.len() == 2 {
+                                        push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                    } else if index == 1 {
+                                        push_word(&mut code, encode_addi(11, 10, 0)?);
+                                        push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                    }
                                 }
+                                for register in (10 + args.len() as u8)..=14 {
+                                    push_word(&mut code, encode_addi(register, 0, 0)?);
+                                }
+                                push_syscall(&mut code, *syscall);
+                                spill_syscall_result(dest, &mut code)?;
+                            } else {
+                                for (idx, arg) in args.iter().enumerate() {
+                                    let target = 10u8.checked_add(idx as u8).ok_or_else(|| {
+                                        i18n::translate(
+                                            self.lang,
+                                            Message::SemanticError(
+                                                "direct helper syscall has too many arguments",
+                                            ),
+                                        )
+                                    })?;
+                                    if let Some(kind) =
+                                        dataref_kind_map.get(&(func_idx, *arg)).copied()
+                                        && let Some(lit) =
+                                            string_map.get(&(func_idx, *arg)).cloned()
+                                    {
+                                        let key = data_key_for_pointer(kind, &lit);
+                                        emit_literal_load(&mut code, &fixups, target, key);
+                                    } else {
+                                        let scratch = if target == scratch1 {
+                                            scratch2
+                                        } else {
+                                            scratch1
+                                        };
+                                        let r = src_reg(arg, scratch, &mut code)?;
+                                        push_word(&mut code, encode_addi(target, r, 0)?);
+                                    }
+                                }
+                                push_syscall(&mut code, *syscall);
+                                spill_syscall_result(dest, &mut code)?;
                             }
-                            push_syscall(&mut code, *syscall);
-                            spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::StatePathFromName { dest, name } => {
                             // r10=&Name; publish; SCALL STATE_PATH_FROM_NAME;
@@ -15001,6 +15105,20 @@ impl Compiler {
                             }
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_AXT_TOUCH);
                         }
+                        Instr::StageAnchoredSpend { spend } => {
+                            load_pointer(
+                                spend,
+                                10,
+                                scratch1,
+                                DataKind::AxtAnchoredSpendV1,
+                                &mut code,
+                            )?;
+                            code.extend_from_slice(&publish_tlv);
+                            push_syscall_imm8(
+                                &mut code,
+                                syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND,
+                            );
+                        }
                         Instr::VerifyDsProof { dsid, proof } => {
                             load_pointer(dsid, 10, scratch1, DataKind::DataSpaceId, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
@@ -15012,38 +15130,6 @@ impl Compiler {
                             }
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_VERIFY_DS_PROOF);
                         }
-                        Instr::UseAssetHandle {
-                            handle,
-                            intent,
-                            proof,
-                        } => {
-                            load_pointer(handle, 10, scratch1, DataKind::AssetHandle, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            if let Some(s) = string_map.get(&(func_idx, *intent)) {
-                                if decode_remote_spend_intent_literal(s).is_none() {
-                                    let err = format!(
-                                        "invalid AXT remote spend intent literal `{s}`: expected one canonical, context-valid RemoteSpendIntent frame"
-                                    );
-                                    return Err(i18n::translate(
-                                        self.lang,
-                                        Message::SemanticError(&err),
-                                    ));
-                                }
-                                let key = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &fixups, 11, key);
-                            } else {
-                                let r = src_reg(intent, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
-                            }
-                            code.extend_from_slice(&publish_tlv);
-                            if let Some(p) = proof {
-                                load_pointer(p, 12, scratchd, DataKind::ProofBlob, &mut code)?;
-                                code.extend_from_slice(&publish_tlv);
-                            } else {
-                                push_word(&mut code, encode_addi(12, 0, 0)?);
-                            }
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_USE_ASSET_HANDLE);
-                        }
                         Instr::AxtCommit => {
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_AXT_COMMIT);
                         }
@@ -15051,144 +15137,89 @@ impl Compiler {
                 }
                 // end for instr in &bb.instrs
                 allocation_position.set(next_allocation_position);
-                emit_split_reloads(next_allocation_position, &mut code)?;
+                emit_split_reloads(next_allocation_position, &tuple_map, &mut code)?;
                 next_allocation_position = next_allocation_position.saturating_add(1);
                 match &bb.terminator {
-                    Terminator::Return(ret) => {
-                        if let Some(tmp) = ret {
-                            emit_values_to_abi_registers(std::slice::from_ref(tmp), &mut code)?;
-                        }
-                        if is_entry {
-                            push_word(&mut code, encoding::wide::encode_halt());
-                        } else {
-                            // Restore only state that this function actually saved.
-                            let sp = regalloc::SP_REG as u8;
-                            let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
-                            for (idx, reg) in saved_regs.iter().copied().enumerate() {
-                                let offset = (save_base + idx * 8) as i64;
-                                emit_load64(
-                                    &mut code,
-                                    &fixups,
-                                    reg,
-                                    sp,
-                                    offset,
-                                    Some(scratch_base),
-                                )?;
-                            }
-                            if saves_return_address {
-                                let ld = encode_load64_rv(1, sp, 0)?;
-                                push_word(&mut code, ld);
-                            }
-                            if local_frame > 0 {
-                                emit_bounded_add(
-                                    &mut code,
-                                    &fixups,
-                                    sp,
-                                    sp,
-                                    local_frame as i64,
-                                    LITERAL_SHIFT_REG,
-                                )?;
-                            }
-                            // JALR x0, x1, 0
-                            let jalr = encoding::wide::encode_rr(
-                                instruction::wide::control::JALR,
-                                0,
-                                1,
-                                0,
-                            );
-                            push_word(&mut code, jalr);
-                        }
-                    }
-                    Terminator::Return2(t0, t1) => {
-                        emit_values_to_abi_registers(&[*t0, *t1], &mut code)?;
-                        if is_entry {
-                            push_word(&mut code, encoding::wide::encode_halt());
-                        } else {
-                            // Epilogue
-                            let sp = regalloc::SP_REG as u8;
-                            let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
-                            for (idx, reg) in saved_regs.iter().copied().enumerate() {
-                                let offset = (save_base + idx * 8) as i64;
-                                emit_load64(
-                                    &mut code,
-                                    &fixups,
-                                    reg,
-                                    sp,
-                                    offset,
-                                    Some(scratch_base),
-                                )?;
-                            }
-                            if saves_return_address {
-                                let ld = encode_load64_rv(1, sp, 0)?;
-                                push_word(&mut code, ld);
-                            }
-                            if local_frame > 0 {
-                                emit_bounded_add(
-                                    &mut code,
-                                    &fixups,
-                                    sp,
-                                    sp,
-                                    local_frame as i64,
-                                    LITERAL_SHIFT_REG,
-                                )?;
-                            }
-                            let jalr = encoding::wide::encode_rr(
-                                instruction::wide::control::JALR,
-                                0,
-                                1,
-                                0,
-                            );
-                            push_word(&mut code, jalr);
-                        }
-                    }
-                    Terminator::ReturnN(vals) => {
-                        if vals.len() > regalloc::MAX_RETURN_VALUES {
+                    terminator @ (Terminator::Return(_)
+                    | Terminator::Return2(_, _)
+                    | Terminator::ReturnN(_)) => {
+                        let values = match terminator {
+                            Terminator::Return(value) => value.iter().copied().collect::<Vec<_>>(),
+                            Terminator::Return2(first, second) => vec![*first, *second],
+                            Terminator::ReturnN(values) => values.clone(),
+                            _ => unreachable!("return terminator selected above"),
+                        };
+                        let result_count = values.len().max(1);
+                        if result_count != signature.results.len() {
                             return Err(format!(
-                                "too many return values in function: {} > {}",
-                                vals.len(),
-                                regalloc::MAX_RETURN_VALUES
+                                "function `{}` has an inconsistent result table",
+                                func.name
                             ));
                         }
-                        emit_values_to_abi_registers(vals, &mut code)?;
-                        if is_entry {
-                            push_word(&mut code, encoding::wide::encode_halt());
-                        } else {
-                            // Epilogue
-                            let sp = regalloc::SP_REG as u8;
-                            let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
-                            for (idx, reg) in saved_regs.iter().copied().enumerate() {
-                                let offset = (save_base + idx * 8) as i64;
-                                emit_load64(
-                                    &mut code,
-                                    &fixups,
-                                    reg,
-                                    sp,
-                                    offset,
-                                    Some(scratch_base),
-                                )?;
-                            }
-                            if saves_return_address {
-                                let ld = encode_load64_rv(1, sp, 0)?;
-                                push_word(&mut code, ld);
-                            }
-                            if local_frame > 0 {
-                                emit_bounded_add(
-                                    &mut code,
-                                    &fixups,
-                                    sp,
-                                    sp,
-                                    local_frame as i64,
-                                    LITERAL_SHIFT_REG,
-                                )?;
-                            }
-                            let jalr = encoding::wide::encode_rr(
-                                instruction::wide::control::JALR,
-                                0,
-                                1,
-                                0,
-                            );
-                            push_word(&mut code, jalr);
+                        emit_load64(
+                            &mut code,
+                            &fixups,
+                            scratchd,
+                            sp,
+                            frame.result_base_slot as i64,
+                            Some(scratch2),
+                        )?;
+                        if values.is_empty() {
+                            emit_store64(&mut code, &fixups, scratchd, 0, 0, scratch2)?;
                         }
+                        for (index, value) in values.iter().enumerate() {
+                            let source = if let Some(kind) =
+                                dataref_kind_map.get(&(func_idx, *value)).copied()
+                                && let Some(literal) = string_map.get(&(func_idx, *value))
+                            {
+                                emit_literal_load(
+                                    &mut code,
+                                    &fixups,
+                                    scratch1,
+                                    data_key_for_pointer(kind, literal),
+                                );
+                                scratch1
+                            } else {
+                                src_reg(value, scratch1, &mut code)?
+                            };
+                            emit_store64(
+                                &mut code,
+                                &fixups,
+                                scratchd,
+                                source,
+                                (index * 8) as i64,
+                                scratch2,
+                            )?;
+                        }
+                        // Publish only after every slot has been written. Runtime return
+                        // validation independently checks ownership, coverage, and role tags.
+                        push_word(&mut code, encode_addi(10, scratchd, 0)?);
+                        emit_i64_literal_load(&mut code, &fixups, 11, result_count as i64);
+                        for (index, register) in saved_regs.iter().copied().enumerate() {
+                            emit_load64(
+                                &mut code,
+                                &fixups,
+                                register,
+                                sp,
+                                (save_base + index * 8) as i64,
+                                Some(scratch1),
+                            )?;
+                        }
+                        if saves_return_address {
+                            emit_load64(&mut code, &fixups, 1, sp, 0, Some(scratch1))?;
+                        }
+                        emit_bounded_add(
+                            &mut code,
+                            &fixups,
+                            sp,
+                            sp,
+                            local_frame as i64,
+                            LITERAL_SHIFT_REG,
+                        )?;
+                        push_word(
+                            &mut code,
+                            encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 1, 0),
+                        );
                     }
                     Terminator::Jump(target) => {
                         if next_label != Some(*target) {
@@ -15293,32 +15324,6 @@ impl Compiler {
             debug_seed.pc_end = function_end;
             uses_zk_global |= uses_zk;
         }
-        let mut wrapper_functions = typed
-            .items
-            .iter()
-            .filter_map(|item| {
-                let TypedItem::Function(function) = item;
-                (function.modifiers.kind != FunctionKind::Private).then_some(function)
-            })
-            .collect::<Vec<_>>();
-        wrapper_functions.sort_by(|left, right| left.name.cmp(&right.name));
-        for func in wrapper_functions {
-            if !func_start_offsets.contains_key(&func.name) {
-                return Err(format!(
-                    "missing lowered function body for entrypoint `{}`",
-                    func.name
-                ));
-            }
-            let wrapper_start = code.len();
-            entrypoint_wrapper_offsets.insert(func.name.clone(), wrapper_start);
-            let call_at = reserve_word(&mut code);
-            call_fixups.push((
-                call_at,
-                func.name.clone(),
-                format!("__entrypoint_wrapper:{}", func.name),
-            ));
-            push_word(&mut code, encoding::wide::encode_halt());
-        }
         // Patch call sites now that function offsets are known.
         for (at, callee, _caller) in &call_fixups {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
@@ -15345,9 +15350,10 @@ impl Compiler {
         for offset in func_start_offsets.values_mut() {
             *offset = code_offsets.entry(*offset);
         }
-        for offset in entrypoint_wrapper_offsets.values_mut() {
-            *offset = code_offsets.entry(*offset);
+        for callable in &mut callables {
+            callable.entry_pc = code_offsets.entry(callable.entry_pc as usize) as u64;
         }
+        callables.sort_by_key(|callable| callable.entry_pc);
         for seed in &mut function_debug_seeds {
             let old_start = usize::try_from(seed.pc_start)
                 .map_err(|_| "function start does not fit usize".to_owned())?;
@@ -15357,13 +15363,6 @@ impl Compiler {
                 .map_err(|_| "relaxed function start does not fit u64".to_owned())?;
             seed.pc_end = u64::try_from(code_offsets.entry(old_end))
                 .map_err(|_| "relaxed function end does not fit u64".to_owned())?;
-        }
-        // Local test functions return through r1 just like ordinary private
-        // calls. Give the test driver a compiler-owned terminal return target
-        // inside the authenticated artifact instead of requiring it to append
-        // an instruction after metadata and CNTR construction.
-        if self.opts.mode == CompilerMode::Test {
-            push_word(&mut code, encoding::wide::encode_halt());
         }
         uses_vector_global |= detect_vector_usage(&code);
         uses_zk_global |= detect_zk_usage(&code);
@@ -15417,7 +15416,7 @@ impl Compiler {
                 DRK::NoritoBytes => DataKey(DataKind::NoritoBytes, v.clone()),
                 DRK::DataSpaceId => DataKey(DataKind::DataSpaceId, v.clone()),
                 DRK::AxtDescriptor => DataKey(DataKind::AxtDescriptor, v.clone()),
-                DRK::AssetHandle => DataKey(DataKind::AssetHandle, v.clone()),
+                DRK::AxtAnchoredSpendV1 => DataKey(DataKind::AxtAnchoredSpendV1, v.clone()),
                 DRK::ProofBlob => DataKey(DataKind::ProofBlob, v.clone()),
                 DRK::SoracloudRequest => DataKey(DataKind::SoracloudRequest, v.clone()),
                 DRK::SoracloudResponse => DataKey(DataKind::SoracloudResponse, v.clone()),
@@ -15659,28 +15658,30 @@ impl Compiler {
                             })?,
                     )
                 }
-                DataKey(DataKind::AssetHandle, s) => {
+                DataKey(DataKind::AxtAnchoredSpendV1, s) => {
                     let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
-                        let err = format!("invalid AssetHandle literal `{s}`: {e}");
+                        let err = format!("invalid AxtAnchoredSpendV1 literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    let value: crate::axt::AssetHandle =
+                    let value: iroha_data_model::nexus::AxtAnchoredSpendV1 =
                         ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
-                            let err =
-                                format!("invalid AssetHandle literal `{s}`: cannot decode ({e})");
+                            let err = format!(
+                                "invalid AxtAnchoredSpendV1 literal `{s}`: cannot decode ({e})"
+                            );
                             i18n::translate(self.lang, Message::SemanticError(&err))
                         })?;
-                    crate::axt::validate_asset_handle(&value).map_err(|e| {
-                        let err =
-                            format!("invalid AssetHandle literal `{s}`: invalid handle ({e})");
+                    value.issuer_payload_v1().map_err(|e| {
+                        let err = format!(
+                            "invalid AxtAnchoredSpendV1 literal `{s}`: inconsistent signed binding ({e})"
+                        );
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
                     (
-                        PointerType::AssetHandle as u16,
+                        PointerType::AxtAnchoredSpendV1 as u16,
                         ivm_abi::codec::encode_canonical_norito(&value)
                             .map_err(|e| e.to_string())
                             .map_err(|e| {
-                                let err = format!("invalid AssetHandle literal `{s}`: {e}");
+                                let err = format!("invalid AxtAnchoredSpendV1 literal `{s}`: {e}");
                                 i18n::translate(self.lang, Message::SemanticError(&err))
                             })?,
                     )
@@ -15777,42 +15778,14 @@ impl Compiler {
             data_offsets.insert(key.clone(), off);
             Ok(off)
         };
-        let mut entrypoint_start_offsets = func_start_offsets.clone();
-        entrypoint_start_offsets.extend(entrypoint_wrapper_offsets);
-        let mut entrypoint_descriptors = build_entrypoint_descriptors(
+        let entrypoint_start_offsets = func_start_offsets.clone();
+        let entrypoint_descriptors = build_entrypoint_descriptors(
             &typed,
             &access_sets,
             &ir_prog.functions,
             &hint_reports,
             &entrypoint_start_offsets,
         )?;
-        if self.opts.mode == CompilerMode::Test {
-            // Test suites keep their exact compiler-owned interface beside the
-            // generic IVM 1.0 image even when the production projection has no
-            // public entrypoint. Authenticate the return target through a
-            // local-only view descriptor so artifact verification remains
-            // mandatory for execution without embedding a deployable CNTR.
-            let return_pc = code
-                .len()
-                .checked_sub(core::mem::size_of::<u32>())
-                .ok_or_else(|| "test artifact is missing its return HALT".to_owned())?;
-            entrypoint_descriptors.push(EmbeddedEntrypointDescriptor {
-                name: KOTO_TEST_RETURN_ENTRYPOINT.to_owned(),
-                kind: EntryPointKind::View,
-                params: Vec::new(),
-                argument_schema: None,
-                return_type: Some("()".to_owned()),
-                return_schema: ir::entrypoint_return_schema(KOTO_TEST_RETURN_ENTRYPOINT, None)?,
-                permission: None,
-                read_keys: Vec::new(),
-                write_keys: Vec::new(),
-                access_hints_complete: Some(true),
-                access_hints_skipped: Vec::new(),
-                triggers: Vec::new(),
-                entry_pc: u64::try_from(return_pc)
-                    .map_err(|_| "test return PC does not fit u64".to_owned())?,
-            });
-        }
         if self.opts.mode == CompilerMode::Production
             && let Some(entrypoint) = entrypoint_descriptors.iter().find(|entrypoint| {
                 entrypoint.access_hints_complete == Some(false)
@@ -15844,6 +15817,7 @@ impl Compiler {
             feature_bits |= CONTRACT_FEATURE_BIT_VECTOR;
         }
         let contract_interface = EmbeddedContractInterfaceV1 {
+            callables,
             seiyaku_name: typed.unit.name.clone(),
             compiler_fingerprint: COMPILER_FINGERPRINT.to_owned(),
             abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
@@ -16522,7 +16496,7 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
         }
         Type::Secret(_)
         | Type::AxtDescriptor
-        | Type::AssetHandle
+        | Type::AxtAnchoredSpendV1
         | Type::ProofBlob
         | Type::SoracloudRequest
         | Type::SoracloudResponse => {
@@ -16531,13 +16505,7 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
     })
 }
 fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
-    let needs_wrapper = !matches!(func.modifiers.kind, super::ast::FunctionKind::Private)
-        && !func.param_types.is_empty();
-    if needs_wrapper {
-        format!("__entrypoint_impl__{}", func.name)
-    } else {
-        func.name.clone()
-    }
+    func.name.clone()
 }
 fn executable_ir_roots(typed: &TypedProgram, include_tests: bool) -> BTreeSet<String> {
     typed
@@ -17326,20 +17294,8 @@ fn record_isi_access(
                 .reads
                 .insert(format!("axt:dataspace:{}:proof", dsid.as_u64()));
         }
-        ir::Instr::UseAssetHandle { handle, intent, .. } => {
-            let (Some(handle_raw), Some(intent_raw)) = (
-                string_map.get(&(func_idx, *handle)),
-                string_map.get(&(func_idx, *intent)),
-            ) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            let (Some(handle), Some(intent)) = (
-                decode_asset_handle_literal(handle_raw),
-                decode_remote_spend_intent_literal(intent_raw),
-            ) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            add_asset_handle_access(access_set, &handle, &intent);
+        ir::Instr::StageAnchoredSpend { .. } => {
+            return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
         }
         ir::Instr::AxtCommit => {}
         ir::Instr::SoracloudHostCall {
@@ -17487,18 +17443,6 @@ fn decode_axt_touch_manifest_literal(raw: &str) -> Option<crate::axt::TouchManif
     let manifest = ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
     crate::axt::validate_touch_manifest(&manifest).ok()?;
     Some(manifest)
-}
-fn decode_asset_handle_literal(raw: &str) -> Option<crate::axt::AssetHandle> {
-    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    let handle = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
-    crate::axt::validate_asset_handle(&handle).ok()?;
-    Some(handle)
-}
-fn decode_remote_spend_intent_literal(raw: &str) -> Option<crate::axt::RemoteSpendIntent> {
-    let payload = decode_norito_literal_payload(raw)?;
-    let intent = ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-    crate::axt::validate_remote_spend_intent(&intent).ok()?;
-    Some(intent)
 }
 fn parse_dataspace_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
@@ -18718,23 +18662,6 @@ fn add_axt_descriptor_access(set: &mut AccessSets, descriptor: &crate::axt::AxtD
         }
     }
 }
-fn add_asset_handle_access(
-    set: &mut AccessSets,
-    handle: &crate::axt::AssetHandle,
-    intent: &crate::axt::RemoteSpendIntent,
-) {
-    let encoded = ivm_abi::codec::encode_canonical_norito(handle)
-        .expect("AssetHandle encoding is infallible");
-    let digest: [u8; 32] = iroha_crypto::Hash::new(&encoded).into();
-    let handle_key = format!("axt:asset_handle:{}", hex::encode(digest));
-    set.reads.insert(handle_key.clone());
-    set.writes.insert(handle_key);
-    add_asset_definition_ownership_r(set, &handle.asset_definition_id);
-    add_axt_dataspace_rw(set, intent.asset_dsid);
-    if let Some(origin) = handle.subject.origin_dsid {
-        add_axt_dataspace_rw(set, origin);
-    }
-}
 fn add_trigger_rw(set: &mut AccessSets, id: &TriggerId) {
     let key = key_trigger(id);
     set.reads.insert(key.clone());
@@ -18829,10 +18756,9 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::GetPublicInput { .. }
         | ir::Instr::StateMapKeyAt { .. }
         | ir::Instr::StateValueEncode { .. }
-        | ir::Instr::DecodeInt { .. }
         | ir::Instr::StatePathFromName { .. }
         | ir::Instr::PathMapKeyNorito { .. }
-        | ir::Instr::EncodeInt { .. }
+        | ir::Instr::EncodeBoolKey { .. }
         | ir::Instr::PointerToNorito { .. }
         | ir::Instr::PointerFromNorito { .. }
         | ir::Instr::JsonEncode { .. }
@@ -19025,8 +18951,10 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::VrfVerifyBatch { .. } => access_class_for_builtin(Builtin::VrfVerifyBatch),
         ir::Instr::AxtBegin { .. } => access_class_for_builtin(Builtin::AxtBegin),
         ir::Instr::AxtTouch { .. } => access_class_for_builtin(Builtin::AxtTouch),
+        ir::Instr::StageAnchoredSpend { .. } => {
+            access_class_for_builtin(Builtin::StageAnchoredSpend)
+        }
         ir::Instr::VerifyDsProof { .. } => access_class_for_builtin(Builtin::VerifyDsProof),
-        ir::Instr::UseAssetHandle { .. } => access_class_for_builtin(Builtin::UseAssetHandle),
         ir::Instr::AxtCommit => access_class_for_builtin(Builtin::AxtCommit),
         ir::Instr::SoracloudHostCall { .. } => {
             access_class_for_builtin(Builtin::SoracloudReadCommittedState)
@@ -19071,196 +18999,6 @@ fn detect_zk_usage(code: &[u8]) -> bool {
         let opcode = instruction::wide::opcode(word);
         ZK_OPS.contains(&opcode)
     })
-}
-fn build_entrypoint_descriptors(
-    typed: &TypedProgram,
-    access_sets: &[AccessSets],
-    ir_functions: &[ir::Function],
-    hint_reports: &[HintReport],
-    func_start_offsets: &HashMap<String, usize>,
-) -> Result<Vec<EmbeddedEntrypointDescriptor>, String> {
-    let mut hints_by_name: HashMap<&str, (&IndexSet<String>, &IndexSet<String>)> = HashMap::new();
-    let mut hint_report_by_name: HashMap<&str, &HintReport> = HashMap::new();
-    for ((func, sets), report) in ir_functions
-        .iter()
-        .zip(access_sets.iter())
-        .zip(hint_reports.iter())
-    {
-        hints_by_name.insert(&func.name, (&sets.reads, &sets.writes));
-        hint_report_by_name.insert(&func.name, report);
-    }
-    let trigger_anchor_names = typed
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            TypedItem::Function(func)
-                if entrypoint_kind_from_modifiers(&func.modifiers).is_some() =>
-            {
-                Some(func.name.clone())
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let namespaced_trigger_anchor = trigger_anchor_names.first().cloned();
-    let mut triggers_by_name: HashMap<String, Vec<TriggerDescriptor>> = HashMap::new();
-    for trigger in &typed.triggers {
-        let descriptor = TriggerDescriptor {
-            id: trigger.id.clone(),
-            repeats: trigger.repeats,
-            filter: trigger.filter.clone(),
-            authority: trigger.authority.clone(),
-            metadata: trigger.metadata.clone(),
-            callback: TriggerCallback {
-                namespace: trigger.call.namespace.clone(),
-                entrypoint: trigger.call.entrypoint.clone(),
-            },
-        };
-        let trigger_anchor = if trigger.call.namespace.is_some() {
-            namespaced_trigger_anchor.clone().ok_or_else(|| {
-                format!(
-                    "trigger `{}` has a namespaced callback but the seiyaku has no entrypoint descriptor to carry it",
-                    trigger.id
-                )
-            })?
-        } else {
-            trigger.call.entrypoint.clone()
-        };
-        triggers_by_name
-            .entry(trigger_anchor)
-            .or_default()
-            .push(descriptor);
-    }
-    let build_descriptor = |func: &semantic::TypedFunction,
-                            kind: EntryPointKind|
-     -> Result<EmbeddedEntrypointDescriptor, String> {
-        let hint_name = entrypoint_ir_symbol_name(func);
-        let mut hint_names = vec![hint_name.as_str()];
-        if hint_name != func.name {
-            hint_names.push(func.name.as_str());
-        }
-        let reports = hint_names
-            .iter()
-            .map(|name| {
-                hint_report_by_name.get(name).copied().ok_or_else(|| {
-                    format!("missing access-hint report for entrypoint function `{name}`")
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let include_hints = reports.iter().any(|report| report.emitted);
-        let mut read_set = IndexSet::new();
-        let mut write_set = IndexSet::new();
-        if include_hints {
-            for name in &hint_names {
-                let (reads, writes) = hints_by_name.get(name).copied().ok_or_else(|| {
-                    format!("missing access hints for entrypoint function `{name}`")
-                })?;
-                read_set.extend(reads.iter().cloned());
-                write_set.extend(writes.iter().cloned());
-            }
-        }
-        let mut reads = read_set.into_iter().collect::<Vec<_>>();
-        let mut writes = write_set.into_iter().collect::<Vec<_>>();
-        if include_hints && (reads.is_empty() || writes.is_empty()) {
-            let (fallback_reads, fallback_writes) =
-                crate::semantic::function_state_accesses(func, &typed.states);
-            if reads.is_empty() && !fallback_reads.is_empty() {
-                reads = fallback_reads.iter().cloned().collect();
-            }
-            if writes.is_empty() && !fallback_writes.is_empty() {
-                writes = fallback_writes.iter().cloned().collect();
-            }
-        }
-        let triggers = triggers_by_name
-            .get(func.name.as_str())
-            .cloned()
-            .unwrap_or_default();
-        let skipped_reasons = reports
-            .iter()
-            .flat_map(|report| report.skipped_reasons.iter().cloned())
-            .collect::<IndexSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let entry_pc = func_start_offsets
-            .get(&func.name)
-            .copied()
-            .ok_or_else(|| format!("missing function offset for entrypoint `{}`", func.name))?;
-        let argument_schema = crate::ir::entrypoint_argument_schema(&func.param_types)?;
-        let params = match argument_schema.as_ref() {
-            None if func.param_types.is_empty() => Vec::new(),
-            Some(schema) if schema.fields.len() == func.param_types.len() => func
-                .param_types
-                .iter()
-                .zip(&schema.fields)
-                .map(|(param, field)| {
-                    let type_name = field.ty.canonical_type_name().ok_or_else(|| {
-                        format!(
-                            "entrypoint `{}` parameter `{}` has no canonical ABI type name",
-                            func.name, param.name
-                        )
-                    })?;
-                    Ok(EntrypointParamDescriptor {
-                        name: param.name.clone(),
-                        type_name,
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()?,
-            _ => {
-                return Err(format!(
-                    "entrypoint `{}` argument schema does not match its declared parameters",
-                    func.name
-                ));
-            }
-        };
-        let return_schema = crate::ir::entrypoint_return_schema(&func.name, func.ret_ty.as_ref())?;
-        let return_type = return_schema
-            .as_ref()
-            .map(|schema| {
-                schema.canonical_type_name().ok_or_else(|| {
-                    format!(
-                        "entrypoint `{}` return schema has no canonical ABI type name",
-                        func.name
-                    )
-                })
-            })
-            .transpose()?;
-        Ok(EmbeddedEntrypointDescriptor {
-            name: func.name.clone(),
-            kind,
-            params,
-            argument_schema,
-            return_type,
-            return_schema,
-            permission: func.modifiers.permission.clone(),
-            read_keys: reads,
-            write_keys: writes,
-            access_hints_complete: include_hints
-                .then_some(reports.iter().all(|report| report.complete)),
-            access_hints_skipped: skipped_reasons,
-            triggers,
-            entry_pc: u64::try_from(entry_pc)
-                .map_err(|_| format!("entrypoint `{}` PC does not fit u64", func.name))?,
-        })
-    };
-    let entrypoints: Vec<EmbeddedEntrypointDescriptor> = typed
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            TypedItem::Function(func) => {
-                let kind = entrypoint_kind_from_modifiers(&func.modifiers)?;
-                Some(build_descriptor(func, kind))
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(entrypoints)
-}
-fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<EntryPointKind> {
-    match modifiers.kind {
-        FunctionKind::Kotoage => Some(EntryPointKind::Kotoage),
-        FunctionKind::View => Some(EntryPointKind::View),
-        FunctionKind::Hajimari => Some(EntryPointKind::Hajimari),
-        FunctionKind::Kaizen => Some(EntryPointKind::Kaizen),
-        FunctionKind::Private => None,
-    }
 }
 pub mod test_helpers {
     use super::*;

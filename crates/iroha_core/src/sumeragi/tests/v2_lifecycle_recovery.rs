@@ -111,6 +111,8 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
         lane_history_retention: LANE_HISTORY_RETENTION,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -444,6 +446,9 @@ fn open_lifecycle_recovery_state(
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(kura_config, lane_config)
         .expect("open lifecycle Kura");
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -544,7 +549,9 @@ fn install_lifecycle_queue_plan_authority(state: &mut State, validator_keys: &[&
             )
         })
         .collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+        statuses,
+    )));
 }
 fn install_lifecycle_queue_plan_validator_authority(
     state: &State,
@@ -671,7 +678,7 @@ fn install_lifecycle_queue_plan_validator_authority(
             .collect::<BTreeMap<_, _>>()
     };
     statuses.insert(LaneId::SINGLE, status);
-    queue.install_lane_manifests_with_state(
+    queue.install_lane_manifests_with_state_for_testing(
         &Arc::new(LaneManifestRegistry::from_statuses(statuses)),
         state,
     );
@@ -1428,6 +1435,9 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
         .expect("initial Kura");
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -1499,6 +1509,9 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
         Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
             .expect("restart Kura");
     let mut restarted_state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::default(),
         Arc::clone(&restarted),
         LiveQueryStore::start_test(),

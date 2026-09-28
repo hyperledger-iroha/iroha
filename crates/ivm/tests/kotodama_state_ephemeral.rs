@@ -21,7 +21,7 @@ fn execute_int_result(source: &str) -> i64 {
             vm.register(11),
         );
     }
-    common::decode_i64_register(&vm, 10)
+    common::decode_i64_return_word(&vm, 0)
 }
 fn encoded_order_inversion(quantity: bool) -> (String, String) {
     let mut values = Vec::new();
@@ -77,7 +77,7 @@ fn state_map_set_get_roundtrip() {
     vm.load_program(&prog).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("state map roundtrip");
-    assert_eq!(common::decode_i64_register(&vm, 10), 7);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 7);
 }
 #[test]
 fn state_map_with_struct_value_roundtrip() {
@@ -102,7 +102,7 @@ fn state_map_with_struct_value_roundtrip() {
     vm.load_program(&prog).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("state map struct roundtrip");
-    assert_eq!(common::decode_i64_register(&vm, 10), 9);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 9);
 }
 #[test]
 fn decimal_and_quantity_keys_collapse_equivalent_literal_spellings() {

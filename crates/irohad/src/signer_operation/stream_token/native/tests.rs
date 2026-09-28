@@ -110,8 +110,17 @@ fn queue() -> Arc<Queue> {
         tokio::sync::broadcast::channel(32).0,
     ))
 }
+mod checked_reservation;
+
 fn source(fixture: &Fixture, queue: Arc<Queue>) -> NativeStreamTokenSourceV1 {
-    let timeout = Duration::from_secs(1);
+    source_with_timeout(fixture, queue, Duration::from_secs(1))
+}
+
+fn source_with_timeout(
+    fixture: &Fixture,
+    queue: Arc<Queue>,
+    timeout: Duration,
+) -> NativeStreamTokenSourceV1 {
     NativeStreamTokenSourceV1 {
         state: fixture.state.clone(),
         binding: fixture.policy.binding.clone(),

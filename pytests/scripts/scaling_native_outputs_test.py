@@ -118,7 +118,7 @@ def test_invalid_lookup_or_incomplete_finish_permanently_closes_admission(owner,
     with pytest.raises(outputs.NativeOutputError): owner.begin('collection')
 
 
-@pytest.mark.parametrize('field,value', [('finality', True), ('queries', 0), ('facts', -1),
+@pytest.mark.parametrize('field,value', [('carrier', True), ('queries', 0), ('facts', -1),
     ('request', 268435457), ('bundle', 1.0), ('proof', None), ('total', 1), ('total', 2147483649)])
 def test_allocations_are_admitted_before_directory_creation(tmp_path, field, value):
     path = tmp_path.resolve() / 'outputs'
@@ -153,7 +153,7 @@ def test_lexical_symlink_ancestor_is_rejected(tmp_path):
 
 
 @pytest.mark.parametrize('name', ['unlisted', 'facts.nrt', 'proof.nrt.publishing',
-    'finality.nrt.publishing', 'queries.nrt.collecting.more'])
+    'carrier.nrt.collecting', 'queries.nrt.publishing.more'])
 def test_only_current_commands_exact_stage_and_final_names_may_appear(owner, name):
     owner.begin('collection')
     write(owner.directory / name)
@@ -162,14 +162,14 @@ def test_only_current_commands_exact_stage_and_final_names_may_appear(owner, nam
 
 
 def test_no_native_file_may_appear_before_its_step(owner):
-    write(owner.directory / 'finality.nrt')
+    write(owner.directory / 'carrier.nrt')
     with pytest.raises(outputs.NativeOutputError): owner.begin('collection')
 
 
 @pytest.mark.parametrize('kind', ['directory', 'symlink', 'fifo', 'hardlink', 'mode', 'oversize'])
 def test_pending_output_type_owner_and_byte_bounds(owner, kind):
     owner.begin('collection')
-    path = owner.path('finality')
+    path = owner.path('carrier')
     if kind == 'directory': path.mkdir()
     elif kind == 'symlink': path.symlink_to(owner.directory, target_is_directory=True)
     elif kind == 'fifo': os.mkfifo(path, mode=0o600)
@@ -185,15 +185,15 @@ def test_pending_output_type_owner_and_byte_bounds(owner, kind):
 
 def test_native_stage_and_destination_cannot_coexist(owner):
     owner.begin('collection')
-    write(owner.directory / 'finality.nrt')
-    write(owner.directory / 'finality.nrt.collecting')
+    write(owner.directory / 'carrier.nrt')
+    write(owner.directory / 'carrier.nrt.publishing')
     with pytest.raises(outputs.NativeOutputError): owner.validate()
 
 
 @pytest.mark.parametrize('failure', ['empty', 'prefix', 'reorder', 'extra', 'digest', 'length', 'bool', 'missing', 'stage'])
 def test_reply_and_output_group_must_be_complete(owner, failure):
     owner.begin('collection')
-    claims = [stage(owner, role) for role in ('finality', 'queries')]
+    claims = [stage(owner, role) for role in ('carrier', 'queries')]
     if failure == 'empty': claims = []
     elif failure == 'prefix': claims.pop()
     elif failure == 'reorder': claims.reverse()
@@ -202,9 +202,9 @@ def test_reply_and_output_group_must_be_complete(owner, failure):
     elif failure == 'length': claims[-1] = replace(claims[-1], bytes=1)
     elif failure == 'bool': claims[-1] = replace(claims[-1], bytes=True)
     elif failure == 'missing': (owner.directory / 'queries.nrt').unlink()
-    else: (owner.directory / 'queries.nrt').rename(owner.directory / 'queries.nrt.collecting')
+    else: (owner.directory / 'queries.nrt').rename(owner.directory / 'queries.nrt.publishing')
     with pytest.raises(outputs.NativeOutputError): owner.complete(tuple(claims))
-    with pytest.raises(outputs.NativeOutputError): owner.artifact('finality')
+    with pytest.raises(outputs.NativeOutputError): owner.artifact('carrier')
     # Earlier successful opens remain owned for close(), never public results.
     fds = [item.fd for item in owner._files.values()]
     owner.close()
@@ -214,17 +214,17 @@ def test_reply_and_output_group_must_be_complete(owner, failure):
 
 def test_later_file_failure_cannot_publish_earlier_output(owner):
     owner.begin('collection')
-    first, second = (stage(owner, role) for role in ('finality', 'queries'))
+    first, second = (stage(owner, role) for role in ('carrier', 'queries'))
     with pytest.raises(outputs.NativeOutputError): owner.complete((first, replace(second, sha256='0' * 64)))
-    assert set(owner._files) == {'finality', 'queries'}
-    with pytest.raises(outputs.NativeOutputError): owner.descriptor('finality')
+    assert set(owner._files) == {'carrier', 'queries'}
+    with pytest.raises(outputs.NativeOutputError): owner.descriptor('carrier')
 
 
 @pytest.mark.parametrize('change', ['replace', 'content', 'chmod', 'hardlink', 'descriptor', 'fd_flags'])
 def test_sealed_original_changes_are_detected_before_next_step(owner, change):
     complete(owner, 'collection')
-    artifact = owner.artifact('finality')
-    fd = owner.descriptor('finality')
+    artifact = owner.artifact('carrier')
+    fd = owner.descriptor('carrier')
     if change == 'replace':
         raw = artifact.path.read_bytes()
         artifact.path.unlink()
@@ -248,13 +248,13 @@ def test_root_replacement_does_not_adopt_same_named_directory(owner):
 
 def test_capture_rechecks_earlier_output_when_later_hash_is_read(owner, monkeypatch):
     owner.begin('collection')
-    claims = tuple(stage(owner, role) for role in ('finality', 'queries'))
+    claims = tuple(stage(owner, role) for role in ('carrier', 'queries'))
     read = os.pread
     changed = []
     def replace_earlier(fd, count, offset):
         if 'queries' in owner._files and fd == owner._files['queries'].fd and not changed:
             changed.append(True)
-            path = owner.directory / 'finality.nrt'
+            path = owner.directory / 'carrier.nrt'
             raw = path.read_bytes()
             path.unlink()
             write(path, raw)
@@ -266,7 +266,7 @@ def test_capture_rechecks_earlier_output_when_later_hash_is_read(owner, monkeypa
 
 def test_capture_parent_metadata_bracket_rejects_transient_namespace_change(owner, monkeypatch):
     owner.begin('collection')
-    claims = tuple(stage(owner, role) for role in ('finality', 'queries'))
+    claims = tuple(stage(owner, role) for role in ('carrier', 'queries'))
     read, changed = os.pread, []
     def alter_parent(fd, count, offset):
         if 'queries' in owner._files and fd == owner._files['queries'].fd and not changed:
@@ -283,7 +283,7 @@ def test_capture_parent_metadata_bracket_rejects_transient_namespace_change(owne
 def test_each_hash_read_is_bounded_and_failure_retains_original_descriptor(tmp_path, monkeypatch):
     with outputs.NativeOutputs(tmp_path.resolve() / 'outputs', budget(1024 * 1024)) as owner:
         owner.begin('collection')
-        claims = tuple(stage(owner, role, b'x' * 800000) for role in ('finality', 'queries'))
+        claims = tuple(stage(owner, role, b'x' * 800000) for role in ('carrier', 'queries'))
         read, requests = os.pread, []
         def bounded(fd, count, offset):
             requests.append(count)
@@ -296,13 +296,13 @@ def test_each_hash_read_is_bounded_and_failure_retains_original_descriptor(tmp_p
 
 def test_active_atomic_stage_rename_retries_only_changed_namespace(owner, monkeypatch):
     owner.begin('collection')
-    pending = owner.directory / 'finality.nrt.collecting'
+    pending = owner.directory / 'carrier.nrt.publishing'
     write(pending)
     actual_scan, calls = owner._scan, []
     def rename_once():
         calls.append(True)
         if len(calls) == 1:
-            pending.rename(owner.directory / 'finality.nrt')
+            pending.rename(owner.directory / 'carrier.nrt')
             raise FileNotFoundError('old stage vanished')
         return actual_scan()
     monkeypatch.setattr(owner, '_scan', rename_once)
@@ -312,8 +312,8 @@ def test_active_atomic_stage_rename_retries_only_changed_namespace(owner, monkey
 
 def test_atomic_rename_between_iterator_entries_may_observe_both_names(owner, monkeypatch):
     owner.begin('collection')
-    pending = owner.directory / 'finality.nrt.collecting'
-    final = owner.directory / 'finality.nrt'
+    pending = owner.directory / 'carrier.nrt.publishing'
+    final = owner.directory / 'carrier.nrt'
     write(pending)
     actual, calls = os.scandir, []
     class DuringRename:
@@ -333,7 +333,7 @@ def test_atomic_rename_between_iterator_entries_may_observe_both_names(owner, mo
 
 def test_rename_retry_cannot_hide_changed_previously_sealed_output(owner, monkeypatch):
     complete(owner, 'collection')
-    original = owner.directory / 'finality.nrt'
+    original = owner.directory / 'carrier.nrt'
     owner.begin('facts')
     pending = owner.directory / 'facts.nrt.publishing'
     write(pending)
@@ -358,7 +358,7 @@ def test_repeated_active_namespace_mutation_is_bounded(owner, monkeypatch):
     calls = []
     def change():
         calls.append(True)
-        temporary = owner.directory / 'finality.nrt.collecting'
+        temporary = owner.directory / 'carrier.nrt.publishing'
         write(temporary)
         temporary.unlink()
         return set()
@@ -378,7 +378,7 @@ def test_reentrant_validation_cannot_be_caught_and_promoted(owner, monkeypatch):
 
 def test_close_does_not_close_a_foreign_descriptor_reusing_an_old_number(owner):
     complete(owner, 'collection')
-    fd = owner.descriptor('finality')
+    fd = owner.descriptor('carrier')
     foreign = owner.directory.parent / 'foreign'
     write(foreign)
     other = os.open(foreign, os.O_RDONLY)

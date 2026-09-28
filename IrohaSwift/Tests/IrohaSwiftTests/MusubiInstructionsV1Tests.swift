@@ -21,7 +21,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         )
 
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 19)
+        XCTAssertEqual(cases.count, 20)
         XCTAssertEqual(
             try cases.map { try XCTUnwrap($0["id"] as? String) },
             [
@@ -39,6 +39,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                 "retarget-one-character-alias-high-revision",
                 "takedown-max-major-prerelease",
                 "register-archive-max-bounds-signed-receipt",
+                "advance-signed-pin-outbox-inventory",
                 "register-provider-bundle-attestation",
                 "add-location-three-signed-providers",
                 "publish-delegated-domain-release",
@@ -117,7 +118,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
     func testTypedInstructionsEmbedExactFixturePairsInCanonicalNetworkSignedBatch() throws {
         let fixture = try loadFixture()
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 19)
+        XCTAssertEqual(cases.count, 20)
         let instructions = try cases.map { try instruction(for: $0) }
         let frames = try instructions.map { try $0.transactionInstructionFrame() }
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
@@ -583,7 +584,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         )
     }
 
-    func testRecoveryNormalizesMultisigOwnersBeforeDistinctnessAndEncoding() throws {
+    func testRecoveryRejectsNoncanonicalMultisigOwnersBeforeEncoding() throws {
         let fixture = try loadFixture()
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
         let recoverCase = try XCTUnwrap(
@@ -610,9 +611,11 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         )
         let sortedOwner = try AccountAddress.fromCanonicalBytes(sortedBytes)
             .toI105(networkPrefix: 753)
-        let reversedOwner = try AccountAddress.fromCanonicalBytes(reversedBytes)
-            .toI105(networkPrefix: 753)
-        XCTAssertNotEqual(sortedOwner, reversedOwner)
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(reversedBytes)) { error in
+            guard case AccountAddressError.invalidMultisigPolicy = error else {
+                return XCTFail("Expected canonical multisig key ordering rejection, got \(error)")
+            }
+        }
 
         let sorted = try RecoverMusubiPackageV1(
             decision: decision,
@@ -620,21 +623,70 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             owners: [sortedOwner],
             expectedGovernanceRevision: 1
         )
-        let reversed = try RecoverMusubiPackageV1(
-            decision: decision,
-            package: package,
-            owners: [reversedOwner],
-            expectedGovernanceRevision: 1
-        )
-        XCTAssertEqual(try sorted.barePayload(), try reversed.barePayload())
+        XCTAssertFalse(try sorted.barePayload().isEmpty)
         XCTAssertThrowsError(
             try RecoverMusubiPackageV1(
                 decision: decision,
                 package: package,
-                owners: [sortedOwner, reversedOwner],
+                owners: [sortedOwner, sortedOwner],
                 expectedGovernanceRevision: 1
             )
         )
+    }
+
+    func testPinOutboxAdvanceRejectsInvalidLineageAndAuthority() throws {
+        let fixture = try loadFixture()
+        let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
+        let fixtureCase = try XCTUnwrap(
+            cases.first { $0["id"] as? String == "advance-signed-pin-outbox-inventory" }
+        )
+        let semantic = try fixtureObject(fixtureCase["semantic"])
+        let networkID = try NetworkId(literal: XCTUnwrap(semantic["network_id"] as? String))
+        let pinAuthority = try XCTUnwrap(semantic["pin_authority"] as? String)
+        let sessionID = try fixedBytes32(semantic["session_id"])
+        let inventoryDigest = try fixedBytes32(semantic["inventory_digest"])
+        let zeroDigest = [UInt8](repeating: 0, count: 32)
+
+        let initial = try AdvanceMusubiPinOutboxV1(
+            networkID: networkID,
+            pinAuthority: pinAuthority,
+            sessionID: sessionID,
+            expectedRevision: 0,
+            expectedInventoryDigest: zeroDigest,
+            inventoryDigest: inventoryDigest
+        )
+        XCTAssertFalse(try initial.barePayload().isEmpty)
+        XCTAssertThrowsError(try AdvanceMusubiPinOutboxV1(
+            networkID: networkID, pinAuthority: pinAuthority, sessionID: zeroDigest,
+            expectedRevision: 0, expectedInventoryDigest: zeroDigest,
+            inventoryDigest: inventoryDigest
+        ))
+        XCTAssertThrowsError(try AdvanceMusubiPinOutboxV1(
+            networkID: networkID, pinAuthority: pinAuthority, sessionID: sessionID,
+            expectedRevision: 1, expectedInventoryDigest: zeroDigest,
+            inventoryDigest: inventoryDigest
+        ))
+        XCTAssertThrowsError(try AdvanceMusubiPinOutboxV1(
+            networkID: networkID, pinAuthority: pinAuthority, sessionID: sessionID,
+            expectedRevision: 0, expectedInventoryDigest: inventoryDigest,
+            inventoryDigest: inventoryDigest
+        ))
+        XCTAssertThrowsError(try AdvanceMusubiPinOutboxV1(
+            networkID: networkID, pinAuthority: pinAuthority, sessionID: sessionID,
+            expectedRevision: 0, expectedInventoryDigest: zeroDigest,
+            inventoryDigest: zeroDigest
+        ))
+        XCTAssertThrowsError(try AdvanceMusubiPinOutboxV1(
+            networkID: networkID, pinAuthority: pinAuthority + " ", sessionID: sessionID,
+            expectedRevision: 0, expectedInventoryDigest: zeroDigest,
+            inventoryDigest: inventoryDigest
+        ))
+        let predecessor = try AdvanceMusubiPinOutboxV1(
+            networkID: networkID, pinAuthority: pinAuthority, sessionID: sessionID,
+            expectedRevision: 1, expectedInventoryDigest: inventoryDigest,
+            inventoryDigest: [UInt8](repeating: 0xB9, count: 32)
+        )
+        XCTAssertNotEqual(try initial.barePayload(), try predecessor.barePayload())
     }
 
     private func instruction(
@@ -833,6 +885,22 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                 expectedPolicyRevision: fixtureUInt64(
                     semantic, "expected_policy_revision"
                 )
+            )
+        case "advance-signed-pin-outbox-inventory":
+            try requireKeys(
+                semantic,
+                [
+                    "network_id", "pin_authority", "session_id", "expected_revision",
+                    "expected_inventory_digest", "inventory_digest",
+                ]
+            )
+            return try AdvanceMusubiPinOutboxV1(
+                networkID: NetworkId(literal: XCTUnwrap(semantic["network_id"] as? String)),
+                pinAuthority: XCTUnwrap(semantic["pin_authority"] as? String),
+                sessionID: fixedBytes32(semantic["session_id"]),
+                expectedRevision: fixtureUInt64(semantic, "expected_revision"),
+                expectedInventoryDigest: fixedBytes32(semantic["expected_inventory_digest"]),
+                inventoryDigest: fixedBytes32(semantic["inventory_digest"])
             )
         case "register-provider-bundle-attestation":
             try requireKeys(

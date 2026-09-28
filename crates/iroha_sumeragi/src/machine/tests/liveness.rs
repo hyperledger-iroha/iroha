@@ -589,9 +589,8 @@ fn det_l18_f_plus_1_distinct_leaders_core() {
 }
 
 /// `det_l20_p_broadcasts_commitqc` (ML20): n = 4, P forms `CommitQC(h)` → in the same `handle`
-/// call it broadcasts it to the other members and to `C_{h+1} \ C_h` (here a joiner of height
-/// 2), before `CommitBlock`; `L(h + 1, 0)` is among the recipients (it enters `h + 1` one hop
-/// later).
+/// call it broadcasts to every incumbent before `CommitBlock`. A boundary does not route
+/// to unactivated candidates; the next committee becomes available only after application.
 #[test]
 fn det_l20_p_broadcasts_commitqc() {
     let mut h = H::new(4, pick::proxy_tail(0));
@@ -601,7 +600,29 @@ fn det_l20_p_broadcasts_commitqc() {
     let mut keys = h.committee().members().to_vec();
     keys.push(joiner.clone());
     h.committees.insert(2, Committee::new(keys).unwrap());
+    let current = h.config(1);
+    let topo = Topology::compute(
+        &h.v.crypto,
+        &I,
+        &current.epoch,
+        &current.committee,
+        1,
+        0,
+        W,
+        &[],
+    );
+    h.signers = vec![h.v.signer(topo.round(0).proxy_tail()).clone()];
+    h.records.clear();
+    h.install_keys();
     h.restart();
+    let own = h.key_at(h.my_idx());
+    let members: Vec<_> = h
+        .committee()
+        .members()
+        .iter()
+        .filter(|key| **key != own)
+        .cloned()
+        .collect();
     let b = h.block(0, b"B");
     prop(&mut h, 0, &b, None);
     h.exec_all();
@@ -630,18 +651,16 @@ fn det_l20_p_broadcasts_commitqc() {
     let Action::Broadcast { to, .. } = &out[broadcast] else {
         unreachable!()
     };
-    let members: Vec<PublicKey> = h
-        .committee()
-        .members()
-        .iter()
-        .filter(|k| **k != h.key_at(h.my_idx()))
-        .cloned()
-        .collect();
     assert!(members.iter().all(|k| to.contains(k)), "every other member");
-    assert!(to.contains(&joiner), "the joiner of C_2");
+    assert!(
+        !to.contains(&joiner),
+        "unactivated membership cannot route consensus"
+    );
     assert_eq!(h.height(), 2);
-    let next_leader = h.committee_at(2).get(h.leader(0)).cloned().unwrap();
-    assert!(to.contains(&next_leader) || next_leader == h.key_at(h.my_idx()));
+    assert!(
+        h.core.cfg.committee.contains(&joiner),
+        "the applied boundary installs C_2"
+    );
 }
 
 /// `det_l23_commit_before_own_execution` (ML23): X commits `h` while `Execute{B_h}` is still

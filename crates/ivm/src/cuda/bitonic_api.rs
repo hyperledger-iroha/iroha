@@ -1,0 +1,83 @@
+//! Bitonic qualification and all-or-nothing publication to original caller buffers.
+
+use super::policy::{Kernel, public_workload_task_id};
+use iroha_accel::{PtxArtifact, cuda::CudaFailure};
+use std::ffi::CStr;
+#[path = "bitonic_launch.rs"]
+mod launch;
+static ARTIFACT: PtxArtifact = PtxArtifact::new(
+    match CStr::from_bytes_with_nul(
+        concat!(
+            include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx")),
+            "\0"
+        )
+        .as_bytes(),
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => panic!("bitonic artifact must have one terminal NUL"),
+    },
+);
+
+fn stage(hi: &[u64], lo: &[u64]) -> Option<launch::Sorted> {
+    match crate::cuda_dispatch::with_selected(Kernel::Bitonic, ARTIFACT, |device| {
+        // SAFETY: this module owns the exact artifact and checked paired arrays.
+        unsafe { launch::output(device, ARTIFACT, hi, lo) }
+    })? {
+        Ok(result) if result.hi.len() == hi.len() && result.lo.len() == lo.len() => {
+            super::imp::record_completed_cuda_dispatch();
+            Some(result)
+        }
+        Ok(_) => {
+            crate::cuda_dispatch::quarantine_current_kernel();
+            None
+        }
+        Err(error) => {
+            if !matches!(
+                error,
+                CudaFailure::Capacity | CudaFailure::Busy | CudaFailure::Unavailable
+            ) {
+                crate::cuda_dispatch::quarantine_current_kernel();
+            }
+            None
+        }
+    }
+}
+
+pub(super) fn admit() -> bool {
+    crate::cuda_dispatch::admit_kernel(Kernel::Bitonic, ARTIFACT, || {
+        let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
+            return false;
+        };
+        let hi = [u64::MAX, 2, 1, 2, 0];
+        let lo = [u64::MAX, 7, 9, 3, u64::MAX];
+        stage(&hi, &lo).is_some_and(|result| {
+            result.hi.as_slice() == [0, 1, 2, 2, u64::MAX]
+                && result.lo.as_slice() == [u64::MAX, 9, 3, 7, u64::MAX]
+        })
+    })
+}
+
+/// Attempt lexicographic sorting through the qualified native kernel. Both
+/// caller buffers remain unchanged unless the complete native result succeeds.
+/// Empty and singleton pairs need no kernel and succeed without native work.
+pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
+    if hi.len() != lo.len() {
+        return None;
+    }
+    if hi.len() < 2 {
+        return Some(());
+    }
+    let (padded, _) = launch::request(hi.len())?;
+    let task =
+        public_workload_task_id(0x0f0f_0f0f_0000_0002, &[hi.len() as u64, u64::from(padded)]);
+    crate::cuda_dispatch::with_task_scope(task, || {
+        super::imp::record_cuda_attempt();
+        if !super::imp::ensure_cuda_kernel(Kernel::Bitonic) {
+            return None;
+        }
+        let result = stage(hi, lo)?;
+        hi.copy_from_slice(&result.hi);
+        lo.copy_from_slice(&result.lo);
+        Some(())
+    })
+}

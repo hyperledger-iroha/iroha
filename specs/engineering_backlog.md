@@ -4115,12 +4115,10 @@ redistributable schemas, and official trust/revocation bundles.
 	  path binds the canonical ZK-ACE circuit id and STARK/FRI backend, with
 	  preverify/dedup metadata admission rejecting noncanonical backend labels and
 	  malformed ZK-ACE public-input or wrapper shapes before cache insert. Public
-	  generic AIR constructors
-	  now also reserve ZK-ACE and IVM execution circuit aliases for their dedicated
-	  AIR paths before envelope synthesis, and generic STARK wrapper verification
-	  pins `ivm-replay-binding-v1` payloads to the canonical schema plus 16 single-row
-	  commitment columns, with preverify/dedup metadata admission rejecting the
-	  same malformed IVM-shaped wrapper/schema combinations before cache insert.
+	  generic AIR constructors reject reserved ZK-ACE and IVM identities before
+	  envelope synthesis. Binding-only IVM wrapper and dedicated AIR paths are
+	  retired; preverify rejects their identities before cache insertion. Complete
+	  native IVM execution and finalized State authority remain open release gates.
 	  The governed material-native AIR
 	  verifier and release-native execution active verifier now also have drift
 	  coverage for transcript labels, STARK parameters, trace roots, composition
@@ -9289,14 +9287,15 @@ redistributable schemas, and official trust/revocation bundles.
     `RESOLVE_ACCOUNT_ALIAS` also return deterministic nonzero query-style gas.
     `TLV_EQ` and `TLV_LEN` now charge deterministic byte-counted codec-helper
     gas costs instead of inspecting potentially large payloads for free.
-    Numeric helpers now charge the fixed `G_numeric` cost across default, WSV,
-    standalone codec, and real-host forwarding paths. `POINTER_TO_NORITO` and
-    `POINTER_FROM_NORITO` now charge `G_pointer + bytes` across the default,
-    WSV, and standalone codec hosts, with the byte component tied to the
-    canonical TLV envelope copied or validated. Schema helpers and the
-    remaining classic codec helpers now charge deterministic byte-counted gas:
-    `SCHEMA_*`, `JSON_*`, `DECODE_INT`/`ENCODE_INT`, `NAME_DECODE`, and the
-    path builders no longer return zero for payload work. `SM2_VERIFY` now
+    Typed numeric operations charge the deterministic `G_numeric_staged`
+    limb-work schedule. `POINTER_TO_NORITO` and `POINTER_FROM_NORITO` charge
+    `G_pointer + bytes` across default, WSV, and standalone codec hosts, with
+    the byte component tied to the canonical TLV envelope copied or validated.
+    Numeric pointer transport validates canonical V1 Int, Decimal, and
+    Quantity frames, including the signed-512 Int bound, before publication. Schema helpers and the remaining
+    classic codec helpers charge deterministic byte-counted gas: `SCHEMA_*`,
+    `JSON_*`, `NAME_DECODE`, and the path builders no longer return zero for
+    payload work. `SM2_VERIFY` now
     charges `G_verify + bytes`; `SM4_GCM_*` and `SM4_CCM_*` now charge
     `G_sm4 + bytes` through the shared default-host implementation, preserving
     deterministic vector output while charging AAD and plaintext/ciphertext

@@ -1274,7 +1274,7 @@ fn install_lane_manifest_registry_with_torii_urls_for_test(
             &registry_cfg,
         ),
     );
-    state.install_lane_manifests(&registry);
+    state.install_lane_manifests_for_testing(&registry);
 }
 fn ensure_runtime_peer_binding_for_test(
     state: &mut IrohaState,
@@ -2300,23 +2300,15 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         )
         .expect("valid operator-signature defaults"),
     );
-    let zk_ivm_prove_jobs = Arc::new(DashMap::new());
-    let zk_ivm_prove_job_budget = Arc::new(ZkIvmProveJobBudget::new(
-        usize::try_from(defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES.get())
-            .unwrap_or(usize::MAX),
-    ));
     let soracloud_public_inflight_total = defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get();
     let soracloud_public_inflight =
         Arc::new(tokio::sync::Semaphore::new(soracloud_public_inflight_total));
     let soracloud_mutation_inflight = Arc::new(tokio::sync::Semaphore::new(
         defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(),
     ));
-    let zk_ivm_prove_max_inflight = defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT.max(1);
-    let zk_ivm_prove_slots_total =
-        zk_ivm_prove_max_inflight.saturating_add(defaults::torii::ZK_IVM_PROVE_MAX_QUEUE);
-    let zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_slots_total));
-    let zk_ivm_prove_inflight = Arc::new(tokio::sync::Semaphore::new(zk_ivm_prove_max_inflight));
-    let zk_ivm_prove_inflight_total = zk_ivm_prove_max_inflight;
+    let ivm_tooling_inflight = Arc::new(tokio::sync::Semaphore::new(
+        defaults::torii::IVM_TOOLING_MAX_INFLIGHT,
+    ));
     let proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(
         defaults::torii::PROOF_BODY_MAX_INFLIGHT.get(),
     ));
@@ -2508,24 +2500,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         #[cfg(feature = "app_api")]
         tx_history_access_policy: Arc::new(TxHistoryAccessPolicy::default()),
         telemetry,
-        zk_prover_keys_dir: defaults::torii::zk_prover_keys_dir(),
-        zk_ivm_prove_jobs,
-        zk_ivm_prove_job_budget,
         soracloud_public_inflight,
         sns_name_cache: Arc::new(sns::SnsNameRecordCache::new()),
-        zk_ivm_prove_inflight,
-        zk_ivm_prove_slots,
-        zk_ivm_prove_slots_total,
-        zk_ivm_prove_inflight_total,
-        zk_ivm_prove_job_ttl_ms: defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS * 1_000,
-        zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
-        zk_ivm_prove_job_max_entries_per_owner:
-            defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
-        zk_ivm_prove_job_max_retained_bytes_per_owner: usize::try_from(
-            defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER.get(),
-        )
-        .expect("default per-owner prove-job bytes fit usize"),
-        ivm_tooling_timeout: Duration::from_millis(defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS),
+        ivm_tooling_inflight,
+        ivm_tooling_timeout: Duration::from_millis(defaults::torii::IVM_TOOLING_TIMEOUT_MS),
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         peer_telemetry,
         da_replay_cache,

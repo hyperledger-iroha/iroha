@@ -201,6 +201,9 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         .expect("persist retained prefix block");
     let prefix_hash = block1.hash();
     let error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &tail_loss_kura,
         &state.lane_manifests.read().clone(),
@@ -214,8 +217,8 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) {
         Ok(_) => panic!("ordinary signed snapshot must not repair a lost Kura suffix"),
         Err(error) => error,
     };
@@ -315,6 +318,9 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         "test fixture must make the historical block body unavailable"
     );
     let snapshot_state = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &kura,
         &lane_manifests,
@@ -328,8 +334,8 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .expect("snapshot read should validate historical hashes without block bodies");
     assert_eq!(
         canonical_state_snapshot_bytes_for_tests(&snapshot_state),
@@ -381,6 +387,9 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     SNAPSHOT_DEEP_VALIDATION_PASSES.with(|passes| passes.set(0));
     SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| clones.set(0));
     let restored = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &fast_kura,
         &lane_manifests,
@@ -394,8 +403,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .expect("Fast mode must restore its required current snapshot");
     SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| {
         assert_eq!(
@@ -482,6 +491,9 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     std::fs::write(&payload_path, vec![b'!'; payload_bytes.len()])
         .expect("replace deferred snapshot payload without changing its size");
     let restored_without_reading_payload = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &fast_kura,
         &lane_manifests,
@@ -495,8 +507,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .expect("Fast restore must not consume same-size deferred snapshot.data contents");
     assert_eq!(restored_without_reading_payload.committed_height(), 1);
     std::fs::write(&payload_path, payload_bytes).expect("restore signed snapshot payload");
@@ -511,6 +523,9 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     )
     .expect("replace deferred Merkle contents");
     let restored_without_reading_merkle = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &fast_kura,
         &lane_manifests,
@@ -524,13 +539,16 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .expect("Fast restore must bind but never read the deferred Merkle sidecar");
     assert_eq!(restored_without_reading_merkle.committed_height(), 1);
 
     let wrong_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0xE1));
     let network_error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &fast_kura,
         &lane_manifests,
@@ -544,8 +562,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) {
         Ok(_) => panic!("Fast restore must retain exact network identity binding"),
         Err(error) => error,
     };
@@ -568,6 +586,9 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     );
     std::fs::write(&manifest_path, forged_manifest_bytes).expect("replace Fast manifest");
     let manifest_signature_error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &fast_kura,
         &lane_manifests,
@@ -581,8 +602,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) {
         Ok(_) => panic!("Fast restore must authenticate every manifest field"),
         Err(error) => error,
     };
@@ -602,6 +623,9 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     )
     .expect("replace snapshot signature");
     let signature_error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &snapshot_store_dir,
         &fast_kura,
         &lane_manifests,
@@ -615,8 +639,8 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) {
         Ok(_) => panic!("Fast restore must retain ordinary outer signature verification"),
         Err(error) => error,
     };
@@ -633,6 +657,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     )
     .expect("install the re-signed snapshot signature");
     let policy_error = match try_read_snapshot(
+        &restored.ivm_execution_budget(),
         &snapshot_store_dir,
         &fast_kura,
         &lane_manifests,
@@ -843,6 +868,9 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
     let expected_chain_id = state.chain_id.clone();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let snapshot_state = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -856,8 +884,8 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .expect("snapshot read");
     assert_eq!(snapshot_state.chain_id, expected_chain_id);
 }
@@ -1399,6 +1427,9 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
     let key_pair = checked_random_snapshot_keypair();
     let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x21));
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         store_dir,
         &Kura::blank_kura_for_testing(),
         &Arc::new(crate::governance::manifest::LaneManifestRegistry::default()),
@@ -1412,8 +1443,8 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::NotFound));
@@ -1428,6 +1459,9 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     let corrupted = [1, 4, 1, 2, 3, 4, 1, 4];
     write_snapshot_bundle_from_bytes(&store_dir, &corrupted, &key_pair);
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &Arc::new(crate::governance::manifest::LaneManifestRegistry::default()),
@@ -1441,8 +1475,8 @@ async fn cannot_parse_snapshot_on_read_is_error() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::NonCanonicalSnapshotPayload));
@@ -1461,6 +1495,9 @@ async fn checksum_mismatch_rejected() {
     )
     .unwrap();
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1474,8 +1511,8 @@ async fn checksum_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1492,6 +1529,9 @@ async fn network_id_mismatch_rejected() {
     let expected_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x42));
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1505,8 +1545,8 @@ async fn network_id_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::NetworkIdMismatch { .. }));
@@ -1547,6 +1587,9 @@ async fn missing_checksum_rejected() {
     ))
     .unwrap();
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1560,8 +1603,8 @@ async fn missing_checksum_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1582,6 +1625,9 @@ async fn missing_merkle_rejected() {
     ))
     .unwrap();
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1595,8 +1641,8 @@ async fn missing_merkle_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1617,6 +1663,9 @@ async fn merkle_root_mismatch_rejected() {
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1630,8 +1679,8 @@ async fn merkle_root_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::MerkleMismatch { .. }));
@@ -1652,6 +1701,9 @@ async fn merkle_leaf_count_mismatch_rejected() {
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1665,8 +1717,8 @@ async fn merkle_leaf_count_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(error, TryReadError::MerkleMetadataMalformed(_)));
@@ -1684,6 +1736,9 @@ async fn merkle_chunk_size_mismatch_rejected() {
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1697,8 +1752,8 @@ async fn merkle_chunk_size_mismatch_rejected() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-) else {
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) else {
         panic!("should not be ok")
     };
     assert!(matches!(
@@ -1885,6 +1940,9 @@ async fn can_read_multiple_blocks() {
     store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[block1, block2]);
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let state = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -1898,8 +1956,8 @@ async fn can_read_multiple_blocks() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .unwrap();
     assert_eq!(state.view().height(), 2);
 }
@@ -1949,6 +2007,9 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         "rejected block replacement must not change the selected snapshot generation"
     );
     let restored = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -1962,8 +2023,8 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         #[cfg(feature = "telemetry")]
         <_>::default(),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .unwrap();
     assert_eq!(restored.view().height(), 2);
     assert_eq!(restored.latest_block_hash_fast(), Some(canonical_tip));

@@ -821,7 +821,6 @@ fn run_lifecycle_active_height(
     output_guard: &Arc<ConsensusOutputGuard>,
     cleanup_supervisor: &mut V2CleanupSupervisor,
     liveness_watchdog: &mut crate::sumeragi::v2_status::V2LivenessWatchdog,
-    npos_beacon: &mut V2GlobalBeaconLifecycle,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_server: &mut V2BlockSyncServer,
     eager_block_sync: &mut bool,
@@ -841,7 +840,6 @@ fn run_lifecycle_active_height(
         initial_block_sync_deadline(height_started_at, round_timeout, *eager_block_sync);
     let mut next_recovered_decision_fetch_retransmit =
         deadline_after(height_started_at, retransmit_interval);
-    let mut next_npos_beacon_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
     let mut terminal_finalization_cut = None;
@@ -1006,7 +1004,6 @@ fn run_lifecycle_active_height(
                     block_sync_server,
                     block_sync,
                     &mut block_sync_request,
-                    npos_beacon,
                 )?;
             }
             if let Some(permit) = producer_claim.decided_lane_recovery_permit() {
@@ -1159,30 +1156,6 @@ fn run_lifecycle_active_height(
                     Ok::<_, V2RunnerError>(())
                 },
             )?;
-        } else {
-            activated.with_runner_runtime(
-                &mut active_runner,
-                |_owner, executor, services, _local_proposal| {
-                    npos_beacon
-                        .begin_round(executor.current_tag().view())
-                        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
-                    broadcast_npos_beacon_messages(
-                        npos_beacon.take_outbound(),
-                        output_guard.as_ref(),
-                        services,
-                    )?;
-                    let now = Instant::now();
-                    if now >= next_npos_beacon_retransmit {
-                        broadcast_npos_beacon_messages(
-                            npos_beacon.retransmission(),
-                            output_guard.as_ref(),
-                            services,
-                        )?;
-                        next_npos_beacon_retransmit = deadline_after(now, retransmit_interval);
-                    }
-                    Ok::<_, V2RunnerError>(())
-                },
-            )?;
         }
 
         let discovery_was_outstanding = if terminal_finalization_fenced {
@@ -1260,7 +1233,6 @@ fn run_lifecycle_active_height(
             block_sync_server,
             block_sync,
             &mut block_sync_request,
-            npos_beacon,
             body_queue_capacity,
             terminal_finalization_cut.as_ref(),
         )
@@ -1540,7 +1512,6 @@ fn run_lifecycle_active_height(
                         services,
                         native,
                         queue_plan,
-                        npos_beacon,
                         retransmit_interval,
                     )
                     .map_err(|error| {
@@ -1652,7 +1623,6 @@ fn run_lifecycle_active_height(
                         block_sync_server,
                         block_sync,
                         &mut block_sync_request,
-                        npos_beacon,
                         body_queue_capacity,
                         terminal_finalization_cut.as_ref(),
                     )?;
@@ -1879,7 +1849,6 @@ fn run_lifecycle_active_height(
                     block_sync_server,
                     block_sync,
                     &mut block_sync_request,
-                    npos_beacon,
                     body_queue_capacity,
                     terminal_finalization_cut.as_ref(),
                 )?;
@@ -2301,13 +2270,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
         if let Some(horizon) = beacon_readiness.horizon(context.id()) {
             super::super::v2_status::set_v2_beacon_horizon(context.id(), context.height, horizon);
         }
-        let mut npos_beacon = V2GlobalBeaconLifecycle::open_deferred(
-            &context,
-            Arc::clone(&state),
-            local_validator,
-            global_beacon_partial_signer.clone(),
-        )
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
         let new_block_sync_server = block_sync_server
             .is_none()
             .then(|| {
@@ -2660,7 +2622,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             let _ = reconcile_executor_locked_body(executor, services)?;
             Ok::<_, V2RunnerError>(())
         })?;
-        let (initial_directive, local_proposal) =
+        let (_, local_proposal) =
             preactivation.initialize_recovered_local_proposal(setup_runner)?;
         if let Some(timings) = pending_successor_timings.as_mut() {
             timings.record_first(SuccessorTimingStage::SuccessorLaneReady, Instant::now());
@@ -2669,27 +2631,12 @@ pub(super) fn run_non_pending_lifecycle_loop(
         // and discovery deadlines only after every closed-ingress recovery and
         // lane setup transaction has completed.
         let height_started_at = Instant::now();
-        let mut activated = preactivation.activate(height_started_at, local_proposal)?;
+        let activated = preactivation.activate(height_started_at, local_proposal)?;
         if let Some(timings) = pending_successor_timings.as_mut() {
             timings.record_first(SuccessorTimingStage::Activated, Instant::now());
         }
-        let mut active_runner =
-            ProductionLifecycleActiveRunnerBorrowV1::mint_for_recovered_runner();
-        npos_beacon
-            .begin_round(initial_directive.tag().view())
-            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
-        activated.with_runner_runtime(
-            &mut active_runner,
-            |_owner, _executor, services, _local_proposal| {
-                broadcast_npos_beacon_messages(
-                    npos_beacon.take_outbound(),
-                    output_guard.as_ref(),
-                    services,
-                )
-            },
-        )?;
-
-        // Preserve activation/readiness and beacon handoff before diagnostic I/O.
+        let active_runner = ProductionLifecycleActiveRunnerBorrowV1::mint_for_recovered_runner();
+        // Preserve activation/readiness before diagnostic I/O.
         if let Some(timings) = pending_successor_timings.take() {
             timings.report();
         }
@@ -2723,7 +2670,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
             &output_guard,
             &mut cleanup_supervisor,
             &mut liveness_watchdog,
-            &mut npos_beacon,
             &mut block_sync,
             block_sync_server
                 .as_mut()

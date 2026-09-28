@@ -676,16 +676,6 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   'c4ac978f10747f02696fcd2e1ae95560f9bd9652f8be1bba1236aeb2db3e52a0'),
  ('Telemetry',
-  'set_torii_zk_ivm_prove_inflight',
-  'atomic_if',
-  'explicit',
-  'd0c30bdc405f1ac82e341438cf94d7ee8bda538f2662947e7e70d72604479646'),
- ('Telemetry',
-  'set_torii_zk_ivm_prove_queued',
-  'atomic_if',
-  'explicit',
-  'd1c9a19f3f557b7bd6bd59ffb6a8c8cb7f79670023731e33b4f04a531bbf96a7'),
- ('Telemetry',
   'inc_torii_zk_prover_budget_exhausted',
   'atomic_if',
   'explicit',
@@ -791,9 +781,12 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   '109b6ba3b68c7824434adcf5fcbf1822c543ab2ac7a3c7aeb6285b44afb16941'))
 
-EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (125, '9e212737d19d4dba13c2382e08af353e4c53795543ff0d84c66c57ee75fc87c8'),
- 'StreamingTelemetry': (16, 'e3c87c4656bea8817ad977df0211c5505d70dd214e8b1c34527a80cfd09dad46'),
- 'Telemetry': (186, '688ad86367616a5df909120ac2ee0a68272def6c171a49c7dabcb8b5f350aad7')}
+EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (125,
+                    '9e212737d19d4dba13c2382e08af353e4c53795543ff0d84c66c57ee75fc87c8'),
+ 'StreamingTelemetry': (16,
+                        'e3c87c4656bea8817ad977df0211c5505d70dd214e8b1c34527a80cfd09dad46'),
+ 'Telemetry': (184,
+               'cf969f3a2e5808f61ffb557035345bd772867856caa8970341c69fb007b47fed')}
 
 RETIRED_CONSENSUS_VRF_METHODS = (
     "inc_vrf_commit_emitted",
@@ -1353,12 +1346,12 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
         self.assertEqual(
             validate_source(self.source, self.provider),
             {
-                "rows": 153,
+                "rows": 151,
                 "forward_rows": 61,
-                "source_lines": 11_771,
+                "source_lines": 11_844,
                 "provider_lines": 26,
-                "governed_lines": 11_797,
-                "net_reduction": 2_461,
+                "governed_lines": 11_870,
+                "net_reduction": 2_388,
             },
         )
         self.assertEqual(PREIMAGE_LINES - MAX_GOVERNED_LINES, 951)

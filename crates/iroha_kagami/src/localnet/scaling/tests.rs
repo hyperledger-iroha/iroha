@@ -222,31 +222,21 @@ fn fixed_account_keys_are_ordered_unique_and_independent_of_lane_count() {
 }
 
 #[test]
-fn fixed_config_projection_changes_only_catalog_routing_and_autoscale_fields() {
+fn fixed_config_preserves_the_original_single_world_and_uses_signed_lane_policy() {
     let original = "chain = 'preserve-chain'\n[sumeragi]\nbody = 12345\n[nexus]\n[nexus.storage]\nlocal_budget_bytes = 1234567\n[nexus.fees]\nper_instruction_fee = '0.001'\n";
     let before = original.parse::<Table>().unwrap();
-    let mut variants = vec![];
-    for (lanes, count) in [(ScalingLanes::One, 1), (ScalingLanes::Four, 4)] {
-        let layout = layout(lanes, 8);
-        let accounts = layout.identities(Some(SEED.as_bytes())).unwrap();
-        let rendered = layout
+    let mut variants = Vec::new();
+    for lanes in [ScalingLanes::One, ScalingLanes::Four] {
+        let selected = layout(lanes, 8);
+        let accounts = selected.identities(Some(SEED.as_bytes())).unwrap();
+        let rendered = selected
             .render_config(Zeroizing::new(original.to_owned()), &accounts)
             .unwrap();
-        let mut table = rendered.parse::<Table>().unwrap();
-        let nexus = table.get_mut("nexus").unwrap().as_table_mut().unwrap();
-        assert_eq!(nexus["lane_count"].as_integer(), Some(count));
-        assert_eq!(nexus["dataspace_catalog"].as_array().unwrap().len(), 1);
-        assert_eq!(nexus["autoscale"]["enabled"].as_bool(), Some(false));
-        let rules = nexus["routing_policy"]["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 8);
-        for (index, rule) in rules.iter().enumerate() {
-            assert_eq!(rule["lane"].as_integer(), Some(index as i64 % count));
-            assert_eq!(
-                rule["matcher"]["account"].as_str(),
-                Some(accounts[index].account_id.to_string().as_str())
-            );
-            assert_eq!(rule["matcher"].as_table().unwrap().len(), 1);
-        }
+        let table = rendered.parse::<Table>().unwrap();
+        assert_eq!(
+            table, before,
+            "local config cannot create a second scheduling authority"
+        );
         for key in [
             "lane_count",
             "lane_catalog",
@@ -254,20 +244,14 @@ fn fixed_config_projection_changes_only_catalog_routing_and_autoscale_fields() {
             "routing_policy",
             "autoscale",
         ] {
-            assert!(nexus.remove(key).is_some());
+            assert!(table["nexus"].get(key).is_none());
         }
-        assert_eq!(table, before);
-        variants.push(rendered);
+        variants.push(table);
     }
-    let mut one = variants[0].parse::<Table>().unwrap();
-    let mut four = variants[1].parse::<Table>().unwrap();
-    for table in [&mut one, &mut four] {
-        let nexus = table.get_mut("nexus").unwrap().as_table_mut().unwrap();
-        for key in ["lane_count", "lane_catalog", "routing_policy"] {
-            nexus.remove(key).unwrap();
-        }
-    }
-    assert_eq!(one, four, "all non-topology parameters must be identical");
+    assert_eq!(
+        variants[0], variants[1],
+        "native policy lives only in original signed genesis"
+    );
 }
 
 #[test]
@@ -431,28 +415,21 @@ fn fixed_command_signed_genesis_authenticates_every_lane_and_funded_account() {
             actual::Root::from_toml_source(TomlSource::from_file(dest.join("peer0.toml")).unwrap())
                 .unwrap();
         let authority =
-            crate::genesis::staged_signed_genesis_merge_authority(&manifest, &signed, &config)
-                .unwrap();
+            crate::genesis::staged_signed_native_genesis(&manifest, &signed, &config).unwrap();
         let mut expected_peers = build_peers(4, Some(SEED.as_bytes()), 8080, 1337)
             .unwrap()
             .into_iter()
             .map(|peer| PeerId::new(peer.public_key))
             .collect::<Vec<_>>();
         expected_peers.sort();
-        assert_eq!(authority.active_lanes().len(), count);
-        assert_eq!(authority.proofs_of_possession().len(), 4);
-        assert_eq!(authority.lane_authority_catalog().rosters.len(), 1);
-        assert_eq!(
-            authority.lane_authority_catalog().lane_roster_indices,
-            vec![0; count]
-        );
-        assert_eq!(authority.context().height, 1);
-        assert_eq!(
-            authority.catalog_hash(),
-            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
-                &config.nexus.configured_lane_catalog
-            )
-        );
+        let native_policy = authority.lane_policy().unwrap();
+        assert_eq!(authority.lanes().lanes.len(), count - 1);
+        assert_eq!(native_policy.fixed.len(), count - 1);
+        assert_eq!(native_policy.routes.len(), 8);
+        assert!(native_policy.autoscale.is_none());
+        assert_eq!(authority.epoch().committee.len(), 4);
+        assert_eq!(authority.epoch().authorization.first_height, 1);
+        assert_eq!(config.nexus.lane_catalog.lanes().len(), 1);
         assert_eq!(
             config.nexus.lane_catalog,
             config.nexus.configured_lane_catalog
@@ -486,21 +463,27 @@ fn fixed_command_signed_genesis_authenticates_every_lane_and_funded_account() {
                 .all(|activation| activation.lane_id == LaneId::SINGLE)
         );
         assert_eq!(
-            authority.context().network_id,
+            authority.epoch().network_id,
             NetworkId::from_genesis_hash(config.genesis.expected_hash)
         );
-        for (index, binding) in authority.active_lanes().iter().enumerate() {
-            assert_eq!(binding.lane_id, LaneId::new(index as u32));
-            assert_eq!(binding.dataspace_id, DataSpaceId::UNIVERSAL);
-            assert_eq!(binding.activation_height, 1);
+        for (index, record) in authority.lanes().lanes.iter().enumerate() {
+            assert_eq!(record.lane, LaneId::new(index as u32 + 1));
+            assert_eq!(record.dataspace, DataSpaceId::UNIVERSAL);
+            assert_eq!(record.created_at, 1);
+            assert_eq!(record.active_from, 3);
             assert_eq!(
-                authority
-                    .lane_authority_catalog()
-                    .roster_for_lane(index)
-                    .unwrap()
-                    .validators,
+                record
+                    .committee
+                    .iter()
+                    .map(|member| member.peer.clone())
+                    .collect::<Vec<_>>(),
                 expected_peers
             );
+            assert_eq!(record.committee, native_policy.fixed[index].committee);
+            assert_eq!(record.params, native_policy.lane_params);
+            for member in &record.committee {
+                iroha_crypto::bls_normal_pop_verify(member.peer.public_key(), &member.pop).unwrap();
+            }
         }
         let selected = layout(
             if count == 1 {
@@ -551,7 +534,7 @@ fn fixed_command_signed_genesis_authenticates_every_lane_and_funded_account() {
             assert_eq!(mints[0].object(), &Quantity::from(100_u64));
             assert!(!manifest.instructions().any(|instruction| matches!(instruction.as_any().downcast_ref::<GrantBox>(), Some(GrantBox::Permission(grant)) if grant.destination() == &account.account_id)));
             let transaction = TransactionBuilder::new(
-                authority.context().network_id,
+                authority.epoch().network_id,
                 account.account_id.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -569,32 +552,48 @@ fn fixed_command_signed_genesis_authenticates_every_lane_and_funded_account() {
                     .parse::<iroha_crypto::PrivateKey>()
                     .unwrap(),
             );
-            let decision = iroha_core::queue::evaluate_policy_with_catalog(
-                &config.nexus.routing_policy,
-                &config.nexus.lane_catalog,
-                &config.nexus.dataspace_catalog,
-                transaction.payload(),
+            use iroha_core::state::{StateReadOnly, WorldReadOnly};
+            let (_, route) = crate::genesis::staged_signed_native_genesis_with_projection(
+                &manifest,
+                &signed,
+                &config,
+                |genesis, staged| {
+                    let policy = iroha_core::sumeragi::lanes::lane_policy(staged.world()).unwrap();
+                    let inputs = iroha_core::sumeragi::lanes::routing::RoutingInputs {
+                        policy: Some(&policy),
+                        lanes: staged.world().sumeragi_lanes(),
+                        dataspaces: &staged.nexus.dataspace_catalog,
+                        world: staged.world(),
+                        ledger_time_ms: u64::try_from(
+                            genesis.0.header().creation_time().as_millis(),
+                        )
+                        .unwrap(),
+                    };
+                    assert_eq!(
+                        inputs.route(transaction.payload(), 2),
+                        LaneId::new(0),
+                        "fixed lane cannot receive work before activation"
+                    );
+                    Ok(inputs.route(transaction.payload(), 4))
+                },
             )
             .unwrap();
-            assert_eq!(decision.lane_id, LaneId::new((index % count) as u32));
-            assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
+            assert_eq!(route, LaneId::new((index % count) as u32));
+            assert_eq!(native_policy.routes[index].lane, route);
             assert_eq!(
-                config.nexus.routing_policy.rules[index].lane,
-                LaneId::new((index % count) as u32)
-            );
-            assert_eq!(
-                config.nexus.routing_policy.rules[index].matcher.account,
+                native_policy.routes[index].account,
                 Some(account.account_id.to_string())
             );
-            assert_eq!(
-                config.nexus.routing_policy.rules[index].dataspace,
-                Some(DataSpaceId::UNIVERSAL)
-            );
+            assert!(native_policy.routes[index].instruction.is_none());
             assert!(!reply.contains(account.private_key.as_str()));
         }
         assert!(
             selected
-                .append_accounts(manifest.clone(), &accounts)
+                .append_accounts(
+                    manifest.clone(),
+                    &accounts,
+                    &build_peers(4, Some(SEED.as_bytes()), 8080, 1337).unwrap()
+                )
                 .is_err(),
             "cannot reuse already registered workload accounts"
         );
@@ -809,21 +808,24 @@ fn fixed_generated_peer_configs_parse_from_retained_bytes_after_side_files_move(
                 defaults.rans_tables_path
             );
             let authority =
-                crate::genesis::staged_signed_genesis_merge_authority(&manifest, &signed, &config)
-                    .unwrap();
-            assert_eq!(authority.context().network_id, expected);
-            assert_eq!(authority.context().height, 1);
-            assert_eq!(authority.context().roster.len(), 4);
+                crate::genesis::staged_signed_native_genesis(&manifest, &signed, &config).unwrap();
+            assert_eq!(authority.epoch().network_id, expected);
+            assert_eq!(authority.epoch().authorization.first_height, 1);
+            assert_eq!(authority.epoch().committee.len(), 4);
             assert_eq!(
-                authority.active_lanes().len(),
-                usize::from(layout(lanes, 4).lane_count())
+                authority.lanes().lanes.len(),
+                usize::from(layout(lanes, 4).lane_count()) - 1
             );
             let projection = (
-                authority.context().clone(),
-                authority.catalog_hash(),
-                authority.active_lanes().to_vec(),
-                authority.lane_authority_catalog().clone(),
-                authority.proofs_of_possession().to_vec(),
+                authority.epoch().clone(),
+                authority.lanes().clone(),
+                authority.lane_policy().cloned(),
+                authority
+                    .epoch()
+                    .committee
+                    .iter()
+                    .map(|member| member.proof_of_possession.clone())
+                    .collect::<Vec<_>>(),
             );
             if let Some(first) = first.as_ref() {
                 assert_eq!(&projection, first);
@@ -834,9 +836,10 @@ fn fixed_generated_peer_configs_parse_from_retained_bytes_after_side_files_move(
             let mut changed = config.clone();
             changed.genesis.expected_hash =
                 HashOf::from_untyped_unchecked(Hash::new(b"wrong-final-genesis"));
-            assert!(crate::genesis::staged_signed_genesis_merge_authority(
-                &manifest, &signed, &changed,
-            ).is_err());
+            assert!(
+                crate::genesis::staged_signed_native_genesis(&manifest, &signed, &changed,)
+                    .is_err()
+            );
         }
     }
 }
@@ -903,7 +906,7 @@ fn ordinary_generated_configs_keep_published_identity_and_service_dependencies()
 
 #[test]
 fn fixed_generated_context_is_canonical_and_matches_every_final_peer_stage() {
-    use iroha_data_model::block::consensus_v2::HeightContext;
+    use iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1;
 
     for lanes in [ScalingLanes::One, ScalingLanes::Four] {
         let temp = tempfile::tempdir().unwrap();
@@ -926,9 +929,9 @@ fn fixed_generated_context_is_canonical_and_matches_every_final_peer_stage() {
         let context_bytes = crate::secure_fs::read_private_file(&path).unwrap();
         assert!(!context_bytes.is_empty());
         assert!(context_bytes.len() <= GENESIS_CONTEXT_MAX_BYTES);
-        let context: HeightContext = norito::decode_from_bytes(&context_bytes).unwrap();
-        assert_eq!(context.height, 1);
-        assert_eq!(context.roster.len(), 4);
+        let context: ValidatorEpochContextV1 = norito::decode_from_bytes(&context_bytes).unwrap();
+        assert_eq!(context.authorization.first_height, 1);
+        assert_eq!(context.committee.len(), 4);
         assert_eq!(
             norito::canonical_frame_len(&context).unwrap(),
             context_bytes.len()
@@ -952,12 +955,11 @@ fn fixed_generated_context_is_canonical_and_matches_every_final_peer_stage() {
             let config = parse_localnet_peer_config(&rendered, Some(&peer)).unwrap();
             assert_eq!(config.genesis.expected_hash, block.hash());
             let authority =
-                crate::genesis::staged_signed_genesis_merge_authority(&manifest, &signed, &config)
-                    .unwrap();
-            assert_eq!(&context, authority.context());
+                crate::genesis::staged_signed_native_genesis(&manifest, &signed, &config).unwrap();
+            assert_eq!(&context, authority.epoch());
             assert_eq!(
-                authority.active_lanes().len(),
-                usize::from(layout(lanes, 4).lane_count())
+                authority.lanes().lanes.len(),
+                usize::from(layout(lanes, 4).lane_count()) - 1
             );
         }
         #[cfg(unix)]
@@ -975,7 +977,7 @@ fn fixed_generated_context_is_canonical_and_matches_every_final_peer_stage() {
         );
         let mut trailing = context_bytes.clone();
         trailing.push(0);
-        assert!(norito::decode_from_bytes::<HeightContext>(&trailing).is_err());
+        assert!(norito::decode_from_bytes::<ValidatorEpochContextV1>(&trailing).is_err());
     }
 }
 
@@ -1010,12 +1012,7 @@ fn fixed_context_derivation_rejects_final_wire_manifest_config_and_bound_tamperi
         let mut wrong_policy = config.clone();
         wrong_policy.pipeline.amx_group_budget_ms += 1;
         let error = genesis_context_bytes(&manifest_path, &signed_path, &wrong_policy).unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<iroha_core::sumeragi::GenesisMergeAuthorityError>(),
-            Some(iroha_core::sumeragi::GenesisMergeAuthorityError::Bootstrap(
-                iroha_core::sumeragi::V2GenesisBootstrapError::NexusAmxContextHashMismatch { .. }
-            ))
-        ));
+        assert!(format!("{error:#}").contains("policy"), "{error:#}");
         let manifest_bytes = fs::read(&manifest_path).unwrap();
         let changed = RawGenesisTransaction::from_path(&manifest_path)
             .unwrap()

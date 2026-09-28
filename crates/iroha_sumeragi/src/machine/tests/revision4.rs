@@ -191,7 +191,12 @@ fn det_r4_block_applied_checks() {
         height: block.header.height,
         block_hash: bh,
         header: Box::new(block.header.clone()),
-        config_after_next: h.config(block.header.height + 2),
+        config: crate::testing::applied_config(
+            block.header.height,
+            &h.config(block.header.height),
+            h.config(block.header.height + 1),
+            h.config(block.header.height + 2),
+        ),
     };
     let halted = |h: &mut H, event: Event| {
         let out = h.fire(event);
@@ -447,7 +452,7 @@ fn det_r4_restart_leader_rules() {
     let key = h.signers[0].public_key().clone();
     let record = SafetyRecord {
         high_tc: Some(tc.clone()),
-        ..SafetyRecord::fresh(I, key.clone(), 1, None)
+        ..SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, key.clone(), 1, None)
     };
     h.records
         .insert(key.clone(), record.encode(&h.v.crypto).unwrap());
@@ -464,7 +469,7 @@ fn det_r4_restart_leader_rules() {
     // L(1, 0) with a fresh record at 1: the view-0 build is scheduled at t_enter + pace.
     let mut h = H::new(4, pick::leader(0));
     let key = h.signers[0].public_key().clone();
-    let record = SafetyRecord::fresh(I, key.clone(), 1, None);
+    let record = SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, key.clone(), 1, None);
     h.records.insert(key, record.encode(&h.v.crypto).unwrap());
     h.restart();
     assert_eq!(deadline(&h, "build"), Some(h.now + h.params.block_time));
@@ -524,13 +529,17 @@ fn det_r4_probe_statuses_and_echoes() {
     };
     h.deliver(peer, WireMessage::Status(Box::new(plain)));
     let echo = |h: &H, named: &PublicKey, signer: &PublicKey, height: u64| {
-        let sig = h
-            .signer_of(signer)
-            .sign(&preimage::echo_preimage(&I, h.nonce, height));
+        let sig = h.signer_of(signer).sign(&preimage::echo_preimage(
+            &I,
+            &crate::testing::TEST_EPOCH.id,
+            h.nonce,
+            height,
+        ));
         WireMessage::Status(Box::new(Status {
             instance: I,
             height,
             echo: Some(Echo {
+                epoch: crate::testing::TEST_EPOCH.id,
                 nonce: h.nonce,
                 key: named.clone(),
                 sig,
@@ -549,11 +558,17 @@ fn det_r4_probe_statuses_and_echoes() {
     // A non-member key never counts; a relayed echo counts for its signer.
     let outsider = crate::testing::FakeSigner::from_seed(b"outsider", None);
     let outsider_key = outsider.public_key().clone();
-    let sig = outsider.sign(&preimage::echo_preimage(&I, h.nonce, 2));
+    let sig = outsider.sign(&preimage::echo_preimage(
+        &I,
+        &crate::testing::TEST_EPOCH.id,
+        h.nonce,
+        2,
+    ));
     let foreign = WireMessage::Status(Box::new(Status {
         instance: I,
         height: 2,
         echo: Some(Echo {
+            epoch: crate::testing::TEST_EPOCH.id,
             nonce: h.nonce,
             key: outsider_key.clone(),
             sig,

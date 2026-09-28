@@ -571,3 +571,53 @@ fn membership_attached_execution_transfer_and_repeated_commit_preserve_identity(
     drop(capture);
     assert_eq!(storage.view().get(&key(2)), Some(height(1)));
 }
+
+#[test]
+fn inline_membership_freeze_releases_logical_writer_and_retries_exact_original() {
+    for replace in [false, true] {
+        let storage = seeded(71);
+        let mut original = TransactionsBlockField::new(if replace {
+            storage.block_and_revert()
+        } else {
+            storage.block()
+        });
+        let next = if replace { height(1) } else { height(2) };
+        original.insert_block_with_single_tx(key(72), next);
+        let pointer = tip_ptr(original.current_block.as_ref().unwrap());
+        let expected = json::to_json(&original).unwrap();
+        let reserved = storage.budget.reserved_bytes();
+        original.try_prepare_publication().unwrap();
+        original.finish_freeze().unwrap();
+        assert!(
+            storage.write_lock.try_lock().is_some(),
+            "actual membership mutex released"
+        );
+        assert_eq!(original.get(&key(72)), Some(next));
+        assert_eq!(json::to_json(&original).unwrap(), expected);
+        assert_eq!(storage.budget.reserved_bytes(), reserved);
+        original.retire_frozen_cleanup();
+        storage.budget.set_limit_bytes(0);
+        for _ in 0..3 {
+            let blocker = storage.released.guard(storage.write_lock.lock());
+            original.install_frozen_publication(&storage);
+            assert!(matches!(
+                original.try_prepare_frozen_publication(),
+                Err(mv::PublicationPreparationError::Busy(_))
+            ));
+            original.recover_installed_frozen_publication();
+            let MembershipCapturePhase::Captured(journal) = &original.slot.phase else {
+                panic!("exact frozen original")
+            };
+            assert_eq!(tip_ptr(&journal.current), pointer);
+            assert_eq!(original.get(&key(72)), Some(next));
+            assert_eq!(json::to_json(&original).unwrap(), expected);
+            drop(blocker);
+            original.retire_frozen_cleanup();
+        }
+        original.install_frozen_publication(&storage);
+        original.try_prepare_frozen_publication().unwrap();
+        original.publish_prepared();
+        drop(original);
+        assert_eq!(storage.view().get(&key(72)), Some(next));
+    }
+}

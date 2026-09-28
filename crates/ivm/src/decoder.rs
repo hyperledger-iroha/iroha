@@ -33,7 +33,7 @@ pub fn decode(memory: &Memory, pc: u64) -> Result<u32, VMError> {
             perm: Perm::EXECUTE,
         });
     }
-    let word = memory.load_u32(pc)?;
+    let word = memory.load_instruction_u32(pc)?;
     Ok(word)
 }
 /// Decode one instruction directly from a code slice.

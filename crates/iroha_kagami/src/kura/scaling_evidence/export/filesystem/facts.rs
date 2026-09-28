@@ -85,7 +85,7 @@ impl FactsInputBindings {
             peer3,
             self.context,
             self.journal,
-            self.finality,
+            self.carrier,
             self.queries,
         ]
     }
@@ -557,7 +557,7 @@ fn produce_with_hook(
             peer_configs: [original(2), original(3), original(4), original(5)],
             context: original(6),
             journal: original(7),
-            finality: original(8),
+            carrier: original(8),
             queries: original(9),
         },
         genesis,

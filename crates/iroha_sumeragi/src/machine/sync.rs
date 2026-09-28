@@ -99,7 +99,7 @@ fn entry_bytes(entry: &SyncEntry) -> usize {
         .block
         .payload
         .len()
-        .saturating_add(256)
+        .saturating_add(256 + crate::types::MAX_CONTROL_WITNESS_BYTES)
         .saturating_add(entry.block.header.skipped_leaders.len().saturating_mul(64))
 }
 
@@ -118,7 +118,7 @@ impl Core {
             self.sync.add_source(from);
             return;
         }
-        if self.configs.contains_key(&c.height) {
+        if self.config(&c.height).is_some() {
             if self.verify_qc_cached(c) {
                 self.sync.verified = c.height;
                 self.sync.add_source(from);
@@ -334,11 +334,13 @@ impl Core {
             let header = &entry.block.header;
             let linked = cfg!(sumeragi_mutation = "MS22")
                 || (header.parent_hash == self.tip.block_hash
-                    && header.parent_result == self.tip.result);
+                    && header.parent_result == self.tip.result
+                    && header.epoch == self.cfg.epoch.id
+                    && (header.height != self.cfg.epoch.last_height || header.attest));
             #[cfg(not(sumeragi_mutation = "MS15"))]
             let committee = &self.cfg.committee;
             #[cfg(sumeragi_mutation = "MS15")]
-            let committee = &(self.configs.get(&self.tip.height).unwrap_or(&self.cfg)).committee;
+            let committee = &(self.config(&self.tip.height).unwrap_or(&self.cfg)).committee;
             let verified = self
                 .cert_cache
                 .contains(&entry.commit_qc.digest(&*self.crypto))
@@ -346,6 +348,7 @@ impl Core {
                     &*self.crypto,
                     &*self.attestation.verifier,
                     &self.instance,
+                    &self.cfg.epoch.id,
                     committee,
                     &entry.commit_qc,
                 )

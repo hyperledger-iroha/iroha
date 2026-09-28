@@ -1,7 +1,7 @@
 //! Final generator receipt bindings, role projection and publication failures.
 use super::*;
 use clap::Parser as _;
-use iroha_data_model::block::consensus_v2::HeightContext;
+use iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd as _, IntoRawFd as _};
 
@@ -131,7 +131,7 @@ fn receipt_public_typed_anchors_and_census_match_every_original() {
             "chain_id",
             "lane_count",
             "genesis_hash",
-            "context_id",
+            "genesis_epoch_context_id",
             "network_id",
             "peers",
             "accounts",
@@ -142,20 +142,20 @@ fn receipt_public_typed_anchors_and_census_match_every_original() {
     );
     assert_eq!(
         receipt["schema"].as_str(),
-        Some("iroha.sumeragi_v2.scaling.genesis_anchors.v1")
+        Some("iroha.native_consensus.scaling.genesis_anchors.v1")
     );
     assert_eq!(receipt["version"].as_u64(), Some(1));
     assert_eq!(receipt["lane_count"].as_u64(), Some(4));
     assert_eq!(receipt["consensus_mode"].as_str(), Some("npos"));
     assert_eq!(receipt["chain_id"].as_str(), Some(DEFAULT_CHAIN_ID));
-    let context: HeightContext = norito::decode_from_bytes(&f.context).unwrap();
+    let context: ValidatorEpochContextV1 = norito::decode_from_bytes(&f.context).unwrap();
     assert_eq!(
         receipt["genesis_hash"],
         norito::json::to_value(&f.expected).unwrap()
     );
     assert_eq!(
-        receipt["context_id"],
-        norito::json::to_value(&context.id()).unwrap()
+        receipt["genesis_epoch_context_id"],
+        norito::json::to_value(&Hash::prehashed(context.context_id().unwrap())).unwrap()
     );
     assert_eq!(
         receipt["network_id"],

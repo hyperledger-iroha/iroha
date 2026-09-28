@@ -1264,9 +1264,9 @@ resolved.ifPresentOrElse(
 ### Reading Kotodama Manifests
 
 `HttpClientTransport.getContractManifest(codeHash)` reads
-`/v1/contracts/code/{code_hash}` into the complete Kotodama V1 manifest model.
-The strict decoder retains `seiyaku_name`, branded entrypoint kinds, exact
-flat-preorder argument/return schemas, dynamic access hints,
+`/v1/contracts/code/{code_hash}` into the Kotlin-owned Kotodama V1 manifest
+model in `core-jvm`. The strict Kotlin decoder retains `seiyaku_name`, branded
+entrypoint kinds, exact flat-preorder argument/return schemas, dynamic access hints,
 completeness/skips, triggers, state, error codes, `kotoba`, and provenance. A
 `List` node contains only `capacity` and its element subtree immediately follows
 it. Unknown fields, legacy nested `element` metadata, incomplete or trailing
@@ -1421,9 +1421,9 @@ separately trusted expected value. StrongBox preferences are propagated to key
 generation (`STRONGBOX_REQUIRED` forces StrongBox and
 `STRONGBOX_PREFERRED` requests it), and backend errors are surfaced directly.
 
-CUDA computation belongs to `org.hyperledger.iroha.sdk.gpu.CudaAccelerators`
+Native computation belongs to `org.hyperledger.iroha.sdk.gpu.Accelerators`
 in `kotlin/core-jvm`. Both JVM languages use its explicit backend construction
-and five bounded batch operations. See the [CUDA bridge contract](../../specs/sdk/android/gpu_operator_guide.md)
+and five bounded batch operations. See the [native bridge contract](../../specs/sdk/android/gpu_operator_guide.md)
 for native loading and the hardware qualification task.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM

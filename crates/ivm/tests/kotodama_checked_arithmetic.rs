@@ -76,7 +76,10 @@ fn run_binary(program: &[u8], left: &str, right: &str) -> Result<BigInt, VMError
         .expect("valid binary arguments");
     vm.set_host(argument_host(program, &payload)?);
     vm.run()?;
-    Ok(common::decode_int_register(&vm, 10))
+    Ok(common::decode_int_word(
+        &vm,
+        vm.public_call_result_word(0).unwrap(),
+    ))
 }
 fn run_unary(program: &[u8], value: &str) -> Result<BigInt, VMError> {
     let mut vm = IVM::new(u64::MAX);
@@ -86,7 +89,10 @@ fn run_unary(program: &[u8], value: &str) -> Result<BigInt, VMError> {
         Json::from_str_norito(&format!(r#"{{"value":"{value}"}}"#)).expect("valid unary arguments");
     vm.set_host(argument_host(program, &payload)?);
     vm.run()?;
-    Ok(common::decode_int_register(&vm, 10))
+    Ok(common::decode_int_word(
+        &vm,
+        vm.public_call_result_word(0).unwrap(),
+    ))
 }
 fn run_mixed_int_decimal(program: &[u8], left: &str, right: &str) -> Result<Numeric, VMError> {
     let mut vm = IVM::new(u64::MAX);
@@ -96,7 +102,7 @@ fn run_mixed_int_decimal(program: &[u8], left: &str, right: &str) -> Result<Nume
         .expect("valid mixed numeric arguments");
     vm.set_host(argument_host(program, &payload)?);
     vm.run()?;
-    let output = vm.validate_tlv(vm.register(10))?;
+    let output = vm.validate_tlv(vm.public_call_result_word(0)?)?;
     assert_eq!(output.type_id, PointerType::Decimal);
     DecimalValueV1::decode_frame(output.payload)
         .map(DecimalValueV1::into_numeric)
@@ -136,10 +142,16 @@ fn contains_extended_syscall(program: &[u8], syscall: u32) -> bool {
 }
 fn decode_numeric_return(vm: &IVM, kind: NumericReturnKind) -> NumericValue {
     match kind {
-        NumericReturnKind::Int => NumericValue::Int(common::decode_int_register(vm, 10)),
+        NumericReturnKind::Int => NumericValue::Int(common::decode_int_word(
+            vm,
+            vm.public_call_result_word(0).unwrap(),
+        )),
         NumericReturnKind::Decimal => {
             let output = vm
-                .validate_tlv(vm.register(10))
+                .validate_tlv(
+                    vm.public_call_result_word(0)
+                        .expect("completed numeric result"),
+                )
                 .expect("validate returned decimal pointer");
             assert_eq!(output.type_id, PointerType::Decimal);
             NumericValue::Decimal(
@@ -150,7 +162,10 @@ fn decode_numeric_return(vm: &IVM, kind: NumericReturnKind) -> NumericValue {
         }
         NumericReturnKind::Quantity => {
             let output = vm
-                .validate_tlv(vm.register(10))
+                .validate_tlv(
+                    vm.public_call_result_word(0)
+                        .expect("completed numeric result"),
+                )
                 .expect("validate returned quantity pointer");
             assert_eq!(output.type_id, PointerType::Quantity);
             NumericValue::Quantity(
@@ -299,7 +314,10 @@ fn folded_outcome(expression: &str) -> ArithmeticOutcome {
     vm.set_program_counter(entrypoint_pc(&program))
         .expect("select folded arithmetic entrypoint");
     vm.run().expect("execute folded arithmetic result");
-    ArithmeticOutcome::Value(common::decode_int_register(&vm, 10))
+    ArithmeticOutcome::Value(common::decode_int_word(
+        &vm,
+        vm.public_call_result_word(0).unwrap(),
+    ))
 }
 #[test]
 fn constant_folding_and_runtime_match_signed_512_bit_boundaries_and_failures() {
@@ -366,7 +384,7 @@ fn explicit_int_to_decimal_conversion_matches_contextual_literal_folding() {
         .expect("select folded decimal entrypoint");
     folded_vm.run().expect("execute folded decimal");
     let folded_output = folded_vm
-        .validate_tlv(folded_vm.register(10))
+        .validate_tlv(folded_vm.public_call_result_word(0).unwrap())
         .expect("validate folded decimal pointer");
     assert_eq!(folded_output.type_id, PointerType::Decimal);
     let folded_value = DecimalValueV1::decode_frame(folded_output.payload)
@@ -1090,7 +1108,10 @@ fn constant_folding_uses_checked_signed_512_bit_rules() {
     vm.load_program(&safe).unwrap();
     vm.set_program_counter(entrypoint_pc(&safe)).unwrap();
     vm.run().unwrap();
-    assert_eq!(common::decode_int_register(&vm, 10), bigint(MAX_INT));
+    assert_eq!(
+        common::decode_int_word(&vm, vm.public_call_result_word(0).unwrap()),
+        bigint(MAX_INT)
+    );
     for source in [
         "seiyaku OverflowAdd { view fn run() -> int { return 6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047 + 1; } }",
         "seiyaku OverflowNeg { view fn run() -> int { return -(-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048); } }",
@@ -1124,8 +1145,89 @@ seiyaku WrappingArithmetic {
     vm.load_program(&program).unwrap();
     vm.set_program_counter(entrypoint_pc(&program)).unwrap();
     vm.run().unwrap();
-    assert_eq!(common::decode_int_register(&vm, 10), bigint(MIN_INT));
-    assert_eq!(common::decode_int_register(&vm, 11), bigint(MAX_INT));
-    assert_eq!(common::decode_int_register(&vm, 12), bigint("-2"));
-    assert_eq!(common::decode_int_register(&vm, 13), bigint(MIN_INT));
+    assert_eq!(
+        common::decode_int_word(&vm, vm.public_call_result_word(0).unwrap()),
+        bigint(MIN_INT)
+    );
+    assert_eq!(
+        common::decode_int_word(&vm, vm.public_call_result_word(1).unwrap()),
+        bigint(MAX_INT)
+    );
+    assert_eq!(
+        common::decode_int_word(&vm, vm.public_call_result_word(2).unwrap()),
+        bigint("-2")
+    );
+    assert_eq!(
+        common::decode_int_word(&vm, vm.public_call_result_word(3).unwrap()),
+        bigint(MIN_INT)
+    );
+}
+
+#[test]
+fn full_width_math_helpers_match_constant_folding_and_runtime() {
+    use iroha_primitives::numeric_int::{IntBinaryOperation, IntUnaryOperation};
+    let maximum = MAX_INT.parse::<BigInt>().expect("maximum int");
+    let minimum = MIN_INT.parse::<BigInt>().expect("minimum int");
+    for (name, operation) in [
+        ("isqrt", IntUnaryOperation::Isqrt),
+        ("abs", IntUnaryOperation::Abs),
+    ] {
+        let source = format!(
+            "seiyaku Math {{ view fn run(int value) -> int {{ return math::{name}(value); }} }}"
+        );
+        let runtime = compile(&source);
+        let folded = compile(&format!(
+            "seiyaku Math {{ view fn run(int value) -> int {{ return math::{name}({MAX_INT}); }} }}"
+        ));
+        let expected = operation.evaluate(&maximum).unwrap();
+        assert_eq!(run_unary(&runtime, MAX_INT).unwrap(), expected);
+        assert_eq!(run_unary(&folded, "0").unwrap(), expected);
+    }
+    for (name, operation, left, right) in [
+        ("min", IntBinaryOperation::Min, &minimum, &maximum),
+        ("max", IntBinaryOperation::Max, &minimum, &maximum),
+        ("div_ceil", IntBinaryOperation::DivCeil, &maximum, &maximum),
+        ("gcd", IntBinaryOperation::Gcd, &minimum, &maximum),
+        ("mean", IntBinaryOperation::Mean, &maximum, &maximum),
+    ] {
+        let source = format!(
+            "seiyaku Math {{ view fn run(int left, int right) -> int {{ return math::{name}(left: left, right: right); }} }}"
+        );
+        let runtime = compile(&source);
+        let folded = compile(&format!(
+            "seiyaku Math {{ view fn run(int left, int right) -> int {{ return math::{name}(left: {left}, right: {right}); }} }}"
+        ));
+        let expected = operation.evaluate(left, right).unwrap();
+        assert_eq!(
+            run_binary(&runtime, &left.to_string(), &right.to_string()).unwrap(),
+            expected
+        );
+        assert_eq!(run_binary(&folded, "0", "0").unwrap(), expected);
+    }
+    let constant = compile(
+        "seiyaku Math { const int ROOT = math::isqrt(340282366920938463463374607431768211456); const int MID = math::mean(right: ROOT, left: ROOT); view fn run(int value) -> int { return MID; } }",
+    );
+    assert_eq!(
+        run_unary(&constant, "0").unwrap(),
+        "18446744073709551616".parse::<BigInt>().unwrap()
+    );
+    for (expression, diagnostic) in [
+        ("math::isqrt(-1)".to_owned(), "E_NEGATIVE_SQUARE_ROOT"),
+        (format!("math::abs({MIN_INT})"), "E_INT_OVERFLOW"),
+        (
+            "math::div_ceil(left: 1, right: 0)".to_owned(),
+            "E_DIVISION_BY_ZERO",
+        ),
+        (
+            format!("math::gcd(left: {MIN_INT}, right: 0)"),
+            "E_INT_OVERFLOW",
+        ),
+    ] {
+        let error = Compiler::new()
+            .compile_source(&format!(
+                "seiyaku Math {{ view fn run() -> int {{ return {expression}; }} }}"
+            ))
+            .expect_err("constant math fault");
+        assert!(error.contains(diagnostic), "{expression}: {error}");
+    }
 }

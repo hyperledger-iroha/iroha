@@ -98,25 +98,6 @@ fn validate_leaf(kind: Kind, bytes: &[u8]) -> Result<(), VMError> {
         Kind::Bool => Err(invalid()),
     }
 }
-fn expected_mask(schema: &EntrypointValueTypeV1) -> Result<u64, VMError> {
-    let mut pending = vec![0];
-    let mut count = 0;
-    let mut mask = 0;
-    while let Some(at) = pending.pop() {
-        match &schema.nodes[at] {
-            Node::Tuple(_) | Node::Struct(_) => {
-                pending.extend(child_nodes(schema, at)?.into_iter().rev())
-            }
-            node => {
-                if !matches!(node, Node::Unit | Node::Error(_) | Node::Leaf(Kind::Bool)) {
-                    mask |= 1 << count;
-                }
-                count += 1;
-            }
-        }
-    }
-    Ok(mask)
-}
 fn charge(used: &mut usize, bytes: usize) -> Result<(), VMError> {
     *used = used
         .checked_add(bytes)
@@ -130,20 +111,37 @@ pub(super) fn transfer_return(
     destination: &mut IVM,
     schema: &EntrypointValueTypeV1,
     arity: usize,
-    mask: u64,
+    result_table: u64,
 ) -> Result<(), VMError> {
     if !schema.validate()
         || schema.word_count() != Some(arity)
-        || arity > TEST_MAX_RETURN_VALUES
-        || expected_mask(schema)? != mask
+        || arity == 0
+        || arity > ivm_abi::call::MAX_CALL_WORDS_V1
+        || source.call_result_word_count()? != arity
     {
         return Err(invalid());
     }
+    if !result_table.is_multiple_of(ivm_abi::call::CALL_WORD_BYTES_V1 as u64) {
+        return Err(VMError::MisalignedAccess {
+            addr: result_table as u32,
+        });
+    }
+    let result_bytes = (arity * ivm_abi::call::CALL_WORD_BYTES_V1) as u64;
+    let result_end = result_table.checked_add(result_bytes).ok_or_else(invalid)?;
+    let allocated_heap = result_table >= crate::Memory::HEAP_START
+        && result_end <= crate::Memory::HEAP_START + destination.memory.heap_allocated_len();
+    let active_stack = result_table >= crate::Memory::STACK_START
+        && destination.memory.call_frames.entry_pc().is_ok();
+    if !allocated_heap && !active_stack {
+        return Err(invalid());
+    }
+    destination.memory.checked_region_bounds_for(
+        result_table,
+        result_bytes,
+        crate::error::Perm::WRITE,
+    )?;
     let words = (0..arity)
-        .map(|index| {
-            source.ensure_public_register(10 + index)?;
-            Ok(source.register(10 + index))
-        })
+        .map(|index| source.public_call_result_word(index))
         .collect::<Result<Vec<_>, VMError>>()?;
     let mut tasks = vec![Task::Visit(0, words)];
     let mut completed: Vec<Vec<usize>> = Vec::new();
@@ -170,6 +168,12 @@ pub(super) fn transfer_return(
                 let children = child_nodes(schema, at)?;
                 let first = words.first().copied().ok_or_else(invalid)?;
                 match &schema.nodes[at] {
+                    Node::Struct(node) if node.fields.is_empty() => {
+                        if first != 0 {
+                            return Err(invalid());
+                        }
+                        CopyValue::Scalar(0)
+                    }
                     Node::Tuple(_) | Node::Struct(_) => {
                         tasks.push(Task::Product(completed.len()));
                         let mut offset = 0;
@@ -313,9 +317,50 @@ pub(super) fn transfer_return(
         };
     }
     for (index, value) in completed[0].iter().enumerate() {
-        destination.set_register(10 + index, output[*value]);
+        destination.store_u64(result_table + (index * 8) as u64, output[*value])?;
     }
+    destination.set_register(10, result_table);
+    destination.set_register(11, arity as u64);
     Ok(())
+}
+
+#[cfg(test)]
+fn complete_test_result(source: &mut IVM, words: &[u64]) -> u64 {
+    let result_table = source.alloc_heap((words.len() * 8) as u64).unwrap();
+    let stack_top = source.memory.stack_top();
+    let callable = ivm_abi::call::EmbeddedCallableV1 {
+        entry_pc: 0,
+        frame_bytes: 0,
+        argument_words: Vec::new(),
+        result_words: vec![ivm_abi::call::CallWordV1::Bool; words.len()],
+    };
+    source
+        .memory
+        .call_frames
+        .enter_root(
+            stack_top,
+            &callable,
+            crate::call_frame::CallTables {
+                argument_base: 0,
+                argument_words: 0,
+                result_base: result_table,
+                result_words: words.len() as u64,
+            },
+            stack_top,
+        )
+        .unwrap();
+    for (index, word) in words.iter().enumerate() {
+        source
+            .store_u64(result_table + (index * 8) as u64, *word)
+            .unwrap();
+    }
+    // These unit tests exercise schema validation independently of root runtime role validation.
+    source
+        .memory
+        .call_frames
+        .finish(stack_top, result_table, words.len() as u64)
+        .unwrap();
+    result_table
 }
 
 #[cfg(test)]
@@ -346,13 +391,18 @@ mod tests {
         let err = crate::sum::allocate_words(&mut source, sum, 0, &[1]).unwrap();
         let items = crate::list::allocate_words(&mut source, list, &[vec![ok], vec![err]]).unwrap();
         let some = crate::sum::allocate_words(&mut source, option, 1, &[items]).unwrap();
-        source.set_register(10, some);
+        complete_test_result(&mut source, &[some]);
         let mut destination = IVM::new(0);
         destination.alloc_heap(128).unwrap();
-        transfer_return(&source, &mut destination, &schema, 1, 1).unwrap();
+        let result_table = destination.alloc_heap(8).unwrap();
+        transfer_return(&source, &mut destination, &schema, 1, result_table).unwrap();
         drop(source);
-        let (tag, active) =
-            crate::sum::read_words(&destination, destination.register(10), option).unwrap();
+        let (tag, active) = crate::sum::read_words(
+            &destination,
+            destination.load_u64(result_table).unwrap(),
+            option,
+        )
+        .unwrap();
         assert!(tag);
         let elements = crate::list::read_words(&destination, active[0], list).unwrap();
         assert_eq!(elements.len(), 2);
@@ -381,22 +431,36 @@ mod tests {
         let layout = SumLayoutV1::option(1).unwrap();
         let mut source = IVM::new(0);
         let none = crate::sum::allocate_words(&mut source, layout, 0, &[]).unwrap();
-        source.set_register(10, none);
+        complete_test_result(&mut source, &[none]);
         let mut destination = IVM::new(0);
         destination.set_register(10, 42);
-        assert!(transfer_return(&source, &mut destination, &schema, 2, 1).is_err());
+        let result_table = destination.alloc_heap(8).unwrap();
+        destination.store_u64(result_table, 99).unwrap();
+        let allocated = destination.memory.heap_allocated_len();
+        assert!(transfer_return(&source, &mut destination, &schema, 2, result_table).is_err());
+        assert!(transfer_return(&source, &mut destination, &schema, 1, result_table + 1).is_err());
         assert!(transfer_return(&source, &mut destination, &schema, 1, 0).is_err());
+        for unowned in [
+            result_table + 8,
+            crate::Memory::OUTPUT_START,
+            destination.memory.stack_top() - 8,
+        ] {
+            assert!(transfer_return(&source, &mut destination, &schema, 1, unowned).is_err());
+        }
         source.store_u64(none + 8, 99).unwrap();
-        assert!(transfer_return(&source, &mut destination, &schema, 1, 1).is_err());
+        assert!(transfer_return(&source, &mut destination, &schema, 1, result_table).is_err());
         assert_eq!(destination.register(10), 42);
-        assert_eq!(
-            destination.alloc_heap(8).unwrap(),
-            crate::memory::Memory::HEAP_START
-        );
+        assert_eq!(destination.memory.heap_allocated_len(), allocated);
+        assert_eq!(destination.load_u64(result_table).unwrap(), 99);
         source.store_u64(none + 8, 0).unwrap();
-        transfer_return(&source, &mut destination, &schema, 1, 1).unwrap();
+        transfer_return(&source, &mut destination, &schema, 1, result_table).unwrap();
         assert_eq!(
-            crate::sum::read_words(&destination, destination.register(10), layout).unwrap(),
+            crate::sum::read_words(
+                &destination,
+                destination.load_u64(result_table).unwrap(),
+                layout
+            )
+            .unwrap(),
             (false, vec![])
         );
     }
@@ -411,24 +475,24 @@ mod tests {
             ],
         };
         let mut source = IVM::new(0);
-        source.set_register(10, 2);
         let wrong = source
             .alloc_host_tlv(&make_tlv(PointerType::Blob, b"wrong"))
             .unwrap();
-        source.set_register(11, wrong);
+        let source_table = complete_test_result(&mut source, &[2, wrong]);
         let mut destination = IVM::new(0);
-        assert!(transfer_return(&source, &mut destination, &schema, 2, 2).is_err());
-        source.set_register(10, 1);
-        assert!(transfer_return(&source, &mut destination, &schema, 2, 2).is_err());
+        let result_table = destination.alloc_heap(16).unwrap();
+        assert!(transfer_return(&source, &mut destination, &schema, 2, result_table).is_err());
+        source.store_u64(source_table, 1).unwrap();
+        assert!(transfer_return(&source, &mut destination, &schema, 2, result_table).is_err());
         let integer = source
             .alloc_host_tlv(&crate::numeric_tlv::encode_int(&7.into()).unwrap())
             .unwrap();
-        source.set_register(11, integer);
-        transfer_return(&source, &mut destination, &schema, 2, 2).unwrap();
-        assert_eq!(destination.register(10), 1);
+        source.store_u64(source_table + 8, integer).unwrap();
+        transfer_return(&source, &mut destination, &schema, 2, result_table).unwrap();
+        assert_eq!(destination.load_u64(result_table).unwrap(), 1);
         assert_eq!(
             destination
-                .validate_tlv(destination.register(11))
+                .validate_tlv(destination.load_u64(result_table + 8).unwrap())
                 .unwrap()
                 .type_id,
             PointerType::Int
@@ -446,19 +510,20 @@ mod depth_tests {
         };
         let mut source = IVM::new(0);
         let mut destination = IVM::new(0);
-        source.set_register(10, 0);
-        transfer_return(&source, &mut destination, &schema, 1, 0).unwrap();
-        assert_eq!(destination.register(10), 0);
+        let source_table = complete_test_result(&mut source, &[0]);
+        let result_table = destination.alloc_heap(8).unwrap();
+        transfer_return(&source, &mut destination, &schema, 1, result_table).unwrap();
+        assert_eq!(destination.load_u64(result_table).unwrap(), 0);
         let layout = SumLayoutV1::option(1).unwrap();
         let mut handle = 0;
         for _ in 1..ivm_abi::entrypoint::MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH {
             schema.nodes.insert(0, Node::Option);
             handle = crate::sum::allocate_words(&mut source, layout, 1, &[handle]).unwrap();
         }
-        source.set_register(10, handle);
-        transfer_return(&source, &mut destination, &schema, 1, 1).unwrap();
+        source.store_u64(source_table, handle).unwrap();
+        transfer_return(&source, &mut destination, &schema, 1, result_table).unwrap();
         drop(source);
-        let mut handle = destination.register(10);
+        let mut handle = destination.load_u64(result_table).unwrap();
         for _ in 1..ivm_abi::entrypoint::MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH {
             let (tag, payload) = crate::sum::read_words(&destination, handle, layout).unwrap();
             assert!(tag);

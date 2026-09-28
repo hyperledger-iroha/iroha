@@ -91,43 +91,54 @@ pub(crate) fn default_budget() -> AllocationBudget {
 }
 
 macro_rules! initial_world_field {
-    (kagemusha_mint_credit_operations, $budget:ident) => {
+    (kagemusha_mint_credit_operations, $budget:ident, $execution:ident) => {
         OperationIndex::try_new_admitted($budget.clone())?
     };
-    (kagemusha_issuance_operations, $budget:ident) => {
+    (kagemusha_issuance_operations, $budget:ident, $execution:ident) => {
         OperationIndex::try_new_admitted($budget.clone())?
     };
-    (kagemusha_redemption_id_operations, $budget:ident) => {
+    (kagemusha_redemption_id_operations, $budget:ident, $execution:ident) => {
         OperationIndex::try_new_admitted($budget.clone())?
     };
-    (kagemusha_terminal_nullifier_operations, $budget:ident) => {
+    (kagemusha_terminal_nullifier_operations, $budget:ident, $execution:ident) => {
         OperationIndex::try_new_admitted($budget.clone())?
     };
-    ($field:ident, $budget:ident) => {
+    (musubi_replication_shortfall_releases, $budget:ident, $execution:ident) => {
+        super::scalar_cell_custody::initialize(0, $execution)?
+    };
+    ($field:ident, $budget:ident, $execution:ident) => {
         Default::default()
     };
 }
 macro_rules! initial_world {
-    ($budget:ident; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
+    ($budget:ident, $execution:ident; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
         WorldData {
-            $($prefix: initial_world_field!($prefix, $budget),)*
-            $($privacy: initial_world_field!($privacy, $budget),)*
-            $($suffix: initial_world_field!($suffix, $budget),)*
+            $($prefix: initial_world_field!($prefix, $budget, $execution),)*
+            $($privacy: initial_world_field!($privacy, $budget, $execution),)*
+            $($suffix: initial_world_field!($suffix, $budget, $execution),)*
             external_event_buf: Default::default(),
         }
     };
 }
 impl WorldData {
-    pub(super) fn try_new_with_operation_index_budget(
+    pub(super) fn try_new_with_budgets(
         budget: AllocationBudget,
+        execution_budget: &AllocationBudget,
     ) -> Result<Self, AdmittedStorageError> {
-        Ok(with_world_overlay_fields!(initial_world, budget))
+        Ok(with_world_overlay_fields!(
+            initial_world,
+            budget,
+            execution_budget
+        ))
     }
 }
 impl Default for WorldData {
     fn default() -> Self {
-        Self::try_new_with_operation_index_budget(default_budget())
-            .expect("configured default admits four empty fixed operation indexes")
+        Self::try_new_with_budgets(
+            default_budget(),
+            &super::scalar_cell_custody::default_budget(),
+        )
+        .expect("configured default admits four empty fixed operation indexes")
     }
 }
 
@@ -243,11 +254,21 @@ mod tests {
     #[test]
     fn all_four_operation_indexes_share_the_original_finite_pool() {
         let too_small = AllocationBudget::new(1);
-        assert!(WorldData::try_new_with_operation_index_budget(too_small.clone()).is_err());
+        assert!(
+            WorldData::try_new_with_budgets(
+                too_small.clone(),
+                &super::super::scalar_cell_custody::default_budget()
+            )
+            .is_err()
+        );
         assert_eq!(too_small.reserved_bytes(), 0);
 
         let budget = default_budget();
-        let world = WorldData::try_new_with_operation_index_budget(budget.clone()).unwrap();
+        let world = WorldData::try_new_with_budgets(
+            budget.clone(),
+            &super::super::scalar_cell_custody::default_budget(),
+        )
+        .unwrap();
         let baseline = budget.reserved_bytes();
         assert!(baseline > 0);
         let remaining = budget

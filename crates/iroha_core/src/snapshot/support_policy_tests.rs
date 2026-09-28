@@ -631,6 +631,9 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
     assert_snapshot_bundle_absent(&store_dir);
     assert!(
         try_read_snapshot(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES
+            ),
             &store_dir,
             &kura,
             &state.lane_manifests.read().clone(),
@@ -644,8 +647,8 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
             &snapshot_read_budget_for_testing(),
-                    &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+        )
         .is_err(),
         "restart must not select a rejected unpublished generation"
     );
@@ -738,6 +741,9 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
     assert_canonical_snapshot_generation(&store_dir);
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
     let restored = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -751,8 +757,8 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-)
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    )
     .expect("post-height snapshot must remain exactly restart-readable");
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
         assert_eq!(
@@ -821,6 +827,9 @@ async fn snapshot_bootstrap_policy_requires_exact_canonical_digest_and_height() 
 fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::try_new_with_chain(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         crate::queue::tests::world_with_test_domains(),
         Arc::clone(&kura),
         query_handle,
@@ -867,6 +876,8 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:

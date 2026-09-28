@@ -11,7 +11,10 @@ import {
   isKotodamaV1StateMapKeyTypeName,
   kotodamaV1StateMapKeyTypeName,
 } from "../kotodamaIdentifiers.js";
-import { analyzeEntrypointValueTypeV1 } from "../entrypointSchema.js";
+import {
+  analyzeEntrypointValueTypeV1,
+  MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1,
+} from "../entrypointSchema.js";
 
 const TEXT_DOES_NOT_MATCH = " does not match ";
 const TEXT_RESPONSE_CONTAINS_AN_INVALID = "response contains an invalid ";
@@ -61,8 +64,9 @@ const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
 const MAX_IVM_CODE_REGION_BYTES = 0x0010_0000;
 const MAX_WIRE_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_ITEMS = 65_536;
-const MAX_ENTRYPOINT_PARAMETERS = 13;
-const MAX_ENTRYPOINT_WORDS = 13;
+const MAX_ENTRYPOINT_PARAMETERS = MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1;
+const MAX_ENTRYPOINT_WORDS = MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1;
+const MAX_CALL_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_STRING_BYTES = 1024 * 1024;
 const MAX_SOURCE_PATH_BYTES = 4096;
 const MAX_JSON_DEPTH = 64;
@@ -530,6 +534,65 @@ function decodeEmbeddedString(field, label) {
   }
 }
 
+function visitEmbeddedVector(field, label, maximum, visit = () => {}) {
+  const count = readU64Le(field, 0, `${label}.count`);
+  if (count > BigInt(maximum)) {
+    throw new RangeError(`${label}${TEXT_EXCEEDS_THE}${maximum}-item limit`);
+  }
+  const state = { offset: 8 };
+  for (let index = 0; index < Number(count); index += 1) {
+    const itemLabel = `${label}[${index}]`;
+    visit(readCompactField(field, state, itemLabel), itemLabel);
+  }
+  if (state.offset !== field.length) {
+    rejectType(`${label} has trailing or missing vector bytes`);
+  }
+  return Number(count);
+}
+
+function validateEmbeddedCallables(field, headerMode, minimumCount, label) {
+  let lastEntryPc = -1n;
+  const validateRole = (role, roleLabel) => {
+    const kind = readU32Le(role, 0, roleLabel);
+    if (kind === 3 || kind === 8) {
+      const state = { offset: 4 };
+      const idBytes = readCompactField(role, state, roleLabel);
+      const id = idBytes[0] | (idBytes[1] << 8);
+      if (idBytes.length !== 2 || state.offset !== role.length || id < 1 || id > 0x12) {
+        rejectType(`${roleLabel} has an invalid pointer role`);
+      }
+      if (kind === 8 && ((headerMode & 1) === 0 || id < 0x10)) {
+        rejectType(`${roleLabel} requires a numeric private role in ZK mode`);
+      }
+    } else if (kind > 7 || role.length !== 4) {
+      rejectType(`${roleLabel} has an invalid call-word role`);
+    }
+  };
+  const count = visitEmbeddedVector(field, label, MAX_MANIFEST_ITEMS, (item, itemLabel) => {
+    const state = { offset: 0 };
+    const fields = Array.from({ length: 4 }, (_, index) =>
+      readCompactField(item, state, `${itemLabel}.field${index}`));
+    if (state.offset !== item.length || fields[0].length !== 8 || fields[1].length !== 4) {
+      rejectType(`${itemLabel} has an invalid callable descriptor`);
+    }
+    const entryPc = readU64Le(fields[0], 0, `${itemLabel}.entry_pc`);
+    const frameBytes = readU32Le(fields[1], 0, `${itemLabel}.frame_bytes`);
+    if (entryPc <= lastEntryPc || entryPc % 4n !== 0n ||
+        frameBytes % 16 !== 0 || frameBytes > MAX_CALL_FRAME_BYTES) {
+      rejectType(`${itemLabel} requires ordered aligned roots and bounded aligned frames`);
+    }
+    lastEntryPc = entryPc;
+    visitEmbeddedVector(fields[2], `${itemLabel}.argument_words`, MAX_ENTRYPOINT_WORDS, validateRole);
+    if (visitEmbeddedVector(fields[3], `${itemLabel}.result_words`, MAX_ENTRYPOINT_WORDS, validateRole) === 0) {
+      rejectType(`${itemLabel} requires a nonempty result table`);
+    }
+  });
+  if (count < minimumCount) {
+    rejectType(`${label} must cover every public entrypoint`);
+  }
+  return lastEntryPc;
+}
+
 function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex) {
   const label = (TEXT_KOTODAMA_EMBEDDED_CONTRACT + "interface");
   if (frame.length < NORITO_FRAME_HEADER_BYTES) {
@@ -569,7 +632,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
   }
 
   const state = { offset: 0 };
-  const fields = Array.from({ length: 9 }, (_, index) =>
+  const fields = Array.from({ length: 10 }, (_, index) =>
     readCompactField(payload, state, `${label}.field${index}`));
   if (state.offset !== payload.length) {
     rejectType(`${label} contains trailing or unknown fields`);
@@ -612,20 +675,6 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     }
     rejectType(`${optionLabel} has a noncanonical option envelope`);
   };
-  const vectorCount = (field, vectorLabel) => {
-    const count = readU64Le(field, 0, `${vectorLabel}.count`);
-    if (count > BigInt(MAX_MANIFEST_ITEMS)) {
-      throw new RangeError(`${vectorLabel}${TEXT_EXCEEDS_THE}${MAX_MANIFEST_ITEMS}-item limit`);
-    }
-    const vectorState = { offset: 8 };
-    for (let index = 0; index < Number(count); index += 1) {
-      readCompactField(field, vectorState, `${vectorLabel}[${index}]`);
-    }
-    if (vectorState.offset !== field.length) {
-      rejectType(`${vectorLabel} has trailing or missing vector bytes`);
-    }
-    return Number(count);
-  };
   const expectedAccessHints = manifest.access_set_hints !== null;
   if (optionPresent(fields[4], `${label}.${TEXT_ACCESS_SET_HINTS}`) !== expectedAccessHints) {
     rejectType((TEXT_KOTODAMA_MANIFEST + "access hints do not match the embedded interface"));
@@ -633,15 +682,16 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
   for (const [fieldIndex, manifestValue, fieldLabel] of [
     [5, manifest.kotoba ?? [], "kotoba"],
     [6, manifest.entrypoints, "entrypoints"],
-    [7, manifest.states, "states"],
-    [8, manifest.error_types ?? [], "error_types"],
+    [8, manifest.states, "states"],
+    [9, manifest.error_types ?? [], "error_types"],
   ]) {
-    if (vectorCount(fields[fieldIndex], `${label}.${fieldLabel}`) !== manifestValue.length) {
+    if (visitEmbeddedVector(fields[fieldIndex], `${label}.${fieldLabel}`, MAX_MANIFEST_ITEMS) !== manifestValue.length) {
       rejectType(
         `${TEXT_KOTODAMA_MANIFEST}${fieldLabel} count${TEXT_DOES_NOT_MATCH}the embedded interface`,
       );
     }
   }
+  return validateEmbeddedCallables(fields[7], headerMode, manifest.entrypoints.length, `${label}.callables`);
 }
 
 function validateLiteralSection(bytes, start) {
@@ -780,7 +830,7 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   if (interfaceLength === 0 || interfaceEnd < interfaceStart || interfaceEnd > bytes.length) {
     rejectType(`${label} has an invalid CNTR interface length`);
   }
-  validateEmbeddedInterfaceFrame(
+  const lastCallablePc = validateEmbeddedInterfaceFrame(
     bytes.subarray(interfaceStart, interfaceEnd),
     manifest,
     bytes[6],
@@ -796,6 +846,9 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   const codeLength = bytes.length - codeOffset;
   if (codeLength <= 0 || codeLength % 4 !== 0) {
     rejectType(`${label}${TEXT_MUST_CONTAIN}a non-empty word-aligned instruction stream`);
+  }
+  if (lastCallablePc >= BigInt(codeLength)) {
+    rejectType(`${label} callable root is outside the instruction stream`);
   }
 }
 
@@ -814,9 +867,10 @@ function artifactHashHex(artifactBytes) {
  *
  * This intentionally reuses the same strict V1 checks as the compiler-client
  * response normalizer: the complete domain-separated code identity, canonical
- * manifest fields, authenticated ABI header, CNTR frame, literal section, and
- * word-aligned executable stream must all agree before upload instructions are
- * built.
+ * manifest fields, authenticated ABI header, CNTR frame and callable tables,
+ * literal section, and word-aligned executable stream must all agree before
+ * upload instructions are built. Native admission owns executable policy and
+ * exact callable-to-entrypoint schema binding.
  */
 export function verifyCompiledContractArtifact(
   artifactBytes,

@@ -148,9 +148,9 @@ public enum ValidatorStakingNoritoV1 {
             commitmentsEndHeight = try record.u64(9)
             deliveriesEndHeight = try record.u64(10)
             acceptancesEndHeight = try record.u64(11)
-            guard version == 1, committeeSize >= 4, (committeeSize - 1) % 3 == 0,
+            guard version == 1, (4...31).contains(committeeSize), (committeeSize - 1) % 3 == 0,
                   threshold == (committeeSize - 1) / 3 + 1,
-                  startHeight < commitmentsEndHeight,
+                  startHeight > 0, startHeight < commitmentsEndHeight,
                   commitmentsEndHeight < deliveriesEndHeight,
                   deliveriesEndHeight < acceptancesEndHeight else {
                 throw CanonicalNoritoDecodingError.invalidField("invalid DKG session geometry or cutoffs")
@@ -293,17 +293,77 @@ public enum ValidatorStakingNoritoV1 {
         public var noritoPayload: Data { record.encode() }
     }
 
-    /// Exact equal-vote committee seat in a frozen election.
-    public struct ValidatorPower: Sendable {
+    /// Frozen monetary and scheduling eligibility; network authority is checked by finality.
+    public struct ElectionPolicy: Sendable {
+        public enum AssetScope: Sendable, Equatable { case global }
+
+        private let record: Record
+        public let xorAssetDefinitionID: Data
+        public let assetScope: AssetScope
+        public let assetScale: UInt32
+        public let minSelfBond: Quantity
+        public let minNominationBond: Quantity
+        public let maxValidators: UInt32
+        public let epochLengthBlocks: UInt64
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 7)
+            self.record = record
+            xorAssetDefinitionID = try Record.fixedByteArray(record.field(0), count: 16)
+            guard record.field(1) == Data([0, 0, 0, 0]) else {
+                throw CanonicalNoritoDecodingError.invalidField("validator election custody requires Global scope")
+            }
+            assetScope = .global
+            assetScale = try record.u32(2)
+            minSelfBond = try Quantity(noritoPayload: record.field(3))
+            minNominationBond = try Quantity(noritoPayload: record.field(4))
+            maxValidators = try record.u32(5)
+            epochLengthBlocks = try record.u64(6)
+            // Rust AssetDefinitionId::derive_from_components("nexus.universal", "xor").
+            // This is a rejected identity, never an accepted network XOR default.
+            let syntheticXor = Data([
+                0x5e, 0xcd, 0x1e, 0x80, 0xac, 0x7d, 0x4d, 0x18,
+                0xb2, 0x27, 0x72, 0x09, 0x1a, 0x73, 0xfc, 0x13,
+            ])
+            guard (xorAssetDefinitionID[6] & 0xf0) == 0x40,
+                  (xorAssetDefinitionID[8] & 0xc0) == 0x80,
+                  xorAssetDefinitionID != syntheticXor,
+                  assetScale == 9, !minSelfBond.mantissaLittleEndian.isEmpty,
+                  !minNominationBond.mantissaLittleEndian.isEmpty,
+                  minSelfBond.scale <= assetScale, minNominationBond.scale <= assetScale,
+                  maxValidators >= 4, maxValidators <= 31, (maxValidators - 1) % 3 == 0,
+                  epochLengthBlocks >= 3 else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid frozen validator election policy")
+            }
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Original BLS identity and possession proof. Decoding checks shape, not the pairing.
+    public struct CommitteeMember: Sendable {
         private let record: Record
         public let validator: Data
-        public let power: UInt64
+        public let blsPublicKey: Data
+        public let proofOfPossession: Data
 
         public init(noritoPayload: Data) throws {
             let record = try Record(noritoPayload, fields: 2)
             self.record = record
             validator = record.field(0)
-            power = try record.u64(1)
+            // PeerId wraps PublicKey's sequence of algorithm byte followed by compressed key.
+            let peer = try Record(validator, fields: 1)
+            let key: [UInt8] = try peer.vector(0, limit: 49) { field in
+                guard field.count == 1 else {
+                    throw CanonicalNoritoDecodingError.invalidField("non-canonical public-key byte")
+                }
+                return field.first!
+            }
+            proofOfPossession = try Record.byteVector(record.field(1))
+            guard key.count == 49, key.first == 2, proofOfPossession.count == 96 else {
+                throw CanonicalNoritoDecodingError.invalidField("committee member requires BLS-normal key and possession proof")
+            }
+            blsPublicKey = Data(key.dropFirst())
         }
 
         public var noritoPayload: Data { record.encode() }
@@ -323,8 +383,8 @@ public enum ValidatorStakingNoritoV1 {
         public let authorityGeneration: UInt64
         public let preparingAuthorizationID: Data
         public let electionSeed: Data
-        public let roster: [ValidatorPower]
-        public let validatorSetPops: [Data]
+        public let eligibility: ElectionPolicy
+        public let committee: [CommitteeMember]
 
         public init(noritoPayload: Data) throws {
             let record = try Record(noritoPayload, fields: 13)
@@ -340,12 +400,27 @@ public enum ValidatorStakingNoritoV1 {
             authorityGeneration = try record.u64(8)
             preparingAuthorizationID = try record.fixed(9, count: 32)
             electionSeed = try record.fixed(10, count: 32)
-            roster = try record.vector(11, limit: 31, ValidatorPower.init(noritoPayload:))
-            validatorSetPops = try record.vector(12, limit: 31, Record.byteVector)
-            guard version == 1, targetEpoch == selectionEpoch + 2,
-                  roster.count >= 4, (roster.count - 1) % 3 == 0,
-                  roster.count == validatorSetPops.count else {
+            eligibility = try ElectionPolicy(noritoPayload: record.field(11))
+            committee = try record.vector(12, limit: 31, CommitteeMember.init(noritoPayload:))
+            let target = selectionEpoch.addingReportingOverflow(2)
+            let preparingFirst = selectionHeight.addingReportingOverflow(1)
+            let distance = lastHeight.subtractingReportingOverflow(firstHeight)
+            let length = distance.partialValue.addingReportingOverflow(1)
+            guard version == 1, record.field(1).contains(where: { $0 != 0 }),
+                  selectionAnchor.contains(where: { $0 != 0 }), selectionHeight > 0,
+                  authorityGeneration > 0, !target.overflow, targetEpoch == target.partialValue,
+                  !preparingFirst.overflow, firstHeight > preparingFirst.partialValue,
+                  !distance.overflow, !length.overflow, length.partialValue == eligibility.epochLengthBlocks,
+                  preparingAuthorizationID.contains(where: { $0 != 0 }),
+                  electionSeed.contains(where: { $0 != 0 }),
+                  committee.count >= 4, (committee.count - 1) % 3 == 0,
+                  committee.count <= Int(eligibility.maxValidators) else {
                 throw CanonicalNoritoDecodingError.invalidField("invalid frozen committee preparation")
+            }
+            for index in 1..<committee.count {
+                guard committee[index - 1].blsPublicKey.lexicographicallyPrecedes(committee[index].blsPublicKey) else {
+                    throw CanonicalNoritoDecodingError.invalidField("committee keys must be strictly ordered and unique")
+                }
             }
         }
 

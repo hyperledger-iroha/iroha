@@ -30,7 +30,7 @@ _DIRECTORY = _READ | os.O_DIRECTORY
 _HEX = re.compile(r'[0-9a-f]{64}')
 _EXISTING = {
     'collector_journal': 'collector.jsonl', 'transaction_trace': 'trace.json',
-    'native_finality': 'native/finality.nrt', 'native_queries': 'native/queries.nrt',
+    'native_carrier': 'native/carrier.nrt', 'native_queries': 'native/queries.nrt',
     'native_facts': 'native/facts.nrt', 'native_request': 'native/request.nrt',
     'native_bundle': 'native/bundle.nrt', 'canonical_proof': 'native/proof.nrt',
 }

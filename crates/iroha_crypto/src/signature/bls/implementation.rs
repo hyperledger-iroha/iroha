@@ -9,7 +9,6 @@ use rand_core::TryCryptoRng;
 use sha2::Digest as _;
 use sha2::Sha256;
 use std::{
-    borrow::ToOwned as _,
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     string::ToString as _,
@@ -22,44 +21,12 @@ use w3f_bls::{
     Signature as BlsSignature,
 };
 use zeroize::{Zeroize as _, Zeroizing};
+
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
-const PREPARED_PK_CACHE_LIMIT: usize = 128;
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;
 const VERIFY_OK_CACHE_INPUT_BYTES_LIMIT: usize = 2 * 1024 * 1024;
 #[cfg(feature = "rand")]
 const BLS_RNG_SEED_LEN: usize = 32;
-#[doc(hidden)]
-pub struct PreparedPublicKeyCache<E: EngineBLS> {
-    entries: Vec<(Vec<u8>, E::PublicKeyPrepared)>,
-}
-impl<E: EngineBLS> PreparedPublicKeyCache<E> {
-    fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-    fn get_or_insert(&mut self, pk: &PublicKey<E>, pk_bytes: &[u8]) -> E::PublicKeyPrepared {
-        if let Some(pos) = self
-            .entries
-            .iter()
-            .position(|(bytes, _)| bytes.as_slice() == pk_bytes)
-        {
-            let prepared = self.entries[pos].1.clone();
-            if pos + 1 != self.entries.len() {
-                let entry = self.entries.remove(pos);
-                self.entries.push(entry);
-            }
-            return prepared;
-        }
-        let prepared = E::prepare_public_key(pk.0);
-        self.entries.push((pk_bytes.to_vec(), prepared.clone()));
-        if self.entries.len() > PREPARED_PK_CACHE_LIMIT {
-            let drain = self.entries.len() - PREPARED_PK_CACHE_LIMIT;
-            self.entries.drain(0..drain);
-        }
-        prepared
-    }
-}
 #[derive(Debug, PartialEq, Eq)]
 struct VerifyOkCacheEntry {
     public_key: Vec<u8>,
@@ -197,34 +164,37 @@ fn verify_ok_cache_digest(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> 
     h.update(signature);
     h.finalize().into()
 }
+/// Optional ordinary verification-result retention; never used by admission.
 #[doc(hidden)]
-pub trait PreparedPublicKeyCacheAccess: BlsConfiguration {
-    fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R;
+pub trait VerifyOkCacheAccess: BlsConfiguration {
+    /// Borrow only the exact positive-verdict cache for this orientation.
     fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R;
 }
+#[cfg(test)]
 thread_local! {
-    static PREPARED_PK_CACHE_NORMAL: RefCell<
-        PreparedPublicKeyCache<<NormalConfiguration as BlsConfiguration>::Engine>
-    > = RefCell::new(PreparedPublicKeyCache::new());
-    static PREPARED_PK_CACHE_SMALL: RefCell<
-        PreparedPublicKeyCache<<SmallConfiguration as BlsConfiguration>::Engine>
-    > = RefCell::new(PreparedPublicKeyCache::new());
+    static VERIFY_OK_CACHE_ACCESSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn verify_ok_cache_accesses_for_tests() -> usize {
+    VERIFY_OK_CACHE_ACCESSES.with(std::cell::Cell::get)
+}
+
+thread_local! {
     static VERIFY_OK_CACHE_NORMAL: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
     static VERIFY_OK_CACHE_SMALL: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
 }
-impl PreparedPublicKeyCacheAccess for NormalConfiguration {
-    fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
-        PREPARED_PK_CACHE_NORMAL.with(|cache| f(&mut cache.borrow_mut()))
-    }
+impl VerifyOkCacheAccess for NormalConfiguration {
     fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R {
+        #[cfg(test)]
+        VERIFY_OK_CACHE_ACCESSES.with(|count| count.set(count.get() + 1));
         VERIFY_OK_CACHE_NORMAL.with(|cache| f(&mut cache.borrow_mut()))
     }
 }
-impl PreparedPublicKeyCacheAccess for SmallConfiguration {
-    fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
-        PREPARED_PK_CACHE_SMALL.with(|cache| f(&mut cache.borrow_mut()))
-    }
+impl VerifyOkCacheAccess for SmallConfiguration {
     fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R {
+        #[cfg(test)]
+        VERIFY_OK_CACHE_ACCESSES.with(|count| count.set(count.get() + 1));
         VERIFY_OK_CACHE_SMALL.with(|cache| f(&mut cache.borrow_mut()))
     }
 }
@@ -345,35 +315,12 @@ fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(
     }
     Ok(())
 }
-fn bls_signature_material_is_all_zero(signature: &[u8]) -> bool {
-    !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
-}
-fn bls_public_key_material_is_all_zero(public_key: &[u8]) -> bool {
-    !public_key.is_empty() && public_key.iter().all(|&byte| byte == 0)
-}
-fn ensure_bls_signature_material_not_all_zero(signature: &[u8]) -> Result<(), Error> {
-    if bls_signature_material_is_all_zero(signature) {
-        return Err(ParseError("BLS signature material must not be all zero".to_string()).into());
-    }
-    Ok(())
-}
 fn parse_canonical_bls_signature<E: EngineBLS>(
     signature_bytes: &[u8],
 ) -> Result<BlsSignature<E>, Error> {
-    ensure_bls_signature_material_not_all_zero(signature_bytes)?;
-    let signature = BlsSignature::<E>::from_bytes(signature_bytes)
-        .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
-    let canonical = signature.to_bytes();
-    if canonical.as_slice() != signature_bytes {
-        return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
-    }
-    // Arkworks accepts the encoded point at infinity before running its
-    // subgroup check, so this explicit identity rejection is load-bearing.
-    let identity_sig = BlsSignature::<E>(Default::default()).to_bytes();
-    if canonical == identity_sig {
-        return Err(ParseError("BLS signature is identity".to_string()).into());
-    }
-    Ok(signature)
+    super::canonical::signature::<E>(signature_bytes)
+        .map(|(signature, _)| signature)
+        .map_err(|failure| failure.into_parse_error().into())
 }
 fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
     let mut seen = BTreeSet::new();
@@ -461,38 +408,67 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         pk: &PublicKey<C::Engine>,
     ) -> Result<(), Error>
     where
-        C: PreparedPublicKeyCacheAccess,
+        C: VerifyOkCacheAccess,
     {
-        ensure_bls_signature_material_not_all_zero(signature_bytes)?;
-        let pk_bytes = pk.to_bytes();
-        let identity_pk = PublicKey::<C::Engine>(Default::default());
-        if pk_bytes == identity_pk.to_bytes() {
-            return Err(ParseError("BLS public key is identity".to_string()).into());
-        }
-        // Parse before consulting the positive cache. Besides pinning canonical
-        // subgroup-checked material, this prevents malformed signatures from
-        // borrowing a cached verdict through variable-length tuple splicing.
-        let signature = parse_canonical_bls_signature::<C::Engine>(signature_bytes)?;
-        let cache_digest = verify_ok_cache_digest(&pk_bytes, message, signature_bytes);
+        // This typed API has always diagnosed all-zero signature material
+        // before typed-key identity; keep that order while checking all keys.
+        super::canonical::signature_nonzero(signature_bytes)
+            .map_err(|failure| Error::from(failure.into_parse_error()))?;
+        let pk_bytes = super::canonical::encode(pk)
+            .ok_or_else(|| super::canonical::Failure::PublicKeyInvalid.into_parse_error())?;
+        let orientation =
+            super::uncached::Orientation::for_algorithm(C::ALGORITHM).ok_or(Error::BadSignature)?;
+        let key = super::uncached::public_key(orientation, pk_bytes.as_slice())
+            .map_err(super::uncached::Rejection::into_error)?;
+        let signature = super::uncached::signature(orientation, signature_bytes)
+            .map_err(super::uncached::Rejection::into_error)?;
+        Self::verify_parsed_inputs(
+            message,
+            signature_bytes,
+            pk_bytes.as_slice(),
+            &key,
+            &signature,
+        )
+    }
+
+    /// Verify the generic Signature facade without retaining a decoded key.
+    pub(crate) fn verify_bytes(
+        message: &[u8],
+        signature_bytes: &[u8],
+        public_key_bytes: &[u8],
+    ) -> Result<(), Error>
+    where
+        C: VerifyOkCacheAccess,
+    {
+        let orientation =
+            super::uncached::Orientation::for_algorithm(C::ALGORITHM).ok_or(Error::BadSignature)?;
+        let (key, signature) =
+            super::uncached::prepare_facade(orientation, public_key_bytes, signature_bytes)
+                .map_err(super::uncached::Rejection::into_error)?;
+        Self::verify_parsed_inputs(message, signature_bytes, public_key_bytes, &key, &signature)
+    }
+
+    fn verify_parsed_inputs(
+        message: &[u8],
+        signature_bytes: &[u8],
+        pk_bytes: &[u8],
+        key: &super::uncached::PublicKey,
+        signature: &super::uncached::Signature,
+    ) -> Result<(), Error>
+    where
+        C: VerifyOkCacheAccess,
+    {
+        // Canonical and subgroup validation precede every cache lookup.
+        let cache_digest = verify_ok_cache_digest(pk_bytes, message, signature_bytes);
         if C::with_verify_ok_cache(|cache| {
-            cache.contains_at_digest(cache_digest, &pk_bytes, message, signature_bytes)
+            cache.contains_at_digest(cache_digest, pk_bytes, message, signature_bytes)
         }) {
             return Ok(());
         }
-        let domain_message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
-        let prepared_pk = C::with_cache(|cache| cache.get_or_insert(pk, &pk_bytes));
-        let prepared_message = <C::Engine as EngineBLS>::prepare_signature(
-            domain_message.hash_to_signature_curve::<C::Engine>(),
-        );
-        let prepared_signature = <C::Engine as EngineBLS>::prepare_signature(signature.0);
-        if !<C::Engine as EngineBLS>::verify_prepared(
-            prepared_signature,
-            &[(prepared_pk, prepared_message)],
-        ) {
-            return Err(Error::BadSignature);
-        }
+        super::uncached::verify_parsed(key, signature, message)
+            .map_err(super::uncached::Rejection::into_error)?;
         C::with_verify_ok_cache(|cache| {
-            cache.remember_at_digest(cache_digest, &pk_bytes, message, signature_bytes);
+            cache.remember_at_digest(cache_digest, pk_bytes, message, signature_bytes);
         });
         Ok(())
     }
@@ -663,25 +639,15 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         Ok(())
     }
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C::Engine>, ParseError> {
-        if bls_public_key_material_is_all_zero(payload) {
-            return Err(ParseError(
-                "BLS public key material must not be all zero".to_string(),
-            ));
-        }
-        let key = PublicKey::from_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
-        let canonical = key.to_bytes();
-        if canonical.as_slice() != payload {
-            return Err(ParseError(
-                "non-canonical BLS public key encoding".to_string(),
-            ));
-        }
-        // Arkworks accepts the encoded point at infinity before running its
-        // subgroup check, so this explicit identity rejection is load-bearing.
-        let identity = PublicKey::<C::Engine>(Default::default());
-        if canonical == identity.to_bytes() {
-            return Err(ParseError("BLS public key is identity".to_string()));
-        }
-        Ok(key)
+        super::canonical::public_key::<C::Engine>(payload)
+            .map(|(key, _)| key)
+            .map_err(super::canonical::Failure::into_parse_error)
+    }
+    /// Validate with the same canonical point relation without formatting a diagnostic.
+    pub(crate) fn validate_public_key_for_decode(
+        payload: &[u8],
+    ) -> Result<(), super::canonical::Failure> {
+        super::canonical::public_key::<C::Engine>(payload).map(drop)
     }
     pub fn parse_private_key(payload: &[u8]) -> Result<ManagedSecretKey<C>, ParseError> {
         let key = ManagedSecretKey::from_bytes(payload)?;
@@ -692,7 +658,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         Ok(key)
     }
 }
-impl<C: BlsConfiguration + PreparedPublicKeyCacheAccess + ?Sized> BlsImpl<C> {
+impl<C: BlsConfiguration + VerifyOkCacheAccess + ?Sized> BlsImpl<C> {
     /// Verify each signature against its paired distinct message and public key.
     ///
     /// A sum-only aggregate verdict is insufficient for a slice API because it

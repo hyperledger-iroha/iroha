@@ -8,10 +8,10 @@ use crate::musubi::{
     ArchiveId, MUSUBI_MAX_PACKAGE_OWNERS_V1, MusubiAliasNameV1, MusubiArchiveCommitmentV1,
     MusubiArchiveLocationIdV1, MusubiGovernanceDecisionV1, MusubiNamespaceBindingV1,
     MusubiNamespaceDelegationV1, MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageRoleV1,
-    MusubiProviderBundleAttestationSetDigestV1, MusubiProviderBundleVerificationAttestationV1,
-    MusubiPublicationV1, MusubiReasonV1, MusubiRegistryPolicyV1, MusubiReleaseDigestV1,
-    MusubiReleaseIdV1, MusubiReleaseMetadataV1, MusubiSeedIngressReceiptV1,
-    validate_musubi_account_id_v1,
+    MusubiPinOutboxHighWaterV1, MusubiProviderBundleAttestationSetDigestV1,
+    MusubiProviderBundleVerificationAttestationV1, MusubiPublicationV1, MusubiReasonV1,
+    MusubiRegistryPolicyV1, MusubiReleaseDigestV1, MusubiReleaseIdV1, MusubiReleaseMetadataV1,
+    MusubiSeedIngressReceiptV1, validate_musubi_account_id_v1,
 };
 use crate::sorafs::pin_registry::{ManifestDigest, ReplicationOrderId};
 use iroha_model_base::error::ParseError;
@@ -74,6 +74,82 @@ impl RegisterMusubiArchiveV1 {
     }
 }
 impl crate::seal::Instruction for RegisterMusubiArchiveV1 {}
+isi! {
+    /// Advance one publisher's complete immutable signed pin-intent inventory high-water.
+    ///
+    /// The signer submits this instruction and waits for finality before any represented pin
+    /// transaction can enter Queue. The instruction carries no private signed wire.
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
+    #[norito_schema(name = "iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1")]
+    pub struct AdvanceMusubiPinOutboxV1 {
+        /// Exact deployment identity.
+        pub network_id: crate::NetworkId,
+        /// Signed transaction authority that owns this monotonic lineage.
+        pub pin_authority: AccountId,
+        /// Immutable signing-session identity.
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
+        pub session_id: [u8; 32],
+        /// Exact current revision, or zero only before initialization.
+        pub expected_revision: u64,
+        /// Exact current complete inventory digest, or zero only before initialization.
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
+        pub expected_inventory_digest: [u8; 32],
+        /// Digest of the complete next inventory, including every retained signed wire.
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
+        pub inventory_digest: [u8; 32],
+    }
+}
+impl AdvanceMusubiPinOutboxV1 {
+    /// First-release wire identifier.
+    pub const WIRE_ID: &'static str = "iroha.musubi.v1.pin_outbox.advance";
+
+    /// Validate the self-contained signed instruction fields.
+    ///
+    /// # Errors
+    /// Rejects malformed identity, lineage, predecessor, or next digest.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        validate_musubi_account_id_v1(&self.pin_authority)?;
+        if self.network_id.as_bytes()[31] & 1 != 1
+            || self.session_id == [0; 32]
+            || self.inventory_digest == [0; 32]
+            || self.inventory_digest == self.expected_inventory_digest
+            || (self.expected_revision == 0) != (self.expected_inventory_digest == [0; 32])
+        {
+            return Err(ParseError::new("Musubi pin-outbox advance is invalid"));
+        }
+        Ok(())
+    }
+
+    /// Build the exact value committed by a successful signed transaction.
+    ///
+    /// # Errors
+    /// Rejects malformed fields, revision overflow, or an invalid finality context.
+    pub fn recorded_high_water(
+        &self,
+        recorded_at_height: u64,
+        transaction_hash: [u8; 32],
+    ) -> Result<MusubiPinOutboxHighWaterV1, ParseError> {
+        self.validate()?;
+        let revision = self
+            .expected_revision
+            .checked_add(1)
+            .ok_or_else(|| ParseError::new("Musubi pin-outbox revision overflow"))?;
+        let record = MusubiPinOutboxHighWaterV1 {
+            version: crate::musubi::MUSUBI_PIN_OUTBOX_HIGH_WATER_VERSION_V1,
+            network_id: self.network_id,
+            pin_authority: self.pin_authority.clone(),
+            session_id: self.session_id,
+            revision,
+            inventory_digest: self.inventory_digest,
+            recorded_at_height,
+            transaction_hash,
+        };
+        record.validate()?;
+        Ok(record)
+    }
+}
+impl crate::seal::Instruction for AdvanceMusubiPinOutboxV1 {}
 isi! {
     /// Register one immutable provider attestation for later compact location-set commitments.
     #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
@@ -639,6 +715,14 @@ impl_decode_musubi_instruction!(RegisterMusubiArchiveV1 {
     staging_receipt: MusubiSeedIngressReceiptV1,
     expected_policy_revision: u64,
 });
+impl_decode_musubi_instruction!(AdvanceMusubiPinOutboxV1 {
+    network_id: crate::NetworkId,
+    pin_authority: AccountId,
+    session_id: [u8; 32],
+    expected_revision: u64,
+    expected_inventory_digest: [u8; 32],
+    inventory_digest: [u8; 32],
+});
 impl_decode_musubi_instruction!(RegisterMusubiProviderBundleAttestationV1 {
     attestation: MusubiProviderBundleVerificationAttestationV1,
     expected_location_revision: u64,
@@ -777,6 +861,56 @@ mod tests {
     }
     fn release() -> MusubiReleaseIdV1 {
         MusubiReleaseIdV1::new(package(), "1.2.3".parse().expect("version"))
+    }
+    #[test]
+    fn pin_outbox_advance_record_binds_all_lineage_fields_and_roundtrips() {
+        let keypair = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .expect("pin authority keypair");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let network_id = crate::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([0x42; 32])),
+        );
+        let mut advance = AdvanceMusubiPinOutboxV1 {
+            network_id,
+            pin_authority: authority.clone(),
+            session_id: [0x43; 32],
+            expected_revision: 0,
+            expected_inventory_digest: [0; 32],
+            inventory_digest: [0x44; 32],
+        };
+        advance.validate().expect("initial advance is canonical");
+        assert_slice_roundtrip(advance.clone());
+        let record = advance
+            .recorded_high_water(7, [0x45; 32])
+            .expect("derived high-water");
+        assert_eq!(record.pin_authority, authority);
+        assert_eq!(record.revision, 1);
+        record.validate().expect("derived record is valid");
+        advance.expected_revision = 1;
+        assert!(
+            advance.validate().is_err(),
+            "predecessor digest is required"
+        );
+        advance.expected_inventory_digest = record.inventory_digest;
+        advance.inventory_digest = record.inventory_digest;
+        assert!(
+            advance.validate().is_err(),
+            "unchanged inventory cannot ratchet"
+        );
+        advance.inventory_digest = [0; 32];
+        assert!(advance.validate().is_err(), "next digest must be nonzero");
+        advance.inventory_digest = [0x46; 32];
+        assert_eq!(
+            advance
+                .recorded_high_water(8, [0x47; 32])
+                .expect("successor record")
+                .revision,
+            2
+        );
+        assert!(advance.recorded_high_water(0, [0x47; 32]).is_err());
+        assert!(advance.recorded_high_water(8, [0; 32]).is_err());
+        advance.expected_revision = u64::MAX;
+        assert!(advance.recorded_high_water(8, [0x47; 32]).is_err());
     }
     fn provider_attestation() -> MusubiProviderBundleVerificationAttestationV1 {
         let keypair =
@@ -986,6 +1120,7 @@ mod tests {
         let ids = [
             RegisterMusubiNamespaceBindingV1::WIRE_ID,
             RegisterMusubiArchiveV1::WIRE_ID,
+            AdvanceMusubiPinOutboxV1::WIRE_ID,
             RegisterMusubiProviderBundleAttestationV1::WIRE_ID,
             AddMusubiArchiveLocationV1::WIRE_ID,
             RetireMusubiArchiveLocationV1::WIRE_ID,

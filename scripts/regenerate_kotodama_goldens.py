@@ -860,12 +860,15 @@ def source_check_commands(
     return commands
 
 
-def validate_sources(koto: Path, root: Path, sources: Sequence[Path]) -> None:
+def validate_sources(
+    koto: Path, root: Path, sources: Sequence[Path], staging_root: Path
+) -> None:
     """Format-check and compile-check every tracked source under its V1 mode."""
 
     if TEST_SOURCE not in sources:
         raise GoldenError(f"missing canonical test module {TEST_SOURCE}")
-    ordinary = [source for source in sources if source != TEST_SOURCE]
+    test_sources = [source for source in sources if source.name.endswith(".test.ko")]
+    ordinary = [source for source in sources if source not in test_sources]
     zk_sources = sorted(
         {
             *EXTRA_ZK_SOURCES,
@@ -887,6 +890,33 @@ def validate_sources(koto: Path, root: Path, sources: Sequence[Path]) -> None:
     run([koto, "fmt", "--check", *sources], root)
     for command in source_check_commands(koto, standard_sources, zk_sources):
         run(command, root)
+    validate_additional_test_sources(koto, root, test_sources, staging_root)
+
+
+def validate_additional_test_sources(
+    koto: Path, root: Path, test_sources: Sequence[Path], staging_root: Path
+) -> None:
+    """Execute test modules in their real source or scaffold layout."""
+
+    template = Path("crates/musubi/templates/contract.test.ko")
+    for source in sorted(test_sources):
+        if source == TEST_SOURCE:
+            continue  # The canonical runner acceptance suite executes this below.
+        command = [koto, "test", "run", "--jobs", "2", "--seed", "0", "--format", "json"]
+        if source != template:
+            run([*command, source], root)
+            continue
+        # Musubi installs this exact pair under contracts/ and tests/, preserving
+        # the template's relative koto_test target without rewriting its source.
+        with tempfile.TemporaryDirectory(prefix="musubi-tests.", dir=staging_root) as raw:
+            stage = Path(raw)
+            contract = stage / "contracts" / "coffee-club.ko"
+            test = stage / "tests" / "coffee-club.test.ko"
+            contract.parent.mkdir()
+            test.parent.mkdir()
+            contract.write_bytes((root / "crates/musubi/templates/contract.ko").read_bytes())
+            test.write_bytes((root / source).read_bytes())
+            run([*command, test], stage)
 
 
 def contract_test_commands(
@@ -1821,7 +1851,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise GoldenError(
                 "Kotodama generation inputs drifted during source classification"
             )
-        validate_sources(koto, root, checked_sources)
+        validate_sources(koto, root, checked_sources, staging_root)
         with tempfile.TemporaryDirectory(
             prefix="v1-goldens-first.",
             dir=staging_root,

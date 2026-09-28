@@ -494,6 +494,34 @@ mod tests {
                 .expect("bound lane manifest policy set");
         assert_ne!(left, right);
     }
+    #[test]
+    fn nexus_policy_preimage_is_exact_digest_source_under_ambient_layout_changes() {
+        const DOMAIN: &[u8] = b"iroha:nexus:consensus-policy:v1\0";
+        let nexus = Nexus::default();
+        let compliance = None;
+        let manifests = Some([0x31; 32]);
+        let preimage =
+            nexus_consensus_policy_preimage_with_runtime_policies(&nexus, compliance, manifests)
+                .expect("canonical Nexus preimage");
+        let digest =
+            nexus_consensus_policy_digest_with_runtime_policies(&nexus, compliance, manifests)
+                .expect("Nexus digest");
+        assert_eq!(
+            digest,
+            <[u8; 32]>::from(Hash::new_from_chunks(&[DOMAIN, preimage.as_slice()]))
+        );
+        let _ambient = norito::core::DecodeFlagsGuard::enter(0);
+        assert_eq!(
+            nexus_consensus_policy_preimage_with_runtime_policies(&nexus, compliance, manifests)
+                .expect("ambient-independent preimage"),
+            preimage
+        );
+        assert_eq!(
+            nexus_consensus_policy_digest_with_runtime_policies(&nexus, compliance, manifests)
+                .expect("ambient-independent digest"),
+            digest
+        );
+    }
     fn execution_policy_hash(config: &Root) -> [u8; 32] {
         execution_policy_digest_v1(
             &config.pipeline,

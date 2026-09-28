@@ -17,10 +17,10 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     block_hashes: BlockHashSurface,
     runtime: SnapshotNexusRuntime,
     runtime_preimage: Option<SnapshotNexusRuntime>,
-    state_journals: [mv::BlockPublicationIdentity; 4],
-    state_preimages: [Option<Hash>; 3],
-    lane_contexts: Hash,
-    lane_contexts_seal: Option<Hash>,
+    state_journals: [mv::BlockPublicationIdentity; 3],
+    state_preimages: [Option<Hash>; 2],
+    lane_state: Hash,
+    lane_state_seal: Option<Hash>,
     world: WorldPublicationDelta,
     world_journals: Vec<mv::BlockPublicationIdentity>,
     world_dataspaces: DataSpaceCatalog,
@@ -47,9 +47,6 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     evaluated_fragment_count: Option<u64>,
     lifecycle_evaluated: bool,
     relay_records: Hash,
-    merge_entry: Option<HashOf<MergeLedgerEntry>>,
-    merge_entrypoints: BTreeSet<HashOf<TransactionEntrypoint>>,
-    native_identity: Option<Hash>,
     axt_counters: Hash,
     axt_transitions: BTreeSet<DataSpaceId>,
     axt_ratchets_finalized: bool,
@@ -57,8 +54,6 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     slash_observability: Hash,
     #[cfg(feature = "telemetry")]
     parliament_observability: Hash,
-    authenticated_replay: bool,
-    replay_prevalidation: bool,
 }
 
 /// Original tree family/predecessor and exact appended suffix.
@@ -227,7 +222,6 @@ impl FinalizedPublicationSurface {
             state_journal!(canonical_runtime),
             state_journal!(commit_topology),
             state_journal!(prev_commit_topology),
-            state_journal!(lane_consensus_contexts),
         ];
         let world_journals = block.world.publication_identities(&expected.world, mode)?;
         let da_commitments = block
@@ -303,19 +297,15 @@ impl FinalizedPublicationSurface {
                     .touched_value()
                     .map(|value| hash_value(value.before))
                     .transpose()?,
-                block
-                    .lane_consensus_contexts
-                    .touched_value()
-                    .map(|value| value.before.canonical_hash())
-                    .transpose()
-                    .map_err(|error| error.to_string())?,
             ],
-            lane_contexts: block
-                .lane_consensus_contexts
-                .get()
-                .canonical_hash()
-                .map_err(|error| error.to_string())?,
-            lane_contexts_seal: block.lane_consensus_contexts_seal,
+            lane_state:
+                iroha_data_model::sumeragi_finality::SumeragiLaneStateCommitment::from_state(
+                    block.network_id,
+                    block._curr_block.height().get(),
+                    block.world.sumeragi_lanes(),
+                )?
+                .state_hash(),
+            lane_state_seal: block.sumeragi_lane_state_seal,
             world: block.world.publication_state_delta()?,
             world_journals,
             world_dataspaces: block.world.dataspace_catalog.clone(),
@@ -359,12 +349,6 @@ impl FinalizedPublicationSurface {
             evaluated_fragment_count: block.autoscale_evaluated_committed_fragment_count,
             lifecycle_evaluated: block.autoscale_lifecycle_evaluated,
             relay_records: hash_value(&block.verified_lane_relay_records)?,
-            merge_entry: block
-                .staged_merge_entry
-                .as_ref()
-                .map(MergeLedgerEntry::canonical_hash),
-            merge_entrypoints: block.merge_carrier_entrypoints.iter().copied().collect(),
-            native_identity: block.native_output_publication_identity()?,
             axt_counters: hash_value(&block.axt_next_handle_counters)?,
             axt_transitions: block.axt_authorization_transitioned.clone(),
             axt_ratchets_finalized: block.axt_policy_transition_ratchets_finalized,
@@ -372,8 +356,6 @@ impl FinalizedPublicationSurface {
             slash_observability: hash_value(&slashes)?,
             #[cfg(feature = "telemetry")]
             parliament_observability: hash_value(&block.pending_parliament_telemetry_events)?,
-            authenticated_replay: block.authenticated_replay_commit,
-            replay_prevalidation: block.replay_prevalidation,
         })
     }
 
@@ -398,16 +380,10 @@ impl StateBlock<'_> {
         self.finalize_axt_asset_incarnations()?;
         self.finalize_axt_policy_transition_ratchets()
             .map_err(|error| error.to_string())?;
-        if !self
-            .staged_merge_entry
-            .as_ref()
-            .is_some_and(|entry| entry.execution_batch.is_some())
-        {
-            self.prune_axt_replay_ledger(
-                current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms),
-                self.nexus.axt.replay_retention_slots.get(),
-            );
-        }
+        self.prune_axt_replay_ledger(
+            current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms),
+            self.nexus.axt.replay_retention_slots.get(),
+        );
         // This is also the preview used before replay's checkpoint comparison.
         // Repeating it later cannot mutate the retained net publication surface.
         self.prepare_replay_checkpoint_preview()
@@ -435,7 +411,7 @@ mod tests {
     #[test]
     fn final_publication_surface_binds_topologies_omitted_from_checkpoint() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         surface.verify(&block).unwrap();
@@ -457,9 +433,9 @@ mod tests {
     }
 
     #[test]
-    fn final_publication_surface_binds_deferred_da_and_replay_authority() {
+    fn final_publication_surface_binds_deferred_da_effects() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         block.pending_da_commitments = Some(PendingDaCommitmentBundle {
@@ -473,14 +449,12 @@ mod tests {
         assert!(surface.verify(&block).is_err());
         block.pending_da_commitments = None;
         surface.verify(&block).unwrap();
-        block.authenticated_replay_commit = true;
-        assert!(surface.verify(&block).is_err());
     }
 
     #[test]
     fn final_publication_surface_rejects_new_delivery_events() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         block.world.external_event_buf.push(
@@ -500,7 +474,7 @@ mod tests {
     #[test]
     fn final_publication_surface_binds_projection_history_and_activation_inputs() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         block.autoscale_sample_history_dirty = true;
         assert!(surface.verify(&block).is_err());
@@ -519,7 +493,7 @@ mod tests {
     #[test]
     fn final_publication_surface_binds_runtime_and_pending_journals() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         let version = block.canonical_runtime.get().version;
         block.canonical_runtime.get_mut().version = version.wrapping_add(1);
@@ -539,7 +513,7 @@ mod tests {
     #[test]
     fn final_publication_surface_binds_noop_undo_changes_omitted_from_net_delta() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let semantic_delta = block.world.net_state_delta().unwrap();
         let checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
@@ -558,7 +532,7 @@ mod tests {
         assert_eq!(semantic_delta, block.world.net_state_delta().unwrap());
         assert!(surface.verify(&block).is_err());
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
-        let _ = block.lane_consensus_contexts.get_mut();
+        let _ = block.world.sumeragi_lanes.get_mut();
         assert!(surface.verify(&block).is_err());
     }
 
@@ -566,8 +540,8 @@ mod tests {
     fn final_publication_surface_rejects_foreign_original_journals() {
         let state = state();
         let foreign_state = self::state();
-        let block = state.merge_preexecution_block(header());
-        let foreign_block = foreign_state.merge_preexecution_block(header());
+        let block = state.block(header());
+        let foreign_block = foreign_state.block(header());
         assert_eq!(
             crate::snapshot::canonical_staged_state_snapshot_hash(&block),
             crate::snapshot::canonical_staged_state_snapshot_hash(&foreign_block),
@@ -580,8 +554,8 @@ mod tests {
     fn final_publication_surface_rejects_identical_foreign_world_journals_at_first_capture() {
         let state = state();
         let foreign_state = self::state();
-        let mut block = state.merge_preexecution_block(header());
-        let mut foreign_block = foreign_state.merge_preexecution_block(header());
+        let mut block = state.block(header());
+        let mut foreign_block = foreign_state.block(header());
         let semantic_delta = block.world.net_state_delta().unwrap();
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         macro_rules! reject_foreign {
@@ -597,14 +571,15 @@ mod tests {
         reject_foreign!(parameters);
         reject_foreign!(smart_contract_state);
         reject_foreign!(triggers);
+        reject_foreign!(sumeragi_lanes);
     }
 
     #[test]
     fn final_publication_surface_rejects_identical_foreign_state_journals_at_first_capture() {
         let state = state();
         let foreign_state = self::state();
-        let mut block = state.merge_preexecution_block(header());
-        let mut foreign_block = foreign_state.merge_preexecution_block(header());
+        let mut block = state.block(header());
+        let mut foreign_block = foreign_state.block(header());
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         macro_rules! reject_foreign {
             ($field:ident) => {
@@ -618,7 +593,6 @@ mod tests {
         reject_foreign!(canonical_runtime);
         reject_foreign!(commit_topology);
         reject_foreign!(prev_commit_topology);
-        reject_foreign!(lane_consensus_contexts);
         reject_foreign!(transactions);
         reject_foreign!(block_hashes);
     }
@@ -627,7 +601,7 @@ mod tests {
     fn final_publication_surface_rejects_changed_world_predecessor_and_mixed_modes() {
         let state = state();
         let foreign_state = self::state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let semantic_delta = block.world.net_state_delta().unwrap();
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         let original = std::mem::replace(
@@ -674,7 +648,7 @@ mod tests {
     #[test]
     fn final_publication_surface_binds_deferred_geometry_inputs() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         // A no-op deferred plan isolates the local authorization surface from
         // replicated World changes. This never grants lifecycle publication.
         block.pending_autoscale_lifecycle = Some(PendingAutoscaleLaneLifecycle {
@@ -728,7 +702,7 @@ mod tests {
     #[test]
     fn final_publication_preparation_is_idempotent_and_requires_drained_events() {
         let state = state();
-        let mut block = state.merge_preexecution_block(header());
+        let mut block = state.block(header());
         let first = block.prepare_finalized_publication_surface().unwrap();
         first.verify(&block).unwrap();
         let repeated = block.prepare_finalized_publication_surface().unwrap();

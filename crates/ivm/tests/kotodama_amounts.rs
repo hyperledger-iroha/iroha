@@ -40,7 +40,10 @@ fn execute_rounded(mode: &str) -> Quantity {
         .expect("select main entrypoint");
     vm.run().expect("execute rounded quantity program");
     let tlv = vm
-        .validate_tlv(vm.register(10))
+        .validate_tlv(
+            vm.public_call_result_word(0)
+                .expect("completed return word"),
+        )
         .expect("returned quantity pointer");
     assert_eq!(tlv.type_id, PointerType::Quantity);
     QuantityValueV1::decode_frame(tlv.payload)

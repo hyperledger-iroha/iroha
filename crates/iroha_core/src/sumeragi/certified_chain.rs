@@ -4,8 +4,11 @@
 //! Kura holds one frame per committed height: the result-bearing iroha block and its
 //! [`CommitCertificate`] — the canonical core [`BlockHeader`], the `CommitQC` and the preimage of
 //! the certified result `R` ([`ExecutionResultCommitment`]). Genesis carries a result-only
-//! certificate (no header, no `CommitQC`); it is the chain's trust root, authenticated by its
-//! signature and by the network id every transaction binds (the genesis hash).
+//! certificate (no header, no `CommitQC`). Its signed body and registered authority are the
+//! network-pinned trust root. The result-only execution preimage is added after genesis executes;
+//! genesis signatures do not authenticate that preimage. An exact-quorum successor authenticates
+//! `R_g` through its signed `parent_result`; a genesis-only result requires local deterministic
+//! execution trust or a separately authenticated replay anchor.
 //!
 //! The reader offers two reads with different trust models:
 //!
@@ -24,31 +27,30 @@
 //! - [`CertifiedChain::certified`]: the committed read **plus the local `CommitQC`**. The
 //!   certificate must certify exactly this header and result (kind, height, block hash, result,
 //!   attestation flag, instance) and verify under the committee of its height (see below). The
-//!   verification is pluggable: by default it is the commit-only check of F8's rule H6 (b)
-//!   (`verify_qc_signatures`: `q` Commit signatures prove the commit); a caller that relays the
-//!   certificate as an attestation bundle passes an [`AttestationVerifier`] for the full check
-//!   (a). Off-chain consumers (Torii, signers, provers, bridges) use this read.
+//!   default verifier checks both the exact BLS quorum and source-complete native paired-Pasta
+//!   attestations. A caller may explicitly supply an application verifier; there is no
+//!   signature-only finality fallback. Off-chain consumers use this read.
 //!
-//! **Committees.** The committee of height `x` is `C_x` of the lag-2 schedule (§10.1). `R_{x-2}`
-//! commits `committee_digest(C_x)` (`next_committee_digest`), so the reader authenticates a
-//! candidate committee against the digest in the result preimage stored at `x - 2`, bound to the
-//! certified header of `x` through the header of `x - 1` (its hash is the certified header's
-//! `parent_hash`, and it binds `R_{x-2}` as `parent_result`); `C_{g+1}` is the committee the
-//! signed genesis registers. The candidates are the committees of the World
-//! schedule window and the genesis committee, each with its members' proofs of possession
-//! (aggregate verification only admits `PoP`-verified keys). A historical committee that is
-//! neither — the chain has since rotated validators — is not reconstructible from the retained
-//! state: the reader then reports [`QcVerification::CommittedLocally`], relying on the
-//! verification the driver performed before it stored the block (the driver appends only blocks
-//! whose `CommitQC` verified under `C_x`, §12.2). That is the trust boundary: a node trusts its
-//! own Kura for such heights as it trusts it for its whole state; a caller that needs an
-//! independent proof requires [`QcVerification::Verified`].
+//! **Epoch authority.** Every result retains its complete native epoch and schedule graph.
+//! The reader verifies the prefix iteratively from the signed genesis context, checks both
+//! parent links and the parent result at every height, and carries a bounded schedule plus
+//! active authority. Chain parameters retain lag two; a successor authority is admitted only
+//! after the incumbent exact quorum certifies the mandatory attested boundary. Every signature
+//! binds the scheduling epoch and complete context identity. The preceding certified pulse
+//! supplies fresh leader randomness, even when an authority generation is retained.
+//! Missing, reordered or invalid authority fails closed even after that committee has rotated
+//! out of World. There is no trust-in-local-storage certificate verdict.
 //!
 //! **Chains.** [`CertifiedChain::walk`] reads consecutive heights and additionally checks that
 //! each block extends the previous one: its core header binds the parent's block hash and `R`,
 //! and its iroha header the parent's iroha hash.
+//!
+//! **Restoration.** `CertifiedChain::from_pinned` runs this same verifier before a State exists,
+//! against an explicit network, configured chain instance and exact committed hash cut. It
+//! accepts no World authority. Each body is checked against the cut before its prefix is
+//! authenticated; the lone-genesis execution trust limitation is unchanged.
 
-use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf, PublicKey as IrohaPublicKey};
 use iroha_data_model::{
@@ -59,24 +61,31 @@ use iroha_data_model::{
             TrustedBlockProofAnchor, TrustedBlockProofAnchorError, TrustedExecutionOutputAnchor,
         },
     },
+    parameter::system::ConsensusMode,
+    sumeragi::epoch::ValidatorEpochContextV1,
     transaction::TransactionEntrypoint,
 };
 use iroha_sumeragi::{
-    crypto::{AttestationVerifier, CertError, verify_qc, verify_qc_signatures},
+    crypto::{AttestationVerifier, CertError, verify_qc},
     message::{BlockHeader, Qc, VoteKind},
-    preimage::{committee_digest_preimage, payload_hash},
-    types::{Committee, Hash32},
+    preimage::payload_hash,
+    types::{Committee, EpochId, Hash32},
 };
 
 use super::{
     block_store::{decode_certificate, derive_payload},
-    commitment::{ExecutionResultCommitment, chain_hash, result_of_preimage},
-    crypto::BlsCrypto,
+    commitment::{ExecutionResultCommitment, result_of_preimage},
+    crypto::{BlsCrypto, core_key},
     node::global_instance,
     schedule,
     startup::{GENESIS_HEIGHT, core_hash_of},
 };
-use crate::state::{StateReadOnly, WorldReadOnly};
+use crate::{
+    kura::Kura,
+    state::{StateReadOnly, StateView},
+};
+use iroha_data_model::NetworkId;
+use iroha_model_base::chain::ChainId;
 
 /// Domain tag of a certified block id: `H(tag ‖ block_hash ‖ R)`.
 pub const CERTIFIED_BLOCK_ID_TAG: &[u8] = b"iroha/sumeragi/certified-block/v1";
@@ -160,6 +169,33 @@ pub enum ChainReadError {
         /// The failed check.
         error: CertError,
     },
+}
+
+// Keep the committed-source failure typed across the portable data-model boundary.
+// Local allocation/admission errors never pass through this conversion.
+impl From<ChainReadError> for iroha_data_model::sumeragi_finality::ScheduleSourceError {
+    fn from(error: ChainReadError) -> Self {
+        match error {
+            ChainReadError::NotCommitted { height } => Self::NotCommitted { height },
+            ChainReadError::NotInView { height } => Self::NotInView { height },
+            ChainReadError::MissingCertificate { height } => Self::MissingCertificate { height },
+            ChainReadError::Malformed { height, reason } => Self::Malformed { height, reason },
+            ChainReadError::HeaderMismatch { height } => Self::HeaderMismatch { height },
+            ChainReadError::ResultMismatch { height } => Self::ResultMismatch { height },
+            ChainReadError::ExecutionMismatch { height } => Self::ExecutionMismatch { height },
+            ChainReadError::WrongInstance { height } => Self::WrongInstance { height },
+            ChainReadError::Discontinuous { height } => Self::Discontinuous { height },
+            ChainReadError::ForeignGenesis => Self::ForeignGenesis,
+            ChainReadError::Committee { height, reason } => Self::Committee { height, reason },
+            ChainReadError::Certificate { height, error } => Self::Certificate { height, error },
+        }
+    }
+}
+
+impl From<ChainReadError> for iroha_data_model::sumeragi_finality::ScheduleError {
+    fn from(error: ChainReadError) -> Self {
+        Self::CommittedSource(error.into())
+    }
 }
 
 /// The consensus-visible receipt of a committed height: identical on every honest node, derived
@@ -315,6 +351,8 @@ pub fn committed_block(
 
 /// The receipt of a Kura frame claimed to be the committed block at `height`.
 fn read_frame(block: Arc<SignedBlock>, height: u64) -> Result<CommittedBlock, ChainReadError> {
+    #[cfg(test)]
+    relation_counts::frame(height);
     let malformed = |reason: String| ChainReadError::Malformed { height, reason };
     // Hashing only: the chain hash `H` needs no admitted key.
     let hasher = BlsCrypto::new();
@@ -323,14 +361,14 @@ fn read_frame(block: Arc<SignedBlock>, height: u64) -> Result<CommittedBlock, Ch
         .ok_or(ChainReadError::MissingCertificate { height })?;
     let genesis = height == GENESIS_HEIGHT;
     let (header, core_hash) = if genesis {
-        if !certificate.consensus_header.is_empty() || !certificate.commit_qc.is_empty() {
+        if !certificate.consensus_header().is_empty() || !certificate.commit_qc().is_empty() {
             return Err(malformed(
                 "genesis carries a result-only certificate".into(),
             ));
         }
         (None, core_hash_of(&block))
     } else {
-        let header: BlockHeader = norito::decode_canonical(&certificate.consensus_header)
+        let header: BlockHeader = norito::decode_canonical(certificate.consensus_header())
             .map_err(|error| malformed(error.to_string()))?;
         let payload = derive_payload(&block, header.payload_len)
             .map_err(|error| malformed(error.to_string()))?;
@@ -343,17 +381,46 @@ fn read_frame(block: Arc<SignedBlock>, height: u64) -> Result<CommittedBlock, Ch
         let core_hash = header.hash(&hasher);
         (Some(header), core_hash)
     };
-    let result = result_of_preimage(&certificate.result_preimage);
-    let commitment = ExecutionResultCommitment::decode(&certificate.result_preimage)
+    let result = result_of_preimage(certificate.result_preimage());
+    let commitment = ExecutionResultCommitment::decode(certificate.result_preimage())
         .map_err(|error| malformed(error.to_string()))?;
+    if let Some(header) = &header {
+        super::epoch_beacon::control::verify_result(
+            &header.control_witness,
+            commitment.beacon.as_ref(),
+        )
+        .map_err(|error| malformed(error.to_string()))?;
+        if commitment.beacon.as_ref().is_some_and(|pulse| {
+            pulse.context.instance != header.instance.0
+                || pulse.context.epoch != header.epoch.epoch
+                || pulse.context.epoch_context_id != header.epoch.context.0
+                || pulse.context.parent_consensus_hash != header.parent_hash.0
+                || pulse.context.parent_result != header.parent_result.0
+        }) {
+            return Err(ChainReadError::HeaderMismatch { height });
+        }
+        let epoch = schedule::core_epoch(&commitment.schedule.current)
+            .map_err(|error| malformed(error.to_string()))?;
+        if header.epoch != epoch.id || (commitment.schedule.boundary.is_some() && !header.attest) {
+            return Err(ChainReadError::HeaderMismatch { height });
+        }
+    }
     let (wire_len, wire_hash) = block
         .executed_block_wire_identity()
         .map_err(|error| malformed(error.to_string()))?;
-    if block.header().height().get() != height
+    if commitment.height != height
+        || block.header().height().get() != height
         || commitment.execution.executed_block_wire_len != wire_len
         || commitment.execution.executed_block_wire_hash != wire_hash
     {
         return Err(ChainReadError::ExecutionMismatch { height });
+    }
+    if commitment.beacon.as_ref().is_some_and(|pulse| {
+        Some(pulse.finalized_chain_anchor.block_hash) != block.header().prev_block_hash()
+    }) {
+        return Err(malformed(
+            "beacon pulse names another committed parent".into(),
+        ));
     }
     Ok(CommittedBlock {
         height,
@@ -368,13 +435,12 @@ fn read_frame(block: Arc<SignedBlock>, height: u64) -> Result<CommittedBlock, Ch
 /// How the local `CommitQC` of a height was checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QcVerification {
-    /// Genesis: the signed trust root of the chain, without a `CommitQC`.
+    /// Genesis body signatures and network identity verified, without a `CommitQC`.
+    /// This alone does not authenticate its post-execution result preimage. Consumers needing
+    /// independent genesis execution evidence require a verified successor or replay anchor.
     Genesis,
     /// The `CommitQC` verified under the committee of its height.
     Verified,
-    /// The committee of the height is not reconstructible from the retained chain; the driver
-    /// verified the `CommitQC` before storing the block (see the module documentation).
-    CommittedLocally,
 }
 
 /// A committed height with its local `CommitQC` checked.
@@ -433,31 +499,420 @@ impl core::ops::Deref for CertifiedBlock {
     }
 }
 
-/// A committee candidate: the core committee and its members with their proofs of possession.
-struct Candidate {
+/// One complete epoch authority. Its crypto owner admits only this roster's original proofs.
+struct VerifiedAuthority {
+    material: ValidatorEpochContextV1,
+    epoch: EpochId,
     committee: Committee,
-    members: Vec<(IrohaPublicKey, Vec<u8>)>,
+    crypto: BlsCrypto,
 }
 
-/// The candidate committees of a reader (see the module documentation).
-struct Candidates {
-    /// Candidates by `committee_digest` under the chain hash.
-    by_digest: BTreeMap<[u8; 32], Candidate>,
-    /// `digest(C_{g+1})`: the genesis committee.
-    genesis: [u8; 32],
+impl VerifiedAuthority {
+    fn new(material: ValidatorEpochContextV1, height: u64) -> Result<Self, ChainReadError> {
+        let malformed = |reason: String| ChainReadError::Committee { height, reason };
+        let epoch = schedule::core_epoch(&material)
+            .map_err(|error| malformed(error.to_string()))?
+            .id;
+        let crypto = BlsCrypto::new();
+        let keys = material
+            .committee
+            .iter()
+            .map(|member| core_key(member.validator.public_key()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| malformed(error.to_string()))?;
+        let committee =
+            schedule::global_committee(keys).map_err(|error| malformed(error.to_string()))?;
+        crypto
+            .admit_committee(material.committee.iter().map(|member| {
+                (
+                    member.validator.public_key(),
+                    member.proof_of_possession.as_slice(),
+                )
+            }))
+            .map_err(|(index, error)| malformed(format!("member {index}: {error}")))?;
+        Ok(Self {
+            material,
+            epoch,
+            committee,
+            crypto,
+        })
+    }
 }
 
-/// Keys whose proof of possession verified, for aggregate verification. A key stays admitted:
-/// possession is a property of the key, and certificates of old heights still name it.
-static ADMITTED: std::sync::LazyLock<BlsCrypto> = std::sync::LazyLock::new(BlsCrypto::new);
+/// Constant-size cursor: one committed parent, the bounded native schedule and active authority.
+/// A sequential walk verifies each height once; older random reads replay from signed genesis.
+struct VerifiedPrefix {
+    tip: CommittedBlock,
+    schedule: schedule::ConsensusSchedule,
+    authority: Arc<VerifiedAuthority>,
+}
 
-/// The certified-chain reader over one State view (see the module documentation).
+/// One crypto context for both random pinned reads and one-pass externally streamed evidence.
+struct PrefixVerifierContext<'a> {
+    instance: Hash32,
+    network: NetworkId,
+    attestations: Option<&'a dyn AttestationVerifier>,
+}
+impl PrefixVerifierContext<'_> {
+    fn advance_prefix(
+        &self,
+        prefix: &mut VerifiedPrefix,
+        committed: CommittedBlock,
+    ) -> Result<CertifiedBlock, ChainReadError> {
+        let height = committed.height;
+        if !committed.extends(&prefix.tip) {
+            return Err(ChainReadError::Discontinuous { height });
+        }
+        let malformed = |reason: String| ChainReadError::Committee { height, reason };
+        let scheduled = prefix
+            .schedule
+            .ready(height)
+            .map_err(|error| malformed(error.to_string()))?;
+        let authority = if scheduled.epoch == prefix.authority.material {
+            Arc::clone(&prefix.authority)
+        } else {
+            Arc::new(VerifiedAuthority::new(scheduled.epoch.clone(), height)?)
+        };
+        if committed.commitment.schedule.current != authority.material {
+            return Err(malformed(
+                "result changes its authenticated incumbent context".into(),
+            ));
+        }
+        let certified = self.verify_certificate(committed, &authority)?;
+        if let Some(boundary) = &certified.commitment.schedule.boundary {
+            if boundary.selection_anchor != prefix.tip.block_hash() {
+                return Err(malformed(
+                    "boundary selection anchor differs from certified parent".into(),
+                ));
+            }
+            let pulse = prefix.tip.commitment.beacon.as_ref().ok_or_else(|| {
+                malformed("boundary predecessor omits its certified selection pulse".into())
+            })?;
+            let expected_seed = crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
+                pulse,
+                height,
+                boundary.next.authorization.epoch,
+            );
+            if boundary.next.leader_seed != expected_seed {
+                return Err(malformed(
+                    "boundary leader seed differs from certified fresh pulse".into(),
+                ));
+            }
+            if let Some(preparation) = &boundary.preparation {
+                let expected = super::epoch_election::election_seed(
+                    authority.material.network_id,
+                    authority.material.authorization.epoch,
+                    pulse,
+                )
+                .map_err(malformed)?;
+                if preparation.election_seed != expected {
+                    return Err(malformed(
+                        "frozen election seed differs from certified fresh pulse".into(),
+                    ));
+                }
+            }
+        }
+        let schedule = prefix
+            .schedule
+            .advanced(&certified.commitment.schedule)
+            .map_err(|error| malformed(error.to_string()))?;
+        prefix.tip = certified.committed.clone();
+        prefix.schedule = schedule;
+        prefix.authority = authority;
+        Ok(certified)
+    }
+
+    fn verify_certificate(
+        &self,
+        committed: CommittedBlock,
+        authority: &VerifiedAuthority,
+    ) -> Result<CertifiedBlock, ChainReadError> {
+        let height = committed.height;
+        let malformed = |reason: String| ChainReadError::Malformed { height, reason };
+        let certificate = committed
+            .block
+            .commit_certificate()
+            .ok_or(ChainReadError::MissingCertificate { height })?;
+        let certificate_len = norito::canonical_frame_len(certificate)
+            .map_err(|error| malformed(error.to_string()))?;
+        let Some(header) = committed.header.as_ref() else {
+            return Ok(CertifiedBlock {
+                committed,
+                commit_qc: None,
+                verification: QcVerification::Genesis,
+                certificate_len,
+            });
+        };
+        let (_, commit_qc) =
+            decode_certificate(certificate).map_err(|error| malformed(error.to_string()))?;
+        if header.epoch != authority.epoch
+            || commit_qc.epoch != authority.epoch
+            || height < authority.material.authorization.first_height
+            || height > authority.material.authorization.last_height
+            || (authority.material.mode == ConsensusMode::Npos
+                && height == authority.material.authorization.last_height
+                && !header.attest)
+            || commit_qc.kind != VoteKind::Commit
+            || commit_qc.height != height
+            || commit_qc.block_hash != committed.core_hash
+            || commit_qc.attest != header.attest
+        {
+            return Err(ChainReadError::HeaderMismatch { height });
+        }
+        if commit_qc.result != committed.result {
+            return Err(ChainReadError::ResultMismatch { height });
+        }
+        if header.instance != self.instance || commit_qc.instance != self.instance {
+            return Err(ChainReadError::WrongInstance { height });
+        }
+        let native = super::attestation::NativePastaVerifier::new(self.instance, self.network);
+        let verifier = self.attestations.unwrap_or(&native);
+        #[cfg(test)]
+        relation_counts::qc(height);
+        let checked = verify_qc(
+            &authority.crypto,
+            verifier,
+            &self.instance,
+            &authority.epoch,
+            &authority.committee,
+            &commit_qc,
+        );
+        checked.map_err(|error| ChainReadError::Certificate { height, error })?;
+        Ok(CertifiedBlock {
+            committed,
+            commit_qc: Some(commit_qc),
+            verification: QcVerification::Verified,
+            certificate_len,
+        })
+    }
+}
+
+fn make_genesis_prefix(
+    tip: CommittedBlock,
+    material: ValidatorEpochContextV1,
+) -> Result<VerifiedPrefix, ChainReadError> {
+    if tip.commitment.schedule.current != material {
+        return Err(ChainReadError::Committee {
+            height: GENESIS_HEIGHT,
+            reason: "genesis result context differs from its signed body".into(),
+        });
+    }
+    let schedule = schedule::ConsensusSchedule::from_genesis_outcome(&tip.commitment.schedule)
+        .map_err(|error| ChainReadError::Committee {
+            height: GENESIS_HEIGHT,
+            reason: error.to_string(),
+        })?;
+    let authority = Arc::new(VerifiedAuthority::new(material, GENESIS_HEIGHT)?);
+    Ok(VerifiedPrefix {
+        tip,
+        schedule,
+        authority,
+    })
+}
+
+/// Genesis execution authenticated by an actual verified height-two successor.
+///
+/// This move-only receipt is never decoded or publicly constructed. The genesis has no QC;
+/// the successor's exact quorum authenticates its `parent_result` and complete predecessor.
+#[derive(Debug)]
+pub struct GenesisExecutionAnchor {
+    committed: CommittedBlock,
+    successor: Hash32,
+}
+impl GenesisExecutionAnchor {
+    /// Original result-bearing genesis whose execution is authenticated by the successor.
+    #[must_use]
+    pub fn committed(&self) -> &CommittedBlock {
+        &self.committed
+    }
+    /// Native hash of the independently verified successor that signs this result.
+    #[must_use]
+    pub const fn successor(&self) -> Hash32 {
+        self.successor
+    }
+    /// Move the authenticated execution receipt into its consuming evidence owner.
+    #[must_use]
+    pub fn into_committed(self) -> CommittedBlock {
+        self.committed
+    }
+}
+
+/// One chronologically verified native successor and, exactly once at H2, its genesis anchor.
+#[derive(Debug)]
+pub struct CertifiedPrefixStep {
+    current: CertifiedBlock,
+    genesis: Option<GenesisExecutionAnchor>,
+}
+impl CertifiedPrefixStep {
+    /// Consume both actual verification receipts without rebuilding or converting a proof.
+    #[must_use]
+    pub fn into_parts(self) -> (CertifiedBlock, Option<GenesisExecutionAnchor>) {
+        (self.current, self.genesis)
+    }
+}
+
+/// One-pass native certificate verification from independently pinned signed genesis.
+///
+/// The working authority is bounded: the original parent, current authority and lag-two
+/// schedule only. Every supplied height is checked once by the same transition verifier as
+/// [`CertifiedChain`]. There is no all-history committee cache or World authority lookup.
+/// Callers must bound canonical frame allocations before supplying each decoded block.
+/// Construction authenticates genesis header/body and its epoch only. No genesis execution
+/// receipt is exported until a real verified H2 binds its result through `parent_result`.
+pub struct CertifiedPrefix {
+    network: NetworkId,
+    instance: Hash32,
+    prefix: VerifiedPrefix,
+}
+impl CertifiedPrefix {
+    /// Start with the exact configured chain identity and independently pinned genesis network.
+    ///
+    /// # Errors
+    /// Rejects foreign or unsigned genesis, an invalid complete epoch, or a malformed result
+    /// frame. A well-formed genesis result is still untrusted until the first successor.
+    pub fn new(
+        chain_id: &ChainId,
+        network: NetworkId,
+        genesis: Arc<SignedBlock>,
+    ) -> Result<Self, ChainReadError> {
+        let (epoch, instance) = authenticate_genesis(&genesis, &network, chain_id)?;
+        let tip = read_frame(genesis, GENESIS_HEIGHT)?;
+        Ok(Self {
+            network,
+            instance,
+            prefix: make_genesis_prefix(tip, epoch)?,
+        })
+    }
+
+    /// The native chain instance bound by every subsequent signature.
+    #[must_use]
+    pub const fn instance(&self) -> Hash32 {
+        self.instance
+    }
+
+    /// Verify the exact next canonical carrier with full BLS and native paired-Pasta checks.
+    ///
+    /// # Errors
+    /// Rejects changed/skipped parents, result/context substitutions, malformed certificates,
+    /// invalid signatures, incomplete authority, boundary decisions or beacon source links.
+    /// A rejected frame does not advance the original verified cursor.
+    pub fn push(&mut self, block: Arc<SignedBlock>) -> Result<CertifiedPrefixStep, ChainReadError> {
+        let height = block.header().height().get();
+        if self.prefix.tip.height.checked_add(1) != Some(height) {
+            return Err(ChainReadError::Discontinuous { height });
+        }
+        let committed = read_frame(block, height)?;
+        let genesis = (self.prefix.tip.height == GENESIS_HEIGHT).then(|| self.prefix.tip.clone());
+        let current = PrefixVerifierContext {
+            instance: self.instance,
+            network: self.network,
+            attestations: None,
+        }
+        .advance_prefix(&mut self.prefix, committed)?;
+        let genesis = genesis.map(|committed| GenesisExecutionAnchor {
+            committed,
+            successor: current.core_hash,
+        });
+        Ok(CertifiedPrefixStep { current, genesis })
+    }
+}
+
+fn authenticate_genesis(
+    genesis: &SignedBlock,
+    network: &NetworkId,
+    chain_id: &ChainId,
+) -> Result<(ValidatorEpochContextV1, Hash32), ChainReadError> {
+    if genesis.hash().as_ref() != network.as_bytes()
+        || !genesis.header().is_genesis()
+        || genesis.validate_proposal_commitments().is_err()
+    {
+        return Err(ChainReadError::ForeignGenesis);
+    }
+    let epoch = super::epoch::genesis_epoch(genesis).map_err(|_| ChainReadError::ForeignGenesis)?;
+    Ok((epoch, global_instance(genesis, &chain_id.to_string())))
+}
+
+/// The exact source cut being verified. Pinned restoration never supplies a World or roster.
+enum ChainSource<'v, V: StateReadOnly + ?Sized> {
+    State(&'v V),
+    Frames {
+        chain_id: &'v ChainId,
+        network: &'v NetworkId,
+        hashes: &'v [HashOf<IrohaHeader>],
+        frames: &'v [Arc<SignedBlock>],
+    },
+    Pinned {
+        chain_id: &'v ChainId,
+        network: &'v NetworkId,
+        hashes: &'v [HashOf<IrohaHeader>],
+        kura: &'v Kura,
+    },
+}
+impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
+    fn network_id(&self) -> &NetworkId {
+        match self {
+            Self::State(view) => view.network_id(),
+            Self::Pinned { network, .. } | Self::Frames { network, .. } => network,
+        }
+    }
+    fn chain_id(&self) -> &ChainId {
+        match self {
+            Self::State(view) => view.chain_id(),
+            Self::Pinned { chain_id, .. } | Self::Frames { chain_id, .. } => chain_id,
+        }
+    }
+    fn block(&self, height: u64) -> Result<Arc<SignedBlock>, ChainReadError> {
+        let index = usize::try_from(height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or(ChainReadError::NotCommitted { height })?;
+        match self {
+            Self::State(view) => {
+                if index.get() > view.block_hashes().len() {
+                    return Err(ChainReadError::NotCommitted { height });
+                }
+                view.canonical_block_by_height(index)
+                    .map_err(|_| ChainReadError::NotInView { height })
+            }
+            Self::Frames { hashes, frames, .. } => {
+                let expected = hashes
+                    .get(index.get() - 1)
+                    .ok_or(ChainReadError::NotCommitted { height })?;
+                let block = frames
+                    .get(index.get() - 1)
+                    .ok_or(ChainReadError::NotInView { height })?;
+                if block.hash() != *expected || block.header().height().get() != height {
+                    return Err(ChainReadError::NotInView { height });
+                }
+                Ok(Arc::clone(block))
+            }
+            Self::Pinned { hashes, kura, .. } => {
+                let expected = hashes
+                    .get(index.get() - 1)
+                    .ok_or(ChainReadError::NotCommitted { height })?;
+                if kura.is_hash_only_block_height(index) {
+                    return Err(ChainReadError::NotInView { height });
+                }
+                let block = kura
+                    .get_block(index)
+                    .ok_or(ChainReadError::NotInView { height })?;
+                if block.hash() != *expected || block.header().height().get() != height {
+                    return Err(ChainReadError::NotInView { height });
+                }
+                Ok(block)
+            }
+        }
+    }
+}
+
+/// Certified history over one immutable State view or explicit pinned restoration cut.
 pub struct CertifiedChain<'v, V: StateReadOnly + ?Sized> {
-    view: &'v V,
+    source: ChainSource<'v, V>,
     genesis: Arc<SignedBlock>,
+    genesis_epoch: ValidatorEpochContextV1,
     instance: Hash32,
     attestations: Option<&'v dyn AttestationVerifier>,
-    candidates: std::sync::OnceLock<Result<Candidates, ChainReadError>>,
+    prefix: parking_lot::Mutex<Option<VerifiedPrefix>>,
 }
 
 impl<V: StateReadOnly + ?Sized> core::fmt::Debug for CertifiedChain<'_, V> {
@@ -469,41 +924,44 @@ impl<V: StateReadOnly + ?Sized> core::fmt::Debug for CertifiedChain<'_, V> {
 }
 
 impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
-    /// A reader over `view` with the commit-only `CommitQC` check (F8 rule H6 (b)).
+    /// A reader over `view` with exact BLS quorum and native paired-Pasta attestation checks.
     ///
     /// # Errors
     /// The view has no genesis, or Kura's genesis is not the view's network genesis.
     pub fn new(view: &'v V) -> Result<Self, ChainReadError> {
-        if view.block_hashes().is_empty() {
-            return Err(ChainReadError::NotCommitted {
-                height: GENESIS_HEIGHT,
-            });
-        }
-        let genesis = view
-            .canonical_block_by_height(NonZeroUsize::MIN)
-            .map_err(|_| ChainReadError::NotInView {
-                height: GENESIS_HEIGHT,
-            })?;
-        if genesis.hash().as_ref() != view.network_id().as_bytes() || !genesis.header().is_genesis()
-        {
-            return Err(ChainReadError::ForeignGenesis);
-        }
-        let instance = global_instance(&genesis, &view.chain_id().to_string());
+        Self::from_source(ChainSource::State(view))
+    }
+
+    fn from_source(source: ChainSource<'v, V>) -> Result<Self, ChainReadError> {
+        let genesis = source.block(GENESIS_HEIGHT)?;
+        let (genesis_epoch, instance) =
+            authenticate_genesis(&genesis, source.network_id(), source.chain_id())?;
         Ok(Self {
-            view,
+            source,
             genesis,
+            genesis_epoch,
             instance,
             attestations: None,
-            candidates: std::sync::OnceLock::new(),
+            prefix: parking_lot::Mutex::new(None),
         })
     }
 
     /// Verify `CommitQC`s fully with `verifier`, including the attestations of flagged blocks
-    /// (F8 rule H6 (a)).
+    /// (F8 rule H6 (a)). Any previously verified prefix is discarded so the next read checks
+    /// every historical certificate under this verifier too.
     #[must_use]
     pub fn with_attestation_verifier(mut self, verifier: &'v dyn AttestationVerifier) -> Self {
         self.attestations = Some(verifier);
+        *self.prefix.get_mut() = None;
         self
+    }
+
+    fn verification_context(&self) -> PrefixVerifierContext<'_> {
+        PrefixVerifierContext {
+            instance: self.instance,
+            network: *self.source.network_id(),
+            attestations: self.attestations,
+        }
     }
 
     /// The chain instance `I` every certificate must name.
@@ -512,18 +970,27 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         self.instance
     }
 
-    /// The signed genesis block (the chain's trust root).
+    /// The signed genesis body (the chain's trust root). Its result-only certificate was added
+    /// after execution and is not authenticated by the genesis signatures.
     #[must_use]
     pub fn genesis(&self) -> &Arc<SignedBlock> {
         &self.genesis
     }
 
-    /// The consensus-visible receipt of `height` ([`committed_block`]).
+    /// The source-pinned receipt of `height` ([`committed_block`]).
+    /// This method checks the frame and source identity, not local quorum signatures. In the
+    /// pinned restoration mode, consume [`Self::certified`] or [`Self::walk`] before trusting
+    /// execution or epoch progress; a pinned header hash alone does not authenticate those.
     ///
     /// # Errors
     /// See [`committed_block`].
     pub fn committed(&self, height: u64) -> Result<CommittedBlock, ChainReadError> {
-        committed_block(self.view, height)
+        match &self.source {
+            ChainSource::State(view) => committed_block(*view, height),
+            ChainSource::Pinned { .. } | ChainSource::Frames { .. } => {
+                read_frame(self.source.block(height)?, height)
+            }
+        }
     }
 
     /// The committed block at `height` with its local `CommitQC` checked (see the module
@@ -536,54 +1003,29 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         self.check_certificate(self.committed(height)?)
     }
 
-    /// The exact authenticated committee and its proofs of possession for a portable proof.
-    ///
-    /// Genesis uses the registrations in its signed block; other heights require the
-    /// lag-2 committed committee digest to match a retained candidate. This never returns
-    /// an unverified current roster for a historical height.
+    /// The exact authenticated epoch committee and its original proofs of possession.
+    /// The complete prefix authenticates historical authority even after World rotates it out.
     ///
     /// # Errors
-    /// The committee is not independently reconstructible from the retained chain.
+    /// The signed genesis or certified prefix does not authenticate this height's authority.
     pub fn proof_committee(
         &self,
         height: u64,
     ) -> Result<Vec<(IrohaPublicKey, Vec<u8>)>, ChainReadError> {
-        let candidates = self.candidates()?;
-        let selected = if height == GENESIS_HEIGHT {
-            candidates.genesis
-        } else {
-            let (header, _) = self.certificate_parts(height)?;
-            let header = header.ok_or(ChainReadError::NotCommitted { height })?;
-            let committee =
-                self.committee_of(&header)?
-                    .ok_or_else(|| ChainReadError::Committee {
-                        height,
-                        reason: "historical committee is not independently reconstructible"
-                            .to_owned(),
-                    })?;
-            digest(committee)
-        };
-        let members = &candidates
-            .by_digest
-            .get(&selected)
-            .ok_or_else(|| ChainReadError::Committee {
-                height,
-                reason: "authenticated committee candidate is missing".to_owned(),
-            })?
-            .members;
-        let mut ordered = members
+        let certified = self.certified(height)?;
+        Ok(certified
+            .commitment
+            .schedule
+            .current
+            .committee
             .iter()
-            .map(|(key, pop)| {
-                super::crypto::core_key(key)
-                    .map(|core| (core, (key.clone(), pop.clone())))
-                    .map_err(|error| ChainReadError::Committee {
-                        height,
-                        reason: error.to_string(),
-                    })
+            .map(|member| {
+                (
+                    member.validator.public_key().clone(),
+                    member.proof_of_possession.clone(),
+                )
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        ordered.sort_by(|left, right| left.0.cmp(&right.0));
-        Ok(ordered.into_iter().map(|(_, member)| member).collect())
+            .collect())
     }
 
     /// The certified blocks `from..=to`, oldest first, each checked to extend the previous one.
@@ -613,208 +1055,206 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         })
     }
 
-    /// The candidate committees: the genesis committee and the World schedule window's.
-    fn candidates(&self) -> Result<&Candidates, ChainReadError> {
-        self.candidates
-            .get_or_init(|| {
-                let committee_error = |reason: String| ChainReadError::Committee {
-                    height: GENESIS_HEIGHT.saturating_add(1),
-                    reason,
-                };
-                let registrations = schedule::genesis_registrations(&self.genesis)
-                    .map_err(|error| committee_error(error.to_string()))?;
-                let genesis = candidate(
-                    registrations
-                        .into_iter()
-                        .map(|(peer, pop)| (peer.public_key().clone(), pop)),
-                )
-                .map_err(committee_error)?;
-                let genesis_digest = digest(&genesis.committee);
-                let mut by_digest = BTreeMap::new();
-                by_digest.insert(genesis_digest, genesis);
-                let world = self.view.world();
-                for config in world.consensus_schedule().entries() {
-                    let members = schedule::committee_pops(world, config)
-                        .into_iter()
-                        .map(|(peer, pop)| (peer.public_key().clone(), pop));
-                    // A window entry whose members lack live proofs of possession cannot verify
-                    // an aggregate; leave it out (its heights report `CommittedLocally`).
-                    if let Ok(entry) = candidate(members)
-                        && config
-                            .height_config()
-                            .is_ok_and(|core| core.committee == entry.committee)
-                    {
-                        by_digest.entry(digest(&entry.committee)).or_insert(entry);
-                    }
-                }
-                Ok(Candidates {
-                    by_digest,
-                    genesis: genesis_digest,
-                })
-            })
-            .as_ref()
-            .map_err(Clone::clone)
+    /// Derive authority exclusively from signed genesis, then check the result graph against it.
+    /// The graph's execution/parameter data is not independently final until a successor signs Rg.
+    fn genesis_prefix(&self) -> Result<VerifiedPrefix, ChainReadError> {
+        make_genesis_prefix(self.committed(GENESIS_HEIGHT)?, self.genesis_epoch.clone())
     }
 
-    /// `C_height` of the stored core `header` of `height`, authenticated against the digest
-    /// `R_{height-2}` commits (`C_{g+1}`: the genesis committee), with its keys admitted; `None`
-    /// if no candidate matches.
-    fn committee_of(&self, header: &BlockHeader) -> Result<Option<&Committee>, ChainReadError> {
-        let height = header.height;
-        let candidates = self.candidates()?;
-        let first = GENESIS_HEIGHT.saturating_add(1);
-        let expected = if height == first {
-            candidates.genesis
-        } else {
-            let scheduler = height
-                .checked_sub(schedule::LAG)
-                .filter(|scheduler| *scheduler >= GENESIS_HEIGHT)
-                .ok_or(ChainReadError::NotCommitted { height })?;
-            // `R_{height-2}`'s preimage, authenticated through the headers the `CommitQC` of
-            // `height` certifies: `header` binds its parent's hash, and that parent (the header of
-            // `height - 1`) binds `R_{height-2}` as `parent_result`.
-            let (_, preimage) = self.certificate_parts(scheduler)?;
-            let (parent, _) = self.certificate_parts(scheduler.saturating_add(1))?;
-            let parent = parent
-                .filter(|parent| parent.hash(&BlsCrypto::new()) == header.parent_hash)
-                .ok_or(ChainReadError::Discontinuous { height })?;
-            if parent.parent_result != result_of_preimage(&preimage) {
-                return Err(ChainReadError::ResultMismatch { height: scheduler });
-            }
-            ExecutionResultCommitment::decode(&preimage)
-                .map_err(|error| ChainReadError::Malformed {
-                    height: scheduler,
-                    reason: error.to_string(),
-                })?
-                .next_committee_digest
-        };
-        let Some(candidate) = candidates.by_digest.get(&expected) else {
-            return Ok(None);
-        };
-        for (key, pop) in &candidate.members {
-            let admitted =
-                super::crypto::core_key(key).is_ok_and(|core| ADMITTED.is_admitted(&core));
-            if !admitted {
-                ADMITTED
-                    .admit(key, pop)
-                    .map_err(|error| ChainReadError::Committee {
-                        height,
-                        reason: error.to_string(),
-                    })?;
-            }
-        }
-        Ok(Some(&candidate.committee))
-    }
-
-    /// The core header (`None` for genesis) and result preimage stored with the block this view
-    /// committed at `height`, without re-deriving the block's wire.
-    fn certificate_parts(
-        &self,
-        height: u64,
-    ) -> Result<(Option<BlockHeader>, Vec<u8>), ChainReadError> {
-        let index = usize::try_from(height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .filter(|index| index.get() <= self.view.block_hashes().len())
-            .ok_or(ChainReadError::NotCommitted { height })?;
-        let block = self
-            .view
-            .canonical_block_by_height(index)
-            .map_err(|_| ChainReadError::NotInView { height })?;
-        let certificate = block
-            .commit_certificate()
-            .ok_or(ChainReadError::MissingCertificate { height })?;
-        let header = if height == GENESIS_HEIGHT {
-            None
-        } else {
-            let header: BlockHeader = norito::decode_canonical(&certificate.consensus_header)
-                .map_err(|error| ChainReadError::Malformed {
-                    height,
-                    reason: error.to_string(),
-                })?;
-            Some(header)
-        };
-        Ok((header, certificate.result_preimage.clone()))
-    }
-
-    /// Check a committed block's local `CommitQC` (the second half of [`Self::certified`]).
+    /// Verify the complete prefix with a bounded working set. Sequential reads reuse its
+    /// cursor; an earlier-height read restarts at genesis instead of trusting an unbounded cache.
     fn check_certificate(
         &self,
         committed: CommittedBlock,
     ) -> Result<CertifiedBlock, ChainReadError> {
         let height = committed.height;
-        let malformed = |reason: String| ChainReadError::Malformed { height, reason };
-        let certificate = committed
-            .block
-            .commit_certificate()
-            .ok_or(ChainReadError::MissingCertificate { height })?;
-        let certificate_len = norito::canonical_frame_len(certificate)
-            .map_err(|error| malformed(error.to_string()))?;
-        let Some(header) = committed.header.as_ref() else {
-            return Ok(CertifiedBlock {
-                committed,
-                commit_qc: None,
-                verification: QcVerification::Genesis,
-                certificate_len,
-            });
-        };
-        let (_, commit_qc) =
-            decode_certificate(certificate).map_err(|error| malformed(error.to_string()))?;
-        if commit_qc.kind != VoteKind::Commit
-            || commit_qc.height != height
-            || commit_qc.block_hash != committed.core_hash
-            || commit_qc.attest != header.attest
+        let mut cursor = self.prefix.lock();
+        if cursor
+            .as_ref()
+            .is_none_or(|prefix| prefix.tip.height >= height)
         {
-            return Err(ChainReadError::HeaderMismatch { height });
+            *cursor = Some(self.genesis_prefix()?);
         }
-        if commit_qc.result != committed.result {
-            return Err(ChainReadError::ResultMismatch { height });
-        }
-        if header.instance != self.instance || commit_qc.instance != self.instance {
-            return Err(ChainReadError::WrongInstance { height });
-        }
-        let verification = match self.committee_of(header)? {
-            Some(committee) => {
-                let checked = match self.attestations {
-                    Some(verifier) => {
-                        verify_qc(&*ADMITTED, verifier, &self.instance, committee, &commit_qc)
-                    }
-                    // TODO(F8.4): readers that relay a flagged block's certificate pass the
-                    // historical KAGEMUSHA attestation verifier (F8 rule H6 (a)); F8.4 adds it
-                    // with a flagged-certificate test for this reader.
-                    None => verify_qc_signatures(&*ADMITTED, &self.instance, committee, &commit_qc),
-                };
-                checked.map_err(|error| ChainReadError::Certificate { height, error })?;
-                QcVerification::Verified
+        let prefix = cursor.as_mut().ok_or(ChainReadError::ForeignGenesis)?;
+        if height == GENESIS_HEIGHT {
+            if committed.core_hash != prefix.tip.core_hash || committed.result != prefix.tip.result
+            {
+                return Err(ChainReadError::ForeignGenesis);
             }
-            None => QcVerification::CommittedLocally,
-        };
-        Ok(CertifiedBlock {
-            committed,
-            commit_qc: Some(commit_qc),
-            verification,
-            certificate_len,
+            return self
+                .verification_context()
+                .verify_certificate(committed, &prefix.authority);
+        }
+        while prefix
+            .tip
+            .height
+            .checked_add(1)
+            .is_some_and(|next| next < height)
+        {
+            let next = self.committed(prefix.tip.height + 1)?;
+            self.verification_context().advance_prefix(prefix, next)?;
+        }
+        self.verification_context()
+            .advance_prefix(prefix, committed)
+    }
+}
+
+impl<'v> CertifiedChain<'v, StateView<'v>> {
+    /// Read a bounded, externally pinned, contiguous journal of canonical native frames.
+    ///
+    /// The caller must apply its explicit byte/allocation limits before decoding the frames.
+    /// This constructor borrows that one source; it neither clones block bodies nor builds
+    /// another storage owner. `network` must be independently configured, never taken from the
+    /// supplied journal. It pins signed genesis; `chain_id` pins every successor's instance.
+    /// The supplied hash cut must be exactly coextensive with the frames. A hash alone does not
+    /// authenticate a result: consume `certified`/`walk`. Flagged certificates use the full
+    /// source-complete native paired-Pasta verifier by default. An explicitly supplied
+    /// application/test attestation verifier replaces that check for this reader only. H1 has
+    /// only signed-body authority until a genuine successor or independent local execution
+    /// authenticates its result.
+    ///
+    /// # Errors
+    /// Rejects an empty or mismatched cut, foreign genesis, or malformed signed genesis.
+    /// Subsequent reads reject mismatched bodies, parent links, results, epochs and certificates.
+    pub fn from_frames(
+        chain_id: &'v ChainId,
+        network: &'v NetworkId,
+        hashes: &'v [HashOf<IrohaHeader>],
+        frames: &'v [Arc<SignedBlock>],
+    ) -> Result<Self, ChainReadError> {
+        if hashes.len() != frames.len() {
+            return Err(ChainReadError::NotInView {
+                height: GENESIS_HEIGHT,
+            });
+        }
+        Self::from_source(ChainSource::Frames {
+            chain_id,
+            network,
+            hashes,
+            frames,
+        })
+    }
+
+    /// Verify an exact pinned history cut before a restored State exists.
+    ///
+    /// No StateView is constructed: that concrete generic type only selects this constructor.
+    /// Every body must match the supplied one-based hash cut. Authority comes from verified
+    /// signed genesis and the same exact-quorum prefix walk as State-backed offchain reads.
+    /// The configured chain ID enters the signature instance checked by every successor QC.
+    ///
+    /// This is a restoration/offchain boundary. Deterministic instructions must continue using
+    /// State-anchored [`committed_block`] and must not depend on local QC availability. A lone
+    /// genesis returns only [`QcVerification::Genesis`]: its unsigned result preimage still
+    /// requires deterministic replay or an actually verified successor to authenticate execution.
+    ///
+    /// # Errors
+    /// Rejects an empty cut, absent/mismatched genesis body or foreign signed genesis network.
+    /// Later reads reject missing bodies, changed pinned hashes, wrong instances and certificates.
+    pub(crate) fn from_pinned(
+        chain_id: &'v ChainId,
+        network: &'v NetworkId,
+        hashes: &'v [HashOf<IrohaHeader>],
+        kura: &'v Kura,
+    ) -> Result<Self, ChainReadError> {
+        Self::from_source(ChainSource::Pinned {
+            chain_id,
+            network,
+            hashes,
+            kura,
         })
     }
 }
 
-/// `committee_digest(committee)` under the chain hash, as `R` commits it.
-fn digest(committee: &Committee) -> [u8; 32] {
-    chain_hash(&committee_digest_preimage(committee)).0
-}
-
-/// A candidate committee of `members` (their keys in any order).
-fn candidate(
-    members: impl IntoIterator<Item = (IrohaPublicKey, Vec<u8>)>,
-) -> Result<Candidate, String> {
-    let members: Vec<_> = members.into_iter().collect();
-    let keys = members
-        .iter()
-        .map(|(key, _)| super::crypto::core_key(key).map_err(|error| error.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let committee = Committee::new(keys).map_err(|error| format!("{error:?}"))?;
-    Ok(Candidate { committee, members })
-}
-
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn schedule_source_projection_preserves_every_recovery_variant() {
+    use iroha_data_model::sumeragi_finality::{ScheduleError, ScheduleSourceError};
+    let variants = [
+        (
+            ChainReadError::NotCommitted { height: 19 },
+            ScheduleSourceError::NotCommitted { height: 19 },
+        ),
+        (
+            ChainReadError::NotInView { height: 19 },
+            ScheduleSourceError::NotInView { height: 19 },
+        ),
+        (
+            ChainReadError::MissingCertificate { height: 19 },
+            ScheduleSourceError::MissingCertificate { height: 19 },
+        ),
+        (
+            ChainReadError::Malformed {
+                height: 19,
+                reason: "exact source reason".into(),
+            },
+            ScheduleSourceError::Malformed {
+                height: 19,
+                reason: "exact source reason".into(),
+            },
+        ),
+        (
+            ChainReadError::HeaderMismatch { height: 19 },
+            ScheduleSourceError::HeaderMismatch { height: 19 },
+        ),
+        (
+            ChainReadError::ResultMismatch { height: 19 },
+            ScheduleSourceError::ResultMismatch { height: 19 },
+        ),
+        (
+            ChainReadError::ExecutionMismatch { height: 19 },
+            ScheduleSourceError::ExecutionMismatch { height: 19 },
+        ),
+        (
+            ChainReadError::WrongInstance { height: 19 },
+            ScheduleSourceError::WrongInstance { height: 19 },
+        ),
+        (
+            ChainReadError::Discontinuous { height: 19 },
+            ScheduleSourceError::Discontinuous { height: 19 },
+        ),
+        (
+            ChainReadError::ForeignGenesis,
+            ScheduleSourceError::ForeignGenesis,
+        ),
+        (
+            ChainReadError::Committee {
+                height: 19,
+                reason: "exact source reason".into(),
+            },
+            ScheduleSourceError::Committee {
+                height: 19,
+                reason: "exact source reason".into(),
+            },
+        ),
+        (
+            ChainReadError::Certificate {
+                height: 19,
+                error: CertError::WrongEpoch,
+            },
+            ScheduleSourceError::Certificate {
+                height: 19,
+                error: CertError::WrongEpoch,
+            },
+        ),
+    ];
+    for (source, expected) in variants {
+        assert_eq!(source.to_string(), expected.to_string());
+        assert_eq!(ScheduleSourceError::from(source.clone()), expected);
+        assert_eq!(
+            ScheduleError::from(source),
+            ScheduleError::CommittedSource(expected)
+        );
+    }
+}
+
+mod execution_read;
+pub use execution_read::{
+    AuthenticatedExecutionBlock, NativeExecutionRead, NativeExecutionReadError,
+    NativeExecutionReadLimits, NativeExecutionReadResource, read_authenticated_execution,
+};
+
+#[cfg(test)]
+pub(crate) mod relation_counts;

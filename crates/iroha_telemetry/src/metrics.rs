@@ -2524,6 +2524,30 @@ fields {
     pub ivm_cache_decode_failures: gauge();
     /// IVM opcode pre-decode total decode time in nanoseconds (cumulative)
     pub ivm_cache_decode_time_ns_total: gauge();
+    /// Measured IVM cache allocation bytes whose owners remain live.
+    pub ivm_cache_memory_resident_bytes: gauge();
+    /// Measured IVM cache allocation bytes outside retention.
+    pub ivm_cache_memory_active_bytes: gauge();
+    /// Measured IVM cache allocation bytes admitted to retention.
+    pub ivm_cache_memory_retained_bytes: gauge();
+    /// Retained shared IVM cache bytes held only by cache entries.
+    pub ivm_cache_memory_shared_reclaimable_bytes: gauge();
+    /// Retained shared IVM cache bytes held by both caches and borrowers.
+    pub ivm_cache_memory_shared_borrowed_bytes: gauge();
+    /// Retained shared IVM cache bytes still live after cache eviction.
+    pub ivm_cache_memory_shared_evicted_live_bytes: gauge();
+    /// Retained IVM cache bytes without classified shared-owner custody.
+    pub ivm_cache_memory_unclassified_retained_bytes: gauge();
+    /// Peak measured IVM cache allocation bytes with live owners.
+    pub ivm_cache_memory_peak_bytes: gauge();
+    /// Active IVM cache owners with unknown nested allocation footprints.
+    pub ivm_cache_memory_unmeasured_owners: gauge();
+    /// Requested execution bytes still held by the State-owned allocation pool.
+    pub ivm_execution_memory_reserved_bytes: gauge();
+    /// Highest requested execution-byte reservation admitted by that pool.
+    pub ivm_execution_memory_peak_bytes: gauge();
+    /// Current configured limit of the State-owned execution allocation pool.
+    pub ivm_execution_memory_limit_bytes: gauge();
     /// IVM: histogram of highest general-purpose register index touched per execution.
     pub ivm_register_max_index: histogram_with_buckets(
         vec![
@@ -2552,7 +2576,7 @@ fields {
         prometheus::exponential_buckets(1.0, 2.0, 20).expect("inputs are valid"),
                     &["path"],
     );
-    /// IVM Merkle cache full rebuilds.
+    /// IVM completed in-place canonical Merkle node refreshes (excluding construction and copies).
     pub ivm_merkle_rebuild_total: int_counter();
     /// IVM Merkle cache incremental leaf updates.
     pub ivm_merkle_incremental_leaf_updates_total: int_counter();
@@ -2746,10 +2770,6 @@ fields {
     pub torii_zk_prover_inflight: gauge();
     /// Torii: background prover pending attachment gauge
     pub torii_zk_prover_pending: gauge();
-    /// Torii: IVM prove helper in-flight job gauge
-    pub torii_zk_ivm_prove_inflight: gauge();
-    /// Torii: IVM prove helper queued job gauge
-    pub torii_zk_ivm_prove_queued: gauge();
     /// Torii: background prover last-scan processed bytes gauge
     pub torii_zk_prover_last_scan_bytes: gauge();
     /// Torii: background prover last-scan wall-clock duration gauge
@@ -4033,7 +4053,14 @@ construct {
         sumeragi_membership_height sumeragi_membership_view sumeragi_membership_epoch
         sumeragi_leader_index ivm_cache_hits ivm_cache_misses ivm_cache_evictions
         ivm_cache_decoded_streams ivm_cache_decoded_ops_total ivm_cache_decode_failures
-        ivm_cache_decode_time_ns_total ivm_register_max_index ivm_register_unique_count
+        ivm_cache_decode_time_ns_total ivm_cache_memory_resident_bytes
+        ivm_cache_memory_active_bytes ivm_cache_memory_retained_bytes
+        ivm_cache_memory_shared_reclaimable_bytes ivm_cache_memory_shared_borrowed_bytes
+        ivm_cache_memory_shared_evicted_live_bytes ivm_cache_memory_unclassified_retained_bytes
+        ivm_cache_memory_peak_bytes ivm_cache_memory_unmeasured_owners
+        ivm_execution_memory_reserved_bytes ivm_execution_memory_peak_bytes
+        ivm_execution_memory_limit_bytes
+        ivm_register_max_index ivm_register_unique_count
         merkle_root_gpu_total merkle_root_cpu_total ivm_memory_commit_ms
         ivm_memory_commit_dirty_chunks ivm_merkle_rebuild_total
         ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices pipeline_dag_edges
@@ -4080,7 +4107,7 @@ construct {
         torii_lane_admission_latency_seconds torii_route_stage_latency_seconds
         torii_attachment_reject_total torii_attachment_sanitize_ms torii_zk_prover_attachment_bytes
         torii_zk_prover_latency_ms torii_zk_prover_gc_total torii_zk_prover_inflight
-        torii_zk_prover_pending torii_zk_ivm_prove_inflight torii_zk_ivm_prove_queued
+        torii_zk_prover_pending
         torii_zk_prover_last_scan_bytes torii_zk_prover_last_scan_ms
         torii_zk_prover_budget_exhausted_total]
         // Snapshot-lane counters
@@ -4431,7 +4458,13 @@ initialize (metrics) {
         sumeragi_bg_post_queue_depth sumeragi_bg_post_queue_depth_by_peer sumeragi_bg_post_age_ms
         ivm_cache_hits ivm_cache_misses ivm_cache_evictions ivm_cache_decoded_streams
         ivm_cache_decoded_ops_total ivm_cache_decode_failures ivm_cache_decode_time_ns_total
-        ivm_register_max_index ivm_register_unique_count merkle_root_gpu_total
+        ivm_cache_memory_resident_bytes ivm_cache_memory_active_bytes
+        ivm_cache_memory_retained_bytes ivm_cache_memory_shared_reclaimable_bytes
+        ivm_cache_memory_shared_borrowed_bytes ivm_cache_memory_shared_evicted_live_bytes
+        ivm_cache_memory_unclassified_retained_bytes ivm_cache_memory_peak_bytes
+        ivm_cache_memory_unmeasured_owners ivm_execution_memory_reserved_bytes
+        ivm_execution_memory_peak_bytes ivm_execution_memory_limit_bytes ivm_register_max_index
+        ivm_register_unique_count merkle_root_gpu_total
         merkle_root_cpu_total ivm_memory_commit_ms ivm_memory_commit_dirty_chunks
         ivm_merkle_rebuild_total ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices
         pipeline_dag_edges pipeline_conflict_rate_bps pipeline_access_set_source_total
@@ -4466,7 +4499,7 @@ initialize (metrics) {
         torii_route_stage_latency_seconds torii_attachment_reject_total
         torii_attachment_sanitize_ms torii_zk_prover_attachment_bytes torii_zk_prover_latency_ms
         torii_zk_prover_gc_total torii_zk_prover_inflight torii_zk_prover_pending
-        torii_zk_ivm_prove_inflight torii_zk_ivm_prove_queued torii_zk_prover_last_scan_bytes
+        torii_zk_prover_last_scan_bytes
         torii_zk_prover_last_scan_ms torii_zk_prover_budget_exhausted_total
         torii_query_snapshot_requests torii_query_snapshot_first_batch_ms
         torii_query_snapshot_gas_consumed_units_total query_snapshot_lane_first_batch_ms
@@ -4618,12 +4651,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 742;
-const METRIC_CATALOG_V2_REGISTERED: usize = 699;
-const METRIC_CATALOG_V2_BYTES: usize = 100_865;
+const METRIC_CATALOG_V2_ROWS: usize = 752;
+const METRIC_CATALOG_V2_REGISTERED: usize = 709;
+const METRIC_CATALOG_V2_BYTES: usize = 102_432;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "b13a790c3cf529faef56087ac0358384c0aa7a938eda8219e61103126374f3ae";
+    "5ddc0bdeb43f80735d2b26f46b4a05353b2dc7a78032f9f45d2e8a6de1fce520";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

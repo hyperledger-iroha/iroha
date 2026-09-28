@@ -133,8 +133,8 @@ def admit_plan(value: ExperimentPlan, budget: EvidenceBudget) -> tuple[Experimen
         collection_snapshot(trial.collection); output_snapshot(trial.native_outputs)
         require(type(trial.stop_timeout_ns) is int and 0 < trial.stop_timeout_ns <= 300_000_000_000)
         require(type(trial.replay_reply_max_bytes) is int and 0 < trial.replay_reply_max_bytes <= 256 * 1024 * 1024)
-        roles = ('finality', 'queries', 'facts', 'request', 'bundle', 'proof')
-        names = ('native_finality', 'native_queries', 'native_facts', 'native_request', 'native_bundle', 'canonical_proof')
+        roles = ('carrier', 'queries', 'facts', 'request', 'bundle', 'proof')
+        names = ('native_carrier', 'native_queries', 'native_facts', 'native_request', 'native_bundle', 'canonical_proof')
         caps = tuple(getattr(allocation.run, name).max_bytes for name in names)
         require(tuple(getattr(trial.native_outputs, role) for role in roles) == caps
                 and trial.native_outputs.total == sum(caps))

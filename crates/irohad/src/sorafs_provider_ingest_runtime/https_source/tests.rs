@@ -207,6 +207,16 @@ async fn shared_pool_admission_bounds_distinct_leaf_instances_and_releases_on_ca
         "cancelling acquisition releases the shared budget"
     );
 }
+#[tokio::test]
+async fn gateway_context_worker_panic_is_unavailable() {
+    let result: Result<(), _> = build_gateway_context_recoverably(|| {
+        assert!(iroha_core::panic_hook::is_suppressed());
+        panic!("injected gateway context worker failure");
+    })
+    .await;
+    assert_eq!(result, Err(ProviderIngestSourceFetchErrorV1::Unavailable));
+}
+
 #[test]
 fn grant_binds_network_provider_revision_manifest_and_exact_finalized_request() {
     let original = fixture();

@@ -1,12 +1,12 @@
 //! Public committee preparation observations with explicit finality attachments.
 //!
-//! Finality artifacts require an independently trusted chain/context anchor. Candidate,
+//! Finality artifacts require an independently trusted signed-genesis network and configured chain. Candidate,
 //! transcript and readiness fields are progress observations, not standalone finality proofs.
 
 use super::{ValidatorCandidateKeysV1, ValidatorCommitteeTransitionV1};
 use crate::{
-    NetworkId, block::consensus_v2::finality::V2FinalityArtifact,
-    consensus::GlobalThresholdBeaconKeySessionV1,
+    NetworkId, consensus::GlobalThresholdBeaconKeySessionV1,
+    sumeragi::finality::NativeFinalityArtifact,
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -29,8 +29,8 @@ use norito::codec::{Decode, Encode};
 pub struct ValidatorCommitteeSelectionStatusV1 {
     /// Observed preparation, credentials, possession proofs and optional terminal body.
     pub transition: ValidatorCommitteeTransitionV1,
-    /// Exact selecting boundary; its snapshot must carry the identical preparation.
-    pub selecting_finality: V2FinalityArtifact,
+    /// Exact selecting boundary; its native result must carry the identical preparation.
+    pub selecting_finality: NativeFinalityArtifact,
 }
 
 /// Exact public inputs for inspecting and preparing a validator committee operation.
@@ -54,7 +54,7 @@ pub struct ValidatorCommitteeStatusV1 {
     /// Explicit requested target, or the current scheduling epoch plus one.
     pub target_epoch: u64,
     /// Latest finalized artifact observed by this server, verified against its Kura block.
-    pub latest_finality: V2FinalityArtifact,
+    pub latest_finality: NativeFinalityArtifact,
     /// Absence means no frozen attempt exists for the selected target; never readiness.
     #[norito(required)]
     pub selected: Option<ValidatorCommitteeSelectionStatusV1>,

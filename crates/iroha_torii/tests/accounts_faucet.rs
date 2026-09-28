@@ -232,7 +232,11 @@ fn build_faucet_test_context_with_enabled(
         ));
         let (key_record, pulse) = signed_faucet_beacon_fixture(network_id);
         block
-            .install_global_beacon_fixture_for_testing(key_record, pulse)
+            .install_global_beacon_fixture_for_testing(
+                key_record,
+                pulse,
+                &iroha_core::beacon::pulse_context_fixture_v1(),
+            )
             .expect("install proof-valid faucet beacon fixture");
         block.commit();
     }

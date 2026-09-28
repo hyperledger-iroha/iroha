@@ -183,6 +183,34 @@ fn local_contract_host(authority: AccountId) -> CoreHost {
     host.set_local_contract_debug_execution();
     host
 }
+fn authenticated_test_probe_prologue() -> [u32; 6] {
+    use ivm::{
+        encoding::wide,
+        instruction::wide::{arithmetic, memory},
+    };
+    [
+        wide::encode_ri(arithmetic::ADDI, 31, 31, -16),
+        wide::encode_store(memory::STORE64, 31, 12, 0),
+        wide::encode_store(memory::STORE64, 31, 1, 8),
+        wide::encode_ri(arithmetic::ADDI, 10, 14, 0),
+        wide::encode_ri(arithmetic::ADDI, 11, 15, 0),
+        wide::encode_ri(arithmetic::ADDI, 12, 16, 0),
+    ]
+}
+fn authenticated_test_probe_setup_gas() -> u64 {
+    // Eight root result bytes and three frame/result initialization-bitmap words.
+    8 + 3
+        + authenticated_test_probe_prologue()
+            .into_iter()
+            .map(|instruction| ivm::gas::cost_of(instruction).unwrap())
+            .sum::<u64>()
+}
+fn authenticated_test_probe_result(vm: &IVM) -> u64 {
+    assert_eq!(vm.call_result_word_count().unwrap(), 1);
+    assert_eq!(vm.public_call_result_word(0).unwrap(), 0);
+    // The probe snapshots the syscall's r10 before returning its separate Unit table.
+    vm.register(17)
+}
 fn build_authenticated_test_contract_program(
     code: &[u8],
     vector_length: u8,
@@ -196,7 +224,19 @@ fn build_authenticated_test_contract_program_with_states(
     zk_mode: bool,
     states: Vec<ivm::EmbeddedStateDescriptor>,
 ) -> Vec<u8> {
+    assert!(code.len().is_multiple_of(4));
+    assert!(
+        code.chunks_exact(4)
+            .all(|word| u32::from_le_bytes(word.try_into().unwrap())
+                != ivm::encoding::wide::encode_halt())
+    );
     let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+            entry_pc: 0,
+            frame_bytes: 16,
+            argument_words: Vec::new(),
+            result_words: vec![ivm::call::CallWordV1::Unit],
+        }],
         seiyaku_name: "CoreHostHarness".to_owned(),
         compiler_fingerprint: "iroha-core-host-tests".to_owned(),
         abi_hash: ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -237,8 +277,77 @@ fn build_authenticated_test_contract_program_with_states(
     }
     .encode();
     program.extend_from_slice(&contract_interface.encode_section());
+    // These raw syscall probes have no language arguments. The test owner stages
+    // syscall operands in r14-r16; fixture bytecode copies them only after the VM
+    // establishes authenticated root tables and saves their result descriptor.
+    for instruction in authenticated_test_probe_prologue() {
+        program.extend_from_slice(&instruction.to_le_bytes());
+    }
     program.extend_from_slice(code);
+    use ivm::{
+        encoding::wide,
+        instruction::wide::{arithmetic, control, memory},
+    };
+    for instruction in [
+        wide::encode_ri(arithmetic::ADDI, 17, 10, 0),
+        wide::encode_load(memory::LOAD64, 25, 31, 0),
+        wide::encode_load(memory::LOAD64, 1, 31, 8),
+        wide::encode_store(memory::STORE64, 25, 0, 0),
+        wide::encode_ri(arithmetic::ADDI, 10, 25, 0),
+        wide::encode_ri(arithmetic::ADDI, 11, 0, 1),
+        wide::encode_ri(arithmetic::ADDI, 31, 31, 16),
+        wide::encode_rr(control::JALR, 0, 1, 0),
+    ] {
+        program.extend_from_slice(&instruction.to_le_bytes());
+    }
     program
+}
+#[test]
+fn authenticated_test_probe_completes_unit_and_preserves_syscall_observation() {
+    let mut vm = IVM::new(10_000);
+    vm.load_program(&build_authenticated_test_contract_program(&[], 0, false))
+        .expect("authenticated probe fixture");
+    vm.set_register(14, 42);
+    vm.run().expect("probe completes protected return");
+    assert_eq!(authenticated_test_probe_result(&vm), 42);
+    assert_ne!(vm.register(10), 42, "r10 owns the completed result table");
+}
+#[test]
+fn authenticated_test_probe_setup_gas_matches_real_root_and_staging_work() {
+    struct ObserveGas(Option<u64>);
+    impl ivm::IVMHost for ObserveGas {
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, ivm::VMError> {
+            Ok(0)
+        }
+        fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+            self.0 = Some(vm.remaining_gas());
+            Ok(0)
+        }
+    }
+    let instruction = ivm::encoding::wide::encode_sys(
+        ivm::instruction::wide::system::SCALL,
+        u8::try_from(ivm_sys::SYSCALL_DEBUG_PRINT).expect("syscall fits byte"),
+    );
+    let mut vm = IVM::new(10_000);
+    vm.load_program(&build_authenticated_test_contract_program(
+        &instruction.to_le_bytes(),
+        0,
+        false,
+    ))
+    .expect("authenticated probe fixture");
+    let mut host = ObserveGas(None);
+    vm.run_with_host(&mut host)
+        .expect("probe completes protected return");
+    assert_eq!(
+        host.0,
+        Some(
+            10_000 - authenticated_test_probe_setup_gas() - ivm::gas::cost_of(instruction).unwrap()
+        )
+    );
+    assert_eq!(authenticated_test_probe_result(&vm), 0);
 }
 fn fixture_account_in_domain(label: &str, domain_label: &str) -> AccountId {
     let seed: Vec<u8> = format!("{label}@{domain_label}")
@@ -714,7 +823,7 @@ seiyaku ProtectedPages {
     );
     let returned = vm
         .memory
-        .validate_tlv(vm.register(10))
+        .validate_tlv(authenticated_test_probe_result(&vm))
         .expect("cursor return record");
     assert_eq!(returned.type_id, PointerType::NoritoBytes);
     let schema = EntrypointValueTypeV1 {
@@ -758,7 +867,7 @@ seiyaku ProtectedPages {
         assert!(overlay.is_empty(), "resuming a page must not write state");
         let returned = vm
             .memory
-            .validate_tlv(vm.register(10))
+            .validate_tlv(authenticated_test_probe_result(&vm))
             .expect("page length return");
         assert_eq!(returned.type_id, PointerType::NoritoBytes);
         assert_eq!(decode_nested_int(returned.payload), 1);

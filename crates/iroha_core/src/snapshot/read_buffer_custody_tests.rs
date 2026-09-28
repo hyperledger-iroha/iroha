@@ -93,6 +93,9 @@ async fn snapshot_read_buffer_strict_restore_retains_charge_through_initializati
     };
     let restore = || {
         try_read_snapshot_with_initializer(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             &store,
             &kura,
             &state.lane_manifests.read().clone(),
@@ -586,6 +589,9 @@ where
     let block_count = BlockCount(source.view().height());
     let lane_manifests = source.lane_manifests.read().clone();
     try_read_snapshot_with_initializer(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         store,
         kura,
         &lane_manifests,

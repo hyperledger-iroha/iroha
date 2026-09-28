@@ -407,6 +407,23 @@ impl SignedBlock {
             .root();
         self.payload.external_entrypoints = entrypoints;
     }
+    /// Whether the proposal contains original consensus work.
+    ///
+    /// Network inputs, lane merges and queue admissions are work. Beacon controls,
+    /// execution outputs, DA metadata and scheduling effects cannot create work.
+    /// This predicate grants no admission or execution authority: each input still
+    /// requires its normal signature, custody and deterministic execution checks.
+    #[must_use]
+    pub fn has_consensus_work(&self) -> bool {
+        self.network_entrypoint_count() > 0
+            || self
+                .lane_merge()
+                .is_some_and(|section| !section.merges.is_empty())
+            || self
+                .execution_context()
+                .is_some_and(|context| !context.queue_plan_admissions.is_empty())
+    }
+
     /// Check whether the block has entrypoints or deterministic artifacts.
     #[inline]
     pub fn is_empty(&self) -> bool {

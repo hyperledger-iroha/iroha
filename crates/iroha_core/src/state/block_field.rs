@@ -1,15 +1,12 @@
-//! Keep one original executing field armed through attached publication.
+//! Keep one original field armed through execution, freeze and publication.
 //!
 //! The aggregate inventory owns this field before preparation starts. Execution
 //! can borrow only the original Block; publication requires a private transition
 //! of this owner after the aggregate has accepted the complete result.
 
-use mv::{BlockPublication, BlockRetirement, Key, Value};
+use mv::{BlockCapture, BlockPublication, BlockRetirement, CaptureCleanup, Key, Value};
 use norito::json;
-use std::{
-    borrow::Borrow,
-    ops::{Deref, DerefMut, RangeBounds},
-};
+use std::ops::{Deref, DerefMut};
 
 mod sealed {
     pub trait Sealed {}
@@ -22,9 +19,15 @@ mod sealed {
 
 /// An original MV Block whose consuming transfer creates publication authority.
 /// Implementations perform an inert move, without allocation or validation.
-pub trait OriginalPublicationBlock: BlockRetirement + sealed::Sealed {
+pub trait OriginalPublicationBlock: BlockRetirement + sealed::Sealed + Sized {
     /// Exact attached publication owner for this original Block.
     type Publication: BlockPublication;
+    /// Exact inert capture slot retaining the original block on refusal/unwind.
+    type FreezeCapture: BlockCapture<(), Block = Self, Detached = Self::Frozen>;
+    /// Original private generations after their physical writers are released.
+    type Frozen;
+    /// Move the original block into its capture slot without allocation.
+    fn into_freeze_capture(self) -> Self::FreezeCapture;
     /// Consume execution authority without releasing any physical writer.
     fn into_publication(self) -> Self::Publication;
 }
@@ -33,6 +36,11 @@ impl<'a, V: Value, C: Send + Sync + 'static> OriginalPublicationBlock
     for mv::cell::Block<'a, V, C>
 {
     type Publication = mv::cell::BlockPublicationSlot<'a, V, C>;
+    type FreezeCapture = mv::cell::BlockCaptureSlot<'a, V, (), C>;
+    type Frozen = mv::cell::Detached<V, (), C>;
+    fn into_freeze_capture(self) -> Self::FreezeCapture {
+        self.capture_slot()
+    }
     fn into_publication(self) -> Self::Publication {
         self.publication_slot()
     }
@@ -42,6 +50,11 @@ impl<'a, K: Key, V: Value, M: mv::storage::StorageMode<K, V>> OriginalPublicatio
     for mv::storage::Block<'a, K, V, M>
 {
     type Publication = mv::storage::BlockPublicationSlot<'a, K, V, M>;
+    type FreezeCapture = mv::storage::BlockCaptureSlot<'a, K, V, (), M>;
+    type Frozen = mv::storage::Detached<K, V, (), M>;
+    fn into_freeze_capture(self) -> Self::FreezeCapture {
+        self.capture_slot()
+    }
     fn into_publication(self) -> Self::Publication {
         self.publication_slot()
     }
@@ -49,27 +62,51 @@ impl<'a, K: Key, V: Value, M: mv::storage::StorageMode<K, V>> OriginalPublicatio
 
 /// Exact Cell field types keep aggregate lifetimes covariant. An associated
 /// publication projection in the aggregate field type would make them invariant.
-pub type CellField<'a, V> =
-    BlockField<mv::cell::Block<'a, V>, mv::cell::BlockPublicationSlot<'a, V>>;
+pub type CellField<'a, V, C = concread::ebrcell::Untracked> = BlockField<
+    mv::cell::Block<'a, V, C>,
+    mv::cell::BlockPublicationSlot<'a, V, C>,
+    mv::cell::BlockCaptureSlot<'a, V, (), C>,
+    mv::cell::Detached<V, (), C>,
+>;
 
-/// Exact Storage field types retain both original map publications in one phase.
-pub type StorageField<'a, K, V, M = concread::bptree::Untracked> =
-    BlockField<mv::storage::Block<'a, K, V, M>, mv::storage::BlockPublicationSlot<'a, K, V, M>>;
+/// Exact Storage phases retain both original map generations and covariance.
+pub type StorageField<'a, K, V, M = concread::bptree::Untracked> = BlockField<
+    mv::storage::Block<'a, K, V, M>,
+    mv::storage::BlockPublicationSlot<'a, K, V, M>,
+    mv::storage::BlockCaptureSlot<'a, K, V, (), M>,
+    mv::storage::Detached<K, V, (), M>,
+>;
 
-enum Phase<B, P> {
+enum Phase<B, P, C, F> {
     Executing(B),
+    Capturing(C),
+    Frozen(F),
     Publishing(P),
 }
 
-/// One field in the original executing inventory, also retaining its retirement.
-/// Borrowed execution exposes no publication method or publication slot.
-pub struct BlockField<B, P = <B as OriginalPublicationBlock>::Publication>
-where
-    B: OriginalPublicationBlock<Publication = P>,
+/// One original typed field and its mutually exclusive execution/frozen phases.
+///
+/// Freezing retains the original private generations in this same inline field;
+/// it creates no view, wrapper allocation or substitute execution authority.
+/// Its enclosing original shell must cover this complete type before execution.
+pub struct BlockField<
+    B,
+    P = <B as OriginalPublicationBlock>::Publication,
+    C = <B as OriginalPublicationBlock>::FreezeCapture,
+    F = <B as OriginalPublicationBlock>::Frozen,
+> where
+    B: OriginalPublicationBlock<Publication = P, FreezeCapture = C, Frozen = F>,
     P: BlockPublication,
+    C: BlockCapture<(), Block = B, Detached = F>,
 {
-    phase: Option<Phase<B, P>>,
+    phase: Option<Phase<B, P, C, F>>,
     released: bool,
+    // Normal recovery restores Frozen above while retaining the actual attempt
+    // cleanup here until every sibling and enclosing fence has unlocked.
+    retry_cleanup: Option<P>,
+    // After original payload custody: never notify while a sibling still owns
+    // its writer. The enclosing aggregate retires these only after all release.
+    freeze_cleanup: CaptureCleanup,
 }
 
 impl<B: OriginalPublicationBlock> BlockField<B> {
@@ -77,11 +114,20 @@ impl<B: OriginalPublicationBlock> BlockField<B> {
         Self {
             phase: Some(Phase::Executing(block)),
             released: false,
+            retry_cleanup: None,
+            freeze_cleanup: CaptureCleanup::default(),
         }
     }
 
     /// Transfer only an untouched executing owner to the aggregate capture path.
     pub(crate) fn into_executing(mut self) -> B {
+        self.take_executing()
+    }
+
+    /// Move the exact executing owner out of its heap-resident aggregate field.
+    /// The emptied field has no payload or writer to release. It cannot execute,
+    /// publish, or transfer again; the returned owner retains all original custody.
+    pub(crate) fn take_executing(&mut self) -> B {
         assert!(!self.released, "field was terminally released");
         assert!(
             matches!(self.phase, Some(Phase::Executing(_))),
@@ -89,7 +135,7 @@ impl<B: OriginalPublicationBlock> BlockField<B> {
         );
         match self.phase.take().expect("original field") {
             Phase::Executing(block) => block,
-            Phase::Publishing(_) => unreachable!("checked original execution phase"),
+            _ => unreachable!("checked original execution phase"),
         }
     }
 
@@ -138,82 +184,37 @@ impl<B: OriginalPublicationBlock> DerefMut for BlockField<B> {
         }
     }
 }
-impl<B, P> BlockRetirement for BlockField<B, P>
+impl<B, P, C, F> BlockRetirement for BlockField<B, P, C, F>
 where
-    B: OriginalPublicationBlock<Publication = P>,
+    B: OriginalPublicationBlock<Publication = P, FreezeCapture = C, Frozen = F>,
     P: BlockPublication,
+    C: BlockCapture<(), Block = B, Detached = F>,
 {
     fn release_writers(&mut self) {
         self.released = true;
         match self.phase.as_mut() {
             Some(Phase::Executing(block)) => block.release_writers(),
+            Some(Phase::Capturing(slot)) => slot.release(),
             Some(Phase::Publishing(slot)) => slot.release_writers(),
-            None => {}
+            Some(Phase::Frozen(_)) | None => {}
         }
     }
 }
-impl<B, P> Drop for BlockField<B, P>
+impl<B, P, C, F> Drop for BlockField<B, P, C, F>
 where
-    B: OriginalPublicationBlock<Publication = P>,
+    B: OriginalPublicationBlock<Publication = P, FreezeCapture = C, Frozen = F>,
     P: BlockPublication,
+    C: BlockCapture<(), Block = B, Detached = F>,
 {
     fn drop(&mut self) {
         self.release_writers();
     }
 }
-impl<B: OriginalPublicationBlock + json::JsonSerialize> json::JsonSerialize for BlockField<B> {
-    fn json_serialize(&self, out: &mut String) {
-        self.deref().json_serialize(out);
-    }
 
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn json::JsonWriteSink,
-    ) -> Result<(), json::BoundedJsonError> {
-        self.deref().json_serialize_to(out)
-    }
-}
-impl<K: Key, V: Value, B: OriginalPublicationBlock + mv::storage::StorageReadOnly<K, V>>
-    mv::storage::StorageReadOnly<K, V> for BlockField<B>
-{
-    type Iter<'a>
-        = B::Iter<'a>
-    where
-        Self: 'a;
-    type RangeIter<'a>
-        = B::RangeIter<'a>
-    where
-        Self: 'a;
-    fn get<Q>(&self, key: &Q) -> Option<&V>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.deref().get(key)
-    }
-    fn get_key_value(&self, key: &K) -> Option<(&K, &V)> {
-        self.deref().get_key_value(key)
-    }
-    fn iter(&self) -> Self::Iter<'_> {
-        self.deref().iter()
-    }
-    fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.deref().range(bounds)
-    }
-    fn first_key_value(&self) -> Option<(&K, &V)> {
-        self.deref().first_key_value()
-    }
-    fn last_key_value(&self) -> Option<(&K, &V)> {
-        self.deref().last_key_value()
-    }
-    fn len(&self) -> usize {
-        self.deref().len()
-    }
-}
+#[path = "block_field/frozen.rs"]
+mod frozen;
+#[path = "block_field/read.rs"]
+mod read;
 
 #[cfg(test)]
 #[path = "block_field_tests.rs"]
@@ -223,6 +224,9 @@ mod tests;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AggregatePublication {
     Executing,
+    Capturing,
+    Frozen,
+    Reacquiring,
     Preparing,
     Prepared,
     Publishing,
@@ -232,6 +236,36 @@ pub(crate) enum AggregatePublication {
 impl AggregatePublication {
     pub(crate) fn assert_executing(&self) {
         assert_eq!(*self, Self::Executing, "aggregate no longer executes");
+    }
+    pub(crate) fn begin_freeze(&mut self) {
+        self.assert_executing();
+        *self = Self::Capturing;
+    }
+    pub(crate) fn finish_freeze(&mut self) {
+        assert_eq!(*self, Self::Capturing);
+        *self = Self::Frozen;
+    }
+    pub(crate) fn begin_reacquisition(&mut self) {
+        assert_eq!(*self, Self::Frozen, "original frozen aggregate required");
+        *self = Self::Reacquiring;
+    }
+    pub(crate) fn finish_reacquisition(&mut self) {
+        assert_eq!(*self, Self::Reacquiring);
+        *self = Self::Prepared;
+    }
+    pub(crate) fn recover_reacquisition(&mut self) {
+        assert!(matches!(
+            *self,
+            Self::Frozen | Self::Reacquiring | Self::Prepared
+        ));
+        *self = Self::Frozen;
+    }
+    pub(crate) fn assert_frozen(&self) {
+        assert_eq!(
+            *self,
+            Self::Frozen,
+            "complete original frozen aggregate required"
+        );
     }
     pub(crate) fn begin_preparation(&mut self) {
         self.assert_executing();

@@ -51,6 +51,8 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -75,7 +77,7 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
         std::sync::Arc::clone(&kura),
         LiveQueryStore::start_test(),
     );
-    live.install_lane_manifests(&manifests);
+    live.install_lane_manifests_for_testing(&manifests);
     live.prepare_configured_primary_geometry_anchor(&catalog)
         .expect("bind configured primary before replay");
     live.restore_kura_lane_segments_before_startup_replay()
@@ -87,6 +89,7 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
     let captured = crate::snapshot::CapturedStateSnapshot::capture(&live)
         .expect("capture exact pre-replay State");
     let unseeded = super::deserialize::KuraSeed {
+        execution_budget: live.ivm_execution_budget(),
         operation_index_budget: live.world.operation_index_budget().clone(),
         kura: std::sync::Arc::clone(&kura),
         lane_manifests: live.lane_manifests.read().clone(),

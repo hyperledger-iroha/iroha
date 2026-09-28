@@ -1,14 +1,11 @@
 //! Golden-structure tests for pointer-ABI TLV envelopes.
 //! These tests validate big-endian length encoding and basic layout.
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::Quantity;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_data_model::nexus::AxtAnchoredSpendV1;
+use iroha_model_base::topology::DataSpaceId;
 use ivm::{
     Memory, PointerType,
-    axt::{
-        self, AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
-        ProofBlob,
-    },
+    axt::{AxtDescriptor, AxtTouchSpec, ProofBlob},
 };
 use norito::{decode_from_bytes, to_bytes};
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
@@ -170,53 +167,25 @@ fn tlv_axt_descriptor_roundtrip() {
     assert_eq!(got_hash, exp_hash);
 }
 #[test]
-fn tlv_asset_handle_roundtrip() {
-    let descriptor = sample_descriptor();
-    let binding = axt::compute_binding(&descriptor).expect("compute binding");
-    let handle = AssetHandle {
-        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-        ])
-        .expect("valid AXT fixture asset id"),
-        scope: vec!["transfer".into(), "withdraw".into()],
-        subject: HandleSubject {
-            account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            origin_dsid: Some(DataSpaceId::new(5)),
-        },
-        budget: HandleBudget {
-            remaining: Quantity::from(42_u64),
-            per_use: Some(Quantity::from(7_u64)),
-        },
-        handle_era: 3,
-        sub_nonce: 17,
-        group_binding: GroupBinding {
-            composability_group_id: vec![0xAA, 0xBB, 0xCC],
-            epoch_id: 2026,
-        },
-        target_lane: LaneId::new(2),
-        axt_binding: binding.to_vec(),
-        manifest_view_root: vec![0x11; 32],
-        expiry_slot: 9_999,
-        max_clock_skew_ms: Some(500),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
-    let payload = to_bytes(&handle).expect("encode handle");
-    let type_id = PointerType::AssetHandle as u16;
-    let tlv = make_tlv(type_id, 1, &payload);
-    assert_eq!(u16::from_be_bytes(tlv[0..2].try_into().unwrap()), type_id);
-    assert_eq!(
-        u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
-        payload.len() as u32
-    );
-    let decoded: AssetHandle =
-        decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode AssetHandle payload");
-    assert_eq!(decoded, handle);
-    let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
-        .try_into()
-        .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(payload).into();
-    assert_eq!(got_hash, exp_hash);
+fn tlv_signed_anchored_spend_roundtrip_and_retired_handle_id_rejects() {
+    let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json"
+    )))
+    .expect("current signed-spend fixture");
+    let spend: AxtAnchoredSpendV1 = norito::json::from_value(fixture["spends"]["happy"][0].clone())
+        .expect("signed-spend fixture");
+    let payload = ivm::codec::encode_canonical_norito(&spend).expect("canonical signed spend");
+    let tlv = make_tlv(PointerType::AxtAnchoredSpendV1 as u16, 1, &payload);
+    let validated = ivm::pointer_abi::validate_tlv_bytes(&tlv).expect("typed TLV");
+    assert_eq!(validated.type_id, PointerType::AxtAnchoredSpendV1);
+    let decoded: AxtAnchoredSpendV1 =
+        decode_from_bytes(validated.payload).expect("decode signed-spend payload");
+    assert_eq!(decoded, spend);
+
+    assert_eq!(PointerType::from_u16(0x000C), None);
+    let retired = make_tlv(0x000C, 1, &payload);
+    assert!(ivm::pointer_abi::validate_tlv_bytes(&retired).is_err());
 }
 #[test]
 fn tlv_proof_blob_roundtrip() {

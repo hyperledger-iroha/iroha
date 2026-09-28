@@ -18,7 +18,7 @@
 //! 3. [`ValidBlock`] pairs with [`crate::state::StateBlock`] containing applied state changes and
 //!    transaction errors.
 //! 4. Block is committed ([`CommittedBlock`]). Created from [`ValidBlock`] once the consensus core
-//!    has certified it; the certificate travels beside the block, never inside it.
+//!    has certified it; the canonical SignedBlockWire retains the exact native certificate.
 //!
 //! ### Scenario: a block ordered by the Sumeragi core
 //!
@@ -36,11 +36,6 @@
 //!
 //! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
 //! [`ValidBlock::commit_unchecked`] (infallible)
-mod native_amx_certified_coordinator_authority;
-mod native_lane_carrier;
-pub(crate) use native_lane_carrier::native_lane_batch_for_execution;
-#[cfg(any(test, feature = "iroha-core-tests"))]
-pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
@@ -66,9 +61,8 @@ use iroha_data_model::{
     events::prelude::*,
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLaneBinding},
     nexus::{
-        AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry,
-        AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig, LaneRelayEnvelope,
-        LaneSettlementBufferPolicy, ProofBlob,
+        AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig,
+        LaneRelayEnvelope, LaneSettlementBufferPolicy, ProofBlob,
     },
     transaction::{SignedTransaction, TransactionEntrypoint, error::TransactionLimitError},
 };
@@ -397,49 +391,7 @@ const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
 #[cfg(test)]
 pub(crate) use self::event::EventProducer;
 pub(crate) use self::event::WithEvents;
-pub(crate) use self::valid::VerifiedReplayProposal;
 pub use self::{chained::Chained, commit::CommittedBlock, new::NewBlock, valid::ValidBlock};
-/// Opaque proof that a Sumeragi-v2 finality artifact passed canonical BLS verification.
-///
-/// Construction is restricted to the live verification boundary and Kura's
-/// verified reader. Cloning is cheap and preserves the same immutable
-/// authority without repeating aggregate-signature verification.
-#[derive(Debug, Clone)]
-pub(crate) struct VerifiedV2FinalityArtifact(
-    Arc<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>,
-);
-impl VerifiedV2FinalityArtifact {
-    pub(crate) fn verify(
-        artifact: iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
-    ) -> Result<
-        Self,
-        iroha_data_model::block::consensus_v2::finality::V2QuorumCertificateVerificationError,
-    > {
-        artifact.verify()?;
-        Ok(Self(Arc::new(artifact)))
-    }
-
-    pub(crate) fn from_kura_verified(verified: crate::kura::VerifiedV2FinalityRead) -> Self {
-        Self(Arc::new(verified.into_artifact()))
-    }
-
-    pub(crate) fn artifact(
-        &self,
-    ) -> &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact {
-        self.0.as_ref()
-    }
-
-    fn into_arc(self) -> Arc<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact> {
-        self.0
-    }
-}
-impl core::ops::Deref for VerifiedV2FinalityArtifact {
-    type Target = iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact;
-
-    fn deref(&self) -> &Self::Target {
-        self.artifact()
-    }
-}
 use crate::{
     da::{
         DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError,
@@ -469,936 +421,6 @@ struct LaneSettlementBuilder {
     native_amx_receipts: Vec<NativeAmxReceipt>,
     buffer_snapshot: Option<SettlementBufferSnapshot>,
     source_counts: BTreeMap<AssetDefinitionId, u64>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LanePayloadCoordinate {
-    lane_incarnation: Hash,
-    lane_block_height: u64,
-    lane_block_descriptor_hash: Hash,
-}
-/// Consensus-critical authority surface used by native AMX validation.
-pub(crate) trait NativeAmxAuthorityContext {
-    fn route_active_at_height(
-        &self,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        height: u64,
-    ) -> bool;
-    fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash>;
-    fn resolve_lane_committee_at_height(
-        &self,
-        route: crate::state::LaneAuthorityRoute,
-        height: u64,
-    ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError>;
-    fn consensus_pop_matches_authority(
-        &self,
-        lane_id: LaneId,
-        peer: &PeerId,
-        height: u64,
-        presented_pop: &[u8],
-    ) -> bool;
-    fn native_amx_participant_predecessor_is_current(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        previous_native_settlement_hash: Option<
-            HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
-        >,
-    ) -> crate::kura::Result<bool>;
-}
-fn consensus_pop_matches_lane_authority(
-    nexus: &iroha_config::parameters::actual::Nexus,
-    world: &impl WorldReadOnly,
-    lane_id: LaneId,
-    peer: &PeerId,
-    height: u64,
-    presented_pop: &[u8],
-) -> bool {
-    let Some(lane) = nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .find(|lane| lane.id == lane_id)
-    else {
-        return false;
-    };
-    if lane.claims_autoscale_managed() {
-        return crate::state::autoscale_lane_pinned_committee_with_pops(lane).is_some_and(
-            |committee| {
-                committee.into_iter().any(|(pinned_peer, pinned_pop)| {
-                    pinned_peer == *peer && pinned_pop == presented_pop
-                })
-            },
-        );
-    }
-    crate::state::live_consensus_key_pop_for_peer_on_lane(world, peer, height, lane_id)
-        .is_none_or(|live_pop| live_pop == presented_pop)
-}
-impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
-    fn route_active_at_height(
-        &self,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        height: u64,
-    ) -> bool {
-        crate::state::consensus_lane_dataspace_at_height(lane_id, self.nexus(), height)
-            == Some(dataspace_id)
-    }
-    fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {
-        StateReadOnly::lane_incarnation_at_height(self, lane_id, height)
-    }
-    fn resolve_lane_committee_at_height(
-        &self,
-        route: crate::state::LaneAuthorityRoute,
-        height: u64,
-    ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
-        StateReadOnly::resolve_lane_committee_at_height(self, route, height)
-            .map(crate::state::LaneAuthorityCommittee::into_validators)
-    }
-    fn consensus_pop_matches_authority(
-        &self,
-        lane_id: LaneId,
-        peer: &PeerId,
-        height: u64,
-        presented_pop: &[u8],
-    ) -> bool {
-        consensus_pop_matches_lane_authority(
-            self.nexus(),
-            self.world(),
-            lane_id,
-            peer,
-            height,
-            presented_pop,
-        )
-    }
-    fn native_amx_participant_predecessor_is_current(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        previous_native_settlement_hash: Option<
-            HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
-        >,
-    ) -> crate::kura::Result<bool> {
-        self.kura().consensus_storage_read(
-            State::native_amx_control_predecessor_is_current_for_snapshot(
-                self,
-                proposal,
-                previous_native_settlement_hash,
-            )
-            .map_err(|error| crate::kura::Error::MergeCarrierConflict(error.to_string())),
-        )
-    }
-}
-/// Keep local State/Kura corruption distinct from candidate ineligibility and
-/// publish the fail-stop latch before either validation path can fall back.
-fn native_amx_participant_predecessor_snapshot_read(
-    state: &impl StateReadOnly,
-    proposal: &LaneBlockProposalV1,
-) -> crate::kura::Result<bool> {
-    state.kura().consensus_storage_read(
-        State::lane_block_predecessor_is_applied_for_snapshot(
-            state,
-            proposal,
-            crate::state::LanePredecessorApplicationMode::AppliedStatePrefix,
-        )
-        .map_err(|error| crate::kura::Error::MergeCarrierConflict(error.to_string())),
-    )
-}
-fn native_amx_coordinator_proposal_from_ownership(
-    ownership: &iroha_data_model::block::consensus::SumeragiLanePayloadOwnership,
-) -> Result<iroha_data_model::block::consensus::LaneBlockProposalV1, String> {
-    ownership
-        .validate_replay_material()
-        .map_err(|err| format!("invalid native AMX coordinator ownership: {err}"))?;
-    let descriptor_hash = ownership
-        .lane_block_descriptor_hash
-        .ok_or_else(|| "native AMX coordinator ownership is missing descriptor hash".to_owned())?;
-    let descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
-        lane_id: ownership.lane_id,
-        dataspace_id: ownership.dataspace_id,
-        lane_incarnation: ownership.lane_incarnation,
-        proposal_height: ownership.proposal_height,
-        previous_lane_block_height: ownership.previous_lane_block_height,
-        previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
-        lane_block_height: ownership.lane_block_height,
-        lane_block_view: ownership.lane_block_view,
-        subject_hash: ownership.subject_hash,
-        payload_ownership_hash: ownership.payload_ownership_hash,
-        rbc_instance_hash: ownership.rbc_instance_hash,
-        accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
-        accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
-        validator_set: ownership.lane_block_descriptor_validator_set.clone(),
-        validator_count: ownership.lane_block_descriptor_validator_count,
-        min_quorum: ownership.lane_block_descriptor_min_quorum,
-        qc_mode_tag: ownership.qc_mode_tag.clone(),
-        descriptor_hash,
-    };
-    let mut proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
-        descriptor,
-        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-        payload_block_hint: None,
-    };
-    proposal.proposal_hash = proposal.computed_proposal_hash();
-    crate::lane_consensus::validate_lane_block_proposal(&proposal)
-        .map_err(|_| "native AMX coordinator proposal replay is malformed".to_owned())?;
-    Ok(proposal)
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ExpectedNativeAmxV2Context {
-    round: iroha_data_model::block::consensus_v2::ConsensusRound,
-    epoch: u64,
-}
-/// Recover the single signed v2 context from a producer-authenticated receipt.
-pub(crate) fn expected_native_amx_v2_context_from_receipt(
-    receipt: &NativeAmxReceipt,
-    expected_epoch: u64,
-) -> Result<ExpectedNativeAmxV2Context, String> {
-    let first_leg = receipt
-        .legs
-        .first()
-        .ok_or_else(|| "native AMX v2 receipt has no participant context".to_owned())?;
-    let context = ExpectedNativeAmxV2Context {
-        round: first_leg.prepare_qc.body.round,
-        epoch: first_leg.prepare_qc.body.epoch,
-    };
-    if context.round.height != receipt.authority_context_height {
-        return Err(
-            "native AMX v2 round height differs from the receipt authority height".to_owned(),
-        );
-    }
-    if context.epoch != expected_epoch {
-        return Err("native AMX v2 epoch differs from its autonomous payload".to_owned());
-    }
-    Ok(context)
-}
-/// Validate a native AMX receipt against its exact route, coordinator proposal, and authority.
-pub(crate) fn validate_native_amx_receipt_against_plan(
-    receipt: &NativeAmxReceipt,
-    coordinator_proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    plan: &crate::queue::RoutingPlan,
-    expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
-    expected_network_id: iroha_data_model::NetworkId,
-    dataspace_catalog: &DataSpaceCatalog,
-    authority: &dyn NativeAmxAuthorityContext,
-    expected_v2_context: Option<ExpectedNativeAmxV2Context>,
-) -> Result<(), String> {
-    let validation_authority = NativeAmxValidationAuthority::Live {
-        dataspace_catalog,
-        authority,
-    };
-    validate_native_amx_receipt_against_plan_with_authority(
-        receipt,
-        coordinator_proposal,
-        entrypoint_hash,
-        plan,
-        expected_source_id,
-        expected_network_id,
-        &validation_authority,
-        expected_v2_context,
-    )
-}
-/// Return the Native-AMX source identity of one exact queued/executed entrypoint.
-pub(crate) fn native_amx_source_id_from_entrypoint_hash(
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-) -> [u8; iroha_crypto::Hash::LENGTH] {
-    // Native AMX identifies the exact queued/executed entrypoint. In particular, a sealed reveal
-    // must remain distinct from the signed transaction it opens.
-    let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
-    source_id.copy_from_slice(entrypoint_hash.as_ref());
-    source_id
-}
-#[derive(Clone, Copy)]
-enum NativeAmxValidationAuthority<'a> {
-    Live {
-        dataspace_catalog: &'a DataSpaceCatalog,
-        authority: &'a dyn NativeAmxAuthorityContext,
-    },
-    Historical {
-        /// When present, these bindings were authenticated by the enclosing
-        /// merge QC before this validator was called.
-        merge_active_lanes: Option<&'a [MergeLaneBinding]>,
-    },
-}
-/// Frozen authority root accepted by historical autonomous-source validation.
-pub(crate) enum HistoricalNativeAmxSourceAuthority<'a> {
-    /// The enclosing merge QC authenticates this exact historical lane set.
-    MergeQcActiveLanes(&'a [MergeLaneBinding]),
-    /// No merge entry exists yet. Proposal-block/V2-finality ownership
-    /// authenticates the exact coordinator committee; the state context is
-    /// consulted only for height-scoped durable key/PoP records.
-    CertifiedCoordinator {
-        /// Exact historical committee recovered from authenticated ownership.
-        committee: &'a [PeerId],
-        /// Height-scoped durable key authority used to check embedded PoPs.
-        key_authority: &'a dyn NativeAmxAuthorityContext,
-    },
-}
-fn validate_historical_native_amx_route_binding(
-    active_lanes: &[MergeLaneBinding],
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    incarnation: Hash,
-    proposal_height: u64,
-    role: &str,
-) -> Result<(), String> {
-    let mut matches = active_lanes
-        .iter()
-        .filter(|binding| binding.lane_id == lane_id);
-    let Some(binding) = matches.next() else {
-        return Err(format!(
-            "historical native AMX {role} lane {} is absent from the merge-QC active-lane set",
-            lane_id.as_u32(),
-        ));
-    };
-    if matches.next().is_some() {
-        return Err(format!(
-            "historical native AMX {role} lane {} has duplicate merge-QC active-lane bindings",
-            lane_id.as_u32(),
-        ));
-    }
-    if binding.dataspace_id != dataspace_id || binding.incarnation != incarnation {
-        return Err(format!(
-            "historical native AMX {role} route/incarnation differs from the merge-QC active-lane set",
-        ));
-    }
-    if proposal_height < binding.activation_height {
-        return Err(format!(
-            "historical native AMX {role} proposal predates its merge-QC activation height",
-        ));
-    }
-    Ok(())
-}
-/// Revalidate a certified Native AMX receipt without mutable lifecycle state.
-///
-/// The exact producer-authenticated routing plan and coordinator proposal are
-/// the coordinator trust root. Every participant route, incarnation, proposal,
-/// predecessor, settlement, and ordered committee is authenticated by both its
-/// Prepare and Commit QCs, including embedded PoPs and aggregate signatures.
-/// When `merge_active_lanes` is present, the enclosing merge QC additionally
-/// binds the coordinator and every participant route/incarnation. No current
-/// predecessor, lane lifecycle, committee, or key registry is consulted.
-fn validate_historical_native_amx_receipt_against_plan(
-    receipt: &NativeAmxReceipt,
-    coordinator_proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    plan: &crate::queue::RoutingPlan,
-    expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
-    expected_network_id: iroha_data_model::NetworkId,
-    merge_active_lanes: Option<&[MergeLaneBinding]>,
-    expected_v2_context: Option<ExpectedNativeAmxV2Context>,
-) -> Result<(), String> {
-    let validation_authority = NativeAmxValidationAuthority::Historical { merge_active_lanes };
-    validate_native_amx_receipt_against_plan_with_authority(
-        receipt,
-        coordinator_proposal,
-        entrypoint_hash,
-        plan,
-        expected_source_id,
-        expected_network_id,
-        &validation_authority,
-        expected_v2_context,
-    )
-}
-/// Decode and authenticate one exact historical autonomous Native AMX source.
-///
-/// The returned bundle has passed canonical decoding, producer-signature,
-/// availability-QC, lane Prepare/Commit-QC, routing/reservation, and every
-/// participant Prepare/Commit-QC check. This is the shared restart/diagnostic
-/// boundary. Merge recovery supplies QC-authenticated historical lane bindings;
-/// bundle-only diagnostics must instead supply the still-active coordinator's
-/// authoritative lifecycle and committee context.
-pub(crate) fn validate_historical_native_amx_source_bundle(
-    source_bundle: &[u8],
-    expected_network_id: iroha_data_model::NetworkId,
-    expected_epoch: u64,
-    source_authority: HistoricalNativeAmxSourceAuthority<'_>,
-) -> Result<crate::kura::AutonomousLaneMergeBundleV1, String> {
-    let bundle = crate::kura::Kura::decode_autonomous_lane_merge_bundle(
-        source_bundle,
-        expected_network_id,
-        expected_epoch,
-    )
-    .map_err(str::to_owned)?;
-    let merge_active_lanes = match source_authority {
-        HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(active_lanes) => Some(active_lanes),
-        HistoricalNativeAmxSourceAuthority::CertifiedCoordinator {
-            committee,
-            key_authority,
-        } => {
-            native_amx_certified_coordinator_authority::validate_historical_native_amx_certified_coordinator_authority(
-                &bundle,
-                committee,
-                key_authority,
-            )?;
-            None
-        }
-    };
-    let payload = bundle.executable_payload();
-    for (((entrypoint, reservation), routing_plan), native_amx_receipt) in payload
-        .entrypoints
-        .iter()
-        .zip(&payload.reservation_keys)
-        .zip(&payload.routing_plans)
-        .zip(&payload.native_amx_receipts)
-    {
-        let Some(receipt) = native_amx_receipt else {
-            continue;
-        };
-        let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
-        source_id.copy_from_slice(reservation.entrypoint_hash.as_ref());
-        let expected_v2_context =
-            expected_native_amx_v2_context_from_receipt(receipt, expected_epoch)?;
-        validate_historical_native_amx_receipt_against_plan(
-            receipt,
-            &payload.origin_proposal,
-            entrypoint.hash(),
-            routing_plan,
-            source_id,
-            expected_network_id,
-            merge_active_lanes,
-            Some(expected_v2_context),
-        )?;
-    }
-    Ok(bundle)
-}
-fn validate_native_amx_receipt_against_plan_with_authority(
-    receipt: &NativeAmxReceipt,
-    coordinator_proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    plan: &crate::queue::RoutingPlan,
-    expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
-    expected_network_id: iroha_data_model::NetworkId,
-    validation_authority: &NativeAmxValidationAuthority<'_>,
-    expected_v2_context: Option<ExpectedNativeAmxV2Context>,
-) -> Result<(), String> {
-    let Some(expected_v2_context) = expected_v2_context else {
-        return Err("native AMX v2 receipt requires an authenticated height context".to_owned());
-    };
-    if receipt.version != 2 {
-        return Err(format!(
-            "unsupported native AMX receipt version {}",
-            receipt.version
-        ));
-    }
-    if receipt.source_id != expected_source_id {
-        return Err("native AMX receipt source entrypoint mismatch".to_owned());
-    }
-    if receipt.network_id != expected_network_id {
-        return Err("native AMX receipt network identity mismatch".to_owned());
-    }
-    let coordinator = plan.coordinator_route();
-    if receipt.lane_id != coordinator.lane_id || receipt.dataspace_id != coordinator.dataspace_id {
-        return Err("native AMX receipt coordinator route mismatch".to_owned());
-    }
-    if receipt.authority_context_height == 0
-        || receipt.lane_block_height == 0
-        || receipt
-            .lane_incarnation
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
-        || receipt
-            .coordinator_proposal_hash
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
-    {
-        return Err("native AMX receipt has invalid coordinator session coordinates".to_owned());
-    }
-    match validation_authority {
-        NativeAmxValidationAuthority::Live { authority, .. } => {
-            if !authority.route_active_at_height(
-                receipt.lane_id,
-                receipt.dataspace_id,
-                receipt.authority_context_height,
-            ) || authority
-                .lane_incarnation_at_height(receipt.lane_id, receipt.authority_context_height)
-                != Some(receipt.lane_incarnation)
-            {
-                return Err(
-                    "native AMX receipt coordinator route or incarnation is stale".to_owned(),
-                );
-            }
-        }
-        NativeAmxValidationAuthority::Historical {
-            merge_active_lanes: Some(active_lanes),
-        } => validate_historical_native_amx_route_binding(
-            active_lanes,
-            receipt.lane_id,
-            receipt.dataspace_id,
-            receipt.lane_incarnation,
-            receipt.authority_context_height,
-            "coordinator",
-        )?,
-        NativeAmxValidationAuthority::Historical {
-            merge_active_lanes: None,
-        } => {}
-    }
-    if receipt.plan_digest != plan.digest() {
-        return Err("native AMX receipt plan digest mismatch".to_owned());
-    }
-    let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
-        return Err("native AMX receipt attached to single-route plan".to_owned());
-    };
-    if !crate::native_amx::native_amx_participant_leg_count_within_limit(receipt.legs.len()) {
-        return Err("native AMX receipt exceeds the participant-leg cap".to_owned());
-    }
-    crate::lane_consensus::validate_lane_block_proposal(coordinator_proposal)
-        .map_err(|_| "native AMX coordinator proposal is malformed".to_owned())?;
-    let descriptor = &coordinator_proposal.descriptor;
-    if descriptor.lane_id != receipt.lane_id
-        || descriptor.dataspace_id != receipt.dataspace_id
-        || descriptor.lane_incarnation != receipt.lane_incarnation
-        || descriptor.proposal_height != receipt.authority_context_height
-        || descriptor.lane_block_height != receipt.lane_block_height
-        || descriptor.lane_block_view != receipt.lane_block_view
-        || coordinator_proposal.proposal_hash != receipt.coordinator_proposal_hash
-        || descriptor
-            .accepted_transaction_hashes
-            .iter()
-            .filter(|hash| **hash == Hash::from(entrypoint_hash))
-            .count()
-            != 1
-    {
-        return Err(
-            "native AMX receipt does not bind the exact coordinator lane proposal".to_owned(),
-        );
-    }
-    if expected_v2_context.round.height != receipt.authority_context_height {
-        return Err("native AMX receipt authority height differs from its v2 context".to_owned());
-    }
-    if receipt.legs.len() != native_plan.participants.len() {
-        return Err("native AMX receipt participant legs are missing or extra".to_owned());
-    }
-    let expected_participants = match validation_authority {
-        NativeAmxValidationAuthority::Live { authority, .. } => native_plan
-            .participants
-            .iter()
-            .map(|leg| {
-                let incarnation = authority
-                    .lane_incarnation_at_height(
-                        leg.route.lane_id,
-                        receipt.authority_context_height,
-                    )
-                    .ok_or_else(|| {
-                        format!(
-                            "native AMX participant lane {} has no active incarnation at authority height {}",
-                            leg.route.lane_id.as_u32(),
-                            receipt.authority_context_height
-                        )
-                    })?;
-                if !authority.route_active_at_height(
-                    leg.route.lane_id,
-                    leg.route.dataspace_id,
-                    receipt.authority_context_height,
-                ) {
-                    return Err(format!(
-                        "native AMX participant lane {} route is inactive at authority height {}",
-                        leg.route.lane_id.as_u32(),
-                        receipt.authority_context_height
-                    ));
-                }
-                Ok((leg.route.lane_id, leg.route.dataspace_id, incarnation))
-            })
-            .collect::<Result<Vec<_>, String>>()?,
-        NativeAmxValidationAuthority::Historical { .. } => native_plan
-            .participants
-            .iter()
-            .zip(&receipt.legs)
-            .map(|(plan_leg, receipt_leg)| {
-                (
-                    plan_leg.route.lane_id,
-                    plan_leg.route.dataspace_id,
-                    receipt_leg
-                        .prepare_qc
-                        .body
-                        .participant_lane_incarnation,
-                )
-            })
-            .collect(),
-    };
-    debug_assert_eq!(receipt.legs.len(), expected_participants.len());
-    let mut seen_participants = BTreeSet::new();
-    for leg in &receipt.legs {
-        crate::native_amx::native_amx_participant_application_role(receipt, leg).map_err(
-            |reason| format!("native AMX participant application role is invalid: {reason}"),
-        )?;
-        let participant = (
-            leg.lane_id,
-            leg.dataspace_id,
-            leg.prepare_qc.body.participant_lane_incarnation,
-        );
-        if !expected_participants.contains(&participant) {
-            return Err(format!(
-                "native AMX receipt has unexpected participant lane {} dataspace {}",
-                leg.lane_id.as_u32(),
-                leg.dataspace_id.as_u64()
-            ));
-        }
-        if !seen_participants.insert(participant) {
-            return Err(format!(
-                "native AMX receipt duplicates participant lane {} dataspace {}",
-                leg.lane_id.as_u32(),
-                leg.dataspace_id.as_u64()
-            ));
-        }
-        if let NativeAmxValidationAuthority::Historical {
-            merge_active_lanes: Some(active_lanes),
-        } = validation_authority
-        {
-            validate_historical_native_amx_route_binding(
-                active_lanes,
-                leg.lane_id,
-                leg.dataspace_id,
-                leg.prepare_qc.body.participant_lane_incarnation,
-                receipt.authority_context_height,
-                "participant",
-            )?;
-        }
-        let authoritative_validators = match validation_authority {
-            NativeAmxValidationAuthority::Live { authority, .. } => {
-                let mut validators = authority
-                    .resolve_lane_committee_at_height(
-                        crate::state::LaneAuthorityRoute::new(leg.lane_id, leg.dataspace_id),
-                        receipt.authority_context_height,
-                    )
-                    .map_err(|error| {
-                        format!(
-                            "native AMX participant lane {} authority is unavailable at height {}: {error}",
-                            leg.lane_id.as_u32(),
-                            receipt.authority_context_height,
-                        )
-                    })?;
-                validators.sort();
-                validators.dedup();
-                validators.retain(|peer| {
-                    peer.public_key().try_algorithm().ok()
-                        == Some(iroha_crypto::Algorithm::BlsNormal)
-                });
-                Some(validators)
-            }
-            NativeAmxValidationAuthority::Historical { .. } => None,
-        };
-        if authoritative_validators.as_ref().is_some_and(|validators| {
-            validators.is_empty() || validators.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-        }) {
-            return Err(format!(
-                "native AMX participant lane {} has an empty or oversized authoritative BLS committee at height {}",
-                leg.lane_id.as_u32(),
-                receipt.authority_context_height,
-            ));
-        }
-        validate_native_amx_attestation_qc(
-            receipt,
-            leg,
-            &leg.prepare_qc,
-            NativeAmxPhase::Prepare,
-            entrypoint_hash,
-            expected_network_id,
-            validation_authority,
-            Some(expected_v2_context),
-            authoritative_validators.as_deref(),
-        )?;
-        validate_native_amx_attestation_qc(
-            receipt,
-            leg,
-            &leg.commit_qc,
-            NativeAmxPhase::Commit,
-            entrypoint_hash,
-            expected_network_id,
-            validation_authority,
-            Some(expected_v2_context),
-            authoritative_validators.as_deref(),
-        )?;
-        crate::native_amx::NativeAmxCommitRequestV2 {
-            request: crate::native_amx::NativeAmxAttestationRequestV2 {
-                body: leg.commit_qc.body,
-                plan_legs: plan.legs(),
-                coordinator_proposal: coordinator_proposal.clone(),
-                participant_proposal: leg.participant_proposal.clone(),
-                participant_settlement: leg.participant_settlement.clone(),
-            },
-            prepare_qc: leg.prepare_qc.clone(),
-        }
-        .validate_shape()
-        .map_err(|error| format!("native AMX participant phase certificates disagree: {error}"))?;
-        if let NativeAmxValidationAuthority::Live { authority, .. } = validation_authority {
-            if !authority
-                .native_amx_participant_predecessor_is_current(
-                    &leg.participant_proposal,
-                    leg.participant_settlement.previous_native_settlement_hash(),
-                )
-                .map_err(|error| format!("local Native AMX predecessor is unreadable: {error}"))?
-            {
-                return Err(format!(
-                    "native AMX participant lane {} dataspace {} does not extend the exact durable predecessor",
-                    leg.lane_id.as_u32(),
-                    leg.dataspace_id.as_u64(),
-                ));
-            }
-        }
-    }
-    if seen_participants != expected_participants.iter().copied().collect() {
-        return Err("native AMX receipt is missing participant leg".to_owned());
-    }
-    if receipt
-        .legs
-        .iter()
-        .map(|leg| {
-            (
-                leg.lane_id,
-                leg.dataspace_id,
-                leg.prepare_qc.body.participant_lane_incarnation,
-            )
-        })
-        .ne(expected_participants.iter().copied())
-    {
-        return Err("native AMX receipt participant legs are reordered".to_owned());
-    }
-    Ok(())
-}
-fn validate_native_amx_attestation_qc(
-    receipt: &NativeAmxReceipt,
-    leg: &NativeAmxLegRecordV2,
-    qc: &NativeAmxAttestationQcV2,
-    expected_phase: NativeAmxPhase,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    expected_network_id: iroha_data_model::NetworkId,
-    validation_authority: &NativeAmxValidationAuthority<'_>,
-    expected_v2_context: Option<ExpectedNativeAmxV2Context>,
-    authoritative_validator_set: Option<&[PeerId]>,
-) -> Result<(), String> {
-    let body = &qc.body;
-    if let Some(expected) = expected_v2_context
-        && (body.round != expected.round || body.epoch != expected.epoch)
-    {
-        return Err(format!(
-            "native AMX attestation context mismatch: expected round {:?} epoch {}, got round {:?} epoch {}",
-            expected.round, expected.epoch, body.round, body.epoch
-        ));
-    }
-    if qc.validator_set().is_empty()
-        || qc.validator_set().len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-        || qc.validator_set().windows(2).any(|pair| pair[0] >= pair[1])
-        || qc.signers_bitmap.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS.div_ceil(8)
-        || qc.bls_aggregate_signature.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
-    {
-        return Err(
-            "native AMX attestation exceeds or violates a protocol resource cap".to_owned(),
-        );
-    }
-    if body.network_id != expected_network_id || body.network_id != receipt.network_id {
-        return Err("native AMX attestation network identity mismatch".to_owned());
-    }
-    if body.source_id != receipt.source_id {
-        return Err("native AMX attestation source transaction mismatch".to_owned());
-    }
-    if body.tx_entrypoint_hash != entrypoint_hash {
-        return Err("native AMX attestation entrypoint hash mismatch".to_owned());
-    }
-    if body.plan_digest != receipt.plan_digest {
-        return Err("native AMX attestation plan digest mismatch".to_owned());
-    }
-    if body.phase != expected_phase {
-        return Err("native AMX attestation phase mismatch".to_owned());
-    }
-    if body.coordinator_lane_id != receipt.lane_id
-        || body.coordinator_dataspace_id != receipt.dataspace_id
-        || body.coordinator_lane_incarnation != receipt.lane_incarnation
-    {
-        return Err("native AMX attestation coordinator route/incarnation mismatch".to_owned());
-    }
-    if body.participant_lane_id != leg.lane_id || body.participant_dataspace_id != leg.dataspace_id
-    {
-        return Err("native AMX attestation participant route mismatch".to_owned());
-    }
-    let participant_descriptor = &leg.participant_proposal.descriptor;
-    let participant_settlement_hash = leg
-        .participant_settlement
-        .computed_hash()
-        .map_err(|_| "native AMX participant settlement cannot be hashed".to_owned())?;
-    if participant_descriptor.lane_id != leg.lane_id
-        || participant_descriptor.dataspace_id != leg.dataspace_id
-        || participant_descriptor.lane_incarnation != body.participant_lane_incarnation
-        || participant_descriptor.proposal_height != body.authority_context_height
-        || participant_descriptor.previous_lane_block_height
-            != body.participant_previous_block_height
-        || participant_descriptor.previous_lane_block_descriptor_hash
-            != body.participant_previous_block_descriptor_hash
-        || participant_descriptor.lane_block_height != body.participant_lane_block_height
-        || participant_descriptor.lane_block_view != body.participant_lane_block_view
-        || leg.participant_proposal.proposal_hash != body.participant_proposal_hash
-        || participant_settlement_hash != leg.participant_settlement_hash
-        || Hash::from(participant_settlement_hash) != body.participant_settlement_commitment
-    {
-        return Err("native AMX attestation participant finality mismatch".to_owned());
-    }
-    if body.round.height != receipt.authority_context_height
-        || body.authority_context_height != receipt.authority_context_height
-        || body.planned_coordinator_block_height != receipt.lane_block_height
-        || body.coordinator_lane_block_view != receipt.lane_block_view
-        || body.coordinator_proposal_hash != receipt.coordinator_proposal_hash
-    {
-        return Err("native AMX attestation coordinator session mismatch".to_owned());
-    }
-    if let NativeAmxValidationAuthority::Live { authority, .. } = validation_authority {
-        let Some(expected_participant_incarnation) =
-            authority.lane_incarnation_at_height(leg.lane_id, body.authority_context_height)
-        else {
-            return Err(
-                "native AMX attestation participant lane has no active incarnation".to_owned(),
-            );
-        };
-        if body.participant_lane_incarnation != expected_participant_incarnation {
-            return Err("native AMX attestation participant route/incarnation mismatch".to_owned());
-        }
-    }
-    let Ok(body_validator_count) = usize::try_from(body.participant_validator_count) else {
-        return Err("native AMX attestation participant validator count is invalid".to_owned());
-    };
-    let Ok(body_min_quorum) = usize::try_from(body.participant_min_quorum) else {
-        return Err("native AMX attestation participant quorum is invalid".to_owned());
-    };
-    if body_validator_count != qc.validator_set().len()
-        || body_validator_count == 0
-        || body_validator_count > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-        || body_min_quorum == 0
-        || body_min_quorum > body_validator_count
-        || body.participant_validator_set_hash != qc.validator_set_hash
-    {
-        return Err(
-            "native AMX attestation signed participant committee context mismatch".to_owned(),
-        );
-    }
-    if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
-        return Err(format!(
-            "native AMX attestation validator-set hash version mismatch: {}",
-            qc.validator_set_hash_version
-        ));
-    }
-    if qc.validator_set_hash != qc.computed_validator_set_hash() {
-        return Err("native AMX attestation validator-set hash mismatch".to_owned());
-    }
-    if body.participant_validator_set_hash != qc.computed_validator_set_hash() {
-        return Err(
-            "native AMX attestation body does not bind the authoritative participant committee"
-                .to_owned(),
-        );
-    }
-    if authoritative_validator_set.is_some_and(|expected| qc.validator_set() != expected) {
-        return Err(
-            "native AMX attestation validator set is not the authoritative height committee"
-                .to_owned(),
-        );
-    }
-    if let NativeAmxValidationAuthority::Live {
-        dataspace_catalog, ..
-    } = validation_authority
-    {
-        let Some(dataspace) = dataspace_catalog
-            .entries()
-            .iter()
-            .find(|entry| entry.id == leg.dataspace_id)
-        else {
-            return Err(format!(
-                "native AMX attestation participant dataspace {} is unknown",
-                leg.dataspace_id.as_u64()
-            ));
-        };
-        let minimum_committee = usize::try_from(
-            dataspace
-                .fault_tolerance
-                .saturating_mul(3)
-                .saturating_add(1),
-        )
-        .unwrap_or(usize::MAX);
-        if qc.validator_set().len() < minimum_committee {
-            return Err(format!(
-                "native AMX attestation validator set too small: expected at least {minimum_committee}, got {}",
-                qc.validator_set().len()
-            ));
-        }
-    }
-    let expected_bitmap_len = qc.validator_set().len().div_ceil(8);
-    if qc.signers_bitmap.len() != expected_bitmap_len {
-        return Err(format!(
-            "native AMX attestation signer bitmap length mismatch: expected {expected_bitmap_len}, got {}",
-            qc.signers_bitmap.len()
-        ));
-    }
-    for (validator, pop) in qc.validators_with_pops() {
-        if pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
-            || !crate::crypto_util::is_bls_normal_public_key(validator.public_key())
-            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
-        {
-            return Err(
-                "native AMX attestation validator has invalid historical BLS proof-of-possession"
-                    .to_owned(),
-            );
-        }
-        if let NativeAmxValidationAuthority::Live { authority, .. } = validation_authority
-            && !authority.consensus_pop_matches_authority(
-                leg.lane_id,
-                validator,
-                body.authority_context_height,
-                pop,
-            )
-        {
-            return Err(
-                "native AMX attestation validator has invalid historical BLS proof-of-possession"
-                    .to_owned(),
-            );
-        }
-    }
-    let mut signer_count = 0usize;
-    let mut signer_keys = Vec::new();
-    let mut signer_pops = Vec::new();
-    for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
-        if byte == 0 {
-            continue;
-        }
-        let base = byte_index * 8;
-        for bit in 0..8 {
-            if byte & (1_u8 << bit) == 0 {
-                continue;
-            }
-            let signer_index = base + bit;
-            let Some((signer, signer_pop)) = qc.validators_with_pops().nth(signer_index) else {
-                return Err(format!(
-                    "native AMX attestation signer index {signer_index} exceeds validator set size {}",
-                    qc.validator_set().len()
-                ));
-            };
-            signer_count = signer_count.saturating_add(1);
-            if !crate::crypto_util::is_bls_normal_public_key(signer.public_key()) {
-                return Err("native AMX attestation signer is not a BLS normal key".to_owned());
-            }
-            signer_keys.push(signer.public_key());
-            signer_pops.push(signer_pop.to_vec());
-        }
-    }
-    let required_quorum = iroha_sumeragi::types::quorum(qc.validator_set().len()).max(1);
-    if body_min_quorum != required_quorum {
-        return Err("native AMX attestation signed quorum policy mismatch".to_owned());
-    }
-    if signer_count != required_quorum {
-        return Err(format!(
-            "native AMX attestation signer count mismatch: expected exactly {required_quorum}, got {signer_count}"
-        ));
-    }
-    if qc.bls_aggregate_signature.is_empty() {
-        return Err("native AMX attestation aggregate signature missing".to_owned());
-    }
-    let signer_pop_refs = signer_pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    iroha_crypto::bls_normal_verify_preaggregated_same_message(
-        &body.signature_preimage(),
-        &qc.bls_aggregate_signature,
-        &signer_keys,
-        &signer_pop_refs,
-    )
-    .map_err(|_| "native AMX attestation aggregate signature invalid".to_owned())?;
-    Ok(())
 }
 fn lane_relay_envelopes_for_block(
     block_header: &BlockHeader,
@@ -2724,6 +1746,8 @@ pub enum BlockValidationError {
     StateStorageAdmission(crate::state::StateStorageAdmissionError),
     /// Local evidence or stake-index penalty preparation failed: {0}
     EvidencePreparation(crate::state::EvidencePreparationError),
+    /// Local execution did not complete: {0}
+    ExecutionDeferred(crate::execution_attempt::ExecutionDeferred),
     /// Local hash-history admission failed before State execution: {0}
     BlockHashAdmission(crate::state::BlockHashAdmissionError),
     /// Local membership-history admission failed before State execution: {0}
@@ -2789,6 +1813,17 @@ pub enum BlockValidationError {
     SignatureVerification(#[from] SignatureVerificationError),
     /// Invalid genesis block: {0}
     InvalidGenesis(#[from] InvalidGenesisError),
+    /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}
+    GenesisPolicyMismatch {
+        /// Execution policy committed by the signed genesis body.
+        expected_execution: Hash,
+        /// Execution policy actually used by this original genesis execution.
+        actual_execution: Hash,
+        /// Nexus/AMX policy committed by the signed genesis body.
+        expected_nexus: Hash,
+        /// Nexus/AMX context derived from the original staged genesis effects.
+        actual_nexus: Hash,
+    },
     /// Block's creation time is earlier than that of the previous block
     BlockInThePast,
     /// Block's creation time is later than the current node local time
@@ -2889,6 +1924,7 @@ impl BlockValidationError {
             MergeLedgerCommitError::StateStorageAdmission(error) => {
                 Self::StateStorageAdmission(error)
             }
+            MergeLedgerCommitError::ExecutionDeferred(reason) => Self::ExecutionDeferred(reason),
             MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
             MergeLedgerCommitError::MembershipAdmission(error) => Self::MembershipAdmission(error),
             MergeLedgerCommitError::NativeControlValidation(error) => *error,
@@ -2934,6 +1970,80 @@ impl BlockValidationError {
         }
     }
 }
+/// Preserve the original epoch-allocation refusal before any diagnostic formatting.
+impl From<crate::sumeragi::schedule::ScheduleError> for BlockValidationError {
+    fn from(error: crate::sumeragi::schedule::ScheduleError) -> Self {
+        use crate::sumeragi::schedule::ScheduleError;
+        match error {
+            ScheduleError::CommittedSource(source) => Self::LocalStorageRecoveryRequired {
+                reason: source.to_string(),
+            },
+            ScheduleError::Admission(refusal) => Self::ExecutionDeferred(refusal.into()),
+            ScheduleError::Allocator { .. } => {
+                Self::ExecutionDeferred(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+            }
+            deterministic => Self::ExecutionContextInvalid(deterministic.to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn epoch_schedule_capacity_preserves_original_local_release() {
+    use crate::sumeragi::schedule::ScheduleError;
+    let budget = mv::allocation::AllocationBudget::new(8);
+    let occupied = budget.try_reserve_bytes(8).expect("occupy original pool");
+    let refusal = budget
+        .try_reserve_bytes(1)
+        .expect_err("local capacity refusal");
+    let error = BlockValidationError::from(ScheduleError::Admission(refusal.clone()));
+    assert_eq!(event::map_block_err_to_reason(&error), None);
+    let BlockValidationError::ExecutionDeferred(owner) = error else {
+        panic!("local epoch capacity cannot reject a block");
+    };
+    assert_eq!(owner.allocation_refusal(), Some(&refusal));
+    assert!(matches!(
+        owner.allocation_refusal(),
+        Some(mv::allocation::AllocationRefusal::Capacity { .. })
+    ));
+    drop(occupied);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[cfg(test)]
+#[test]
+fn epoch_schedule_allocator_refusal_and_invalid_context_stay_distinct() {
+    let source = crate::sumeragi::certified_chain::ChainReadError::NotInView { height: 2 };
+    let local = BlockValidationError::from(
+        crate::sumeragi::schedule::ScheduleError::CommittedSource(source.into()),
+    );
+    assert!(matches!(
+        local,
+        BlockValidationError::LocalStorageRecoveryRequired { .. }
+    ));
+    assert_eq!(event::map_block_err_to_reason(&local), None);
+
+    use crate::sumeragi::schedule::ScheduleError;
+    let error = BlockValidationError::from(ScheduleError::Allocator {
+        requested_bytes: 64,
+    });
+    assert_eq!(event::map_block_err_to_reason(&error), None);
+    let BlockValidationError::ExecutionDeferred(owner) = error else {
+        panic!("physical allocator refusal cannot reject a block");
+    };
+    assert_eq!(
+        owner.reason(),
+        ivm::error::ExecutionDeferral::AllocationUnavailable
+    );
+    assert!(owner.allocation_refusal().is_none());
+    let error = BlockValidationError::from(ScheduleError::Epoch("wrong authority".into()));
+    assert!(matches!(
+        error,
+        BlockValidationError::ExecutionContextInvalid(_)
+    ));
+    assert!(event::map_block_err_to_reason(&error).is_some());
+}
+
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
         // These errors arise while replaying already committed local history,
@@ -4190,305 +3300,9 @@ pub(crate) mod valid {
         pipeline_cfg: iroha_config::parameters::actual::Pipeline,
         pipeline_parallelism: crate::state::PipelineParallelism,
         aggregate_lane: LaneId,
-        /// Canonical admission instants for signed external entrypoints whose exact pending
-        /// QueuePlan ownership already existed in the parent WSV.
-        queue_plan_stateless_validation_times: Vec<Option<Duration>>,
     }
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub(crate) struct SumeragiV2ValidationContext {
-        context_id: iroha_data_model::block::consensus_v2::HeightContextId,
-        height: u64,
-        epoch: u64,
-        consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-        view_zero_leader: iroha_data_model::block::consensus_v2::ValidatorIndex,
-        snapshot_bootstrap: Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor>,
-        authenticated_height_context:
-            Option<Arc<iroha_data_model::block::consensus_v2::HeightContext>>,
-    }
-    impl SumeragiV2ValidationContext {
-        /// Freeze the exact authenticated height context required to validate
-        /// context-bound body attachments and their weighted signer quorum.
-        pub(crate) fn from_height_context(
-            context: &iroha_data_model::block::consensus_v2::HeightContext,
-        ) -> Self {
-            Self {
-                context_id: context.id(),
-                height: context.height,
-                epoch: context.epoch,
-                consensus_mode: context.mode,
-                view_zero_leader: context.leader(0),
-                snapshot_bootstrap: context.snapshot_bootstrap,
-                authenticated_height_context: Some(Arc::new(context.clone())),
-            }
-        }
-        #[cfg(any(test, feature = "iroha-core-tests"))]
-        fn for_body_without_context_bound_attachments(block: &SignedBlock) -> Self {
-            Self {
-                context_id: iroha_data_model::block::consensus_v2::HeightContextId(
-                    HashOf::from_untyped_unchecked(Hash::new(b"v2-block-validation-test-context")),
-                ),
-                height: block.header().height().get(),
-                epoch: 0,
-                consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-                view_zero_leader: 0,
-                snapshot_bootstrap: None,
-                authenticated_height_context: None,
-            }
-        }
-        fn authenticated_height_context(
-            &self,
-        ) -> Option<&iroha_data_model::block::consensus_v2::HeightContext> {
-            self.authenticated_height_context.as_deref()
-        }
-    }
-    /// Exact canonical proposal admitted by an already verified historical CommitQC.
-    /// Only the dedicated replay entry point can construct this capability; a height,
-    /// missing local slot, or unverified context cannot select historical validation.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub(crate) struct VerifiedReplayProposal {
-        network_id: iroha_data_model::NetworkId,
-        block_hash: HashOf<BlockHeader>,
-        proposal_wire_hash: Hash,
-        carrier_header: BlockHeader,
-        merge_entry: Option<std::sync::Arc<iroha_data_model::merge::MergeLedgerEntry>>,
-        context: SumeragiV2ValidationContext,
-    }
-    impl VerifiedReplayProposal {
-        fn new(
-            executed: &SignedBlock,
-            verified: &super::VerifiedV2FinalityArtifact,
-            merge_entry: Option<&iroha_data_model::merge::MergeLedgerEntry>,
-        ) -> Result<Self, BlockValidationError> {
-            let artifact = verified.artifact();
-            artifact
-                .validate_for_header(&executed.header())
-                .map_err(|error| {
-                    ValidBlock::execution_context_error(format!(
-                        "replay finality header mismatch: {error}"
-                    ))
-                })?;
-            let wire = executed.encode_wire().map_err(|error| {
-                ValidBlock::execution_context_error(format!(
-                    "replay execution wire is invalid: {error}"
-                ))
-            })?;
-            let commitment = &artifact.commit_qc.execution_commitment;
-            if !executed.has_results()
-                || u64::try_from(wire.len()).ok() != Some(commitment.executed_block_wire_len)
-                || Hash::new(&wire) != commitment.executed_block_wire_hash
-            {
-                return Err(ValidBlock::execution_context_error(
-                    "replay authority does not bind the exact executed block wire",
-                ));
-            }
-            let proposal_wire_hash = executed.canonical_proposal_wire_hash().map_err(|error| {
-                ValidBlock::execution_context_error(format!(
-                    "replay proposal wire is invalid: {error}"
-                ))
-            })?;
-            if proposal_wire_hash != artifact.subject.payload_hash {
-                return Err(ValidBlock::execution_context_error(
-                    "replay authority does not bind the exact canonical proposal wire",
-                ));
-            }
-            match (
-                executed
-                    .execution_context()
-                    .and_then(|context| context.merge_entry.as_ref()),
-                merge_entry,
-            ) {
-                (None, None) => {}
-                (Some(reference), Some(entry)) if reference.matches_entry(entry) => {}
-                _ => {
-                    return Err(ValidBlock::execution_context_error(
-                        "replay authority requires the exact retained certified merge sidecar",
-                    ));
-                }
-            }
-            Ok(Self {
-                network_id: artifact.height_context.network_id,
-                block_hash: executed.hash(),
-                proposal_wire_hash,
-                carrier_header: executed.header(),
-                merge_entry: merge_entry.cloned().map(std::sync::Arc::new),
-                context: SumeragiV2ValidationContext::from_height_context(&artifact.height_context),
-            })
-        }
-        fn validate_state_prefix(&self, state: &impl StateReadOnly) -> Result<(), String> {
-            if *state.network_id() != self.network_id
-                || u64::try_from(state.height())
-                    .ok()
-                    .and_then(|height| height.checked_add(1))
-                    != Some(self.context.height)
-                || self.carrier_header.prev_block_hash() != state.latest_block_hash()
-            {
-                return Err(
-                    "verified replay authority differs from the exact committed State prefix"
-                        .to_owned(),
-                );
-            }
-            Ok(())
-        }
-        pub(crate) fn merge_entry(
-            &self,
-            reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
-        ) -> Result<&iroha_data_model::merge::MergeLedgerEntry, String> {
-            self.merge_entry
-                .as_deref()
-                .filter(|entry| reference.matches_entry(entry))
-                .ok_or_else(|| {
-                    "verified replay authority differs from the exact retained merge entry"
-                        .to_owned()
-                })
-        }
-        pub(crate) fn validate_merge_stage(
-            &self,
-            carrier_header: &BlockHeader,
-            state: &impl StateReadOnly,
-            entry: &iroha_data_model::merge::MergeLedgerEntry,
-        ) -> Result<(), String> {
-            self.validate_state_prefix(state)?;
-            if carrier_header != &self.carrier_header
-                || self.merge_entry.as_deref() != Some(entry)
-                || entry.execution_batch.as_ref().is_some_and(|batch| {
-                    batch.application_block_header
-                        != crate::merge::merge_application_header_from_carrier(carrier_header)
-                })
-            {
-                return Err("verified replay merge stage differs from its exact carrier, sidecar, or application header".to_owned());
-            }
-            Ok(())
-        }
-        pub(crate) fn validate_drain_payload(
-            &self,
-            state: &impl StateReadOnly,
-            carrier_height: u64,
-            active_lanes: &[iroha_data_model::merge::MergeLaneBinding],
-            certificates: &[iroha_data_model::merge::LaneDrainCertificateV1],
-        ) -> Result<(), String> {
-            self.validate_state_prefix(state)?;
-            if self.context.height != carrier_height
-                || self.merge_entry.as_deref().is_none_or(|entry| {
-                    entry.merge_qc.carrier_height != carrier_height
-                        || entry.active_lanes != active_lanes
-                        || entry.lane_drain_certificates != certificates
-                        || entry.execution_batch.is_some()
-                        || !entry.lane_snapshots.is_empty()
-                })
-            {
-                return Err(
-                    "replay drain payload differs from its exact authenticated carrier entry"
-                        .to_owned(),
-                );
-            }
-            Ok(())
-        }
-        pub(crate) fn native_amx_authority<'a, S: StateReadOnly>(
-            &'a self,
-            state: &'a S,
-        ) -> Result<ReplayNativeAmxAuthority<'a, S>, String> {
-            self.validate_state_prefix(state)?;
-            Ok(ReplayNativeAmxAuthority {
-                state,
-                _proposal: self,
-            })
-        }
-        fn validate(
-            &self,
-            proposal: &SignedBlock,
-            state: &impl StateReadOnly,
-        ) -> Result<(), BlockValidationError> {
-            let wire = proposal.encode_wire().map_err(|error| {
-                ValidBlock::execution_context_error(format!(
-                    "replay proposal wire is invalid: {error}"
-                ))
-            })?;
-            if !proposal.is_resultless_proposal()
-                || proposal.hash() != self.block_hash
-                || Hash::new(&wire) != self.proposal_wire_hash
-                || *state.network_id() != self.network_id
-                || proposal.header().height().get() != self.context.height
-                || u64::try_from(state.height())
-                    .ok()
-                    .and_then(|height| height.checked_add(1))
-                    != Some(self.context.height)
-                || proposal.header().prev_block_hash() != state.latest_block_hash()
-            {
-                return Err(ValidBlock::execution_context_error(
-                    "replay proposal differs from its verified authority or exact committed State prefix",
-                ));
-            }
-            Ok(())
-        }
-    }
-    /// Preserve all live route, committee and key checks while sourcing historical
-    /// predecessor chains from the exact isolated replay State.
-    pub(crate) struct ReplayNativeAmxAuthority<'a, S> {
-        state: &'a S,
-        _proposal: &'a VerifiedReplayProposal,
-    }
-    impl<S: StateReadOnly> NativeAmxAuthorityContext for ReplayNativeAmxAuthority<'_, S> {
-        fn route_active_at_height(
-            &self,
-            lane: LaneId,
-            dataspace: DataSpaceId,
-            height: u64,
-        ) -> bool {
-            NativeAmxAuthorityContext::route_active_at_height(self.state, lane, dataspace, height)
-        }
-        fn lane_incarnation_at_height(&self, lane: LaneId, height: u64) -> Option<Hash> {
-            NativeAmxAuthorityContext::lane_incarnation_at_height(self.state, lane, height)
-        }
-        fn resolve_lane_committee_at_height(
-            &self,
-            route: crate::state::LaneAuthorityRoute,
-            height: u64,
-        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
-            NativeAmxAuthorityContext::resolve_lane_committee_at_height(self.state, route, height)
-        }
-        fn consensus_pop_matches_authority(
-            &self,
-            lane: LaneId,
-            peer: &PeerId,
-            height: u64,
-            pop: &[u8],
-        ) -> bool {
-            NativeAmxAuthorityContext::consensus_pop_matches_authority(
-                self.state, lane, peer, height, pop,
-            )
-        }
-        fn native_amx_participant_predecessor_is_current(
-            &self,
-            proposal: &LaneBlockProposalV1,
-            previous: Option<
-                HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
-            >,
-        ) -> crate::kura::Result<bool> {
-            State::native_amx_control_predecessor_matches_replay_state(
-                self.state, proposal, previous,
-            )
-            .map_err(|error| crate::kura::Error::MergeCarrierConflict(error.to_string()))
-        }
-    }
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq)]
     enum ConsensusValidationProfile {
-        SignedGenesis {
-            consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-        },
-        SumeragiV2 {
-            block_cadence: Duration,
-            context: SumeragiV2ValidationContext,
-        },
-        VerifiedReplay {
-            block_cadence: Duration,
-            authority: VerifiedReplayProposal,
-        },
-        // Private preparation only: all common checks still run. No live
-        // validator entry selects this profile or exposes a Native ValidBlock.
-        NativePreparation {
-            block_cadence: Duration,
-            context: SumeragiV2ValidationContext,
-        },
         /// A block ordered by the Sumeragi core (`specs/sumeragi.md` §4): the certified
         /// core header binds the nonempty payload, so block signatures are not checked;
         /// block time is canonical from the parent and
@@ -4496,11 +3310,15 @@ pub(crate) mod valid {
         Sumeragi {
             block_cadence: Duration,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+            supplied_pulse:
+                Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
             /// The block's lane step input (`specs/sumeragi_lanes.md` §4.3).
             lanes: crate::sumeragi::lanes::merge::LaneStepInput,
+            expected_pulse_context:
+                iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
+            source_generation: u64,
         },
-        /// The signed genesis of a Sumeragi chain: [`Self::SignedGenesis`] that also installs
-        /// the consensus schedule.
+        /// The sole signed genesis path; installs the native consensus schedule and lane step.
         SumeragiGenesis {
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
         },
@@ -4516,137 +3334,113 @@ pub(crate) mod valid {
                 _ => None,
             }
         }
-        /// The lane step input when the block advances the lane set
-        /// (`specs/sumeragi_lanes.md` §4.3): genesis creates the policy's fixed lanes.
-        fn sumeragi_lanes(&self) -> Option<crate::sumeragi::lanes::merge::LaneStepInput> {
+        /// Lane lifecycle input committed by this global block.
+        fn take_sumeragi_lanes(&mut self) -> Option<crate::sumeragi::lanes::merge::LaneStepInput> {
             match self {
-                Self::Sumeragi { lanes, .. } => Some(lanes.clone()),
-                Self::SumeragiGenesis { .. } => {
-                    Some(crate::sumeragi::lanes::merge::LaneStepInput::default())
-                }
+                Self::Sumeragi { lanes, .. } => Some(std::mem::take(lanes)),
+                Self::SumeragiGenesis { .. } => Some(Default::default()),
                 _ => None,
             }
         }
-        #[cfg(test)]
-        /// Return whether validation may publish best-effort pipeline recovery metadata.
-        ///
-        /// Signed genesis and authenticated replay execute against disposable overlays.
-        /// Neither may mutate Kura or invalidate the exact retained recovery boundary
-        /// before the complete validated state is published.
-        const fn persist_pipeline_recovery_sidecar(&self) -> bool {
-            matches!(self, Self::SumeragiV2 { .. })
-        }
-        const fn enforce_local_wall_clock(&self) -> bool {
-            matches!(
-                self,
-                Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. }
-            )
-        }
-        const fn v2_block_cadence(&self) -> Option<Duration> {
-            match self {
-                Self::SumeragiV2 { block_cadence, .. }
-                | Self::NativePreparation { block_cadence, .. }
-                | Self::VerifiedReplay { block_cadence, .. }
-                | Self::Sumeragi { block_cadence, .. } => Some(*block_cadence),
-                Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. } => None,
-            }
-        }
-        /// Whether to apply the retired proposal-work classifier. Current Sumeragi enforces
-        /// nonempty transaction work directly at its payload and admission boundary.
-        const fn enforces_proposal_work(&self) -> bool {
-            !matches!(
-                self,
-                Self::Sumeragi { .. } | Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. }
-            )
-        }
-        const fn snapshot_bootstrap(
+        /// The exact transported native control witness, never a local aggregator lookup.
+        const fn sumeragi_pulse(
             &self,
-        ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
+        ) -> Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
             match self {
-                Self::SumeragiV2 { context, .. } | Self::NativePreparation { context, .. } => {
-                    context.snapshot_bootstrap
-                }
-                Self::VerifiedReplay { authority, .. } => authority.context.snapshot_bootstrap,
-                Self::SignedGenesis { .. }
-                | Self::Sumeragi { .. }
-                | Self::SumeragiGenesis { .. } => None,
+                Self::Sumeragi { supplied_pulse, .. } => *supplied_pulse,
+                _ => None,
             }
         }
-        /// Where the SCCP post-execution hook takes the consensus inputs of the executed
-        /// height (`specs/sccp.md` §4.3.2): the Sumeragi core's lag-2 schedule for its blocks
-        /// and genesis, the authenticated v2 height context otherwise, and nothing for a v2
-        /// signed genesis, whose height-one context is frozen from the staged genesis.
+        /// The authenticated native header source, absent only for signed genesis.
+        const fn sumeragi_pulse_context(
+            &self,
+        ) -> Option<iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1> {
+            match self {
+                Self::Sumeragi {
+                    expected_pulse_context,
+                    ..
+                } => Some(*expected_pulse_context),
+                _ => None,
+            }
+        }
+        const fn source_generation(&self) -> Option<u64> {
+            match self {
+                Self::Sumeragi {
+                    source_generation, ..
+                } => Some(*source_generation),
+                _ => None,
+            }
+        }
+
+        const fn enforce_local_wall_clock(&self) -> bool {
+            matches!(self, Self::SumeragiGenesis { .. })
+        }
+        const fn block_cadence(&self) -> Option<Duration> {
+            match self {
+                Self::Sumeragi { block_cadence, .. } => Some(*block_cadence),
+                _ => None,
+            }
+        }
+
         fn sccp_height_source(
             &self,
         ) -> crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1<'_> {
             use crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1;
-            if let Some(genesis_height) = self.sumeragi_schedule() {
-                return SccpHeightSourceV1::SumeragiSchedule {
-                    genesis_height,
-                    mode: self.authoritative_consensus_mode(),
-                };
-            }
-            self.v2_context()
-                .and_then(SumeragiV2ValidationContext::authenticated_height_context)
-                .map_or(
-                    SccpHeightSourceV1::Unauthenticated,
-                    SccpHeightSourceV1::V2Context,
-                )
+            self.sumeragi_schedule()
+                .map_or(SccpHeightSourceV1::Unauthenticated, |genesis_height| {
+                    SccpHeightSourceV1::SumeragiSchedule {
+                        genesis_height,
+                        mode: self.authoritative_consensus_mode(),
+                    }
+                })
         }
-        const fn v2_context(&self) -> Option<&SumeragiV2ValidationContext> {
-            match self {
-                Self::SumeragiV2 { context, .. } | Self::NativePreparation { context, .. } => {
-                    Some(context)
-                }
-                Self::VerifiedReplay { authority, .. } => Some(&authority.context),
-                Self::SignedGenesis { .. }
-                | Self::Sumeragi { .. }
-                | Self::SumeragiGenesis { .. } => None,
-            }
-        }
+
         const fn authoritative_consensus_mode(
             &self,
-        ) -> iroha_data_model::block::consensus_v2::ConsensusMode {
+        ) -> iroha_data_model::parameter::system::ConsensusMode {
             match self {
-                Self::SignedGenesis { consensus_mode } => *consensus_mode,
-                Self::SumeragiV2 { context, .. } | Self::NativePreparation { context, .. } => {
-                    context.consensus_mode
-                }
-                Self::VerifiedReplay { authority, .. } => authority.context.consensus_mode,
                 Self::Sumeragi { consensus_mode, .. }
                 | Self::SumeragiGenesis { consensus_mode } => *consensus_mode,
             }
         }
     }
-    /// Consensus ceiling for issuer-authenticated AXT handles attached to one block.
-    const MAX_AUTHENTICATED_AXT_HANDLES_PER_BLOCK: usize =
-        iroha_data_model::nexus::MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1;
     #[cfg(all(test, feature = "app_api"))]
     std::thread_local! {
         static AXT_FASTPQ_PROOF_VERIFICATION_COUNT: std::cell::Cell<usize> =
-            const { std::cell::Cell::new(0) };
-        static AXT_CANONICAL_PROOF_DECODE_COUNT: std::cell::Cell<usize> =
-            const { std::cell::Cell::new(0) };
-        static AXT_PROOF_AMOUNT_FACT_RESOLUTION_COUNT: std::cell::Cell<usize> =
             const { std::cell::Cell::new(0) };
     }
     #[cfg(all(test, feature = "app_api"))]
     pub(super) fn reset_axt_fastpq_proof_verification_count() {
         AXT_FASTPQ_PROOF_VERIFICATION_COUNT.with(|count| count.set(0));
-        AXT_CANONICAL_PROOF_DECODE_COUNT.with(|count| count.set(0));
-        AXT_PROOF_AMOUNT_FACT_RESOLUTION_COUNT.with(|count| count.set(0));
     }
     #[cfg(all(test, feature = "app_api"))]
     pub(super) fn axt_fastpq_proof_verification_count() -> usize {
         AXT_FASTPQ_PROOF_VERIFICATION_COUNT.with(std::cell::Cell::get)
     }
-    #[cfg(all(test, feature = "app_api"))]
-    pub(super) fn axt_canonical_proof_decode_count() -> usize {
-        AXT_CANONICAL_PROOF_DECODE_COUNT.with(std::cell::Cell::get)
-    }
-    #[cfg(all(test, feature = "app_api"))]
-    pub(super) fn axt_proof_amount_fact_resolution_count() -> usize {
-        AXT_PROOF_AMOUNT_FACT_RESOLUTION_COUNT.with(std::cell::Cell::get)
+    pub(super) fn map_axt_fastpq_error(
+        error: fastpq_prover::Error,
+        context: &str,
+        snapshot_version: u64,
+        dataspace: DataSpaceId,
+        lane: LaneId,
+    ) -> BlockValidationError {
+        if matches!(
+            error,
+            fastpq_prover::Error::LocalAllocationUnavailable { .. }
+        ) {
+            return BlockValidationError::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            );
+        }
+        BlockValidationError::AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails {
+            message: format!("{context}: {error}"),
+            reason: AxtRejectReason::Proof,
+            snapshot_version: Some(snapshot_version),
+            dataspace: Some(dataspace),
+            lane: Some(lane),
+            active_handle_era: None,
+            next_handle_counter: None,
+        })
     }
     #[allow(clippy::too_many_lines)]
     pub fn validate_axt_envelopes<'block>(
@@ -4727,21 +3521,24 @@ pub(crate) mod valid {
             .iter()
             .map(|binding| (binding.dsid, binding.policy))
             .collect();
-        let snapshot_slot = snapshot
-            .entries
-            .iter()
-            .map(|entry| entry.policy.current_slot)
-            .filter(|slot| *slot > 0)
-            .max()
-            .unwrap_or(0);
-        let retention_slots = state_block.nexus.axt.replay_retention_slots.get();
-        let mut seen: BTreeSet<AxtHandleReplayKey> = BTreeSet::new();
-        let mut next_sub_nonces: BTreeMap<DataSpaceId, u64> = policies
+        let next_sub_nonces: BTreeMap<DataSpaceId, u64> = policies
             .iter()
             .map(|(dsid, policy)| (*dsid, policy.next_handle_counter))
             .collect();
-        let network_id = state_block.network_id;
         if let Some(envelopes) = block.axt_envelopes() {
+            if let Some(envelope) = envelopes
+                .iter()
+                .find(|envelope| !envelope.spends.is_empty())
+            {
+                return Err(make_axt_error_with(
+                    AxtRejectReason::Proof,
+                    crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
+                    Some(envelope.spends[0].draft.intent.asset_dsid),
+                    Some(envelope.lane),
+                    None,
+                    None,
+                ));
+            }
             let validate_proof_expiry = |proof: &ProofBlob,
                                          dsid: DataSpaceId,
                                          policy: &AxtPolicyEntry,
@@ -4802,17 +3599,6 @@ pub(crate) mod valid {
             // references avoid copying proof payloads owned by the block.
             let mut verified_proofs = Vec::<VerifiedProof<'block>>::new();
             let mut verified_proof_buckets = VerifiedProofBuckets::new();
-            let mut block_consumed_by_proof = BTreeMap::<usize, Vec<[u8; 32]>>::new();
-            let mut resolved_proof_amounts =
-                BTreeMap::<(usize, Option<Quantity>), ivm::axt::ResolvedHandleAmount>::new();
-            // A signed budget belongs to its normalized handle family, not to
-            // one envelope. Hydrate only families touched by this block from
-            // the immutable parent WSV, then retain their working records at
-            // block scope so sequential sub-nonces cannot reset them.
-            let mut handle_budget_records = BTreeMap::<
-                iroha_data_model::nexus::AxtHandleBudgetKey,
-                iroha_data_model::nexus::AxtHandleBudgetRecord,
-            >::new();
             let validate_proof = |verified_proofs: &mut Vec<VerifiedProof<'block>>,
                                   verified_proof_buckets: &mut VerifiedProofBuckets,
                                   proof: &'block ProofBlob,
@@ -4875,9 +3661,6 @@ pub(crate) mod valid {
                         None,
                     ));
                 }
-                #[cfg(all(test, feature = "app_api"))]
-                AXT_CANONICAL_PROOF_DECODE_COUNT
-                    .with(|count| count.set(count.get().saturating_add(1)));
                 let envelope =
                     ivm::codec::decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
                         .map_err(|err| {
@@ -4911,15 +3694,12 @@ pub(crate) mod valid {
                     )
                 })?;
                 fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
-                    make_axt_error_with(
-                        AxtRejectReason::Proof,
-                        &format!(
-                            "generic AXT proof admission requires a witnessed transfer claim: {err}"
-                        ),
-                        Some(dsid),
-                        Some(policy.target_lane),
-                        None,
-                        None,
+                    map_axt_fastpq_error(
+                        err,
+                        "generic AXT proof admission requires a witnessed transfer claim",
+                        snapshot_version,
+                        dsid,
+                        policy.target_lane,
                     )
                 })?;
                 validate_proof_expiry(proof, dsid, policy, policy_slot, min_expiry_slot)?;
@@ -4931,13 +3711,12 @@ pub(crate) mod valid {
                     proof.expiry_slot,
                 )
                 .map_err(|err| {
-                    make_axt_error_with(
-                        AxtRejectReason::Proof,
-                        &format!("FASTPQ verification failed: {err}"),
-                        Some(dsid),
-                        Some(policy.target_lane),
-                        None,
-                        None,
+                    map_axt_fastpq_error(
+                        err,
+                        "FASTPQ verification failed",
+                        snapshot_version,
+                        dsid,
+                        policy.target_lane,
                     )
                 })?;
                 let index = verified_proofs.len();
@@ -4968,164 +3747,6 @@ pub(crate) mod valid {
                         next_handle_counter,
                     )
                 };
-            let mut authenticated_handles = BTreeSet::<AxtHandleReplayKey>::new();
-            let mut authenticated_handle_count = 0_usize;
-            for envelope in envelopes {
-                for fragment in &envelope.handles {
-                    let dsid = fragment.intent.asset_dsid;
-                    let policy = policies.get(&dsid).ok_or_else(|| {
-                        make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::MissingPolicy,
-                            "no block-start policy for dataspace",
-                            Some(dsid),
-                            None,
-                            None,
-                        )
-                    })?;
-                    if policy.manifest_root != fragment.handle.manifest_view_root
-                        || policy.target_lane != fragment.handle.target_lane
-                    {
-                        return Err(make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::Manifest,
-                            "authenticated handle does not match its committed policy scope",
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    if fragment.handle.handle_era != policy.active_handle_era {
-                        return Err(make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::HandleEra,
-                            "authenticated handle does not use the committed manifest era",
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    if fragment.handle.asset_definition_id != fragment.intent.op.asset_definition_id
-                    {
-                        return Err(make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::PolicyDenied,
-                            "issuer-signed handle asset does not match remote spend intent asset",
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    let current_asset_incarnation = state_block
-                        .world
-                        .axt_asset_incarnations
-                        .get(&fragment.handle.asset_definition_id)
-                        .copied();
-                    let block_start_asset_incarnation = state_block
-                        .axt_asset_incarnation_at_block_start(&fragment.handle.asset_definition_id)
-                        .copied();
-                    if current_asset_incarnation.is_none()
-                        || current_asset_incarnation != block_start_asset_incarnation
-                        || current_asset_incarnation
-                            != Some(fragment.handle.issuer_context.asset_definition_incarnation)
-                    {
-                        return Err(make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::PolicyDenied,
-                            "issuer-signed handle does not match the stable block-start asset incarnation",
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    if ivm::axt::validate_model_asset_handle(&fragment.handle).is_err() {
-                        return Err(make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle fields are not canonical, authenticated, or usable",
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    let issuer = block_start.issuer_binding(dsid).map_err(|error| {
-                        make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::PolicyDenied,
-                            &format!("failed to resolve committed AXT issuer: {error}"),
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        )
-                    })?;
-                    let carried_context = fragment.handle.issuer_context;
-                    let issuer_context = AxtHandleIssuerContextV1 {
-                        network_id,
-                        asset_dsid: dsid,
-                        asset_definition_incarnation: current_asset_incarnation
-                            .expect("checked above"),
-                        issuer: issuer.issuer,
-                        issuer_manifest_root: policy.manifest_root,
-                        code_root: carried_context.code_root,
-                        abi_version: carried_context.abi_version,
-                        abi_hash: carried_context.abi_hash,
-                    };
-                    fragment
-                        .handle
-                        .verify_issuer_signature_v1(issuer_context, &issuer.public_key)
-                        .map_err(|_| {
-                            make_env_error(
-                                envelope.lane,
-                                AxtRejectReason::PolicyDenied,
-                                "AXT handle issuer signature is invalid",
-                                Some(dsid),
-                                Some(policy.active_handle_era),
-                                Some(policy.next_handle_counter),
-                            )
-                        })?;
-                    let replay_key = AxtHandleReplayKey::from_handle(dsid, &fragment.handle);
-                    let record_slot = if policy.current_slot > 0 {
-                        policy.current_slot
-                    } else {
-                        snapshot_slot
-                    };
-                    if let Some(entry) = state_block.axt_replay_record_at_block_start(&replay_key)
-                        && !entry.is_expired(record_slot, retention_slots)
-                    {
-                        return Err(make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::ReplayCache,
-                            "handle replayed in persisted ledger",
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    if !authenticated_handles.insert(replay_key) {
-                        return Err(make_env_error(
-                            envelope.lane,
-                            AxtRejectReason::ReplayCache,
-                            "duplicate authenticated handle usage in block",
-                            Some(dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    authenticated_handle_count = authenticated_handle_count
-                        .checked_add(1)
-                        .filter(|count| *count <= MAX_AUTHENTICATED_AXT_HANDLES_PER_BLOCK)
-                        .ok_or_else(|| {
-                            make_env_error(
-                                envelope.lane,
-                                AxtRejectReason::PolicyDenied,
-                                "block exceeds the authenticated AXT handle limit",
-                                Some(dsid),
-                                Some(policy.active_handle_era),
-                                Some(policy.next_handle_counter),
-                            )
-                        })?;
-                }
-            }
             for envelope in envelopes {
                 let envelope_lane = envelope.lane;
                 let expected_commit_height = block.header().height().get();
@@ -5354,652 +3975,14 @@ pub(crate) mod valid {
                         ));
                     }
                 }
-                // Consumption is scoped to this envelope, even when global
-                // proof verification memoizes an identical proof value used
-                // by another envelope. Every fallback proof starts with an
-                // empty assignment so a claim-carrying proof with no handle
-                // cannot authorize an unrelated effect.
-                let mut consumed_by_proof = proofs_by_ds
+                // No signed spend may consume a claim until finalized source
+                // execution can be authenticated by State.
+                let consumed_by_proof = proofs_by_ds
                     .iter()
                     .map(|(dsid, (_, proof_index))| (*proof_index, (*dsid, Vec::new())))
                     .collect::<BTreeMap<usize, (DataSpaceId, Vec<[u8; 32]>)>>();
-                let mut dataspace_proofs_present: BTreeSet<DataSpaceId> =
+                let dataspace_proofs_present: BTreeSet<DataSpaceId> =
                     proofs_by_ds.keys().copied().collect();
-                if envelope.handles.windows(2).any(|pair| {
-                    let key = |fragment: &AxtHandleFragment| {
-                        (
-                            *fragment.handle.axt_binding.as_bytes(),
-                            fragment.handle.handle_era,
-                            fragment.handle.sub_nonce,
-                            fragment.intent.asset_dsid,
-                            fragment.amount.clone(),
-                        )
-                    };
-                    key(&pair[0]) >= key(&pair[1])
-                }) {
-                    return Err(make_env_error(
-                        envelope_lane,
-                        AxtRejectReason::Duplicate,
-                        "handle fragments are not strictly ordered by producer key",
-                        None,
-                        None,
-                        None,
-                    ));
-                }
-                for fragment in &envelope.handles {
-                    let binding = fragment.handle.axt_binding;
-                    if binding.as_bytes() != envelope.binding.as_bytes() {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Descriptor,
-                            "handle binding does not match envelope binding",
-                            None,
-                            None,
-                            None,
-                        ));
-                    }
-                    let policy = policies.get(&fragment.intent.asset_dsid).ok_or_else(|| {
-                        make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::MissingPolicy,
-                            "no policy for dataspace",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        )
-                    })?;
-                    if !expected_dsids.contains(&fragment.intent.asset_dsid) {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Descriptor,
-                            "handle references undeclared dataspace",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if let Some(origin_dsid) = fragment.handle.subject.origin_dsid
-                        && !expected_dsids.contains(&origin_dsid)
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Descriptor,
-                            "authenticated handle origin dataspace is not declared by the bound AXT descriptor",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    let policy_slot = policy.current_slot;
-                    let record_slot = if policy_slot > 0 {
-                        policy_slot
-                    } else {
-                        snapshot_slot
-                    };
-                    if fragment.handle.handle_era == 0 {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::HandleEra,
-                            "handle era is zero",
-                            Some(fragment.intent.asset_dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    if fragment.handle.sub_nonce == 0 {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::SubNonce,
-                            "handle sub-nonce is zero",
-                            Some(fragment.intent.asset_dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    if fragment.handle.expiry_slot == 0 {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Expiry,
-                            "handle expiry slot is zero",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if fragment.handle.scope.is_empty() {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle scope is empty",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if fragment
-                        .handle
-                        .scope
-                        .iter()
-                        .all(|scope| scope != &fragment.intent.op.kind)
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle scope does not permit intent kind",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if fragment.handle.subject.account != fragment.intent.op.from {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle subject does not match intent sender",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if fragment.handle.asset_definition_id != fragment.intent.op.asset_definition_id
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "issuer-signed handle asset does not match remote spend intent asset",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if fragment
-                        .handle
-                        .group_binding
-                        .composability_group_id
-                        .is_empty()
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle composability group id is empty",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if policy.target_lane != fragment.handle.target_lane {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Lane,
-                            "handle target lane does not match policy",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if policy.manifest_root.iter().all(|byte| *byte == 0) {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Manifest,
-                            "policy manifest root is zeroed",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if fragment
-                        .handle
-                        .manifest_view_root
-                        .iter()
-                        .all(|byte| *byte == 0)
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Manifest,
-                            "handle manifest root is zeroed",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if policy.manifest_root != fragment.handle.manifest_view_root {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Manifest,
-                            "handle manifest root does not match policy",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    let expected_sub_nonce = *next_sub_nonces
-                        .get(&fragment.intent.asset_dsid)
-                        .expect("every validated policy has a working AXT counter");
-                    let mut working_policy = *policy;
-                    working_policy.next_handle_counter = expected_sub_nonce;
-                    let next_sub_nonce = iroha_data_model::nexus::next_axt_handle_sub_nonce(
-                        &working_policy,
-                        &fragment.handle,
-                    )
-                    .map_err(|error| {
-                        let reason = match error {
-                            iroha_data_model::nexus::AxtHandleSequenceError::EraMismatch {
-                                ..
-                            } => AxtRejectReason::HandleEra,
-                            iroha_data_model::nexus::AxtHandleSequenceError::SubNonceMismatch {
-                                ..
-                            }
-                            | iroha_data_model::nexus::AxtHandleSequenceError::CounterExhausted => {
-                                AxtRejectReason::SubNonce
-                            }
-                        };
-                        make_env_error(
-                            envelope_lane,
-                            reason,
-                            &error.to_string(),
-                            Some(fragment.intent.asset_dsid),
-                            Some(policy.active_handle_era),
-                            Some(expected_sub_nonce),
-                        )
-                    })?;
-                    let requested_skew_ms = fragment
-                        .handle
-                        .max_clock_skew_ms
-                        .map_or(axt_timing.max_clock_skew_ms, u64::from);
-                    if requested_skew_ms > axt_timing.max_clock_skew_ms {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Expiry,
-                            "handle max_clock_skew_ms exceeds configured bound",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    let expiry_slot = ivm::axt::expiry_slot_with_skew(
-                        fragment.handle.expiry_slot,
-                        axt_timing.slot_length_ms,
-                        axt_timing.max_clock_skew_ms,
-                        fragment.handle.max_clock_skew_ms,
-                    );
-                    if policy_slot > 0 && policy_slot > expiry_slot {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Expiry,
-                            "handle expired relative to policy slot",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if ivm::axt::validate_model_asset_handle(&fragment.handle).is_err() {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle fields are not canonical, authenticated, or usable",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    let current_asset_incarnation = state_block
-                        .world
-                        .axt_asset_incarnations
-                        .get(&fragment.handle.asset_definition_id)
-                        .copied();
-                    let block_start_asset_incarnation = state_block
-                        .axt_asset_incarnation_at_block_start(&fragment.handle.asset_definition_id)
-                        .copied();
-                    if current_asset_incarnation.is_none()
-                        || current_asset_incarnation != block_start_asset_incarnation
-                        || current_asset_incarnation
-                            != Some(fragment.handle.issuer_context.asset_definition_incarnation)
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "issuer-signed handle does not match the stable block-start asset incarnation",
-                            Some(fragment.intent.asset_dsid),
-                            Some(policy.active_handle_era),
-                            Some(expected_sub_nonce),
-                        ));
-                    }
-                    let issuer = block_start
-                        .issuer_binding(fragment.intent.asset_dsid)
-                        .map_err(|error| {
-                            make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::PolicyDenied,
-                                &format!("failed to resolve committed AXT issuer: {error}"),
-                                Some(fragment.intent.asset_dsid),
-                                Some(policy.active_handle_era),
-                                Some(expected_sub_nonce),
-                            )
-                        })?;
-                    let carried_context = fragment.handle.issuer_context;
-                    let issuer_context = AxtHandleIssuerContextV1 {
-                        network_id,
-                        asset_dsid: fragment.intent.asset_dsid,
-                        asset_definition_incarnation: current_asset_incarnation
-                            .expect("checked above"),
-                        issuer: issuer.issuer,
-                        issuer_manifest_root: policy.manifest_root,
-                        code_root: carried_context.code_root,
-                        abi_version: carried_context.abi_version,
-                        abi_hash: carried_context.abi_hash,
-                    };
-                    fragment
-                        .handle
-                        .verify_issuer_signature_v1(issuer_context, &issuer.public_key)
-                        .map_err(|_| {
-                            make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::PolicyDenied,
-                                "AXT handle issuer signature is invalid",
-                                Some(fragment.intent.asset_dsid),
-                                Some(policy.active_handle_era),
-                                Some(expected_sub_nonce),
-                            )
-                        })?;
-                    let replay_key = AxtHandleReplayKey::from_handle(
-                        fragment.intent.asset_dsid,
-                        &fragment.handle,
-                    );
-                    if let Some(entry) = state_block.axt_replay_record_at_block_start(&replay_key)
-                        && !entry.is_expired(record_slot, retention_slots)
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::ReplayCache,
-                            "handle replayed in persisted ledger",
-                            Some(fragment.intent.asset_dsid),
-                            Some(policy.active_handle_era),
-                            Some(policy.next_handle_counter),
-                        ));
-                    }
-                    let proof_index = if let Some(proof) = fragment.proof.as_ref() {
-                        validate_proof(
-                            &mut verified_proofs,
-                            &mut verified_proof_buckets,
-                            proof,
-                            fragment.intent.asset_dsid,
-                            policy,
-                            policy_slot,
-                            Some(fragment.handle.expiry_slot),
-                        )?
-                    } else {
-                        let (proof, proof_index) = proofs_by_ds
-                            .get(&fragment.intent.asset_dsid)
-                            .copied()
-                            .ok_or_else(|| {
-                                make_env_error(
-                                    envelope_lane,
-                                    AxtRejectReason::Proof,
-                                    "missing proof for dataspace",
-                                    Some(fragment.intent.asset_dsid),
-                                    None,
-                                    None,
-                                )
-                            })?;
-                        // Envelope fallback proofs were fully verified above. Reused
-                        // handles still enforce their own freshness bound, without
-                        // rescanning or rehashing the shared proof payload.
-                        validate_proof_expiry(
-                            proof,
-                            fragment.intent.asset_dsid,
-                            policy,
-                            policy_slot,
-                            Some(fragment.handle.expiry_slot),
-                        )?;
-                        proof_index
-                    };
-                    let proof_facts = &verified_proofs[proof_index].facts;
-                    dataspace_proofs_present.insert(fragment.intent.asset_dsid);
-                    let amount_cache_key = (proof_index, fragment.intent.op.amount.clone());
-                    let resolved_amount = if let Some(resolved) =
-                        resolved_proof_amounts.get(&amount_cache_key)
-                    {
-                        resolved.clone()
-                    } else {
-                        #[cfg(all(test, feature = "app_api"))]
-                        AXT_PROOF_AMOUNT_FACT_RESOLUTION_COUNT
-                            .with(|count| count.set(count.get().saturating_add(1)));
-                        let resolved =
-                            ivm::axt::resolve_handle_amount_components_from_proof_facts(
-                                fragment.intent.asset_dsid,
-                                fragment.intent.op.amount.as_ref(),
-                                proof_facts,
-                            )
-                            .map_err(|error| {
-                        let (reason, message) = match error {
-                            ivm::axt::HandleAmountResolutionError::MissingAmount => {
-                                (
-                                    AxtRejectReason::Budget,
-                                    "redacted remote spend amount has no qualified private proof relation",
-                                )
-                            }
-                            ivm::axt::HandleAmountResolutionError::InvalidProofEnvelope => {
-                                (
-                                    AxtRejectReason::Proof,
-                                    "proof payload is not a canonical AXT proof envelope",
-                                )
-                            }
-                            ivm::axt::HandleAmountResolutionError::Mismatch => {
-                                (
-                                    AxtRejectReason::Budget,
-                                    "intent amount does not match proof committed amount",
-                                )
-                            }
-                            ivm::axt::HandleAmountResolutionError::ZeroAmount => {
-                                (AxtRejectReason::Budget, "handle amount must be non-zero")
-                            }
-                            ivm::axt::HandleAmountResolutionError::InvalidProofScalar => {
-                                (
-                                    AxtRejectReason::Proof,
-                                    "handle amount is not exactly representable by the V1 proof statement",
-                                )
-                            }
-                            ivm::axt::HandleAmountResolutionError::CommitmentMismatch => {
-                                (
-                                    AxtRejectReason::Proof,
-                                    "proof amount commitment does not bind its canonical statement",
-                                )
-                            }
-                        };
-                        make_env_error(
-                            envelope_lane,
-                            reason,
-                            message,
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        )
-                            })?;
-                        resolved_proof_amounts.insert(amount_cache_key, resolved.clone());
-                        resolved
-                    };
-                    if fragment.intent.op.amount.as_ref() != Some(&resolved_amount.amount)
-                        || fragment.amount.as_ref() != Some(&resolved_amount.amount)
-                    {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Budget,
-                            "handle fragment amount does not match the clear intent amount",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if fragment.amount_commitment != resolved_amount.amount_commitment {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Budget,
-                            "handle amount commitment does not match the resolved proof statement",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    let budget_key =
-                        iroha_data_model::nexus::AxtHandleBudgetKey::from_handle(&fragment.handle);
-                    if budget_key.asset_dsid() != fragment.intent.asset_dsid {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "handle budget identity does not match the intent dataspace",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    let retain_until_slot = crate::state::retain_until_slot_for_handle(
-                        fragment,
-                        &state_block.nexus,
-                        policy_slot,
-                    );
-                    let budget_record = match handle_budget_records.entry(budget_key.clone()) {
-                        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                        std::collections::btree_map::Entry::Vacant(entry) => {
-                            let parent_record = state_block
-                                .axt_handle_budget_record_at_block_start(entry.key())
-                                .cloned()
-                                .unwrap_or_else(
-                                    iroha_data_model::nexus::AxtHandleBudgetRecord::empty,
-                                );
-                            entry.insert(parent_record)
-                        }
-                    };
-                    budget_record
-                        .try_consume(
-                            &budget_key,
-                            &resolved_amount.amount,
-                            retain_until_slot,
-                        )
-                        .map_err(|error| {
-                            let (reason, message) = match error {
-                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::InvalidAssetIncarnation(_) => (
-                                    AxtRejectReason::PolicyDenied,
-                                    "handle budget identity contains an invalid asset-definition incarnation",
-                                ),
-                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::RemainingExceeded =>
-                                    (AxtRejectReason::Budget, "shared handle budget exceeded across blocks or AXT envelopes"),
-                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::PerUseExceeded =>
-                                    (AxtRejectReason::Budget, "per-use handle budget exceeded across blocks or AXT envelopes"),
-                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::ZeroAmount =>
-                                    (AxtRejectReason::Budget, "handle budget consumption amount is zero"),
-                                iroha_data_model::nexus::AxtHandleBudgetConsumeError::Arithmetic(_) =>
-                                    (AxtRejectReason::Budget, "handle budget arithmetic overflow"),
-                            };
-                            make_env_error(
-                                envelope_lane,
-                                reason,
-                                message,
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            )
-                        })?;
-                    if ivm::axt::validate_model_remote_spend_intent(&fragment.intent).is_err() {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "remote spend intent fields are not canonical or usable",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    let balance_policy = state_block
-                        .world
-                        .asset_definition(&fragment.intent.op.asset_definition_id)
-                        .map_err(|_| {
-                            make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::PolicyDenied,
-                                "remote-spend asset definition is not registered",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            )
-                        })?
-                        .balance_scope_policy();
-                    let source_scope =
-                        crate::smartcontracts::ivm::host::remote_spend_asset_scope_from_policy(
-                            balance_policy,
-                            fragment.intent.asset_dsid,
-                        );
-                    ivm::axt::validate_remote_spend_asset_scope(
-                        fragment.intent.asset_dsid,
-                        source_scope,
-                    )
-                    .map_err(|_| {
-                        make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::PolicyDenied,
-                            "remote-spend asset does not belong to the intent dataspace",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        )
-                    })?;
-                    ivm::axt::validate_model_remote_spend_intent_commitment_from_proof_facts(
-                        &fragment.handle,
-                        &fragment.intent,
-                        &resolved_amount.amount,
-                        proof_facts,
-                    )
-                    .map_err(|_| {
-                        make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Proof,
-                            "FASTPQ proof does not commit to the exact remote spend intent",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        )
-                    })?;
-                    let commitment = ivm::axt::expected_model_remote_spend_intent_commitment_v1(
-                        &fragment.handle,
-                        &fragment.intent,
-                        &resolved_amount.amount,
-                    );
-                    match consumed_by_proof.entry(proof_index) {
-                        std::collections::btree_map::Entry::Occupied(mut entry) => {
-                            if entry.get().0 != fragment.intent.asset_dsid {
-                                return Err(make_env_error(
-                                    envelope_lane,
-                                    AxtRejectReason::Proof,
-                                    "one exact FASTPQ proof was selected for different dataspaces",
-                                    Some(fragment.intent.asset_dsid),
-                                    None,
-                                    None,
-                                ));
-                            }
-                            entry.get_mut().1.push(commitment);
-                        }
-                        std::collections::btree_map::Entry::Vacant(entry) => {
-                            entry.insert((fragment.intent.asset_dsid, vec![commitment]));
-                        }
-                    }
-                    block_consumed_by_proof
-                        .entry(proof_index)
-                        .or_default()
-                        .push(commitment);
-                    if !seen.insert(replay_key) {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::ReplayCache,
-                            "duplicate handle usage in block",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    *next_sub_nonces
-                        .get_mut(&fragment.intent.asset_dsid)
-                        .expect("every validated policy has a working AXT counter") =
-                        next_sub_nonce;
-                }
                 for dsid in &expected_dsids {
                     if !dataspace_proofs_present.contains(dsid) {
                         return Err(make_env_error(
@@ -6028,22 +4011,17 @@ pub(crate) mod valid {
                         })?;
                 }
             }
-            // A copied proof remains one canonical statement at block scope.
-            // Enforcing its commitment multiset again across all envelopes
-            // prevents the same claim set from being replayed through several
-            // individually well-formed envelope records.
-            for (proof_index, verified) in verified_proofs.iter().enumerate() {
-                let consumed = block_consumed_by_proof
-                    .get(&proof_index)
-                    .map_or(&[][..], Vec::as_slice);
+            // Proofs with remote-spend commitments cannot be consumed while
+            // anchored source execution admission is unavailable.
+            for verified in &verified_proofs {
                 verified
                     .facts
-                    .validate_remote_spend_consumption(consumed)
+                    .validate_remote_spend_consumption(&[])
                     .map_err(|_| {
                         make_axt_error_with(
                             AxtRejectReason::Proof,
-                            "FASTPQ remote-spend claims were not consumed exactly once in the block",
-                            None,
+                            "FASTPQ remote-spend claims require anchored admission",
+                            Some(verified.dsid),
                             None,
                             None,
                             None,
@@ -6169,24 +4147,6 @@ pub(crate) mod valid {
                 }
             }
         }
-        // TODO: admit remote spend only after the exact intent, proof and effective
-        // amount are authenticated against finalized source roots and transaction
-        // set. Reusable capability authentication and witness replay do not supply
-        // those missing facts. This also covers blocks constructed outside CoreHost.
-        if block.axt_envelopes().is_some_and(|envelopes| {
-            envelopes
-                .iter()
-                .any(|envelope| !envelope.handles.is_empty())
-        }) {
-            return Err(make_axt_error_with(
-                AxtRejectReason::Proof,
-                crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
-                None,
-                None,
-                None,
-                None,
-            ));
-        }
         Ok(())
     }
     /// Counts of signatures attached to a block.
@@ -6222,142 +4182,21 @@ pub(crate) mod valid {
             set_b_signatures,
         }
     }
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    struct AutonomousMergeCarrierContent {
-        ordinary_entrypoints: usize,
-        external_contexts: usize,
-        autonomous_lane_payloads: usize,
-        lane_payload_ownerships: usize,
-        has_da_effect: bool,
-        has_npos: bool,
-        has_axt_envelopes: bool,
-        axt_snapshot_mismatch: bool,
-        has_native_participant_frontiers: bool,
-    }
-    include!("block/pristine_consensus_effects.rs");
-    include!("block/current_beacon.rs");
-
-    /// Owned, authenticated control inputs for the same Native execution scope.
-    /// This is neither global block validity nor publication authority.
-    pub(crate) struct PreparedNativeExecutionControls<'state> {
+    /// Original committed cut admitted before the constructor acquires execution writers.
+    struct PristineNativeSource<'state> {
         state: &'state State,
         generation: u64,
         header: BlockHeader,
-        admissions: Vec<Vec<u8>>,
-        npos: Option<PreparedPristineConsensusEffects<'state>>,
-        context: crate::sumeragi::v2::VerifiedHeightContext,
     }
-    impl PreparedNativeExecutionControls<'_> {
-        /// Consume after pristine source preflight and recorder acquisition,
-        /// before the constructor's start hooks, on that original overlay.
-        pub(crate) fn apply(
-            self,
-            overlay: &mut StateBlock<'_>,
-        ) -> Result<crate::sumeragi::v2::VerifiedHeightContext, BlockValidationError> {
-            overlay
-                .validate_native_pristine_control_owner(self.state, self.generation, &self.header)
-                .map_err(ValidBlock::execution_context_error)?;
-            if let Some(npos) = self.npos.as_ref() {
-                if !std::ptr::eq(npos.penalty_index.state, self.state)
-                    || npos.penalty_index.generation != self.generation
-                    || npos.penalty_index.header != self.header
-                {
-                    return Err(ValidBlock::execution_context_error(
-                        "Native pristine penalty index differs from its original control owner",
-                    ));
-                }
-            }
-            if !self.admissions.is_empty() {
-                overlay
-                    .stage_queue_plan_admissions_for_carrier(&self.admissions)
-                    .map_err(|error| ValidBlock::execution_context_error(error.to_string()))?;
-            }
-            if let Some(npos) = self.npos {
-                npos.apply(overlay)?;
-            }
-            Ok(self.context)
-        }
-    }
-    /// Move-only permission minted solely by strict parent-state block validation.
-    /// The consumer cannot substitute a local pulse, roster, pruning plan or carrier.
-    pub(crate) struct VerifiedMergeBeaconPulse {
-        header: BlockHeader,
-        network_id: NetworkId,
-        effects: iroha_data_model::consensus::NposConsensusEffects,
-        prune_keys: mv::allocation::ChargedBuffer<Hash>,
-        roster: Vec<PeerId>,
-        parent_surface: Hash,
-    }
-    impl VerifiedMergeBeaconPulse {
-        pub(crate) fn into_parts(
-            self,
-        ) -> (
-            BlockHeader,
-            NetworkId,
-            iroha_data_model::consensus::NposConsensusEffects,
-            mv::allocation::ChargedBuffer<Hash>,
-            Vec<PeerId>,
-            Hash,
-        ) {
-            (
-                self.header,
-                self.network_id,
-                self.effects,
-                self.prune_keys,
-                self.roster,
-                self.parent_surface,
-            )
-        }
-    }
-    include!("block/carrier_preparation.rs");
-    include!("block/merge_beacon_owner.rs");
+    include!("block/native_header_source.rs");
+    include!("block/native_genesis_policy.rs");
+    #[cfg(test)]
+    #[path = "native_header_source_tests.rs"]
+    mod native_header_source_tests;
+
     include!("block/post_execution_tail.rs");
 
     impl ValidBlock {
-        fn autonomous_merge_carrier_has_da_effect(block: &SignedBlock) -> bool {
-            // Every valid block carries the exact active proof-policy bundle.
-            // That mandatory consensus metadata does not itself publish a DA
-            // effect; commitments and pin intents do.
-            block.da_commitments().is_some() || block.da_pin_intents().is_some()
-        }
-        fn validate_autonomous_merge_carrier_content(
-            content: AutonomousMergeCarrierContent,
-        ) -> Result<(), BlockValidationError> {
-            if content != AutonomousMergeCarrierContent::default() {
-                return Err(Self::execution_context_error(
-                    "certified merge execution carrier contains an incompatible ordinary, DA, NPoS, AXT, Native, or lane-payload effect",
-                ));
-            }
-            Ok(())
-        }
-        fn validate_npos_soft_fork_composition(
-            block: &SignedBlock,
-            soft_fork: bool,
-        ) -> Result<(), BlockValidationError> {
-            if soft_fork && block.npos_consensus_effects().is_some() {
-                return Err(Self::npos_effects_error(
-                    "soft-fork replacement cannot safely apply NPoS finality effects",
-                ));
-            }
-            Ok(())
-        }
-        fn validate_npos_merge_composition(
-            block: &SignedBlock,
-            reference: &CertifiedMergeLedgerReference,
-        ) -> Result<(), BlockValidationError> {
-            if reference.execution_batch_hash.is_some()
-                && block.npos_consensus_effects().is_some_and(|effects| {
-                    effects.finalized_global_beacon_pulse.is_none()
-                        || !effects.v2_evidence_admissions.is_empty()
-                        || !effects.penalty_actions.is_empty()
-                })
-            {
-                return Err(Self::execution_context_error(
-                    "a carrier cannot mix NPoS finality effects with a certified merge execution batch",
-                ));
-            }
-            Ok(())
-        }
         #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
         fn new_unverified(block: SignedBlock) -> Self {
             Self {
@@ -6666,39 +4505,7 @@ pub(crate) mod valid {
             Self::verify_signatures_against_topology_with_pops(block, topology, &pops)?;
             Self::enforce_consensus_key_lifecycle_world(block, topology, world)
         }
-        /// Verify exact stored signature indices against a frozen v2 artifact authority.
-        ///
-        /// Replay must not derive signature authority from mutable WSV key registries. The
-        /// artifact's roster and roster-aligned PoPs are the only authority for this check.
-        pub(crate) fn validate_signatures_subset_v2_artifact_exact(
-            block: &SignedBlock,
-            artifact: &consensus_v2::finality::V2FinalityArtifact,
-        ) -> Result<(), SignatureVerificationError> {
-            Self::verify_unique_signers(block)?;
-            consensus_v2::finality::verify_validator_power_roster_pops(
-                &artifact.height_context.roster,
-                &artifact.validator_set_pops,
-            )
-            .map_err(|_| SignatureVerificationError::MissingPop)?;
-            let hash = block.hash();
-            for signature in block.signatures() {
-                let signer = usize::try_from(signature.index())
-                    .map_err(|_| SignatureVerificationError::UnknownSignatory)?;
-                let validator = artifact
-                    .height_context
-                    .roster
-                    .get(signer)
-                    .ok_or(SignatureVerificationError::UnknownSignatory)?;
-                if !Self::is_bls_normal_public_key(validator.validator.public_key()) {
-                    return Err(SignatureVerificationError::UnknownSignature);
-                }
-                signature
-                    .signature()
-                    .verify_hash(validator.validator.public_key(), hash)
-                    .map_err(|_| SignatureVerificationError::UnknownSignature)?;
-            }
-            Ok(())
-        }
+
         #[cfg(test)]
         pub(crate) fn validate_signatures_subset(
             block: &SignedBlock,
@@ -6829,243 +4636,26 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        #[cfg(any(test, feature = "iroha-core-tests"))]
-        fn sumeragi_v2_fixture_profile(block: &SignedBlock) -> ConsensusValidationProfile {
-            ConsensusValidationProfile::SumeragiV2 {
-                block_cadence: Duration::from_millis(1),
-                context: SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
-                    block,
-                ),
-            }
-        }
+
         /// Component fixtures can start a recorder only when they contain no
         /// pre-staged consensus controls. Full prefix recording belongs to the
         /// applying constructor and must be supplied through its consuming seam.
         #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
         fn begin_component_fixture_recording(
-            state: &StateBlock<'_>,
+            _state: &StateBlock<'_>,
         ) -> Result<crate::exec_witness::ExecWitnessGuard, BlockValidationError> {
-            if state.staged_merge_entry().is_some()
-                || !state.staged_queue_plan_admissions().is_empty()
-            {
-                return Err(Self::execution_context_error(
-                    "pre-staged controls require their original recorded constructor",
-                ));
-            }
             crate::exec_witness::begin_exec_witness_capture().map_err(Self::execution_context_error)
         }
 
-        /// Execute a strict Sumeragi-v2 test fixture through the current validation profile.
-        ///
-        /// This test-only entrypoint retains the production execution-context, routing, and
-        /// execution-witness checks. Context-bound attachments still require an authenticated
-        /// height context, so callers may use it only for bodies without those attachments.
-        #[cfg(any(test, feature = "iroha-core-tests"))]
-        #[doc(hidden)]
-        pub fn validate_sumeragi_v2_fixture(
-            block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state_block: &mut StateBlock<'_>,
-        ) -> WithEvents<Result<ValidBlock, Error>> {
-            let guard = match Self::begin_component_fixture_recording(state_block) {
-                Ok(guard) => guard,
-                Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
-            };
-            Self::validate_recorded_sumeragi_v2_fixture(
-                block,
-                topology,
-                genesis_account,
-                time_source,
-                state_block,
-                guard,
-            )
-        }
-
-        /// Validate a fixture over its original constructor-owned recorder.
-        #[cfg(any(test, feature = "iroha-core-tests"))]
-        pub(crate) fn validate_recorded_sumeragi_v2_fixture(
-            mut block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state_block: &mut StateBlock<'_>,
-            exec_witness_guard: crate::exec_witness::ExecWitnessGuard,
-        ) -> WithEvents<Result<ValidBlock, Error>> {
-            if let Err(error) = Self::validate_sumeragi_v2_fixture_static(
-                &block,
-                topology,
-                genesis_account,
-                state_block,
-                false,
-                time_source,
-            ) {
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            let genesis = if block.header().is_genesis() {
-                Some(
-                    authenticate_genesis_block_intents(&block, genesis_account).expect(
-                        "the same immutable genesis passed configured-key static validation",
-                    ),
-                )
-            } else {
-                None
-            };
-            if let Err(error) = Self::execute_and_record_canonical_outputs(
-                &mut block,
-                state_block,
-                None,
-                genesis.as_ref(),
-            ) {
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = validate_axt_envelopes(&block, state_block) {
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) =
-                Self::validate_staged_merge_execution_authorization(&block, state_block)
-            {
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = state_block
-                .finalize_lane_consensus_contexts(&block, None)
-                .and_then(|()| state_block.capture_exec_witness())
-                .map_err(Self::execution_context_error)
-            {
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            drop(exec_witness_guard);
-            if block.is_empty() {
-                let error = BlockValidationError::EmptyBlock;
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = Self::ensure_genesis_transactions_clean(&block, genesis_account) {
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
-        }
-        /// Execute a Sumeragi-v2 unit fixture and emit only deterministic rejection events.
-        #[cfg(test)]
-        #[doc(hidden)]
-        fn validate_sumeragi_v2_fixture_with_events<F: Fn(PipelineEventBox)>(
-            mut block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state_block: &mut StateBlock<'_>,
-            send_events: F,
-        ) -> WithEvents<Result<ValidBlock, Error>> {
-            if let Err(error) = Self::validate_sumeragi_v2_fixture_static(
-                &block,
-                topology,
-                genesis_account,
-                state_block,
-                false,
-                time_source,
-            ) {
-                // Emit rejection with the offending header
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            let genesis = if block.header().is_genesis() {
-                Some(
-                    authenticate_genesis_block_intents(&block, genesis_account).expect(
-                        "the same immutable genesis passed configured-key static validation",
-                    ),
-                )
-            } else {
-                None
-            };
-            let exec_witness_guard = match Self::begin_component_fixture_recording(state_block) {
-                Ok(guard) => guard,
-                Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
-            };
-            if let Err(error) = Self::execute_and_record_canonical_outputs(
-                &mut block,
-                state_block,
-                None,
-                genesis.as_ref(),
-            ) {
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = validate_axt_envelopes(&block, state_block) {
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) =
-                Self::validate_staged_merge_execution_authorization(&block, state_block)
-            {
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = state_block
-                .finalize_lane_consensus_contexts(&block, None)
-                .and_then(|()| state_block.capture_exec_witness())
-                .map_err(Self::execution_context_error)
-            {
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            drop(exec_witness_guard);
-            if block.is_empty() {
-                let error = BlockValidationError::EmptyBlock;
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let Err(error) = Self::ensure_genesis_transactions_clean(&block, genesis_account) {
-                emit_block_rejection(block.header(), &error, &send_events);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
-        }
-        /// Validate signed genesis against its authenticated consensus mode without committing it.
-        /// The staged state stays boxed across validation and event delivery to bound stack use.
+        /// Execute the signed genesis through the sole native consensus path without publishing.
+        /// The staged state includes the authenticated schedule, the actual global lane step,
+        /// and the same complete execution witness used by startup and result certification.
+        /// The original state stays boxed across validation and event delivery to bound stack use.
         ///
         /// The mode must come from the canonical signed genesis handshake metadata. It is threaded
         /// explicitly because the pre-execution world cannot yet contain genesis parameters.
         #[allow(clippy::too_many_arguments)]
         pub fn validate_signed_genesis<'state>(
-            block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state: &'state State,
-            consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            if !block.header().is_genesis() {
-                return WithEvents::new(Err((
-                    Box::new(block),
-                    Box::new(BlockValidationError::InvalidGenesis(
-                        InvalidGenesisError::InvalidHeader,
-                    )),
-                )));
-            }
-            Self::validate_with_profile(
-                block,
-                topology,
-                genesis_account,
-                time_source,
-                state,
-                false,
-                None,
-                false,
-                ConsensusValidationProfile::SignedGenesis { consensus_mode },
-                false,
-                None,
-            )
-        }
-        /// Validate the signed genesis of a Sumeragi chain: [`Self::validate_signed_genesis`]
-        /// that also installs the consensus schedule (`specs/sumeragi.md` §10).
-        pub(crate) fn validate_sumeragi_genesis<'state>(
             block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
@@ -7095,65 +4685,10 @@ pub(crate) mod valid {
                 None,
             )
         }
-        /// Validate a unit fixture through the current Sumeragi-v2 profile.
-        ///
-        /// This adapter retains the fixture controls needed by checkpoint and validation-cache
-        /// tests. It does not relax execution-context, routing, consensus-mode, transaction, or
-        /// execution-witness validation. Callers supply cadence independently of candidate time.
-        #[cfg(test)]
-        #[allow(clippy::too_many_arguments)]
-        pub(crate) fn validate_sumeragi_v2_fixture_keep_voting_block<'state>(
-            block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            block_cadence: Duration,
-            state: &'state State,
-            soft_fork: bool,
-            skip_block_signatures: bool,
-            validation_context: SumeragiV2ValidationContext,
-        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            let validation_profile = ConsensusValidationProfile::SumeragiV2 {
-                block_cadence,
-                context: validation_context,
-            };
-            Self::validate_with_profile(
-                block,
-                topology,
-                genesis_account,
-                time_source,
-                state,
-                soft_fork,
-                None,
-                skip_block_signatures,
-                validation_profile,
-                false,
-                None,
-            )
-        }
-        /// Validate a Sumeragi v2 proposal body after the exact-body store has
-        /// authenticated its immutable origin-view block signature.
-        ///
-        /// A certified later leader may re-propose an unchanged locked body,
-        /// so its embedded block signature need not belong to the current
-        /// proposal leader. This path skips only that already-checked block
-        /// signature set. A body which is wire-empty may pass only when the
-        /// shared semantic-work gate proves state-derived clock progress,
-        /// scheduled start effects or autonomous/internal work; idle bodies
-        /// are rejected.
-        /// The authenticated height context and its parent CommitQC are the
-        /// sole reconfiguration proof; the block payload carries no parallel
-        /// authority surface.
-        /// Transaction signatures, stateless checks, state-dependent invariants,
-        /// and deterministic execution all remain mandatory. Genesis additionally
-        /// retains its configured-authority block signature over the ordered intents.
-        /// Validate and execute a block ordered by the Sumeragi core (`specs/sumeragi.md` §4)
-        /// against the committed parent, keeping the executed overlay.
-        ///
-        /// The certified core header binds the payload bytes, so block signatures are not
-        /// checked; empty blocks are valid; block time must be canonical from the parent and
-        /// `block_cadence`. Transaction signatures, stateless checks, state-dependent
-        /// invariants and deterministic execution all remain mandatory.
+        /// Execute the exact original nonempty proposal bound by its native consensus header.
+        /// The source is verified before certified lane merges expand its execution inputs.
+        /// Transaction validation, deterministic execution and original State generation checks
+        /// remain mandatory; the native consensus certificate owns block authentication.
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_block<'state>(
             block: SignedBlock,
@@ -7161,9 +4696,32 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             block_cadence: Duration,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
-            lanes: crate::sumeragi::lanes::merge::LaneStepInput,
+            expansion: crate::sumeragi::lanes::merge::Expansion<'state>,
+            native_header: &iroha_sumeragi::message::BlockHeader,
+            native_payload: &[u8],
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            let source =
+                match Self::native_header_source(&block, state, native_header, native_payload) {
+                    Ok(source) => source,
+                    Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
+                };
+            let (block, lanes) = match expansion.apply(block, source.state(), source.generation()) {
+                Ok(expanded) => expanded,
+                Err((block, error)) => {
+                    return WithEvents::new(Err((
+                        Box::new(block),
+                        Box::new(match error {
+                            crate::sumeragi::lanes::merge::MergeError::Pending(reason) => {
+                                BlockValidationError::LocalStorageRecoveryRequired { reason }
+                            }
+                            crate::sumeragi::lanes::merge::MergeError::Invalid(reason) => {
+                                Self::execution_context_error(reason)
+                            }
+                        }),
+                    )));
+                }
+            };
             let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
             Self::validate_with_profile(
                 block,
@@ -7177,401 +4735,21 @@ pub(crate) mod valid {
                 ConsensusValidationProfile::Sumeragi {
                     block_cadence,
                     consensus_mode,
+                    supplied_pulse: source.pulse,
                     lanes,
+                    expected_pulse_context: source.expected_context,
+                    source_generation: source.generation,
                 },
                 true,
                 None,
             )
-        }
-        #[allow(clippy::too_many_arguments)]
-        pub(crate) fn validate_sumeragi_v2_candidate_keep_voting_block<'state>(
-            block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            block_cadence: Duration,
-            validation_context: SumeragiV2ValidationContext,
-            state: &'state State,
-        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            Self::validate_with_profile(
-                block,
-                topology,
-                genesis_account,
-                time_source,
-                state,
-                false,
-                None,
-                true,
-                ConsensusValidationProfile::SumeragiV2 {
-                    block_cadence,
-                    context: validation_context,
-                },
-                true,
-                None,
-            )
-        }
-        /// Re-execute an exact historical block authenticated by its verified CommitQC.
-        /// The caller supplies genesis/snapshot-rooted finality, not a proposal-controlled
-        /// roster. Deterministic execution and final commitment comparison remain mandatory.
-        #[allow(clippy::too_many_arguments)]
-        pub(crate) fn validate_sumeragi_v2_replay_keep_voting_block<'state>(
-            executed: SignedBlock,
-            verified: &super::VerifiedV2FinalityArtifact,
-            merge_entry: Option<&iroha_data_model::merge::MergeLedgerEntry>,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            block_cadence: Duration,
-            state: &'state State,
-        ) -> Result<ValidatedReplayExecution<'state>, Error> {
-            let authority = match VerifiedReplayProposal::new(&executed, verified, merge_entry) {
-                Ok(authority) => authority,
-                Err(error) => return Err((Box::new(executed), Box::new(error))),
-            };
-            let proposal = executed.canonical_resultless_proposal();
-            if proposal
-                .execution_context()
-                .is_some_and(|bundle| bundle.native_lane_decisions.is_some())
-            {
-                // Current finality alone does not authenticate epoch continuity.
-                // Rejoin the original parent receipt or the exact audited snapshot
-                // before taking any State execution writers.
-                let native =
-                    (|| -> Result<ValidatedReplayExecution<'state>, BlockValidationError> {
-                        authority.validate(&proposal, &state.query_view())?;
-                        let frozen = &verified.height_context;
-                        if !topology
-                            .as_ref()
-                            .iter()
-                            .eq(frozen.roster.iter().map(|entry| &entry.validator))
-                        {
-                            return Err(Self::execution_context_error(
-                                "Native replay topology differs from verified finality",
-                            ));
-                        }
-                        let context = if frozen.snapshot_bootstrap.is_some() {
-                        let bootstrap = state.authenticated_snapshot_v2_bootstrap()
-                            .filter(|record| record.context == *frozen && record.validator_set_pops == verified.validator_set_pops)
-                            .ok_or_else(|| Self::execution_context_error("Native replay lacks its exact authenticated snapshot context"))?;
-                        crate::sumeragi::v2::VerifiedHeightContext::snapshot_bootstrap(bootstrap)
-                    } else {
-                        let parent_height = frozen.height.checked_sub(1)
-                            .filter(|height| *height != 0)
-                            .ok_or_else(|| Self::execution_context_error("Native replay requires an authenticated predecessor"))?;
-                        let (parent, receipt) = state.kura().v2_finality_artifact_with_receipt(parent_height)
-                            .map_err(|error| Self::execution_context_error(error.to_string()))?
-                            .ok_or_else(|| Self::execution_context_error("Native replay parent finality is unavailable"))?;
-                        crate::sumeragi::v2::VerifiedHeightContext::successor(
-                            frozen.clone(), verified.validator_set_pops.clone(), &parent, &receipt, &parent.validator_set_pops,
-                        )
-                    }.map_err(|error| Self::execution_context_error(error.to_string()))?;
-                        let group_count = super::native_lane_batch_for_execution(&proposal)
-                            .map_err(Self::execution_context_error)?
-                            .groups
-                            .len();
-                        let budget = mv::allocation::AllocationBudget::new(
-                            state.nexus.read().storage.retained_carrier_shell_bytes,
-                        );
-                        let admission =
-                            crate::state::NativeExecutionResourceAdmission::try_reserve_source(
-                                &budget,
-                                group_count,
-                            )
-                            .map_err(|error| {
-                                BlockValidationError::LocalStorageRecoveryRequired {
-                                    reason: format!(
-                                        "Native replay source admission refused: {error}"
-                                    ),
-                                }
-                            })?;
-                        let source = match state.prepare_proposed_native_lane_batch_source(
-                            proposal,
-                            &[],
-                            admission,
-                        )
-                        .map_err(|error| {
-                            BlockValidationError::LocalStorageRecoveryRequired {
-                                reason: format!("Native replay source preparation: {error}"),
-                            }
-                        })? {
-                        crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) => source,
-                        crate::state::NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired { .. } => {
-                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
-                                reason: "Native replay first input body is unavailable".to_owned(),
-                            });
-                        }
-                        crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged { .. } => {
-                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
-                                reason: "Native replay pre-State observation changed".to_owned(),
-                            });
-                        }
-                        crate::state::NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
-                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
-                                reason: "Native replay source reservation differs from its exact batch".to_owned(),
-                            });
-                        }
-                        crate::state::NativeLaneBatchSourcePreparationV1::Superseded => {
-                            return Err(Self::execution_context_error("Native replay carrier was superseded by finalized State"));
-                        }
-                    };
-                        let input = Self::validate_and_record_native_candidate(
-                            source,
-                            context,
-                            genesis_account,
-                            time_source,
-                            block_cadence,
-                        )
-                        .map_err(|error| match error {
-                            NativeCandidatePreparationError::Preflight(error) => *error,
-                            NativeCandidatePreparationError::Execution(error) => {
-                                BlockValidationError::from_certified_merge_stage_error(error)
-                            }
-                            NativeCandidatePreparationError::Preparation(error) => {
-                                classify_carrier_preparation_error(error)
-                            }
-                        })?
-                        .ok_or_else(|| {
-                            BlockValidationError::LocalStorageRecoveryRequired {
-                                reason: "Native replay source observation changed".to_owned(),
-                            }
-                        })?;
-                        Ok(ValidatedReplayExecution {
-                            valid: input.valid,
-                            state: input.state,
-                            native: input.native,
-                        })
-                    })();
-                return native.map_err(|error| (Box::new(executed), Box::new(error)));
-            }
-            Self::validate_with_profile(
-                proposal,
-                topology,
-                genesis_account,
-                time_source,
-                state,
-                false,
-                None,
-                true,
-                ConsensusValidationProfile::VerifiedReplay {
-                    block_cadence,
-                    authority,
-                },
-                true,
-                None,
-            )
-            .unpack(|_| {})
-            .map(|(valid, state)| ValidatedReplayExecution {
-                valid,
-                state,
-                native: None,
-            })
-        }
-        /// Exercise a Sumeragi-v2 unit fixture with an externally prevalidated block signature.
-        ///
-        /// Callers must only use this after independently verifying that local validation roots
-        /// and commit-certificate roots agree for the same block. The path still checks
-        /// transaction signatures, state-dependent block invariants,
-        /// transaction limits, duplicate detection, and execution-context alignment.
-        /// It skips only the block signature set authenticated by the commit certificate.
-        /// Callers supply cadence independently of the candidate timestamp.
-        #[cfg(test)]
-        #[allow(clippy::too_many_arguments)]
-        fn validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing<
-            'state,
-            F: FnMut(PipelineEventBox),
-        >(
-            block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            block_cadence: Duration,
-            state: &'state State,
-            validation_context: SumeragiV2ValidationContext,
-            timings: &mut ValidationTimings,
-            mut send_events: F,
-        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            let validation_profile = ConsensusValidationProfile::SumeragiV2 {
-                block_cadence,
-                context: validation_context,
-            };
-            Self::validate_with_profile(
-                block,
-                topology,
-                genesis_account,
-                time_source,
-                state,
-                false,
-                Some(timings),
-                true,
-                validation_profile,
-                false,
-                Some(&mut send_events),
-            )
-        }
-        fn prepare_pristine_consensus_effects<'state>(
-            block: &SignedBlock,
-            state: &'state State,
-            penalty_index: ValidatedNposPenaltyIndex<'state>,
-            authenticated_height_context: Option<
-                &iroha_data_model::block::consensus_v2::HeightContext,
-            >,
-        ) -> Result<Option<PreparedPristineConsensusEffects<'state>>, BlockValidationError>
-        {
-            crate::smartcontracts::ivm::active_runtime_abi_hash(
-                &state.world_view(),
-                block.header().height().get(),
-            )
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "persisted active runtime ABI is incompatible with this node: {error:?}"
-                ))
-            })?;
-            let header = block.header();
-            if !std::ptr::eq(penalty_index.state, state) || penalty_index.header != header {
-                return Err(Self::npos_effects_error(
-                    "pristine index belongs to another State or carrier",
-                ));
-            }
-            let Some(effects) = block.npos_consensus_effects() else {
-                return Ok(None);
-            };
-            let context = authenticated_height_context.ok_or_else(|| {
-                Self::npos_effects_error(
-                    "NPoS finality effects require the authenticated height context",
-                )
-            })?;
-            let height = header.height().get();
-            Ok(Some(PreparedPristineConsensusEffects {
-                penalty_index,
-                prune_keys:
-                    crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
-                        state, height,
-                    )
-                    .map_err(BlockValidationError::EvidencePreparation)?,
-                expected_anchor: header.prev_block_hash().map(|block_hash| {
-                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
-                        height: height.saturating_sub(1),
-                        block_hash,
-                    }
-                }),
-                roster: context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect(),
-                effects: effects.clone(),
-                header,
-            }))
         }
 
-        /// Join a cryptographically verified applying context to this exact
-        /// committed State and proposal before acquiring execution writers.
-        pub(crate) fn prepare_native_execution_controls<'state>(
-            block: &SignedBlock,
-            state: &'state State,
-            context: crate::sumeragi::v2::VerifiedHeightContext,
-        ) -> Result<PreparedNativeExecutionControls<'state>, BlockValidationError> {
-            crate::exec_witness::ensure_state_access_without_exec_witness()
-                .map_err(Self::execution_context_error)?;
-            super::native_lane_batch_for_execution(block).map_err(Self::execution_context_error)?;
-            block
-                .validate_proposal_commitments()
-                .map_err(Self::execution_context_error)?;
-            state
-                .ensure_da_indexes_hydrated()
-                .map_err(BlockValidationError::from)?;
-            let generation = state.state_view_generation();
-            let frozen = context.context();
-            let view = state.view();
-            if frozen.network_id != *view.network_id()
-                || frozen.height != block.header().height().get()
-                || u64::try_from(view.height())
-                    .ok()
-                    .and_then(|height| height.checked_add(1))
-                    != Some(frozen.height)
-                || block.header().prev_block_hash() != view.latest_block_hash()
-                || frozen
-                    .parent_commit_qc
-                    .as_ref()
-                    .map(|qc| qc.subject.block_hash)
-                    .or_else(|| {
-                        frozen
-                            .snapshot_bootstrap
-                            .map(|anchor| anchor.snapshot_block_hash)
-                    })
-                    != view.latest_block_hash()
-            {
-                return Err(Self::execution_context_error(
-                    "Native applying context differs from the exact carrier pre-State, height or network",
-                ));
-            }
-            let expected_da_policy =
-                crate::da::active_proof_policy_bundle_at_height(&view.nexus, frozen.height);
-            if block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy)) {
-                return Err(Self::execution_context_error(
-                    "Native carrier DA proof-policy snapshot differs from active pre-State policy",
-                ));
-            }
-            drop(view);
-            let nexus = crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
-                .map_err(|error| Self::execution_context_error(error.to_string()))?;
-            let policy = crate::sumeragi::v2_recovery::committed_execution_policy_hash(state)
-                .map_err(|error| Self::execution_context_error(error.to_string()))?;
-            if frozen.nexus_amx_context_hash != nexus || frozen.execution_policy_hash != policy {
-                return Err(Self::execution_context_error(
-                    "Native applying context differs from the committed Nexus or execution policy",
-                ));
-            }
-            let penalty_index = Self::validate_npos_effects_with_state(
-                block,
-                state,
-                Some(frozen.mode),
-                Some(frozen),
-            )?;
-            let npos = Self::prepare_pristine_consensus_effects(
-                block,
-                state,
-                penalty_index,
-                Some(frozen),
-            )?;
-            Ok(PreparedNativeExecutionControls {
-                state,
-                generation,
-                header: block.header(),
-                admissions: block
-                    .execution_context()
-                    .expect("checked Native shape")
-                    .queue_plan_admissions
-                    .clone(),
-                npos,
-                context,
-            })
-        }
-
-        /// Complete the shared postchecks and authenticated successor opening
-        /// within the original Native scope, before its sole witness capture.
-        pub(crate) fn finalize_native_execution_contexts(
-            block: &SignedBlock,
-            state: &mut StateBlock<'_>,
-            context: &crate::sumeragi::v2::VerifiedHeightContext,
-        ) -> Result<(), BlockValidationError> {
-            Self::validate_staged_execution_controls(block, state)?;
-            validate_axt_envelopes(block, state)?;
-            state.validate_da_shard_cursors(block)?;
-            state
-                .finalize_lane_consensus_contexts(block, Some(context.context()))
-                .map_err(Self::execution_context_error)
-        }
         fn state_block_for_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
-            penalty_index: ValidatedNposPenaltyIndex<'state>,
-            soft_fork: bool,
-            authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
-            authenticated_height_context: Option<
-                &iroha_data_model::block::consensus_v2::HeightContext,
-            >,
-            replay: Option<&VerifiedReplayProposal>,
+            source: PristineNativeSource<'state>,
+            profile: &ConsensusValidationProfile,
         ) -> Result<
             (
                 Box<StateBlock<'state>>,
@@ -7581,314 +4759,56 @@ pub(crate) mod valid {
         > {
             crate::exec_witness::ensure_exec_witness_capture_available()
                 .map_err(Self::execution_context_error)?;
-            Self::validate_npos_soft_fork_composition(block, soft_fork)?;
-            // Absence of due actions is also a parent-state observation. Retain
-            // its binding even when preparation has no effects/index to keep.
-            let npos_source = (
-                penalty_index.state,
-                penalty_index.generation,
-                penalty_index.header,
-            );
-            let prepared_pulse = if block.global_beacon_pulse().is_some() {
-                Some(
-                    Self::prepare_current_beacon_pulse(
-                        block,
-                        state,
-                        authoritative_mode.ok_or_else(|| {
-                            Self::npos_effects_error(
-                                "current pulse has no authenticated consensus mode",
-                            )
-                        })?,
-                    )?
-                    .ok_or_else(|| {
-                        Self::npos_effects_error("current pulse requirement disappeared")
-                    })?,
-                )
-            } else {
-                None
-            };
-            let mut prepared_npos = Self::prepare_pristine_consensus_effects(
-                block,
-                state,
-                penalty_index,
-                authenticated_height_context,
-            )?;
-            let check_npos_source = |overlay: &StateBlock<'_>| {
-                let (state, generation, header) = npos_source;
-                ValidatedNposPenaltyIndex::validate_source(state, generation, &header, overlay)
-            };
-            let execution_context = block.execution_context();
-            if execution_context.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
-                return Err(Self::execution_context_error(
-                    "native execution requires its original recorded source owner",
-                ));
-            }
-            let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
-            if let Some(reference) = merge_reference {
-                Self::validate_npos_merge_composition(block, reference)?;
-            }
-            let merge_beacon = if merge_reference
-                .is_some_and(|reference| reference.execution_batch_hash.is_some())
-                && prepared_npos.is_some()
+            Self::validate_sumeragi_consensus_effects(block)?;
+            if block
+                .execution_context()
+                .is_some_and(|context| context.native_lane_decisions.is_some())
             {
-                let context = authenticated_height_context.ok_or_else(|| {
-                    Self::npos_effects_error(
-                        "merge beacon composition requires an authenticated height context",
-                    )
-                })?;
-                let prepared = prepared_npos.take().ok_or_else(|| {
-                    Self::npos_effects_error("merge beacon composition lacks effects")
-                })?;
-                Some(prepared.into_merge_beacon(
-                    context.network_id,
-                    crate::state::merge_beacon_parent_surface(&state.world_view()),
-                ))
-            } else {
-                None
-            };
-            let apply_npos = |state_block: &mut StateBlock<'_>| {
-                // Each constructor callback checks this before its first effect;
-                // do not reread diagnostic generation after QueuePlan staging.
-                if let Some(pulse) = prepared_pulse {
-                    pulse.apply(state_block)?;
-                }
-                prepared_npos.map_or(Ok(()), |prepared| prepared.apply(state_block))
-            };
-            let queue_plan_admissions = execution_context
-                .map(|bundle| bundle.queue_plan_admissions())
-                .unwrap_or_default();
-            if merge_reference.is_some() && !queue_plan_admissions.is_empty() {
                 return Err(Self::execution_context_error(
-                    "a carrier cannot mix proposal-native QueuePlan controls with a certified merge entry",
+                    "retired native Decision bodies are not supported",
                 ));
             }
-            if !queue_plan_admissions.is_empty() {
-                if soft_fork {
-                    return Err(Self::execution_context_error(
-                        "soft-fork replacement cannot safely apply QueuePlan admission controls",
-                    ));
-                }
-                return state
-                    .block_with_recorded_pristine_carrier_stage(
-                        block,
-                        |state_block| {
-                            check_npos_source(state_block)?;
-                            state_block
-                                .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
-                                .map_err(|error| {
-                                    Self::execution_context_error(format!(
-                                        "QueuePlan admission controls could not be staged: {error}"
-                                    ))
-                                })?;
-                            apply_npos(state_block)
-                        },
-                        Self::execution_context_error,
-                    )
-                    .map_err(BlockValidationError::from);
-            }
-            if let Some(reference) = merge_reference {
-                if soft_fork {
-                    return Err(Self::execution_context_error(
-                        "soft-fork replacement cannot safely apply a certified merge entry",
-                    ));
-                }
-                let frozen_mode = authoritative_mode.ok_or_else(|| {
-                    Self::execution_context_error(
-                        "certified merge execution requires an authenticated consensus mode",
-                    )
-                })?;
-                return state
-                    .block_with_recorded_pristine_carrier_stage(
-                        block,
-                        |state_block| {
-                            check_npos_source(state_block)?;
-                            let stage = match replay {
-                                Some(authority) => state_block
-                                    .stage_certified_merge_reference_for_verified_replay(
-                                        reference,
-                                        frozen_mode,
-                                        authority,
-                                    ),
-                                None => state_block
-                                    .stage_certified_merge_reference(reference, frozen_mode),
-                            };
-                            stage
-                                .map_err(BlockValidationError::from_certified_merge_stage_error)?;
-                            if let Some(capability) = merge_beacon {
-                                state_block
-                                    .apply_verified_merge_beacon_pulse(capability)
-                                    .map_err(|error| {
-                                        BlockValidationError::from_npos_application_error(
-                                            error,
-                                            "certified merge beacon composition failed",
-                                        )
-                                    })
-                            } else {
-                                apply_npos(state_block)
-                            }
-                        },
-                        Self::execution_context_error,
-                    )
-                    .map_err(BlockValidationError::from);
-            }
-            let apply_pristine = |state_block: &mut StateBlock<'_>| {
-                check_npos_source(state_block)?;
-                apply_npos(state_block)
-            };
-            let state_block = if soft_fork {
-                state.block_and_revert_with_recorded_pristine_carrier_stage(
+            state
+                .block_with_recorded_pristine_carrier_stage(
                     block,
-                    apply_pristine,
+                    |overlay| {
+                        overlay
+                            .validate_native_pristine_control_owner(
+                                source.state,
+                                source.generation,
+                                &source.header,
+                            )
+                            .map_err(Self::execution_context_error)?;
+                        if let Some(genesis_height) = profile.sumeragi_schedule() {
+                            overlay
+                                .request_sumeragi_schedule(
+                                    genesis_height,
+                                    block,
+                                    profile.sumeragi_pulse(),
+                                    profile.sumeragi_pulse_context(),
+                                )
+                                .map_err(BlockValidationError::from)?;
+                        }
+                        Ok(())
+                    },
                     Self::execution_context_error,
                 )
-            } else {
-                state.block_with_recorded_pristine_carrier_stage(
-                    block,
-                    apply_pristine,
-                    Self::execution_context_error,
-                )
-            }?;
-            Ok(state_block)
-        }
-        /// Exercise the actual applying constructor with a persisted certified merge
-        /// sidecar; this fixture seam grants no finality or publication authority.
-        #[cfg(test)]
-        pub(crate) fn recorded_merge_state_block_for_testing<'state>(
-            block: &SignedBlock,
-            state: &'state State,
-        ) -> Result<
-            (
-                Box<StateBlock<'state>>,
-                crate::exec_witness::ExecWitnessGuard,
-            ),
-            BlockValidationError,
-        > {
-            let penalty_index = Self::validate_npos_effects_with_state(block, state, None, None)?;
-            Self::state_block_for_execution(
-                block,
-                state,
-                penalty_index,
-                false,
-                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
-                None,
-                None,
-            )
+                .map_err(BlockValidationError::from)
         }
 
         fn validate_staged_execution_controls(
             block: &SignedBlock,
-            state_block: &StateBlock<'_>,
+            _state: &StateBlock<'_>,
         ) -> Result<(), BlockValidationError> {
-            let execution_context = block.execution_context();
-            let reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
-            let native_queue_plan_admissions = execution_context
-                .map(|bundle| bundle.queue_plan_admissions())
-                .unwrap_or_default();
-            if let Some(index) = external_queue_plan_synced_entrypoint_index(block) {
-                return Err(Self::execution_context_error(format!(
-                    "QueuePlanSynced external entrypoint at index {index} must use autonomous lane ownership and a certified merge carrier"
-                )));
-            }
-            if reference.is_some() && !native_queue_plan_admissions.is_empty() {
+            Self::checked_execution_context_header(block)?;
+            if external_queue_plan_synced_entrypoint_index(block).is_some() {
                 return Err(Self::execution_context_error(
-                    "a carrier cannot mix proposal-native QueuePlan controls with a certified merge entry",
+                    "retired QueuePlanSynced input",
                 ));
             }
-            if native_queue_plan_admissions != state_block.staged_queue_plan_admissions() {
-                return Err(Self::execution_context_error(
-                    "staged QueuePlan admission controls differ from the block execution context",
-                ));
-            }
-            let staged = state_block.staged_merge_entry();
-            let entry = match (reference, staged) {
-                (None, None) => None,
-                (Some(reference), Some(entry)) if reference.matches_entry(entry) => Some(entry),
-                (Some(_), None) => {
-                    return Err(Self::execution_context_error(
-                        "certified merge reference was not staged on the execution overlay",
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(Self::execution_context_error(
-                        "execution overlay contains an unreferenced certified merge entry",
-                    ));
-                }
-                (Some(_), Some(_)) => {
-                    return Err(Self::execution_context_error(
-                        "staged certified merge entry differs from the block reference",
-                    ));
-                }
-            };
-            if let Some(batch) = entry.and_then(|entry| entry.execution_batch.as_ref()) {
-                let merge_entrypoints = batch
-                    .lanes
-                    .iter()
-                    .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
-                    .collect::<BTreeSet<_>>();
-                if block
-                    .external_entrypoints_cloned()
-                    .map(|entrypoint| Hash::from(entrypoint.hash()))
-                    .any(|hash| merge_entrypoints.contains(&hash))
-                {
-                    return Err(Self::execution_context_error(
-                        "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
-                    ));
-                }
-            }
-            state_block
-                .require_queue_plan_admission_intents_from_block(block)
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "QueuePlan admission intent is not satisfied: {error}"
-                    ))
-                })?;
             Ok(())
         }
-        fn validate_staged_merge_execution_authorization(
-            block: &SignedBlock,
-            state_block: &mut StateBlock<'_>,
-        ) -> Result<(), BlockValidationError> {
-            if state_block
-                .staged_merge_entry()
-                .is_some_and(|entry| entry.execution_batch.is_some())
-            {
-                let context = block.execution_context().ok_or_else(|| {
-                    Self::execution_context_error(
-                        "certified merge execution carrier lacks execution context",
-                    )
-                })?;
-                let axt_snapshot_matches = block
-                    .axt_policy_snapshot()
-                    .is_none_or(|snapshot| snapshot == &state_block.axt_policy_snapshot());
-                let native_participant_frontiers =
-                    State::native_amx_participant_frontier_markers(block).map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "certified merge execution carrier has invalid Native participant controls: {error}"
-                        ))
-                    })?;
-                Self::validate_autonomous_merge_carrier_content(AutonomousMergeCarrierContent {
-                    ordinary_entrypoints: block.external_entrypoint_count(),
-                    external_contexts: context.external.len(),
-                    autonomous_lane_payloads: context.autonomous_lane_payloads.len(),
-                    lane_payload_ownerships: context.lane_payload_ownerships.len(),
-                    has_da_effect: Self::autonomous_merge_carrier_has_da_effect(block),
-                    has_npos: block.npos_consensus_effects().is_some()
-                        && !state_block.has_verified_merge_beacon_composition(block),
-                    has_axt_envelopes: block
-                        .axt_envelopes()
-                        .is_some_and(|envelopes| !envelopes.is_empty()),
-                    axt_snapshot_mismatch: !axt_snapshot_matches,
-                    has_native_participant_frontiers: !native_participant_frontiers.is_empty(),
-                })?;
-            }
-            state_block
-                .validate_staged_merge_execution_authorization()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "certified merge execution authorization is invalid after block effects: {error}"
-                    ))
-                })
-        }
+
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
         fn validate_with_profile<'state>(
             mut block: SignedBlock,
@@ -7899,7 +4819,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
-            validation_profile: ConsensusValidationProfile,
+            mut validation_profile: ConsensusValidationProfile,
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
@@ -7929,18 +4849,10 @@ pub(crate) mod valid {
                 let stateless_elapsed = stateless_start.elapsed();
                 record_timings(&mut timings, stateless_elapsed, None);
                 let error = Self::execution_context_error(format!(
-                    "QueuePlanSynced external entrypoint at index {index} must use autonomous lane ownership and a certified merge carrier"
+                    "retired QueuePlanSynced external entrypoint at index {index}"
                 ));
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
-            if let ConsensusValidationProfile::VerifiedReplay { authority, .. } =
-                &validation_profile
-            {
-                if let Err(error) = authority.validate(&block, &state.query_view()) {
-                    emit_rejection(&block, &error);
-                    return WithEvents::new(Err((Box::new(block), Box::new(error))));
-                }
             }
             let static_state_start = Instant::now();
             let static_data = {
@@ -7953,7 +4865,7 @@ pub(crate) mod valid {
                     soft_fork,
                     time_source,
                     skip_block_signatures,
-                    validation_profile.clone(),
+                    &validation_profile,
                 ) {
                     Ok(data) => {
                         if let Some(timings) = timings.as_deref_mut() {
@@ -8021,28 +4933,14 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let consensus_effects = if validation_profile.sumeragi_schedule().is_some() {
-                Self::validate_sumeragi_consensus_effects(
-                    &block,
+            let consensus_effects =
+                Self::validate_sumeragi_consensus_effects(&block).map(|()| PristineNativeSource {
                     state,
-                    validation_profile.authoritative_consensus_mode(),
-                )
-                .map(|()| ValidatedNposPenaltyIndex {
-                    state,
-                    generation: state.state_view_generation(),
+                    generation: validation_profile
+                        .source_generation()
+                        .unwrap_or_else(|| state.state_view_generation()),
                     header: block.header(),
-                    index: None,
-                })
-            } else {
-                Self::validate_npos_effects_with_state(
-                    &block,
-                    state,
-                    Some(validation_profile.authoritative_consensus_mode()),
-                    validation_profile
-                        .v2_context()
-                        .and_then(SumeragiV2ValidationContext::authenticated_height_context),
-                )
-            };
+                });
             let penalty_index = match consensus_effects {
                 Ok(index) => index,
                 Err(error) => {
@@ -8052,55 +4950,6 @@ pub(crate) mod valid {
                     return WithEvents::new(Err((Box::new(block), Box::new(error))));
                 }
             };
-            if let Some(block_cadence) = validation_profile
-                .v2_block_cadence()
-                .filter(|_| validation_profile.enforces_proposal_work())
-            {
-                let time_trigger_clock_progress_required = block
-                    .header()
-                    .creation_time()
-                    .checked_sub(block_cadence)
-                    .is_some_and(|parent_creation_time| {
-                        state.time_trigger_clock_progress_required_fast(parent_creation_time)
-                    });
-                let proposal_work = candidate_block_has_proposal_work(
-                    &block,
-                    state,
-                    time_trigger_clock_progress_required,
-                );
-                let has_work = match proposal_work {
-                    Ok(has_work) => has_work,
-                    Err(error) => {
-                        let error = match error {
-                            crate::state::StateBlockStartError::Storage(error) => {
-                                BlockValidationError::StateStorageAdmission(error)
-                            }
-                            crate::state::StateBlockStartError::History(error) => {
-                                BlockValidationError::BlockHashAdmission(error)
-                            }
-                            crate::state::StateBlockStartError::Membership(error) => {
-                                BlockValidationError::MembershipAdmission(error)
-                            }
-                            crate::state::StateBlockStartError::Stage(error) => {
-                                BlockValidationError::LocalStorageRecoveryRequired {
-                                    reason: format!(
-                                        "persisted runtime ABI admission failed: {error:?}"
-                                    ),
-                                }
-                            }
-                        };
-                        record_timings(&mut timings, stateless_start.elapsed(), None);
-                        return WithEvents::new(Err((Box::new(block), Box::new(error))));
-                    }
-                };
-                if !has_work {
-                    let stateless_elapsed = stateless_start.elapsed();
-                    record_timings(&mut timings, stateless_elapsed, None);
-                    let error = BlockValidationError::EmptyBlock;
-                    emit_rejection(&block, &error);
-                    return WithEvents::new(Err((Box::new(block), Box::new(error))));
-                }
-            }
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
@@ -8110,11 +4959,6 @@ pub(crate) mod valid {
                     .zip(prepared_txs.iter())
                     .enumerate()
                 {
-                    if static_data.queue_plan_stateless_validation_times[idx].is_some() {
-                        // QueuePlan admission time is state-bound authority, while this cache is
-                        // generic and hash-only. Never erase that distinction with a cache hit.
-                        continue;
-                    }
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -8154,33 +4998,17 @@ pub(crate) mod valid {
                 &block,
                 state,
                 penalty_index,
-                soft_fork,
-                Some(validation_profile.authoritative_consensus_mode()),
-                validation_profile
-                    .v2_context()
-                    .and_then(SumeragiV2ValidationContext::authenticated_height_context),
-                match &validation_profile {
-                    ConsensusValidationProfile::VerifiedReplay { authority, .. } => Some(authority),
-                    _ => None,
-                },
+                &validation_profile,
             ) {
-                Ok((mut state_block, exec_witness_guard)) => {
-                    if let Some(genesis_height) = validation_profile.sumeragi_schedule() {
-                        state_block.request_sumeragi_schedule(genesis_height);
+                Ok((mut overlay, guard)) => {
+                    if let Some(lanes) = validation_profile.take_sumeragi_lanes() {
+                        overlay.request_sumeragi_lanes(lanes);
                     }
-                    if let Some(lanes) = validation_profile.sumeragi_lanes() {
-                        state_block.request_sumeragi_lanes(lanes);
-                    }
-                    (state_block, exec_witness_guard)
+                    (overlay, guard)
                 }
                 Err(error) => {
                     record_timings(&mut timings, stateless_elapsed, Some(execution_start));
-                    if !matches!(
-                        error,
-                        BlockValidationError::MissingCertifiedMergeSidecar { .. }
-                    ) {
-                        emit_rejection(&block, &error);
-                    }
+                    emit_rejection(&block, &error);
                     return WithEvents::new(Err((Box::new(block), Box::new(error))));
                 }
             };
@@ -8249,22 +5077,8 @@ pub(crate) mod valid {
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
             }
-            if let Err(error) =
-                Self::validate_staged_merge_execution_authorization(&block, &mut state_block)
-            {
-                drop(state_block);
-                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
-                emit_rejection(&block, &error);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
             if let Err(error) = state_block
-                .finalize_lane_consensus_contexts(
-                    &block,
-                    validation_profile
-                        .v2_context()
-                        .and_then(SumeragiV2ValidationContext::authenticated_height_context),
-                )
-                .and_then(|()| state_block.capture_exec_witness())
+                .capture_exec_witness()
                 .map_err(Self::execution_context_error)
             {
                 drop(state_block);
@@ -8299,41 +5113,7 @@ pub(crate) mod valid {
                 state_block,
             )))
         }
-        /// Validate a Sumeragi-v2 unit fixture while recording timings and rejection events.
-        #[cfg(test)]
-        #[allow(clippy::too_many_arguments)]
-        fn validate_sumeragi_v2_fixture_with_events_and_timing<
-            'state,
-            F: FnMut(PipelineEventBox),
-        >(
-            block: SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state: &'state State,
-            soft_fork: bool,
-            validation_context: SumeragiV2ValidationContext,
-            timings: &mut ValidationTimings,
-            mut send_events: F,
-        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            let validation_profile = ConsensusValidationProfile::SumeragiV2 {
-                block_cadence: Duration::from_millis(1),
-                context: validation_context,
-            };
-            Self::validate_with_profile(
-                block,
-                topology,
-                genesis_account,
-                time_source,
-                state,
-                soft_fork,
-                Some(timings),
-                false,
-                validation_profile,
-                false,
-                Some(&mut send_events),
-            )
-        }
+
         /// All static checks that require a state snapshot.
         fn canonical_v2_block_time(
             block: &SignedBlock,
@@ -8398,7 +5178,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             time_source: &TimeSource,
             skip_block_signatures: bool,
-            validation_profile: ConsensusValidationProfile,
+            validation_profile: &ConsensusValidationProfile,
         ) -> Result<StaticValidationData, BlockValidationError> {
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
@@ -8468,17 +5248,15 @@ pub(crate) mod valid {
                 // is allowed to execute against the bootstrap state.
                 authenticate_genesis_block_intents(block, genesis_account)?;
             }
-            Self::validate_npos_effects_header(block)?;
+            Self::validate_sumeragi_consensus_effects(block)?;
             Self::validate_da_sidecar_hashes(block)?;
             Self::validate_da_pin_intent_bundle(block, state)?;
             Self::validate_execution_context_with_state(
                 block,
                 topology,
                 state,
-                validation_profile.clone(),
+                validation_profile,
             )?;
-            let queue_plan_stateless_validation_times =
-                Self::queue_plan_stateless_validation_times(block, state)?;
             let block_height = block.header().height().get();
             let nexus = state.nexus();
             let expected_policy_bundle =
@@ -8513,14 +5291,8 @@ pub(crate) mod valid {
                     state.latest_block()
                 };
                 if let Some(prev_block) = prev_block {
-                    if validation_profile.snapshot_bootstrap().is_some() {
-                        return Err(BlockValidationError::SnapshotBootstrapParentInvalid(
-                            "snapshot bootstrap parent unexpectedly has a locally available full body"
-                                .to_owned(),
-                        ));
-                    }
                     let prev_block_time = prev_block.header().creation_time();
-                    if let Some(block_cadence) = validation_profile.v2_block_cadence() {
+                    if let Some(block_cadence) = validation_profile.block_cadence() {
                         let expected =
                             Self::canonical_v2_block_time(block, &prev_block, block_cadence)?;
                         let actual = block.header().creation_time();
@@ -8534,38 +5306,6 @@ pub(crate) mod valid {
                         }
                     }
                     if block.header().creation_time() <= prev_block_time {
-                        return Err(BlockValidationError::BlockInThePast);
-                    }
-                } else if let Some(anchor) = validation_profile.snapshot_bootstrap() {
-                    let cadence = validation_profile
-                        .v2_block_cadence()
-                        .expect("snapshot bootstrap exists only in a v2 validation profile");
-                    if anchor.snapshot_height.checked_add(1) != Some(block.header().height().get())
-                        || state_height
-                            != usize::try_from(anchor.snapshot_height).unwrap_or(usize::MAX)
-                        || actual_prev_block_hash != Some(anchor.snapshot_block_hash)
-                    {
-                        return Err(BlockValidationError::SnapshotBootstrapParentInvalid(
-                            "snapshot anchor height, state height, or parent hash differs from the active block"
-                                .to_owned(),
-                        ));
-                    }
-                    let parent_time = Duration::from_millis(anchor.snapshot_block_creation_time_ms);
-                    let expected = Self::canonical_v2_block_time_from_parent_time(
-                        block,
-                        parent_time,
-                        cadence,
-                    )?;
-                    let actual = block.header().creation_time();
-                    if actual != expected {
-                        return Err(BlockValidationError::NonCanonicalV2BlockTime {
-                            expected_ms: u64::try_from(expected.as_millis())
-                                .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
-                            actual_ms: u64::try_from(actual.as_millis())
-                                .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
-                        });
-                    }
-                    if actual <= parent_time {
                         return Err(BlockValidationError::BlockInThePast);
                     }
                 } else {
@@ -8595,18 +5335,12 @@ pub(crate) mod valid {
                 pipeline_cfg,
                 pipeline_parallelism,
                 aggregate_lane,
-                queue_plan_stateless_validation_times,
             })
         }
         fn npos_effects_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::NposEffectsInvalid(message.into())
         }
-        fn classify_npos_penalty_derivation_error(error: eyre::Report) -> BlockValidationError {
-            BlockValidationError::from_npos_application_error(
-                error,
-                "failed to derive NPoS effects",
-            )
-        }
+
         fn validate_da_sidecar_hashes(block: &SignedBlock) -> Result<(), BlockValidationError> {
             let expected_policies = block.da_proof_policies().map(HashOf::new);
             let actual_policies = block.header().da_proof_policies_hash();
@@ -8752,33 +5486,11 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        fn validate_npos_effects_header(block: &SignedBlock) -> Result<(), BlockValidationError> {
-            match (
-                block.header().npos_effects_hash(),
-                block.npos_consensus_effects(),
-            ) {
-                (None, None) => Ok(()),
-                (Some(_), None) => Err(Self::npos_effects_error(
-                    "header references NPoS effects but payload is missing",
-                )),
-                (None, Some(_)) => Err(Self::npos_effects_error(
-                    "payload includes NPoS effects but header hash is absent",
-                )),
-                (Some(expected), Some(effects)) => {
-                    let actual = HashOf::new(effects);
-                    if actual != expected {
-                        return Err(Self::npos_effects_error("NPoS effects hash mismatch"));
-                    }
-                    Ok(())
-                }
-            }
-        }
-        /// Current blocks carry a dedicated pulse authenticated by current committed state.
-        /// Retired mixed NPoS effects are never accepted by the current protocol.
+
+        /// Native control belongs to the authenticated header; the payload has no second
+        /// pulse owner. ScheduleStep validates and applies that witness exactly once.
         fn validate_sumeragi_consensus_effects(
             block: &SignedBlock,
-            state: &State,
-            mode: iroha_data_model::parameter::system::ConsensusMode,
         ) -> Result<(), BlockValidationError> {
             if block.header().npos_effects_hash().is_some()
                 || block.npos_consensus_effects().is_some()
@@ -8787,335 +5499,23 @@ pub(crate) mod valid {
                     "current Sumeragi blocks reject retired NPoS consensus effects",
                 ));
             }
-            Self::prepare_current_beacon_pulse(block, state, mode).map(|_| ())
-        }
-        fn validate_npos_effects_with_state<'state>(
-            block: &SignedBlock,
-            state: &'state State,
-            authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
-            authenticated_height_context: Option<
-                &iroha_data_model::block::consensus_v2::HeightContext,
-            >,
-        ) -> Result<ValidatedNposPenaltyIndex<'state>, BlockValidationError> {
-            let generation = state.state_view_generation();
-            let result = (|| {
-                if block.global_beacon_pulse().is_some()
-                    || block.header().global_beacon_pulse_hash().is_some()
-                {
-                    return Err(Self::npos_effects_error(
-                        "current global beacon pulse requires current Sumeragi validation",
-                    ));
-                }
-                Self::validate_npos_effects_header(block)?;
-                let block_height = block.header().height().get();
-                let actual_effects = block.npos_consensus_effects();
-                if block.header().is_genesis() {
-                    return if actual_effects.is_none() {
-                        Ok(None)
-                    } else {
-                        Err(Self::npos_effects_error(
-                            "genesis must not carry NPoS effects without committed pre-block state",
-                        ))
-                    };
-                }
-                if authoritative_mode
-                    == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
-                {
-                    let context = authenticated_height_context.ok_or_else(|| {
-                    Self::npos_effects_error(
-                        "permissioned candidate validation requires its authenticated height context",
-                    )
-                })?;
-                    if context.mode
-                        != iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
-                        || context.height != block_height
-                    {
-                        return Err(Self::npos_effects_error(
-                            "permissioned candidate differs from its authenticated height context",
-                        ));
-                    }
-                    if let Some(effects) = actual_effects
-                        && (!effects.v2_evidence_admissions.is_empty()
-                            || !effects.penalty_actions.is_empty())
-                    {
-                        return Err(Self::npos_effects_error(
-                            "permissioned consensus blocks may carry only a requested global beacon pulse",
-                        ));
-                    }
-                    return Self::validate_global_beacon_pulse_effect(
-                        block,
-                        state,
-                        context,
-                        actual_effects
-                            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
-                    )
-                    .map(|()| None);
-                }
-                if authoritative_mode
-                    == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
-                {
-                    let context = authenticated_height_context.ok_or_else(|| {
-                        Self::npos_effects_error(
-                            "NPoS candidate validation requires its authenticated height context",
-                        )
-                    })?;
-                    if context.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-                        || context.height != block_height
-                    {
-                        return Err(Self::npos_effects_error(
-                            "NPoS candidate differs from its authenticated height context",
-                        ));
-                    }
-                    crate::sumeragi::v2_npos::validate_candidate_context(context).map_err(
-                        |error| {
-                            Self::npos_effects_error(format!(
-                                "invalid authenticated NPoS context: {error}"
-                            ))
-                        },
-                    )?;
-                    Self::validate_global_beacon_pulse_effect(
-                        block,
-                        state,
-                        context,
-                        actual_effects
-                            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
-                    )?;
-                }
-                let admission_keys = if let Some(effects) = actual_effects {
-                    crate::sumeragi::v2_evidence::validate_v2_evidence_admissions(
-                        state,
-                        block_height,
-                        &effects.v2_evidence_admissions,
-                    )
-                    .map_err(|err| {
-                        Self::npos_effects_error(format!(
-                            "invalid Sumeragi v2 evidence admissions: {err}"
-                        ))
-                    })?
-                } else {
-                    Vec::new()
-                };
-                if let Some(effects) = actual_effects {
-                    let mut sorted_actions = effects.penalty_actions.clone();
-                    sorted_actions.sort();
-                    sorted_actions.dedup();
-                    if sorted_actions != effects.penalty_actions {
-                        return Err(Self::npos_effects_error(
-                            "NPoS penalty actions are not canonical",
-                        ));
-                    }
-                    crate::sumeragi::v2_evidence::validate_v2_admission_penalty_separation(
-                        &admission_keys,
-                        &effects.penalty_actions,
-                    )
-                    .map_err(|err| Self::npos_effects_error(err.to_string()))?;
-                }
-                let applier = crate::sumeragi::penalties::PenaltyApplier::new(
-                    state,
-                    #[cfg(feature = "telemetry")]
-                    Some(state.metrics()),
-                    #[cfg(not(feature = "telemetry"))]
-                    None,
-                );
-                let (expected_actions, index) = applier
-                    .derive_npos_penalty_actions(&block.header())
-                    .map_err(Self::classify_npos_penalty_derivation_error)?;
-                let actual_actions = actual_effects
-                    .map(|effects| effects.penalty_actions.as_slice())
-                    .unwrap_or(&[]);
-                if expected_actions.as_slice() != actual_actions {
-                    return Err(Self::npos_effects_error(
-                        "NPoS penalty actions do not match pre-block state",
-                    ));
-                }
-                let requires_index = actual_actions.iter().any(|action| {
-                    matches!(
-                        action,
-                        iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash(_)
-                    )
-                });
-                Ok(requires_index.then_some(index))
-            })();
-            if !crate::state::is_stable_state_view_generation(
-                generation,
-                state.state_view_generation(),
-            ) {
-                return Err(BlockValidationError::LocalStorageRecoveryRequired {
-                    reason: "pristine NPoS source observation changed before effects".into(),
-                });
-            }
-            result.map(|index| ValidatedNposPenaltyIndex {
-                state,
-                generation,
-                header: block.header(),
-                index,
-            })
-        }
-        fn validate_global_beacon_pulse_effect(
-            block: &SignedBlock,
-            state: &State,
-            context: &iroha_data_model::block::consensus_v2::HeightContext,
-            pulse: Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
-        ) -> Result<(), BlockValidationError> {
-            let pulse_required_for_successor = context.mode
-                == iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-                && context
-                    .height
-                    .checked_add(1)
-                    .is_some_and(|next_height| next_height == context.epoch_end_height);
-            let world = state.world_view();
-            let logical_beacon_id =
-                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
-                    &context.network_id,
-                );
-            let parliament_requested = world
-                .parliament_required_beacon_pulse_slots
-                .get(&(logical_beacon_id, context.height))
-                .is_some_and(|attempts| !attempts.is_empty());
-            let pulse_requested = pulse_required_for_successor || parliament_requested;
-            let Some(pulse) = pulse else {
-                return if pulse_requested {
-                    Err(Self::npos_effects_error(
-                        "block is missing a finalized global beacon pulse requested by committed pre-state",
-                    ))
-                } else {
-                    Ok(())
-                };
-            };
-            if !pulse_requested {
-                return Err(Self::npos_effects_error(
-                    "global beacon pulse was not requested by committed pre-state",
-                ));
-            }
-            let block_height = block.header().height().get();
-            if pulse.height != block_height
-                || pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1
-                || pulse.network_id != context.network_id
+            if block.global_beacon_pulse().is_some()
+                || block.header().global_beacon_pulse_hash().is_some()
             {
                 return Err(Self::npos_effects_error(
-                    "global beacon pulse differs from the authenticated block height, fixed protocol round, or network",
+                    "native payload rejects a second beacon pulse owner",
                 ));
             }
-            if world
-                .parliament_unavailable_beacon_pulse_slots
-                .get(&(logical_beacon_id, pulse.height))
-                .is_some_and(|attempts| !attempts.is_empty())
-            {
-                return Err(Self::npos_effects_error(
-                    "global beacon pulse arrives after Parliament terminally classified its slot as unavailable",
-                ));
-            }
-            let parent_hash = block.header().prev_block_hash().ok_or_else(|| {
-                Self::npos_effects_error("global beacon pulse has no finalized parent anchor")
-            })?;
-            let anchor_height = block_height.checked_sub(1).ok_or_else(|| {
-                Self::npos_effects_error("global beacon pulse height cannot anchor a parent")
-            })?;
-            let expected_anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
-                height: anchor_height,
-                block_hash: parent_hash,
-            };
-
-            if world.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
-                return Err(Self::npos_effects_error(
-                    "global beacon pulse replays a pulse already in committed state",
-                ));
-            }
-            if world.global_beacon_pulse_slots.len() != world.global_beacon_pulses.len() {
-                return Err(Self::npos_effects_error(
-                    "global beacon pulse slot index differs from authoritative history",
-                ));
-            }
-            if world
-                .global_beacon_pulse_slots
-                .get(&(logical_beacon_id, pulse.height))
-                .is_some()
-            {
-                return Err(Self::npos_effects_error(
-                    "global beacon pulse replays a logical-beacon-height slot already in committed state",
-                ));
-            }
-            let active_session = world
-                .global_beacon_active_session
-                .get(&crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
-                .copied()
-                .ok_or_else(|| {
-                    Self::npos_effects_error("global beacon pulse has no active key session")
-                })?;
-            if active_session != pulse.session_id {
-                return Err(Self::npos_effects_error(
-                    "global beacon pulse is not signed by the active key session",
-                ));
-            }
-            let key_record = world
-                .global_beacon_key_sessions
-                .get(&active_session)
-                .ok_or_else(|| {
-                    Self::npos_effects_error("global beacon active key session is absent")
-                })?;
-            if !key_record.is_active_at(block_height) {
-                return Err(Self::npos_effects_error(
-                    "global beacon key session is not active at the pulse height",
-                ));
-            }
-            let context_roster = context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>();
-            let expected_roster_hash =
-                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
-                    &key_record.session,
-                    &context_roster,
-                )
-                .map_err(|_| {
-                    Self::npos_effects_error(
-                        "global beacon active key session differs from the authenticated height roster",
-                    )
-                })?;
-            let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
-                network_id: context.network_id,
-                session_id: active_session,
-                roster_hash: expected_roster_hash,
-                transcript_hash: key_record.session.transcript_hash,
-            };
-            let session = crate::beacon::validate_global_threshold_beacon_session_v1(
-                key_record.session.clone(),
-                &binding,
-            )
-            .map_err(|error| {
-                Self::npos_effects_error(format!(
-                    "global beacon active public DKG session is invalid: {error}"
-                ))
-            })?;
-            crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
-                &session,
-                pulse,
-                expected_anchor,
-            )
-            .map_err(|error| {
-                Self::npos_effects_error(format!(
-                    "invalid finalized global beacon pulse effect: {error}"
-                ))
-            })?;
             Ok(())
         }
+
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::ExecutionContextInvalid(message.into())
         }
         fn validate_execution_context_header(
             block: &SignedBlock,
         ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
-            let bundle = Self::checked_execution_context_header(block)?;
-            // TODO: enable only with the sole Native replay/Apply consumer and
-            // atomic retirement of old economic signers. Private preparation
-            // cannot grant admission, voting or publication permission.
-            if bundle.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
-                return Err(Self::execution_context_error(
-                    "native lane economic carrier is not active",
-                ));
-            }
-            Ok(bundle)
+            Self::checked_execution_context_header(block)
         }
         fn checked_execution_context_header(
             block: &SignedBlock,
@@ -9138,9 +5538,20 @@ pub(crate) mod valid {
                             bundle.version
                         )));
                     }
-                    bundle
-                        .validate_native_lane_decisions_shape()
-                        .map_err(Self::execution_context_error)?;
+                    if bundle.native_lane_decisions.is_some()
+                        || bundle.merge_entry.is_some()
+                        || !bundle.queue_plan_admissions.is_empty()
+                        || !bundle.autonomous_lane_payloads.is_empty()
+                        || !bundle.lane_payload_ownerships.is_empty()
+                        || bundle
+                            .external
+                            .iter()
+                            .any(|context| context.native_amx_receipt.is_some())
+                    {
+                        return Err(Self::execution_context_error(
+                            "retired consensus attachment in native execution context",
+                        ));
+                    }
                     let actual = HashOf::new(bundle);
                     if actual != expected {
                         return Err(Self::execution_context_error(
@@ -9151,13 +5562,7 @@ pub(crate) mod valid {
                 }
             }
         }
-        /// Exercise the unchanged production admission gate on an inactive native carrier.
-        #[cfg(test)]
-        pub(crate) fn validate_inactive_native_carrier_for_test(
-            block: &SignedBlock,
-        ) -> Result<(), BlockValidationError> {
-            Self::validate_execution_context_header(block).map(|_| ())
-        }
+
         fn validate_execution_context_alignment(
             block: &SignedBlock,
             bundle: &BlockExecutionContextBundle,
@@ -9183,1783 +5588,75 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        fn validate_execution_context_merge_reference(
-            block: &SignedBlock,
-            network_id: &NetworkId,
-            bundle: &BlockExecutionContextBundle,
-            validation_profile: &ConsensusValidationProfile,
-        ) -> Result<(), BlockValidationError> {
-            const MAX_MERGE_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
-            const MAX_MERGE_REFERENCE_BYTES: usize = 2 * 1024 * 1024;
-            const MAX_MERGE_VALIDATORS: usize = 4_096;
-            const BLS_NORMAL_SIGNATURE_BYTES: usize = 96;
-            let Some(reference) = bundle.merge_entry.as_ref() else {
-                return Ok(());
-            };
-            Self::validate_merge_reference_execution_projection(reference)?;
-            Self::validate_npos_merge_composition(block, reference)?;
-            if block.header().is_genesis() {
-                return Err(Self::execution_context_error(
-                    "genesis block cannot carry a certified merge entry",
-                ));
-            }
-            if reference.version != 1 {
-                return Err(Self::execution_context_error(format!(
-                    "unsupported certified merge reference version {}",
-                    reference.version
-                )));
-            }
-            if reference.encoded_len == 0 || reference.encoded_len > MAX_MERGE_ENTRY_BYTES {
-                return Err(Self::execution_context_error(format!(
-                    "certified merge sidecar length {} is outside 1..={MAX_MERGE_ENTRY_BYTES}",
-                    reference.encoded_len
-                )));
-            }
-            if reference.encode().len() > MAX_MERGE_REFERENCE_BYTES {
-                return Err(Self::execution_context_error(
-                    "certified merge reference exceeds its hard byte cap",
-                ));
-            }
-            let qc = &reference.merge_qc;
-            if reference.epoch_id != qc.epoch_id {
-                return Err(Self::execution_context_error(
-                    "certified merge reference epoch differs from its QC",
-                ));
-            }
-            if qc.carrier_height != block.header().height().get()
-                || Some(qc.carrier_parent_hash) != block.header().prev_block_hash()
-                || qc.view != block.header().view_change_index()
-            {
-                return Err(Self::execution_context_error(
-                    "certified merge QC is bound to a different carrier height, parent, or view",
-                ));
-            }
-            if qc.network_id != *network_id {
-                return Err(Self::execution_context_error(
-                    "certified merge reference is bound to another network",
-                ));
-            }
-            if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
-                || qc.validator_set.is_empty()
-                || qc.validator_set.len() > MAX_MERGE_VALIDATORS
-                || qc.validator_set_hash != HashOf::new(&qc.validator_set)
-                || qc.aggregate_signature.len() != BLS_NORMAL_SIGNATURE_BYTES
-            {
-                return Err(Self::execution_context_error(
-                    "certified merge reference has malformed committee or signature metadata",
-                ));
-            }
-            let mut unique_validators = BTreeSet::new();
-            if qc.validator_set.iter().any(|validator| {
-                !unique_validators.insert(validator)
-                    || !crate::crypto_util::is_bls_normal_public_key(validator.public_key())
-            }) {
-                return Err(Self::execution_context_error(
-                    "certified merge reference committee is duplicated or contains a non-BLS key",
-                ));
-            }
-            let roster_len = qc.validator_set.len();
-            let expected_bitmap_len = roster_len.div_ceil(8);
-            if qc.signers_bitmap.len() != expected_bitmap_len {
-                return Err(Self::execution_context_error(
-                    "certified merge reference has a non-canonical signer bitmap length",
-                ));
-            }
-            if roster_len % 8 != 0 {
-                let used_bits = roster_len % 8;
-                let padding_mask = !((1_u8 << used_bits) - 1);
-                if qc.signers_bitmap[expected_bitmap_len - 1] & padding_mask != 0 {
-                    return Err(Self::execution_context_error(
-                        "certified merge reference signer bitmap has non-zero padding",
-                    ));
-                }
-            }
-            let signers = qc
-                .signers_bitmap
-                .iter()
-                .copied()
-                .enumerate()
-                .flat_map(|(byte_index, byte)| {
-                    (0_u8..8).filter_map(move |bit| {
-                        (byte & (1_u8 << bit) != 0).then_some(byte_index * 8 + usize::from(bit))
-                    })
-                })
-                .collect::<Vec<_>>();
-            let signer_count = signers.len();
-            let required = iroha_sumeragi::types::quorum(roster_len);
-            if signer_count != required {
-                return Err(Self::execution_context_error(format!(
-                    "certified merge reference signer count mismatch: expected exactly {required}, got {signer_count}"
-                )));
-            }
-            if qc.signer_proofs.len() != signer_count
-                || qc
-                    .signer_proofs
-                    .iter()
-                    .zip(signers.iter().copied())
-                    .any(|(proof, signer)| {
-                        usize::try_from(proof.signer).ok() != Some(signer)
-                            || proof.proof_of_possession.len() != BLS_NORMAL_SIGNATURE_BYTES
-                    })
-            {
-                return Err(Self::execution_context_error(
-                    "certified merge reference lacks canonical signer proof material",
-                ));
-            }
-            if let Some(validation_context) = validation_profile.v2_context() {
-                let height_context = validation_context
-                    .authenticated_height_context()
-                    .ok_or_else(|| {
-                        Self::execution_context_error(
-                            "certified merge reference requires the authenticated Sumeragi v2 height context",
-                        )
-                    })?;
-                if height_context.id() != validation_context.context_id
-                    || height_context.height != block.header().height().get()
-                {
-                    return Err(Self::execution_context_error(
-                        "certified merge reference differs from its authenticated Sumeragi v2 height context",
-                    ));
-                }
-                if qc.validator_set.len() != height_context.roster.len()
-                    || qc
-                        .validator_set
-                        .iter()
-                        .zip(&height_context.roster)
-                        .any(|(validator, frozen)| validator != &frozen.validator)
-                {
-                    return Err(Self::execution_context_error(
-                        "certified merge reference committee differs from the authenticated Sumeragi v2 roster",
-                    ));
-                }
-                let signer_indices = signers
-                    .iter()
-                    .copied()
-                    .map(|signer| {
-                        iroha_data_model::block::consensus_v2::ValidatorIndex::try_from(signer)
-                            .map_err(|_| {
-                                Self::execution_context_error(
-                                    "certified merge reference signer index exceeds the Sumeragi v2 range",
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                height_context
-                    .validate_certificate_signers(&signer_indices)
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "certified merge reference fails authenticated Sumeragi v2 certificate cardinality: {error}"
-                        ))
-                    })?;
-            }
-            Ok(())
-        }
-        fn validate_merge_reference_execution_projection(
-            reference: &CertifiedMergeLedgerReference,
-        ) -> Result<(), BlockValidationError> {
-            let has_batch_hash = reference.execution_batch_hash.is_some();
-            if [
-                reference.entrypoint_count.is_some(),
-                reference.entrypoint_merkle_root.is_some(),
-                reference.result_merkle_root.is_some(),
-                reference.base_state_height.is_some(),
-                reference.base_state_hash.is_some(),
-            ]
-            .into_iter()
-            .any(|present| present != has_batch_hash)
-            {
-                return Err(Self::execution_context_error(
-                    "certified merge reference has a partial execution-batch binding",
-                ));
-            }
-            if let Some(entrypoint_count) = reference.entrypoint_count
-                && !(1..=u64::try_from(MAX_MERGE_EXECUTION_ENTRYPOINTS).unwrap_or(u64::MAX))
-                    .contains(&entrypoint_count)
-            {
-                return Err(Self::execution_context_error(format!(
-                    "certified merge reference entrypoint count {entrypoint_count} is outside 1..={MAX_MERGE_EXECUTION_ENTRYPOINTS}",
-                )));
-            }
-            Ok(())
-        }
-        fn execution_context_lane_descriptor_validator_set(
-            _topology: &Topology,
-            state: &impl StateReadOnly,
-            proposal_height: u64,
-            lane_id: LaneId,
-            dataspace_id: DataSpaceId,
-        ) -> Result<Vec<PeerId>, String> {
-            let validators = state
-                .resolve_lane_committee_at_height(
-                    crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
-                    proposal_height,
-                )
-                .map(crate::state::LaneAuthorityCommittee::into_validators)
-                .map_err(|error| format!("has no exact lane authority: {error}"))?;
-            Self::execution_context_canonical_lane_descriptor_validators(lane_id, validators)
-        }
-        fn execution_context_canonical_lane_descriptor_validators(
-            lane_id: LaneId,
-            mut validators: Vec<PeerId>,
-        ) -> Result<Vec<PeerId>, String> {
-            if validators.is_empty() {
-                return Err(format!(
-                    "has no lane block descriptor validators for lane {}",
-                    lane_id.as_u32()
-                ));
-            }
-            validators.sort();
-            for pair in validators.windows(2) {
-                if pair[0] == pair[1] {
-                    return Err(format!(
-                        "has duplicate lane block descriptor validator for lane {}",
-                        lane_id.as_u32()
-                    ));
-                }
-            }
-            Ok(validators)
-        }
-        fn execution_context_replay_material_error(
-            ownership_idx: usize,
-            error_message: impl AsRef<str>,
-        ) -> BlockValidationError {
-            let error_message = error_message.as_ref();
-            let message = if error_message == "descriptor hash mismatch" {
-                "lane block descriptor hash mismatch"
-            } else {
-                error_message
-            };
-            Self::execution_context_error(format!(
-                "lane payload ownership {ownership_idx} {message}"
-            ))
-        }
-        /// A quorum-certified threshold-key lifecycle action must execute at
-        /// its exact global height and remain the sole direct external control.
-        fn sole_exact_height_lifecycle_control_without_lane_ownership(
-            block: &SignedBlock,
-            state: &impl StateReadOnly,
-            bundle: &BlockExecutionContextBundle,
-        ) -> bool {
-            if !bundle.lane_payload_ownerships.is_empty()
-                || bundle.native_lane_decisions.is_some()
-                || !bundle.autonomous_lane_payloads.is_empty()
-                || !bundle.queue_plan_admissions.is_empty()
-                || bundle.merge_entry.is_some()
-            {
-                return false;
-            }
-            let ([TransactionEntrypoint::External(transaction)], [context]) = (
-                block.external_entrypoints_slice(),
-                bundle.external.as_slice(),
-            ) else {
-                return false;
-            };
-            if transaction.admission_intent()
-                != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-                || transaction.attachments().is_some()
-                || transaction.multisig_signatures().is_some()
-                || !transaction.metadata().is_empty()
-                || context.entrypoint_hash != block.external_entrypoints_slice()[0].hash()
-            {
-                return false;
-            }
-            let iroha_data_model::transaction::Executable::Instructions(instructions) =
-                transaction.instructions()
-            else {
-                return false;
-            };
-            if instructions.len() != 1 {
-                return false;
-            }
-            let Some(instruction) = instructions[0].as_any().downcast_ref::<
-                iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
-            >() else {
-                return false;
-            };
-            if instruction.certificate.effective_height != block.header().height().get()
-                || instruction.certificate.network_id != *state.network_id()
-            {
-                return false;
-            }
-            matches!(
-                routing_plan_from_execution_context(context),
-                Ok(crate::queue::RoutingPlan::Single(leg))
-                    if leg.role == crate::queue::RouteLegRole::Coordinator
-                        && leg.route.dataspace_id == DataSpaceId::UNIVERSAL
-            )
-        }
-        /// Direct ordinary inputs are ordered by the signed global proposal.
-        /// A peer need not have observed them in its local asynchronous queue.
-        fn direct_ordinary_entries_without_lane_ownership(
-            block: &SignedBlock,
-            state: &impl StateReadOnly,
-            bundle: &BlockExecutionContextBundle,
-        ) -> bool {
-            if !bundle.lane_payload_ownerships.is_empty()
-                || bundle.native_lane_decisions.is_some()
-                || !bundle.autonomous_lane_payloads.is_empty()
-                || bundle.merge_entry.is_some()
-                || block.external_entrypoint_count() != bundle.external.len()
-            {
-                return false;
-            }
-            let mut lifecycle = false;
-            for (entrypoint, context) in block
-                .external_entrypoints_slice()
-                .iter()
-                .zip(&bundle.external)
-            {
-                let TransactionEntrypoint::External(signed) = entrypoint else {
-                    return false;
-                };
-                if signed.admission_intent()
-                    != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-                    || context.entrypoint_hash != entrypoint.hash()
-                    || context.native_amx_receipt.is_some()
-                    || !matches!(
-                        routing_plan_from_execution_context(context),
-                        Ok(crate::queue::RoutingPlan::Single(_))
-                    )
-                {
-                    return false;
-                }
-                lifecycle |= signed.instructions().explicit_instructions().any(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1>()
-                        .is_some()
-                });
-            }
-            !lifecycle
-                || Self::sole_exact_height_lifecycle_control_without_lane_ownership(
-                    block, state, bundle,
-                )
-        }
-        fn validate_execution_context_lane_payload_ownerships(
-            block: &SignedBlock,
-            topology: &Topology,
-            state: &impl StateReadOnly,
-            bundle: &BlockExecutionContextBundle,
-        ) -> Result<(), BlockValidationError> {
-            let proposal_height = block.header().height().get();
-            let proposal_view = block.header().view_change_index();
-            let mut covered_indices = BTreeSet::new();
-            let mut seen_lane_payloads = BTreeSet::new();
-            let mut seen_slots = BTreeSet::new();
-            let mut seen_descriptor_hashes = BTreeSet::new();
-            let mut seen_payload_ownership_hashes = BTreeSet::new();
-            let mut seen_rbc_instance_hashes = BTreeSet::new();
-            for (ownership_idx, ownership) in bundle.lane_payload_ownerships.iter().enumerate() {
-                if ownership.proposal_height != proposal_height {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} height mismatch: expected {proposal_height}, got {}",
-                        ownership.proposal_height
-                    )));
-                }
-                if ownership.proposal_view != proposal_view {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} view mismatch: expected {proposal_view}, got {}",
-                        ownership.proposal_view
-                    )));
-                }
-                if ownership.lane_block_height == 0 {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} has zero lane-local height",
-                    )));
-                }
-                if ownership.lane_block_view != 0 {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} must originate at lane-local view zero, got {}",
-                        ownership.lane_block_view
-                    )));
-                }
-                let expected_dataspace = crate::state::consensus_lane_dataspace_at_height(
-                    ownership.lane_id,
-                    state.nexus(),
-                    proposal_height,
-                );
-                if expected_dataspace != Some(ownership.dataspace_id) {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} does not target the active proposal-height lane route"
-                    )));
-                }
-                let expected_incarnation = StateReadOnly::lane_incarnation_at_height(
-                    state,
-                    ownership.lane_id,
-                    proposal_height,
-                );
-                if expected_incarnation != Some(ownership.lane_incarnation) {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} does not bind the active proposal-height lane incarnation"
-                    )));
-                }
-                if ownership.accepted_candidate_indices.is_empty() {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} has no accepted entrypoint indices"
-                    )));
-                }
-                if ownership.qc_mode_tag.trim().is_empty() {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} has blank QC mode tag"
-                    )));
-                }
-                let Some(lane_block_descriptor_hash) = ownership.lane_block_descriptor_hash else {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} has no lane block descriptor hash"
-                    )));
-                };
-                if !seen_lane_payloads.insert((ownership.lane_id, ownership.dataspace_id)) {
-                    return Err(Self::execution_context_error(format!(
-                        "duplicate lane payload ownership for lane {} dataspace {}",
-                        ownership.lane_id.as_u32(),
-                        ownership.dataspace_id.as_u64()
-                    )));
-                }
-                let slot = (
-                    ownership.lane_id,
-                    ownership.dataspace_id,
-                    ownership.lane_block_height,
-                    ownership.lane_block_view,
-                );
-                if !seen_slots.insert(slot) {
-                    return Err(Self::execution_context_error(format!(
-                        "duplicate lane payload ownership slot for lane {} dataspace {} lane-height {} lane-view {}",
-                        ownership.lane_id.as_u32(),
-                        ownership.dataspace_id.as_u64(),
-                        ownership.lane_block_height,
-                        ownership.lane_block_view
-                    )));
-                }
-                if ownership.payload_ownership_hash == ownership.rbc_instance_hash {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} reuses its RBC instance hash"
-                    )));
-                }
-                if lane_block_descriptor_hash == ownership.subject_hash
-                    || lane_block_descriptor_hash == ownership.payload_ownership_hash
-                    || lane_block_descriptor_hash == ownership.rbc_instance_hash
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} reuses its lane block descriptor hash"
-                    )));
-                }
-                if !seen_descriptor_hashes.insert(lane_block_descriptor_hash) {
-                    return Err(Self::execution_context_error(format!(
-                        "duplicate lane block descriptor hash at ownership {ownership_idx}"
-                    )));
-                }
-                if !seen_payload_ownership_hashes.insert(ownership.payload_ownership_hash) {
-                    return Err(Self::execution_context_error(format!(
-                        "duplicate lane payload ownership hash at ownership {ownership_idx}"
-                    )));
-                }
-                if !seen_rbc_instance_hashes.insert(ownership.rbc_instance_hash) {
-                    return Err(Self::execution_context_error(format!(
-                        "duplicate lane RBC instance hash at ownership {ownership_idx}"
-                    )));
-                }
-                let mut local_indices = BTreeSet::new();
-                let mut candidate_hashes =
-                    Vec::with_capacity(ownership.accepted_candidate_indices.len());
-                for raw_index in &ownership.accepted_candidate_indices {
-                    let index = usize::try_from(*raw_index).map_err(|_| {
-                        Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} entrypoint index {raw_index} overflows usize"
-                        ))
-                    })?;
-                    let Some(context) = bundle.external.get(index) else {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} entrypoint index {index} is out of bounds for {} execution contexts",
-                            bundle.external.len()
-                        )));
-                    };
-                    if !local_indices.insert(index) {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} repeats entrypoint index {index}"
-                        )));
-                    }
-                    if !covered_indices.insert(index) {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership entrypoint index {index} is covered more than once"
-                        )));
-                    }
-                    candidate_hashes.push(Hash::from(context.entrypoint_hash));
-                    if context.lane_id != ownership.lane_id
-                        || context.dataspace_id != ownership.dataspace_id
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} route mismatch at entrypoint index {index}: context lane {} dataspace {}, ownership lane {} dataspace {}",
-                            context.lane_id.as_u32(),
-                            context.dataspace_id.as_u64(),
-                            ownership.lane_id.as_u32(),
-                            ownership.dataspace_id.as_u64(),
-                        )));
-                    }
-                }
-                if ownership.accepted_transaction_hashes != candidate_hashes {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} accepted transaction hashes mismatch"
-                    )));
-                }
-                let validator_set = Self::execution_context_lane_descriptor_validator_set(
-                    topology,
-                    state,
-                    proposal_height,
-                    ownership.lane_id,
-                    ownership.dataspace_id,
-                )
-                .map_err(|message| {
-                    Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} {message}"
-                    ))
-                })?;
-                let validator_count = u32::try_from(validator_set.len()).map_err(|_| {
-                    Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} validator count overflows u32"
-                    ))
-                })?;
-                let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
-                    .map_err(|_| {
-                        Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} quorum overflows u32"
-                        ))
-                    })?;
-                let previous_lane_block_height =
-                    ownership.lane_block_height.checked_sub(1).ok_or_else(|| {
-                        Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} has zero lane block height"
-                        ))
-                    })?;
-                if ownership.previous_lane_block_height != previous_lane_block_height {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} previous lane block height mismatch"
-                    )));
-                }
-                if previous_lane_block_height == 0 {
-                    if ownership.previous_lane_block_descriptor_hash.is_some() {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} height-one predecessor descriptor must be absent"
-                        )));
-                    }
-                } else if ownership.previous_lane_block_descriptor_hash.is_none() {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} is missing its non-genesis predecessor descriptor hash"
-                    )));
-                }
-                if ownership.lane_block_descriptor_validator_set != validator_set {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} lane block descriptor validator set mismatch"
-                    )));
-                }
-                if ownership.lane_block_descriptor_validator_count != validator_count {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} lane block descriptor validator count mismatch"
-                    )));
-                }
-                if ownership.lane_block_descriptor_min_quorum != min_quorum {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} lane block descriptor quorum mismatch"
-                    )));
-                }
-                if let Err(error) = ownership.validate_replay_material() {
-                    return Err(Self::execution_context_replay_material_error(
-                        ownership_idx,
-                        error.to_string(),
-                    ));
-                }
-            }
-            if covered_indices.len() != bundle.external.len() {
-                if covered_indices.is_empty()
-                    && Self::direct_ordinary_entries_without_lane_ownership(block, state, bundle)
-                {
-                    return Ok(());
-                }
-                let missing = (0..bundle.external.len())
-                    .find(|index| !covered_indices.contains(index))
-                    .expect("coverage length mismatch implies a missing index");
-                return Err(Self::execution_context_error(format!(
-                    "lane payload ownerships do not cover execution context index {missing}"
-                )));
-            }
-            Ok(())
-        }
-        fn validate_execution_context_lane_payload_artifacts(
-            block: &SignedBlock,
-            state: &impl StateReadOnly,
-            bundle: &BlockExecutionContextBundle,
-            validation_profile: &ConsensusValidationProfile,
-        ) -> Result<(), BlockValidationError> {
-            let proposal_height = block.header().height().get();
-            let proposal_hash = block.hash();
-            for (ownership_idx, ownership) in bundle.lane_payload_ownerships.iter().enumerate() {
-                #[cfg(any(test, feature = "iroha-core-tests"))]
-                if is_default_test_execution_context_ownership(ownership) {
-                    continue;
-                }
-                if ownership.lane_block_height == 0 {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} lane block height must be non-zero"
-                    )));
-                }
-                if let ConsensusValidationProfile::VerifiedReplay { authority, .. } =
-                    validation_profile
-                {
-                    authority.validate(block, state)?;
-                    let proposal = native_amx_coordinator_proposal_from_ownership(ownership)
-                        .map_err(Self::execution_context_error)?;
-                    State::validate_merge_execution_predecessor_against_frontier(
-                        state.world(),
-                        &proposal.descriptor,
-                    )
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "historical ordinary lane predecessor is invalid: {error}",
-                        ))
-                    })?;
-                    continue;
-                }
-                if let Some(existing) = state
-                    .kura()
-                    .consensus_storage_read(state.kura().read_lane_block_artifact_read_only(
-                        ownership.lane_id,
-                        ownership.lane_block_height,
-                    ))
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "local shared lane slot is unreadable: {error}"
-                        ))
-                    })?
-                {
-                    if existing.ownership.dataspace_id != ownership.dataspace_id {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} conflicts with stored lane artifact dataspace: expected {}, got {}",
-                            existing.ownership.dataspace_id.as_u64(),
-                            ownership.dataspace_id.as_u64()
-                        )));
-                    }
-                    if existing.ownership.proposal_height < proposal_height
-                        && existing.proposal_block_hash != proposal_hash
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} reuses committed lane artifact for lane {} dataspace {} lane-height {} from proposal height {}",
-                            ownership.lane_id.as_u32(),
-                            ownership.dataspace_id.as_u64(),
-                            ownership.lane_block_height,
-                            existing.ownership.proposal_height,
-                        )));
-                    }
-                    if existing.proposal_block_hash == proposal_hash
-                        && existing.ownership != *ownership
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "lane payload ownership {ownership_idx} does not match stored lane artifact for this proposal"
-                        )));
-                    }
-                }
-                let proposal = native_amx_coordinator_proposal_from_ownership(ownership)
-                    .map_err(Self::execution_context_error)?;
-                let mode = if validation_profile.v2_context().is_some_and(|context| {
-                    context.height == proposal_height
-                        && ownership.proposal_height == proposal_height
-                }) {
-                    crate::state::LanePredecessorApplicationMode::OrdinaryBodyStatePrefix
-                } else {
-                    crate::state::LanePredecessorApplicationMode::AppliedStatePrefix
-                };
-                let applied = state
-                    .kura()
-                    .consensus_storage_read(
-                        State::lane_block_predecessor_is_applied_for_snapshot(
-                            state, &proposal, mode,
-                        )
-                        .map_err(|error| {
-                            crate::kura::Error::MergeCarrierConflict(error.to_string())
-                        }),
-                    )
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "local shared lane predecessor is unreadable: {error}"
-                        ))
-                    })?;
-                if !applied {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} does not extend the exact applied canonical predecessor for lane {} dataspace {} incarnation {} lane-height {}",
-                        ownership.lane_id.as_u32(),
-                        ownership.dataspace_id.as_u64(),
-                        ownership.lane_incarnation,
-                        ownership.previous_lane_block_height,
-                    )));
-                }
-            }
-            Ok(())
-        }
-        fn validate_autonomous_lane_payload_envelope_budget(
-            envelopes: &[AutonomousLanePayloadEnvelopeV1],
-        ) -> Result<(), BlockValidationError> {
-            if envelopes.len() > MAX_MERGE_EXECUTION_ENTRYPOINTS {
-                return Err(Self::execution_context_error(format!(
-                    "autonomous lane payload envelope count {} exceeds hard limit {MAX_MERGE_EXECUTION_ENTRYPOINTS}",
-                    envelopes.len()
-                )));
-            }
-            let mut aggregate_bytes = 0_usize;
-            for (index, envelope) in envelopes.iter().enumerate() {
-                let envelope_bytes = norito::encode_canonical(envelope).map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to canonically encode autonomous lane payload envelope {index}: {error}"
-                    ))
-                })?;
-                aggregate_bytes = aggregate_bytes
-                    .checked_add(envelope_bytes.len())
-                    .ok_or_else(|| {
-                        Self::execution_context_error(
-                            "autonomous lane payload envelope byte count overflow",
-                        )
-                    })?;
-                if aggregate_bytes > MAX_MERGE_EXECUTION_BATCH_BYTES {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelopes exceed aggregate byte limit {MAX_MERGE_EXECUTION_BATCH_BYTES} at index {index}"
-                    )));
-                }
-            }
-            Ok(())
-        }
-        fn autonomous_lane_validation_context(
-            validation_profile: ConsensusValidationProfile,
-        ) -> Result<SumeragiV2ValidationContext, BlockValidationError> {
-            if let Some(context) = validation_profile.v2_context() {
-                return Ok(context.clone());
-            }
-            Err(Self::execution_context_error(
-                "autonomous lane payload envelopes require a Sumeragi v2 height context",
-            ))
-        }
-        fn autonomous_lane_predecessor_is_current_or_snapshot_anchored(
-            state: &impl StateReadOnly,
-            proposal: &LaneBlockProposalV1,
-        ) -> Result<bool, BlockValidationError> {
-            let descriptor = &proposal.descriptor;
-            let previous_height = descriptor.previous_lane_block_height;
-            let predecessor_shape_is_canonical = if descriptor.lane_block_height == 1 {
-                previous_height == 0 && descriptor.previous_lane_block_descriptor_hash.is_none()
-            } else {
-                previous_height != 0
-                    && previous_height.checked_add(1) == Some(descriptor.lane_block_height)
-                    && descriptor.previous_lane_block_descriptor_hash.is_some()
-            };
-            if !predecessor_shape_is_canonical {
-                return Ok(false);
-            }
-            if state
-                .kura()
-                .consensus_storage_read(state.kura().latest_certified_lane_block_artifact_matching(
-                    descriptor.lane_id,
-                    |artifact| {
-                        let persisted = &artifact.proposal.descriptor;
-                        persisted.dataspace_id == descriptor.dataspace_id
-                            && persisted.lane_incarnation == descriptor.lane_incarnation
-                            && persisted.proposal_height <= descriptor.proposal_height
-                    },
-                ))
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "local certified lane predecessor is unreadable: {error}"
-                    ))
-                })?
-                .is_some_and(|artifact| {
-                    artifact.proposal.descriptor.lane_block_height > previous_height
-                })
-            {
-                return Ok(false);
-            }
-            native_amx_participant_predecessor_snapshot_read(state, proposal).map_err(|error| {
-                Self::execution_context_error(format!(
-                    "local Native AMX predecessor is unreadable: {error}",
-                ))
-            })
-        }
-        fn validate_autonomous_lane_payload_slot(
-            block: &SignedBlock,
-            state: &impl StateReadOnly,
-            payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-            expected_network_id: iroha_data_model::NetworkId,
-            expected_epoch: u64,
-        ) -> Result<bool, BlockValidationError> {
-            let descriptor = &payload.origin_proposal.descriptor;
-            let lane_block_height = descriptor.lane_block_height;
-            let slot_error = |reason: &str| {
-                Self::execution_context_error(format!(
-                    "autonomous lane payload for lane {} dataspace {} incarnation {} lane-height {lane_block_height} {reason}",
-                    descriptor.lane_id.as_u32(),
-                    descriptor.dataspace_id.as_u64(),
-                    descriptor.lane_incarnation,
-                ))
-            };
-            let mut exact_current_slot = false;
-            if let Some(artifact) = state
-                .kura()
-                .consensus_storage_read(state.kura().read_current_autonomous_lane_block_artifact(
-                    descriptor.lane_id,
-                    lane_block_height,
-                    expected_network_id,
-                    expected_epoch,
-                ))
-                .map_err(|error| {
-                    slot_error(&format!("local autonomous slot is unreadable: {error}"))
-                })?
-            {
-                let mut persisted = artifact.executable_payload;
-                if let Some(hint) = persisted.origin_proposal.payload_block_hint {
-                    if hint.proposal_height != block.header().height().get()
-                        || hint.proposal_view != block.header().view_change_index()
-                        || hint.proposal_block_hash != block.hash()
-                    {
-                        return Err(slot_error(
-                            "conflicts with the previously authenticated global carrier",
-                        ));
-                    }
-                    persisted.origin_proposal.payload_block_hint = None;
-                }
-                if persisted != *payload {
-                    return Err(slot_error(
-                        "conflicts with the durable autonomous payload at the same slot",
-                    ));
-                }
-                exact_current_slot = true;
-            }
-            if let Some(certified) = state
-                .kura()
-                .consensus_storage_read(
-                    state
-                        .kura()
-                        .read_lane_completion_certificate(descriptor.lane_id, lane_block_height),
-                )
-                .map_err(|error| {
-                    slot_error(&format!("local certified slot is unreadable: {error}"))
-                })?
-            {
-                if certified.proposal.descriptor.dataspace_id != descriptor.dataspace_id
-                    || certified.proposal.descriptor.lane_incarnation != descriptor.lane_incarnation
-                    || !payload.matches_proposal_static(&certified.proposal)
-                    || certified.proposal.payload_block_hint.is_some_and(|hint| {
-                        hint.proposal_height != block.header().height().get()
-                            || hint.proposal_view != block.header().view_change_index()
-                            || hint.proposal_block_hash != block.hash()
-                    })
-                {
-                    return Err(slot_error(
-                        "conflicts with the durable certificate at the same slot",
-                    ));
-                }
-                exact_current_slot = true;
-            }
-            if let Some(certified) = state
-                .kura()
-                .consensus_storage_read(state.kura().latest_certified_lane_block_artifact_matching(
-                    descriptor.lane_id,
-                    |artifact| {
-                        let persisted = &artifact.proposal.descriptor;
-                        persisted.dataspace_id == descriptor.dataspace_id
-                            && persisted.lane_incarnation == descriptor.lane_incarnation
-                            && persisted.proposal_height <= descriptor.proposal_height
-                    },
-                ))
-                .map_err(|error| {
-                    slot_error(&format!("local certified frontier is unreadable: {error}"))
-                })?
-            {
-                let certified_height = certified.proposal.descriptor.lane_block_height;
-                if certified_height > lane_block_height {
-                    return Err(slot_error(
-                        "is stale relative to a higher durable certified lane slot",
-                    ));
-                }
-                if certified_height == lane_block_height {
-                    if !payload.matches_proposal_static(&certified.proposal) {
-                        return Err(slot_error(
-                            "conflicts with the durable certificate at the same slot",
-                        ));
-                    }
-                    if certified.proposal.payload_block_hint.is_some_and(|hint| {
-                        hint.proposal_height != block.header().height().get()
-                            || hint.proposal_view != block.header().view_change_index()
-                            || hint.proposal_block_hash != block.hash()
-                    }) {
-                        return Err(slot_error(
-                            "certificate is bound to a different global carrier",
-                        ));
-                    }
-                    exact_current_slot = true;
-                }
-            }
-            if let Some(artifact) = state
-                .kura()
-                .consensus_storage_read(
-                    state
-                        .kura()
-                        .read_lane_block_artifact_read_only(descriptor.lane_id, lane_block_height),
-                )
-                .map_err(|error| {
-                    slot_error(&format!("local canonical slot is unreadable: {error}"))
-                })?
-            {
-                let artifact_proposal =
-                    native_amx_coordinator_proposal_from_ownership(&artifact.ownership)
-                        .map_err(|error| slot_error(&error))?;
-                if artifact.ownership.dataspace_id != descriptor.dataspace_id
-                    || artifact.ownership.lane_incarnation != descriptor.lane_incarnation
-                    || artifact.proposal_block_hash != block.hash()
-                    || artifact.ownership.proposal_view != block.header().view_change_index()
-                    || !payload.matches_proposal_static(&artifact_proposal)
-                {
-                    return Err(slot_error(
-                        "conflicts with the canonical carrier artifact at the same slot",
-                    ));
-                }
-                exact_current_slot = true;
-            }
-            if let Some(artifact) = state
-                .kura()
-                .consensus_storage_read(state.kura().latest_lane_block_artifact_matching(
-                    descriptor.lane_id,
-                    |artifact| {
-                        artifact.ownership.dataspace_id == descriptor.dataspace_id
-                            && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
-                            && artifact.ownership.proposal_height <= descriptor.proposal_height
-                    },
-                ))
-                .map_err(|error| {
-                    slot_error(&format!("canonical lane frontier is unreadable: {error}"))
-                })?
-            {
-                let artifact_height = artifact.ownership.lane_block_height;
-                if artifact_height > lane_block_height {
-                    return Err(slot_error(
-                        "is stale relative to a higher canonical lane artifact",
-                    ));
-                }
-                if artifact_height == lane_block_height {
-                    let artifact_proposal =
-                        native_amx_coordinator_proposal_from_ownership(&artifact.ownership)
-                            .map_err(|error| slot_error(&error))?;
-                    if artifact.proposal_block_hash != block.hash()
-                        || artifact.ownership.proposal_view != block.header().view_change_index()
-                        || !payload.matches_proposal_static(&artifact_proposal)
-                    {
-                        return Err(slot_error(
-                            "conflicts with the canonical carrier artifact at the same slot",
-                        ));
-                    }
-                    exact_current_slot = true;
-                }
-            }
-            let latest_receipt = state
-                .kura()
-                .consensus_storage_read(
-                    state
-                        .kura()
-                        .read_latest_native_amx_participant_application_receipt(descriptor.lane_id),
-                )
-                .map_err(|error| {
-                    slot_error(&format!("local Native AMX slot is unreadable: {error}"))
-                })?;
-            match latest_receipt {
-                crate::kura::NativeAmxLatestReceiptObservation::Absent => {}
-                crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {
-                    return Err(slot_error("awaits exact Native AMX application metadata"));
-                }
-                crate::kura::NativeAmxLatestReceiptObservation::Applied(receipt) => {
-                    let stored = &receipt.participant_proposal.descriptor;
-                    if stored.dataspace_id == descriptor.dataspace_id
-                        && stored.lane_incarnation == descriptor.lane_incarnation
-                        && stored.proposal_height <= descriptor.proposal_height
-                        && stored.lane_block_height >= lane_block_height
-                    {
-                        return Err(slot_error(
-                            "conflicts with an applied Native AMX participant slot",
-                        ));
-                    }
-                }
-            }
-            Ok(exact_current_slot)
-        }
-        #[allow(clippy::too_many_lines)]
-        fn validate_execution_context_autonomous_lane_payloads(
-            block: &SignedBlock,
-            topology: &Topology,
-            state: &impl StateReadOnly,
-            bundle: &BlockExecutionContextBundle,
-            validation_profile: ConsensusValidationProfile,
-        ) -> Result<(), BlockValidationError> {
-            let envelopes = &bundle.autonomous_lane_payloads;
-            Self::validate_autonomous_lane_payload_envelope_budget(envelopes)?;
-            if envelopes.is_empty() {
-                return Ok(());
-            }
-            if block.header().is_genesis() {
-                return Err(Self::execution_context_error(
-                    "genesis cannot carry autonomous lane payload envelopes",
-                ));
-            }
-            let v2_context = Self::autonomous_lane_validation_context(validation_profile.clone())?;
-            let proposal_height = block.header().height().get();
-            if v2_context.height != proposal_height {
-                return Err(Self::execution_context_error(format!(
-                    "autonomous lane payload height context mismatch: expected {proposal_height}, got {}",
-                    v2_context.height
-                )));
-            }
-            let expected_network_id = *state.network_id();
-            let base_mode_tag = match v2_context.consensus_mode {
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
-                    iroha_data_model::block::consensus_v2::PERMISSIONED_TAG
-                }
-                iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
-                    iroha_data_model::block::consensus_v2::NPOS_TAG
-                }
-            };
-            let context_mode_tag = format!(
-                "{base_mode_tag}::height-context:{}::epoch:{}",
-                hex::encode(v2_context.context_id.0.as_ref()),
-                v2_context.epoch
-            );
-            let external_entrypoint_hashes = block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| Hash::from(entrypoint.hash()))
-                .collect::<BTreeSet<_>>();
-            let mut merge_entrypoint_hashes = BTreeSet::new();
-            let mut merge_reservation_entrypoint_hashes = BTreeSet::new();
-            let mut merge_reservation_digests = BTreeSet::new();
-            if let Some(reference) = bundle.merge_entry.as_ref() {
-                let resolved = match &validation_profile {
-                    ConsensusValidationProfile::VerifiedReplay { authority, .. } => {
-                        authority.validate(block, state)?;
-                        Some(authority.merge_entry(reference).map_err(Self::execution_context_error)?.clone())
-                    }
-                    _ => state.kura().merge_entry_by_hash(reference.entry_hash).map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload could not resolve certified merge sidecar {}: {error}",
-                            reference.entry_hash
-                        ))
-                    })?,
-                };
-                let Some(entry) = resolved else {
-                    return Err(BlockValidationError::MissingCertifiedMergeSidecar {
-                        entry_hash: reference.entry_hash,
-                    });
-                };
-                if !reference.matches_entry(&entry) {
-                    return Err(Self::execution_context_error(
-                        "autonomous lane payload merge sidecar differs from the block reference",
-                    ));
-                }
-                if let Some(batch) = entry.execution_batch.as_ref() {
-                    merge_entrypoint_hashes.extend(
-                        batch
-                            .lanes
-                            .iter()
-                            .flat_map(|execution| execution.entrypoint_hashes.iter().copied()),
-                    );
-                }
-                for (entrypoint_hash, reservation) in
-                    crate::state::certified_merge_queue_reservations(&entry).map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload merge reservations are invalid: {error}"
-                        ))
-                    })?
-                {
-                    if !merge_reservation_entrypoint_hashes.insert(entrypoint_hash)
-                        || !merge_reservation_digests.insert(reservation.digest())
-                    {
-                        return Err(Self::execution_context_error(
-                            "certified merge batch repeats an entrypoint or reservation identity",
-                        ));
-                    }
-                }
-            }
-            let mut previous_order = None;
-            // Ordinary and autonomous anchors are two encodings of the same
-            // lane route/slot namespace. Seed the autonomous duplicate sets
-            // with every already-validated ordinary ownership so one carrier
-            // cannot smuggle both execution roles for a route or slot.
-            let mut seen_routes = bundle
-                .lane_payload_ownerships
-                .iter()
-                .map(|ownership| {
-                    (
-                        ownership.lane_id,
-                        ownership.dataspace_id,
-                        ownership.lane_incarnation,
-                    )
-                })
-                .collect::<BTreeSet<_>>();
-            let mut seen_slots = bundle
-                .lane_payload_ownerships
-                .iter()
-                .map(|ownership| {
-                    (
-                        ownership.lane_id,
-                        ownership.dataspace_id,
-                        ownership.lane_incarnation,
-                        ownership.lane_block_height,
-                        ownership.lane_block_view,
-                    )
-                })
-                .collect::<BTreeSet<_>>();
-            let mut seen_proposals = bundle
-                .lane_payload_ownerships
-                .iter()
-                .map(|ownership| {
-                    native_amx_coordinator_proposal_from_ownership(ownership)
-                        .map(|proposal| proposal.proposal_hash)
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "ordinary lane ownership cannot seed the shared proposal namespace: {error}"
-                            ))
-                        })
-                })
-                .collect::<Result<BTreeSet<_>, _>>()?;
-            let mut seen_descriptors = BTreeSet::new();
-            let mut seen_payloads = BTreeSet::new();
-            let mut seen_reservations = BTreeSet::new();
-            let mut seen_reservation_entrypoints = BTreeSet::new();
-            let mut seen_entrypoints = BTreeSet::new();
-            let mut total_entrypoints = 0_usize;
-            // These envelopes originate at this carrier height. Static validation reads its
-            // committed parent policy, including during replay, before any carrier effects.
-            // Bound each independent source, not the sum of sources: separate sources may
-            // consume separate future merge carriers, but one source cannot be split later.
-            let source_gas_limit =
-                crate::state::gas_limit_from_parameters(state.world().parameters());
-            for (index, envelope) in envelopes.iter().enumerate() {
-                let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
-                    envelope,
-                    expected_network_id,
-                    v2_context.epoch,
-                )
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} is invalid: {error}"
-                    ))
-                })?;
-                let proposal = &payload.origin_proposal;
-                let descriptor = &proposal.descriptor;
-                let order = (
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                    descriptor.proposal_height,
-                    descriptor.lane_block_height,
-                    descriptor.lane_block_view,
-                    proposal.proposal_hash,
-                );
-                if previous_order
-                    .as_ref()
-                    .is_some_and(|previous| order <= *previous)
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} is not in strict canonical lane/dataspace/incarnation/height/view/proposal order"
-                    )));
-                }
-                previous_order = Some(order);
-                if descriptor.proposal_height != proposal_height {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} height mismatch: expected {proposal_height}, got {}",
-                        descriptor.proposal_height
-                    )));
-                }
-                if descriptor.lane_block_view != 0 {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} must originate at lane-local view zero, got {}",
-                        descriptor.lane_block_view
-                    )));
-                }
-                if crate::state::consensus_lane_dataspace_at_height(
-                    descriptor.lane_id,
-                    state.nexus(),
-                    proposal_height,
-                ) != Some(descriptor.dataspace_id)
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} does not target the active proposal-height lane route"
-                    )));
-                }
-                if StateReadOnly::lane_incarnation_at_height(
-                    state,
-                    descriptor.lane_id,
-                    proposal_height,
-                ) != Some(descriptor.lane_incarnation)
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} does not bind the active proposal-height lane incarnation"
-                    )));
-                }
-                let validator_set = Self::execution_context_lane_descriptor_validator_set(
-                    topology,
-                    state,
-                    proposal_height,
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                )
-                .map_err(|message| {
-                    Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} {message}"
-                    ))
-                })?;
-                let validator_count = u32::try_from(validator_set.len()).map_err(|_| {
-                    Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} validator count overflows u32"
-                    ))
-                })?;
-                let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
-                    .map_err(|_| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} quorum overflows u32"
-                        ))
-                    })?;
-                let expected_qc_mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    &context_mode_tag,
-                );
-                if descriptor.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
-                    || descriptor.validator_set != validator_set
-                    || descriptor.validator_set_hash != HashOf::new(&validator_set)
-                    || descriptor.validator_count != validator_count
-                    || descriptor.min_quorum != min_quorum
-                    || descriptor.qc_mode_tag != expected_qc_mode_tag
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} descriptor committee, quorum, or consensus tag differs from the authoritative height context"
-                    )));
-                }
-                match &validation_profile {
-                    ConsensusValidationProfile::VerifiedReplay { authority, .. } => {
-                        authority.validate(block, state)?;
-                        State::validate_merge_execution_predecessor_against_frontier(
-                            state.world(),
-                            descriptor,
-                        )
-                        .map_err(|error| {
-                            Self::execution_context_error(format!(
-                                "historical autonomous lane predecessor is invalid: {error}",
-                            ))
-                        })?;
-                    }
-                    _ => {
-                        let exact_current_slot = Self::validate_autonomous_lane_payload_slot(
-                            block,
-                            state,
-                            &payload,
-                            expected_network_id,
-                            v2_context.epoch,
-                        )?;
-                        if !exact_current_slot
-                            && !Self::autonomous_lane_predecessor_is_current_or_snapshot_anchored(
-                                state, proposal,
-                            )?
-                        {
-                            return Err(Self::execution_context_error(format!(
-                                "autonomous lane payload envelope {index} does not extend the exact latest applied or snapshot-anchored lane predecessor"
-                            )));
-                        }
-                    }
-                }
-                let expected_producer = crate::lane_consensus::deterministic_lane_author(
-                    &validator_set,
-                    descriptor.lane_block_height,
-                );
-                if expected_producer != Some(&payload.producer) {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} producer is not the deterministic lane author"
-                    )));
-                }
-                let (reservation_owner_hash, proposal_identity_hash) =
-                    crate::sumeragi::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
-                        expected_network_id,
-                        v2_context.context_id,
-                        v2_context.epoch,
-                        proposal,
-                        &payload.producer,
-                    )
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} has no canonical reservation identity: {error}"
-                        ))
-                    })?;
-                if payload.reservation_keys.iter().any(|reservation| {
-                    reservation.reservation_owner_hash != reservation_owner_hash
-                        || reservation.proposal_identity_hash != proposal_identity_hash
-                }) {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} reservation owner or slot identity is not canonical"
-                    )));
-                }
-                if !seen_routes.insert((
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                )) || !seen_slots.insert((
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                    descriptor.lane_block_height,
-                    descriptor.lane_block_view,
-                )) || !seen_proposals.insert(proposal.proposal_hash)
-                    || !seen_descriptors.insert(descriptor.descriptor_hash)
-                    || !seen_payloads.insert(payload.payload_hash)
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} duplicates a route, slot, proposal, descriptor, or payload identity"
-                    )));
-                }
-                total_entrypoints = total_entrypoints
-                    .checked_add(payload.entrypoints.len())
-                    .ok_or_else(|| {
-                        Self::execution_context_error(
-                            "autonomous lane payload entrypoint count overflow",
-                        )
-                    })?;
-                if total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload entrypoint count exceeds hard limit {MAX_MERGE_EXECUTION_ENTRYPOINTS} at envelope {index}"
-                    )));
-                }
-                let source_gas = crate::state::merge_execution_proposal_gas(&payload.entrypoints)
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} has invalid proposal gas accounting: {error}"
-                        ))
-                    })?;
-                if !crate::gas::gas_components_fit_block_limit(source_gas_limit, [source_gas]) {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} exceeds its origin block proposal gas budget: {source_gas} > {source_gas_limit}"
-                    )));
-                }
-                for ((entrypoint_hash, reservation), entrypoint) in payload
-                    .entrypoint_hashes
-                    .iter()
-                    .zip(&payload.reservation_keys)
-                    .zip(&payload.entrypoints)
-                {
-                    if external_entrypoint_hashes.contains(entrypoint_hash) {
-                        return Err(Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} entrypoint is also present in the global carrier; anchors must be control-only"
-                        )));
-                    }
-                    if merge_entrypoint_hashes.contains(entrypoint_hash)
-                        || merge_reservation_entrypoint_hashes
-                            .contains(&reservation.entrypoint_hash)
-                        || merge_reservation_digests.contains(&reservation.digest())
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} overlaps the staged certified merge batch; anchors must be control-only"
-                        )));
-                    }
-                    if !seen_entrypoints.insert(*entrypoint_hash)
-                        || !seen_reservation_entrypoints.insert(reservation.entrypoint_hash)
-                        || !seen_reservations.insert(reservation.digest())
-                        || Hash::from(entrypoint.hash()) != *entrypoint_hash
-                        || Hash::from(reservation.entrypoint_hash) != *entrypoint_hash
-                    {
-                        return Err(Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} repeats or corrupts an entrypoint or reservation identity"
-                        )));
-                    }
-                }
-            }
-            Ok(())
-        }
+
         fn validate_execution_context_with_state(
             block: &SignedBlock,
-            topology: &Topology,
+            _topology: &Topology,
             state: &impl StateReadOnly,
-            validation_profile: ConsensusValidationProfile,
+            _profile: &ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
-            let bundle = if matches!(
-                &validation_profile,
-                ConsensusValidationProfile::NativePreparation { .. }
-            ) {
-                super::native_lane_batch_for_execution(block)
-                    .map_err(Self::execution_context_error)?;
-                Self::checked_execution_context_header(block)?
-            } else {
-                Self::validate_execution_context_header(block)?
-            };
-            let context_required =
-                !block.header().is_genesis() && block.external_entrypoint_count() != 0;
+            let bundle = Self::checked_execution_context_header(block)?;
             let Some(bundle) = bundle else {
-                return if context_required {
+                return if !block.header().is_genesis() && block.external_entrypoint_count() != 0 {
                     Err(Self::execution_context_error(
-                        "missing execution context for external entrypoints",
+                        "missing execution context for external inputs",
                     ))
                 } else {
                     Ok(())
                 };
             };
+            if bundle.merge_entry.is_some()
+                || !bundle.autonomous_lane_payloads.is_empty()
+                || !bundle.lane_payload_ownerships.is_empty()
+                || bundle
+                    .external
+                    .iter()
+                    .any(|context| context.native_amx_receipt.is_some())
+            {
+                return Err(Self::execution_context_error(
+                    "retired receipt or merge authority in native proposal",
+                ));
+            }
+            if bundle.native_lane_decisions.is_some() {
+                return Err(Self::execution_context_error(
+                    "retired native Decision body",
+                ));
+            }
             Self::validate_execution_context_alignment(block, bundle)?;
-            Self::validate_execution_context_merge_reference(
-                block,
-                state.network_id(),
-                bundle,
-                &validation_profile,
-            )?;
-            Self::validate_execution_context_lane_payload_ownerships(
-                block, topology, state, bundle,
-            )?;
-            Self::validate_execution_context_lane_payload_artifacts(
-                block,
-                state,
-                bundle,
-                &validation_profile,
-            )?;
-            Self::validate_execution_context_autonomous_lane_payloads(
-                block,
-                topology,
-                state,
-                bundle,
-                validation_profile.clone(),
-            )?;
             if block.header().is_genesis() {
                 return Ok(());
             }
-            let native_amx_ownership_index = bundle
-                .external
+            let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(state);
+            let inputs = routing.inputs(state.world());
+            for (index, (entrypoint, context)) in block
+                .external_entrypoints_slice()
                 .iter()
-                .any(|context| context.native_amx_receipt.is_some())
-                .then(|| Self::index_native_amx_coordinator_ownerships(bundle))
-                .transpose()?;
-            let expected_native_amx_context = validation_profile
-                .v2_context()
-                .map(|context| {
-                    if context.height != block.header().height().get() {
-                        return Err(Self::execution_context_error(format!(
-                            "Sumeragi v2 height-context mismatch: expected body height {}, got {}",
-                            context.height,
-                            block.header().height().get()
-                        )));
-                    }
-                    Ok(ExpectedNativeAmxV2Context {
-                        round: iroha_data_model::block::consensus_v2::ConsensusRound {
-                            context_id: context.context_id,
-                            height: context.height,
-                            // The immutable block header commits the creation
-                            // view. A later locked re-proposal keeps these exact
-                            // bytes and therefore keeps this origin view.
-                            view: block.header().view_change_index(),
-                        },
-                        epoch: context.epoch,
-                    })
-                })
-                .transpose()?;
-            let nexus = state.nexus();
-            for (idx, (entrypoint, context)) in block
-                .external_entrypoints_cloned()
-                .zip(bundle.external.iter())
+                .zip(&bundle.external)
                 .enumerate()
             {
-                let committed_plan =
-                    routing_plan_from_execution_context(context).map_err(|err| {
-                        Self::execution_context_error(format!(
-                            "execution context routing plan is not canonical at index {idx}: {err}"
-                        ))
-                    })?;
-                let committed_decision = committed_plan.coordinator_route();
-                resolve_routing_decision(
-                    committed_decision,
-                    &nexus.lane_catalog,
-                    &nexus.dataspace_catalog,
-                )
-                .map_err(|err| {
-                    Self::execution_context_error(format!(
-                        "execution context route cannot be resolved at index {idx}: {err}"
-                    ))
-                })?;
+                let plan = routing_plan_from_execution_context(context)
+                    .map_err(|error| Self::execution_context_error(error.to_string()))?;
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
-                    Cow::Owned(entrypoint.clone()),
+                    Cow::Borrowed(entrypoint),
                 );
-                let routing_ledger_time_ms =
-                    u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-                let routing_authority_height = context
-                    .native_amx_receipt
-                    .as_ref()
-                    .map_or(block.header().height().get(), |receipt| {
-                        receipt.authority_context_height
-                    });
-                let plan = reconcile_execution_routing_plan(
-                    &accepted,
-                    &committed_plan,
-                    state,
-                    routing_ledger_time_ms,
-                    routing_authority_height,
-                )
-                .map_err(|err| {
-                    Self::execution_context_error(format!(
-                        "execution context routing cannot be reconciled at index {idx}: {err}"
-                    ))
-                })?;
-                match (&plan, context.native_amx_receipt.as_ref()) {
-                    (crate::queue::RoutingPlan::NativeAmx(_), Some(receipt)) => {
-                        if Self::signed_transaction_from_entrypoint(&entrypoint).is_none() {
-                            return Err(Self::execution_context_error(format!(
-                                "native AMX receipt at index {idx} is not attached to a signed transaction"
-                            )));
-                        }
-                        let expected_source_id =
-                            native_amx_source_id_from_entrypoint_hash(context.entrypoint_hash);
-                        let expected_network_id = *state.network_id();
-                        let entrypoint_untyped = Hash::from(context.entrypoint_hash);
-                        let ownership_key = (
-                            context.lane_id,
-                            context.dataspace_id,
-                            receipt.authority_context_height,
-                            entrypoint_untyped,
-                        );
-                        let Some(ownership_index) = native_amx_ownership_index
-                            .as_ref()
-                            .expect("native AMX receipt requires a coordinator ownership index")
-                            .get(&ownership_key)
-                            .copied()
-                        else {
-                            return Err(Self::execution_context_error(format!(
-                                "native AMX receipt at index {idx} has no coordinator lane ownership"
-                            )));
-                        };
-                        let coordinator_ownership =
-                            &bundle.lane_payload_ownerships[ownership_index];
-                        let coordinator_proposal =
-                            native_amx_coordinator_proposal_from_ownership(coordinator_ownership)
-                                .map_err(|err| {
-                                Self::execution_context_error(format!(
-                                    "native AMX coordinator ownership invalid at index {idx}: {err}"
-                                ))
-                            })?;
-                        let replay_authority = match &validation_profile {
-                            ConsensusValidationProfile::VerifiedReplay { authority, .. } => {
-                                authority.validate(block, state)?;
-                                Some(ReplayNativeAmxAuthority {
-                                    state,
-                                    _proposal: authority,
-                                })
-                            }
-                            _ => None,
-                        };
-                        let receipt_authority: &dyn NativeAmxAuthorityContext =
-                            match replay_authority.as_ref() {
-                                Some(authority) => authority,
-                                None => state,
-                            };
-                        validate_native_amx_receipt_against_plan(
-                            receipt,
-                            &coordinator_proposal,
-                            context.entrypoint_hash,
-                            &plan,
-                            expected_source_id,
-                            expected_network_id,
-                            &nexus.dataspace_catalog,
-                            receipt_authority,
-                            expected_native_amx_context,
+                let expected = inputs
+                    .execution_route(&accepted, block.header().height().get())
+                    .ok_or_else(|| {
+                        Self::execution_context_error(
+                            "committed native execution route is unavailable",
                         )
-                        .map_err(|err| {
-                            Self::execution_context_error(format!(
-                                "native AMX receipt invalid at index {idx}: {err}"
-                            ))
-                        })?;
-                    }
-                    (crate::queue::RoutingPlan::NativeAmx(_), None) => {
-                        return Err(Self::execution_context_error(format!(
-                            "native AMX receipt missing at index {idx}"
-                        )));
-                    }
-                    (_, Some(_)) => {
-                        return Err(Self::execution_context_error(format!(
-                            "native AMX receipt attached to single-route context at index {idx}"
-                        )));
-                    }
-                    (_, None) => {}
-                }
-            }
-            Self::validate_native_amx_participant_groups(bundle)?;
-            Ok(())
-        }
-        fn index_native_amx_coordinator_ownerships(
-            bundle: &BlockExecutionContextBundle,
-        ) -> Result<BTreeMap<(LaneId, DataSpaceId, u64, Hash), usize>, BlockValidationError>
-        {
-            let mut index = BTreeMap::new();
-            for (ownership_index, ownership) in bundle.lane_payload_ownerships.iter().enumerate() {
-                for entrypoint_hash in &ownership.accepted_transaction_hashes {
-                    let key = (
-                        ownership.lane_id,
-                        ownership.dataspace_id,
-                        ownership.proposal_height,
-                        *entrypoint_hash,
-                    );
-                    if index.insert(key, ownership_index).is_some() {
-                        return Err(Self::execution_context_error(format!(
-                            "native AMX coordinator ownership index repeats entrypoint hash {entrypoint_hash:?} for lane {} dataspace {} height {}",
-                            ownership.lane_id.as_u32(),
-                            ownership.dataspace_id.as_u64(),
-                            ownership.proposal_height,
-                        )));
-                    }
-                }
-            }
-            Ok(index)
-        }
-        pub(super) fn validate_native_amx_participant_groups(
-            bundle: &BlockExecutionContextBundle,
-        ) -> Result<(), BlockValidationError> {
-            struct ParticipantGroup {
-                proposal: LaneBlockProposalV1,
-                settlement: iroha_data_model::block::consensus::NativeAmxParticipantSettlement,
-                settlement_hash:
-                    HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
-                members: Vec<(u64, Hash, [u8; Hash::LENGTH])>,
-                member_indices: BTreeSet<u64>,
-                member_sources: BTreeSet<[u8; Hash::LENGTH]>,
-            }
-            // Ordinary single-route blocks have no native-AMX participant
-            // groups. Their exact canonical V1 lane-ownership replay material
-            // was already validated above, so rebuilding every ownership
-            // through the native-AMX proposal boundary would be redundant and
-            // observably stricter than the selected routing plan.
-            if bundle
-                .external
-                .iter()
-                .all(|context| context.native_amx_receipt.is_none())
-            {
-                return Ok(());
-            }
-            let coordinator_proposal_hashes = bundle
-                .lane_payload_ownerships
-                .iter()
-                .map(|ownership| {
-                    native_amx_coordinator_proposal_from_ownership(ownership)
-                        .map(|proposal| HashOf::<LaneBlockProposalV1>::new(&proposal))
-                })
-                .collect::<std::result::Result<BTreeSet<_>, _>>()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "native AMX executable coordinator inventory is invalid: {error}"
-                    ))
-                })?;
-            let mut groups = BTreeMap::<(LaneId, DataSpaceId, Hash, u64), ParticipantGroup>::new();
-            for (index, context) in bundle.external.iter().enumerate() {
-                let Some(receipt) = context.native_amx_receipt.as_ref() else {
-                    continue;
-                };
-                let entrypoint_index = u64::try_from(index).map_err(|_| {
-                    Self::execution_context_error(
-                        "native AMX participant entrypoint index exceeds the canonical u64 range",
-                    )
-                })?;
-                let entrypoint_hash = Hash::from(context.entrypoint_hash);
-                for leg in &receipt.legs {
-                    // The coordinator proposal is authenticated against the executable lane
-                    // ownership earlier in receipt validation. Group only remote participant
-                    // controls here, because each transaction receipt may carry the same
-                    // coordinator block through a transaction-local leg representation.
-                    match crate::native_amx::native_amx_participant_application_role(receipt, leg) {
-                        Ok(crate::native_amx::NativeAmxParticipantApplicationRole::Coordinator) => {
-                            continue;
-                        }
-                        Ok(
-                            crate::native_amx::NativeAmxParticipantApplicationRole::SeparateParticipant,
-                        ) => {}
-                        Err(error) => {
-                            return Err(Self::execution_context_error(format!(
-                                "native AMX participant application identity is invalid at index {index}: {error}"
-                            )));
-                        }
-                    }
-                    let descriptor = &leg.participant_proposal.descriptor;
-                    let key = (
-                        descriptor.lane_id,
-                        descriptor.dataspace_id,
-                        descriptor.lane_incarnation,
-                        descriptor.lane_block_height,
-                    );
-                    if let Some(group) = groups.get_mut(&key) {
-                        if group.proposal != leg.participant_proposal
-                            || group.settlement != leg.participant_settlement
-                            || group.settlement_hash != leg.participant_settlement_hash
-                        {
-                            return Err(Self::execution_context_error(format!(
-                                "native AMX participant lane {} dataspace {} height {} carries conflicting grouped control evidence",
-                                descriptor.lane_id.as_u32(),
-                                descriptor.dataspace_id.as_u64(),
-                                descriptor.lane_block_height,
-                            )));
-                        }
-                        if !group.member_indices.insert(entrypoint_index)
-                            || !group.member_sources.insert(receipt.source_id)
-                        {
-                            return Err(Self::execution_context_error(format!(
-                                "native AMX participant lane {} dataspace {} height {} repeats a grouped block member",
-                                descriptor.lane_id.as_u32(),
-                                descriptor.dataspace_id.as_u64(),
-                                descriptor.lane_block_height,
-                            )));
-                        }
-                        group
-                            .members
-                            .push((entrypoint_index, entrypoint_hash, receipt.source_id));
-                    } else {
-                        groups.insert(
-                            key,
-                            ParticipantGroup {
-                                proposal: leg.participant_proposal.clone(),
-                                settlement: leg.participant_settlement.clone(),
-                                settlement_hash: leg.participant_settlement_hash,
-                                members: vec![(
-                                    entrypoint_index,
-                                    entrypoint_hash,
-                                    receipt.source_id,
-                                )],
-                                member_indices: BTreeSet::from([entrypoint_index]),
-                                member_sources: BTreeSet::from([receipt.source_id]),
-                            },
-                        );
-                    }
-                }
-            }
-            for ((lane_id, dataspace_id, _, lane_block_height), mut group) in groups {
-                group.members.sort_by_key(|(index, _, _)| *index);
-                let member_indices = group
-                    .members
-                    .iter()
-                    .map(|(index, _, _)| *index)
-                    .collect::<Vec<_>>();
-                let member_hashes = group
-                    .members
-                    .iter()
-                    .map(|(_, hash, _)| *hash)
-                    .collect::<Vec<_>>();
-                let member_sources = group
-                    .members
-                    .iter()
-                    .map(|(_, _, source_id)| *source_id)
-                    .collect::<Vec<_>>();
-                let settlement_sources = group.settlement.source_ids();
-                let proposal_members_are_exact = member_indices
-                    == group.proposal.descriptor.accepted_candidate_indices
-                    && member_hashes == group.proposal.descriptor.accepted_transaction_hashes;
-                let proposal_is_executable_anchor = coordinator_proposal_hashes
-                    .contains(&HashOf::<LaneBlockProposalV1>::new(&group.proposal));
-                if member_sources != settlement_sources
-                    || (!proposal_members_are_exact && !proposal_is_executable_anchor)
+                    })?;
+                if matches!(plan, crate::queue::RoutingPlan::NativeAmx(_))
+                    || plan.coordinator_route() != expected
                 {
                     return Err(Self::execution_context_error(format!(
-                        "native AMX participant lane {} dataspace {} height {} does not exactly cover its grouped block members or match an executable coordinator anchor",
-                        lane_id.as_u32(),
-                        dataspace_id.as_u64(),
-                        lane_block_height,
+                        "input {index} differs from its native committed execution route"
                     )));
                 }
             }
             Ok(())
         }
+
         fn committed_heights_for_prepared_transactions(
             prepared_txs: &[PreparedBlockTransaction],
             transactions: &impl TransactionsReadOnly,
@@ -11039,76 +5736,7 @@ pub(crate) mod valid {
         /// replace the block timestamp. The lookup authenticates the complete transaction wire,
         /// committed routing plan, immutable registry owner, pending obligation, route markers,
         /// lane incarnations, and minimum execution height before its enqueue timestamp is used.
-        fn queue_plan_stateless_validation_times_with_lookup(
-            block: &SignedBlock,
-            mut lookup: impl FnMut(
-                &TransactionEntrypoint,
-                &crate::queue::RoutingPlan,
-                u64,
-            ) -> Result<
-                Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>,
-                String,
-            >,
-        ) -> Result<Vec<Option<Duration>>, BlockValidationError> {
-            let execution_height = block.header().height().get();
-            let execution_context = block.execution_context();
-            let mut validation_times =
-                Vec::with_capacity(Self::collect_external_signed_transactions(block).len());
-            for (index, entrypoint) in block.external_entrypoints_slice().iter().enumerate() {
-                if Self::signed_transaction_from_entrypoint(entrypoint).is_none() {
-                    continue;
-                }
-                if entrypoint.admission_intent()
-                    != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-                {
-                    validation_times.push(None);
-                    continue;
-                }
-                let Some(context) = execution_context.and_then(|bundle| bundle.external.get(index))
-                else {
-                    // Contextless or same-block QueuePlan admission receives no historical time
-                    // authority. It remains subject to ordinary block-time TTL validation.
-                    validation_times.push(None);
-                    continue;
-                };
-                let routing_plan = routing_plan_from_execution_context(context).map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "QueuePlan execution context at index {index} has no canonical routing plan: {error}"
-                    ))
-                })?;
-                let binding =
-                    lookup(entrypoint, &routing_plan, execution_height).map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "QueuePlan parent binding lookup failed at index {index}: {error}"
-                        ))
-                    })?;
-                validation_times.push(
-                    binding.map(|binding| Duration::from_millis(binding.enqueue_timestamp_ms)),
-                );
-            }
-            debug_assert_eq!(
-                validation_times.len(),
-                Self::collect_external_signed_transactions(block).len(),
-                "QueuePlan validation times must align with signed external transactions",
-            );
-            Ok(validation_times)
-        }
-        fn queue_plan_stateless_validation_times(
-            block: &SignedBlock,
-            state: &impl StateReadOnly,
-        ) -> Result<Vec<Option<Duration>>, BlockValidationError> {
-            Self::queue_plan_stateless_validation_times_with_lookup(
-                block,
-                |entrypoint, routing_plan, execution_height| {
-                    State::pending_queue_plan_binding_for_execution(
-                        state,
-                        entrypoint,
-                        routing_plan,
-                        execution_height,
-                    )
-                },
-            )
-        }
+
         fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction> {
             Self::collect_external_signed_transactions(block)
                 .into_iter()
@@ -11395,14 +6023,6 @@ pub(crate) mod valid {
             if signed_txs.len() != prepared_txs.len() {
                 return Err(BlockValidationError::MerkleRootMismatch);
             }
-            debug_assert_eq!(
-                static_data.queue_plan_stateless_validation_times.len(),
-                signed_txs.len(),
-                "QueuePlan validation times must align with signed block transactions",
-            );
-            if static_data.queue_plan_stateless_validation_times.len() != signed_txs.len() {
-                return Err(BlockValidationError::MerkleRootMismatch);
-            }
             let is_genesis_block = block.header().is_genesis();
             let mut prechecked_signature_results: Vec<
                 Option<Result<(), SignatureVerificationFail>>,
@@ -11596,8 +6216,7 @@ pub(crate) mod valid {
                 let prechecked_signature_result = prechecked_signature_results
                     .get(idx)
                     .and_then(|result| result.as_ref().cloned());
-                let validation_time = static_data.queue_plan_stateless_validation_times[idx]
-                    .unwrap_or(block_creation_time);
+                let validation_time = block_creation_time;
                 if is_genesis_block {
                     if let Some(Err(fail)) = prechecked_signature_result {
                         return Some(BlockValidationError::TransactionAccept(
@@ -11704,90 +6323,7 @@ pub(crate) mod valid {
             clippy::explicit_iter_loop,
             clippy::collapsible_else_if
         )]
-        fn validate_sumeragi_v2_fixture_static(
-            block: &SignedBlock,
-            topology: &Topology,
-            genesis_account: &AccountId,
-            state: &StateBlock<'_>,
-            soft_fork: bool,
-            time_source: &TimeSource,
-        ) -> Result<(), BlockValidationError> {
-            let validation_profile = Self::sumeragi_v2_fixture_profile(block);
-            let static_data = Self::validate_static_state_dependent(
-                block,
-                topology,
-                genesis_account,
-                state,
-                soft_fork,
-                time_source,
-                false,
-                validation_profile,
-            )?;
-            let prepared_txs = Self::prepare_external_transactions(block);
-            let committed_heights = Self::committed_heights_for_prepared_transactions(
-                &prepared_txs,
-                crate::state::StateReadOnlyWithTransactions::transactions(state),
-            );
-            let committed_carrier_heights = Self::committed_heights_for_entrypoint_carriers(
-                block,
-                crate::state::StateReadOnlyWithTransactions::transactions(state),
-            );
-            let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
-            let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
-            let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let cache_context = if cache_enabled {
-                Some(StatelessValidationContext::new(
-                    state.network_id,
-                    u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
-                    static_data.tx_params,
-                    static_data.crypto_cfg.allowed_signing.clone(),
-                ))
-            } else {
-                None
-            };
-            #[cfg(feature = "telemetry")]
-            let metrics = Some(state.metrics());
-            #[cfg(not(feature = "telemetry"))]
-            let metrics = ();
-            Self::validate_static_with_snapshot(
-                block,
-                &state.network_id,
-                genesis_account,
-                &static_data,
-                &committed_heights,
-                &committed_carrier_heights,
-                &prepared_txs,
-                metrics,
-            )?;
-            if let Some(context) = cache_context {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (idx, (tx, prepared)) in Self::collect_external_signed_transactions(block)
-                    .into_iter()
-                    .zip(prepared_txs.iter())
-                    .enumerate()
-                {
-                    if static_data.queue_plan_stateless_validation_times[idx].is_some() {
-                        continue;
-                    }
-                    let expires_at_ms = tx
-                        .time_to_live()
-                        .and_then(|ttl| tx.creation_time().checked_add(ttl))
-                        .map(|expires_at| expires_at.as_millis());
-                    let not_before_ms = tx
-                        .creation_time()
-                        .as_millis()
-                        .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(
-                        prepared.metadata.stateless_cache_key,
-                        expires_at_ms,
-                        not_before_ms,
-                    );
-                }
-            }
-            Ok(())
-        }
+
         /// Drain transaction-scoped settlement evidence and derive canonical
         /// post-execution statements bound to each transaction's exact route,
         /// lane-payload coordinate, and final result-bearing block header.
@@ -12278,10 +6814,13 @@ pub(crate) mod valid {
             let finalize = |state: &mut StateBlock<'_>,
                             source: &SignedBlock,
                             routes: &[crate::queue::RoutingDecision]| {
-                // The Sumeragi schedule and lane set are World state: advance them before the
-                // seal fixes the block's World delta.
-                state.advance_requested_sumeragi_schedule();
+                // The Sumeragi schedule is World state: advance it before the seal fixes the
+                // block's World delta.
+                state
+                    .advance_requested_sumeragi_schedule()
+                    .map_err(BlockValidationError::from)?;
                 state.advance_requested_sumeragi_lanes();
+                Self::validate_native_genesis_policy(source, state)?;
                 Self::finalize_owned_execution_metadata(
                     source,
                     state,
@@ -12295,7 +6834,7 @@ pub(crate) mod valid {
             // The applying constructor already owns the recorder over pristine
             // controls and start effects. A late reset would erase that prefix.
             state_block
-                .require_merge_prefix_recording()
+                .require_original_execution_recorder()
                 .map_err(Self::execution_context_error)?;
             let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
@@ -12304,6 +6843,9 @@ pub(crate) mod valid {
                 }
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
                     Self::execution_context_error(reason)
+                }
+                crate::state::ExecutionOutputSealError::Deferred(reason) => {
+                    BlockValidationError::ExecutionDeferred(reason)
                 }
                 crate::state::ExecutionOutputSealError::Finalizer(error) => error,
             })?;
@@ -12347,13 +6889,9 @@ pub(crate) mod valid {
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 panic!("AXT envelope validation failed on unchecked block: {error}");
             }
-            Self::validate_staged_merge_execution_authorization(&block, state_block).expect(
-                "unchecked certified merge execution requires exact post-effect authorization",
-            );
             state_block
-                .finalize_lane_consensus_contexts(&block, None)
-                .and_then(|()| state_block.capture_exec_witness())
-                .expect("unchecked block requires authenticated lane contexts and finalized source ownership");
+                .capture_exec_witness()
+                .expect("component output must preserve its exact execution witness");
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
         }
@@ -12435,78 +6973,11 @@ pub(crate) mod valid {
             WithEvents::new(
                 match Self::is_commit_internal(self.as_ref(), topology, self.signatures_verified) {
                     Err(err) => Err((Box::new(self), Box::new(err.into()))),
-                    Ok(()) => Ok(CommittedBlock::without_v2_finality(self)),
+                    Ok(()) => Ok(CommittedBlock::from_execution(self)),
                 },
             )
         }
-        /// Commit using the exact cryptographically verified Sumeragi-v2 finality artifact.
-        ///
-        /// This is the production Sumeragi-v2 finality path that replaces a
-        /// block-signature quorum with a verified finality artifact. It
-        /// consumes an opaque verification capability and binds its header,
-        /// canonical resultless proposal digest, exact result-bearing execution
-        /// digest, and execution commitment to this validated block before
-        /// changing the lifecycle type. Aggregate signatures are not verified
-        /// a second time at this binding boundary.
-        ///
-        /// Other explicitly named APIs can also omit the ordinary quorum:
-        /// [`Self::commit_with_signers`] accepts a caller-authorized bypass,
-        /// while [`Self::commit_unchecked`] intentionally performs no block
-        /// signature checks.
-        pub(crate) fn commit_with_verified_v2_artifact(
-            self,
-            verified_artifact: super::VerifiedV2FinalityArtifact,
-            execution_commitment: consensus_v2::ExecutionCommitment,
-        ) -> WithCommittedBlockEvents {
-            let artifact = verified_artifact.artifact();
-            let validation = (|| -> Result<(), BlockValidationError> {
-                artifact
-                    .validate_for_header(&self.block.header())
-                    .map_err(|error| {
-                        BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
-                    })?;
-                let proposal_wire_hash =
-                    self.block.canonical_proposal_wire_hash().map_err(|error| {
-                        BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
-                    })?;
-                let executed_block_wire = self.block.encode_wire().map_err(|error| {
-                    BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
-                })?;
-                let executed_block_wire_len =
-                    u64::try_from(executed_block_wire.len()).map_err(|_| {
-                        BlockValidationError::V2FinalityAuthorityInvalid(
-                            "executed block wire length does not fit u64".to_owned(),
-                        )
-                    })?;
-                let executed_block_wire_hash = Hash::new(&executed_block_wire);
-                if proposal_wire_hash != artifact.subject.payload_hash
-                    || executed_block_wire_len
-                        != artifact
-                            .commit_qc
-                            .execution_commitment
-                            .executed_block_wire_len
-                    || executed_block_wire_hash
-                        != artifact
-                            .commit_qc
-                            .execution_commitment
-                            .executed_block_wire_hash
-                    || execution_commitment != artifact.commit_qc.execution_commitment
-                {
-                    return Err(BlockValidationError::V2FinalityAuthorityInvalid(
-                        "artifact differs from the canonical proposal wire, exact executed block wire, or deterministic execution"
-                            .to_owned(),
-                    ));
-                }
-                Ok(())
-            })();
-            WithEvents::new(match validation {
-                Ok(()) => Ok(CommittedBlock::with_verified_v2_finality(
-                    self,
-                    verified_artifact,
-                )),
-                Err(error) => Err((Box::new(self), Box::new(error))),
-            })
-        }
+
         #[cfg(test)]
         /// Commit using a prevalidated signer set (e.g., from a QC).
         ///
@@ -12532,7 +7003,7 @@ pub(crate) mod valid {
             })();
             WithEvents::new(match validation {
                 Err(err) => Err((Box::new(self), Box::new(err.into()))),
-                Ok(()) => Ok(CommittedBlock::without_v2_finality(self)),
+                Ok(()) => Ok(CommittedBlock::from_execution(self)),
             })
         }
         /// Like [`Self::commit`], but without block signature checks.
@@ -12540,7 +7011,7 @@ pub(crate) mod valid {
         /// Useful e.g. for Explorer, which assumes all blocks from Iroha are valid, and
         /// only executes them to produce state changes.
         pub fn commit_unchecked(self) -> WithEvents<CommittedBlock> {
-            WithEvents::new(CommittedBlock::without_v2_finality(self))
+            WithEvents::new(CommittedBlock::from_execution(self))
         }
         /// Check if block satisfy requirements to be committed
         ///
@@ -12796,6 +7267,9 @@ pub(crate) mod valid {
         include!("block/canonical_carrier_source_tests.rs");
         include!("block/merge_beacon_owner_tests.rs");
         include!("block/parallel_account_profile_tests.rs");
+        mod native_validation_tests {
+            include!("block/native_validation_tests.rs");
+        }
         fn sumeragi_v2_test_profile(block: &SignedBlock) -> ConsensusValidationProfile {
             ConsensusValidationProfile::SumeragiV2 {
                 block_cadence: Duration::from_millis(1),
@@ -14054,7 +8528,7 @@ pub(crate) mod valid {
                 &fixture.topology,
                 &view,
                 &fixture.bundle,
-                ConsensusValidationProfile::SignedGenesis {
+                ConsensusValidationProfile::SumeragiGenesis {
                     consensus_mode:
                         iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
                 },
@@ -14578,32 +9052,19 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
-            let statuses = state
-                .nexus_snapshot()
+            let nexus = state.nexus_snapshot();
+            let bindings_by_lane = nexus
                 .lane_catalog
                 .lanes()
                 .iter()
-                .map(|lane| {
-                    let status = crate::governance::manifest::LaneManifestStatus {
-                        lane: lane.id,
-                        alias: lane.alias.clone(),
-                        dataspace: lane.dataspace_id,
-                        visibility: lane.visibility,
-                        storage: lane.storage,
-                        governance: lane.governance.clone(),
-                        manifest_path: Some(PathBuf::from("/tmp/block-test-lane-manifest.json")),
-                        governance_rules: Some(crate::governance::manifest::GovernanceRules {
-                            validators: validators.clone(),
-                            validator_bindings: validator_bindings.clone(),
-                            ..crate::governance::manifest::GovernanceRules::default()
-                        }),
-                        privacy_commitments: Vec::new(),
-                    };
-                    (lane.id, status)
-                })
+                .map(|lane| (lane.id, validator_bindings.clone()))
                 .collect();
-            state.install_lane_manifests(&Arc::new(
-                crate::governance::manifest::LaneManifestRegistry::from_statuses(statuses),
+            state.install_lane_manifests_for_testing(&Arc::new(
+                crate::governance::manifest::test_support::validator_registry(
+                    &nexus.lane_catalog,
+                    &nexus.governance,
+                    bindings_by_lane,
+                ),
             ));
         }
         fn static_test_lane_incarnation(catalog: &LaneCatalog, lane_id: LaneId) -> Hash {
@@ -16374,54 +10835,6 @@ pub(crate) mod valid {
                     .is_ok()
             );
         }
-        #[test]
-        fn validate_static_snapshot_accepts_valid_block() {
-            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
-            let candidate = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                .chain(0, state.view().latest_block().as_deref());
-            let signed: SignedBlock = with_current_state_da_sidecars(candidate, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            assert_eq!(signed.header().prev_block_hash(), Some(prev_hash));
-            let static_data = {
-                let view = state.query_view();
-                validate_static_test_block!(&signed, &topology, &view, &time_source)
-                    .expect("static state-dependent validation should succeed")
-            };
-            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
-            let committed_heights = {
-                let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_prepared_transactions(
-                    &prepared_txs,
-                    &transactions_view,
-                )
-            };
-            let committed_carrier_heights = {
-                let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_entrypoint_carriers(&signed, &transactions_view)
-            };
-            #[cfg(feature = "telemetry")]
-            let metrics = Some(&state.telemetry);
-            #[cfg(not(feature = "telemetry"))]
-            let metrics = ();
-            ValidBlock::validate_static_with_snapshot(
-                &signed,
-                state.network_id_ref(),
-                &ALICE_ID,
-                &static_data,
-                &committed_heights,
-                &committed_carrier_heights,
-                &prepared_txs,
-                metrics,
-            )
-            .expect("static snapshot validation should succeed");
-        }
         fn npos_effects_block(
             leader_private_key: &PrivateKey,
             height: u64,
@@ -16489,7 +10902,7 @@ pub(crate) mod valid {
             // World/Parameters defaults do not authenticate a consensus mode.
             assert!(World::new().view().sumeragi_npos_parameters().is_none());
             assert_eq!(
-                ConsensusValidationProfile::SignedGenesis {
+                ConsensusValidationProfile::SumeragiGenesis {
                     consensus_mode: ConsensusMode::Npos,
                 }
                 .authoritative_consensus_mode(),
@@ -16577,222 +10990,6 @@ pub(crate) mod valid {
                 err,
                 BlockValidationError::NposEffectsInvalid(message)
                     if message.contains("authenticated height context")
-            ));
-        }
-        #[test]
-        fn validate_static_snapshot_rejects_invalid_signature() {
-            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let (alice_id, alice_keypair) = gen_account_in("wonderland");
-            let (bob_id, _) = gen_account_in("wonderland");
-            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                alice_id,
-                &time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "test".to_string())])
-            .sign(alice_keypair.private_key());
-            let tx = tx.with_authority(bob_id);
-            let tx = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            time_handle.advance(Duration::from_millis(1));
-            let builder = BlockBuilder::new_with_time_source(vec![tx], time_source.clone())
-                .chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let signed: SignedBlock = new_block.into();
-            let static_data = {
-                let view = state.query_view();
-                validate_static_current_test_block!(&signed, &topology, &view, &time_source)
-                    .expect("static state-dependent validation should succeed")
-            };
-            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
-            let committed_heights = {
-                let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_prepared_transactions(
-                    &prepared_txs,
-                    &transactions_view,
-                )
-            };
-            let committed_carrier_heights = {
-                let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_entrypoint_carriers(&signed, &transactions_view)
-            };
-            #[cfg(feature = "telemetry")]
-            let metrics = Some(&state.telemetry);
-            #[cfg(not(feature = "telemetry"))]
-            let metrics = ();
-            let err = ValidBlock::validate_static_with_snapshot(
-                &signed,
-                state.network_id_ref(),
-                &ALICE_ID,
-                &static_data,
-                &committed_heights,
-                &committed_carrier_heights,
-                &prepared_txs,
-                metrics,
-            )
-            .expect_err("invalid tx signature should be rejected");
-            assert!(matches!(
-                err,
-                BlockValidationError::TransactionAccept(
-                    AcceptTransactionFail::SignatureVerification(_)
-                )
-            ));
-        }
-        #[test]
-        fn validate_static_snapshot_rejects_duplicate_signed_transaction_hashes() {
-            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let (authority, signer) = gen_account_in("duplicate-check");
-            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "duplicate".to_owned())])
-            .sign(signer.private_key());
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            time_handle.advance(Duration::from_millis(1));
-            let builder = BlockBuilder::new_with_time_source(
-                vec![accepted.clone(), accepted],
-                time_source.clone(),
-            )
-            .chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let signed: SignedBlock = new_block.into();
-            // Canonical lane ownership also rejects duplicate identities. Snapshot this
-            // ordinary admission policy directly so the stateless duplicate guard is
-            // exercised independently of that earlier state-dependent rejection.
-            let static_data = {
-                let view = state.query_view();
-                let pipeline_cfg = view.pipeline().clone();
-                StaticValidationData {
-                    expected_block_height: view.height() + 1,
-                    max_clock_drift: view.world().parameters().sumeragi().max_clock_drift(),
-                    tx_params: view.world().parameters().transaction(),
-                    crypto_cfg: view.crypto(),
-                    pipeline_parallelism: crate::state::PipelineParallelism::new(&pipeline_cfg),
-                    pipeline_cfg,
-                    aggregate_lane: view.nexus().routing_policy.default_lane,
-                    queue_plan_stateless_validation_times: vec![
-                        None;
-                        signed.external_entrypoint_count()
-                    ],
-                }
-            };
-            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
-            let committed_heights = {
-                let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_prepared_transactions(
-                    &prepared_txs,
-                    &transactions_view,
-                )
-            };
-            let committed_carrier_heights = {
-                let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_entrypoint_carriers(&signed, &transactions_view)
-            };
-            #[cfg(feature = "telemetry")]
-            let metrics = Some(&state.telemetry);
-            #[cfg(not(feature = "telemetry"))]
-            let metrics = ();
-            let err = ValidBlock::validate_static_with_snapshot(
-                &signed,
-                state.network_id_ref(),
-                &ALICE_ID,
-                &static_data,
-                &committed_heights,
-                &committed_carrier_heights,
-                &prepared_txs,
-                metrics,
-            )
-            .expect_err("duplicate signed transaction hash should be rejected");
-            assert!(matches!(err, BlockValidationError::DuplicateTransactions));
-        }
-        #[test]
-        fn validate_static_snapshot_rejects_replayed_sealed_signed_identity() {
-            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let (authority, signer) = gen_account_in("sealed-replay-static");
-            let (_, reveal) = crate::block::tests::sealed_set_key_entrypoints(
-                state.network_id,
-                &authority,
-                &signer,
-                1,
-                9,
-                Name::from_str("sealed_replay_static").expect("metadata key"),
-            );
-            let TransactionEntrypoint::SealedReveal(sealed_reveal) = &reveal else {
-                unreachable!("fixture creates a sealed reveal")
-            };
-            state.record_committed_entrypoints_for_tests(
-                [sealed_reveal.signed_transaction().hash_as_entrypoint()],
-                NonZeroUsize::new(1).expect("non-zero height"),
-            );
-            let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal));
-            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            time_handle.advance(Duration::from_millis(1));
-            let candidate = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
-                .chain_with_parent_hash(0, 1, prev_hash);
-            let signed: SignedBlock = with_current_state_da_sidecars(candidate, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            let static_data = {
-                let view = state.query_view();
-                validate_static_current_test_block!(&signed, &topology, &view, &time_source)
-                    .expect("static state-dependent validation should succeed")
-            };
-            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
-            let (committed_heights, committed_carrier_heights) = {
-                let transactions_view = state.transactions.view();
-                (
-                    ValidBlock::committed_heights_for_prepared_transactions(
-                        &prepared_txs,
-                        &transactions_view,
-                    ),
-                    ValidBlock::committed_heights_for_entrypoint_carriers(
-                        &signed,
-                        &transactions_view,
-                    ),
-                )
-            };
-            assert!(committed_heights[0].is_some());
-            assert!(committed_carrier_heights[0].is_none());
-            #[cfg(feature = "telemetry")]
-            let metrics = Some(&state.telemetry);
-            #[cfg(not(feature = "telemetry"))]
-            let metrics = ();
-            let error = ValidBlock::validate_static_with_snapshot(
-                &signed,
-                state.network_id_ref(),
-                &ALICE_ID,
-                &static_data,
-                &committed_heights,
-                &committed_carrier_heights,
-                &prepared_txs,
-                metrics,
-            )
-            .expect_err("the enclosed signed intent must be rejected as already committed");
-            assert!(matches!(
-                error,
-                BlockValidationError::HasCommittedTransactions
             ));
         }
         #[test]
@@ -16890,105 +11087,6 @@ pub(crate) mod valid {
                 &bundle,
             )
             .expect("sole exact-height global lifecycle control needs no legacy lane payload");
-        }
-        #[test]
-        fn validate_static_state_dependent_rejects_missing_execution_context() {
-            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let (authority, signer) = gen_account_in("context-check");
-            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
-            .sign(signer.private_key());
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            time_handle.advance(Duration::from_millis(1));
-            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
-                .chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let mut signed: SignedBlock = new_block.into();
-            signed.set_execution_context(None);
-            let err = {
-                let view = state.query_view();
-                match validate_static_test_block!(&signed, &topology, &view, &time_source) {
-                    Ok(_) => panic!("live block without execution context must be rejected"),
-                    Err(err) => err,
-                }
-            };
-            assert!(matches!(
-                err,
-                BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("missing execution context")
-            ));
-        }
-        #[test]
-        fn validate_static_state_dependent_rejects_execution_context_route_mismatch() {
-            setup_static_validation_world!(kura, query, key_pairs, topology, leader, world);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let (authority, signer) = gen_account_in("context-check");
-            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
-            .sign(signer.private_key());
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
-            time_handle.advance(Duration::from_millis(1));
-            let ownership = sample_lane_payload_ownership_for_context(
-                2,
-                0,
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-                state
-                    .lane_incarnation_at_height(LaneId::SINGLE, 2)
-                    .expect("default lane incarnation at candidate height"),
-                vec![0],
-                vec![Hash::from(tx.hash_as_entrypoint())],
-                topology.as_ref(),
-            );
-            let wrong_context =
-                BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-                    tx.hash_as_entrypoint(),
-                    LaneId::new(7),
-                    DataSpaceId::UNIVERSAL,
-                )])
-                .with_lane_payload_ownerships(vec![ownership]);
-            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .with_execution_context(Some(wrong_context));
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let signed: SignedBlock = new_block.into();
-            let err = {
-                let view = state.query_view();
-                match validate_static_test_block!(&signed, &topology, &view, &time_source) {
-                    Ok(_) => {
-                        panic!("live block with mismatched execution context must be rejected")
-                    }
-                    Err(err) => err,
-                }
-            };
-            assert!(matches!(
-                err,
-                BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("route mismatch")
-            ));
         }
         #[test]
         fn validate_static_state_dependent_accepts_lane_payload_ownership_context() {
@@ -18903,59 +13001,6 @@ pub(crate) mod valid {
             assert_eq!(full_results, skip_results);
         }
         #[test]
-        fn validate_keep_voting_block_rejects_unknown_da_lane() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let record = DaCommitmentRecord::new(
-                LaneId::new(7),
-                1,
-                1,
-                BlobDigest::new([0xAA; 32]),
-                ManifestDigest::new([0xBB; 32]),
-                DaProofScheme::MerkleSha256,
-                Hash::prehashed([0xCC; 32]),
-                None,
-                RetentionClass::default(),
-                StorageTicketId::new([0xEE; 32]),
-                checked_da_ack_signature(0x11),
-            );
-            let bundle = DaCommitmentBundle::new(vec![record]);
-            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle));
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let signed: SignedBlock = new_block.into();
-            validate_signed_voting_test_block!(
-                signed,
-                topology,
-                state,
-                time_source,
-                result,
-                validator_keys,
-                Duration::from_millis(1)
-            );
-            let Err((_, err)) = result else {
-                panic!("expected DA commitment bundle rejection");
-            };
-            assert!(
-                matches!(
-                    err.as_ref(),
-                    BlockValidationError::DaCommitmentBundle(
-                        DaCommitmentValidationError::ProofPolicy(
-                            crate::da::DaProofPolicyError::UnknownLane { .. }
-                        )
-                    )
-                ),
-                "expected unknown DA lane rejection, got {err:?}"
-            );
-        }
-        #[test]
         fn validate_keep_voting_block_rejects_stale_geometry_da_commitment_lane() {
             setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
@@ -19153,281 +13198,6 @@ pub(crate) mod valid {
             ));
         }
         #[test]
-        fn validate_keep_voting_block_rejects_duplicate_da_manifest() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let make_record = |sequence: u64, tag: u8| {
-                DaCommitmentRecord::new(
-                    LaneId::new(0),
-                    1,
-                    sequence,
-                    BlobDigest::new([tag; 32]),
-                    ManifestDigest::new([0xBB; 32]),
-                    DaProofScheme::MerkleSha256,
-                    Hash::prehashed([tag; 32]),
-                    None,
-                    RetentionClass::default(),
-                    StorageTicketId::new([tag; 32]),
-                    checked_da_ack_signature(tag),
-                )
-            };
-            let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
-            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle));
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let signed: SignedBlock = new_block.into();
-            validate_signed_voting_test_block!(
-                signed,
-                topology,
-                state,
-                time_source,
-                result,
-                validator_keys,
-                Duration::from_millis(1)
-            );
-            let Err((_, err)) = result else {
-                panic!("expected DA commitment duplicate-manifest rejection");
-            };
-            assert!(matches!(
-                err.as_ref(),
-                BlockValidationError::DaCommitmentBundle(
-                    DaCommitmentValidationError::DuplicateManifest { lane }
-                ) if *lane == LaneId::new(0)
-            ));
-        }
-        #[test]
-        fn validate_keep_voting_block_rejects_duplicate_da_storage_ticket() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let make_record = |sequence: u64, tag: u8| {
-                DaCommitmentRecord::new(
-                    LaneId::new(0),
-                    1,
-                    sequence,
-                    BlobDigest::new([tag; 32]),
-                    ManifestDigest::new([tag; 32]),
-                    DaProofScheme::MerkleSha256,
-                    Hash::prehashed([tag; 32]),
-                    None,
-                    RetentionClass::default(),
-                    StorageTicketId::new([0xDD; 32]),
-                    checked_da_ack_signature(tag),
-                )
-            };
-            let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
-            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle));
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let signed: SignedBlock = new_block.into();
-            validate_signed_voting_test_block!(
-                signed,
-                topology,
-                state,
-                time_source,
-                result,
-                validator_keys,
-                Duration::from_millis(1)
-            );
-            let Err((_, err)) = result else {
-                panic!("expected DA commitment duplicate-storage-ticket rejection");
-            };
-            assert!(matches!(
-                err.as_ref(),
-                BlockValidationError::DaCommitmentBundle(
-                    DaCommitmentValidationError::DuplicateStorageTicket { lane, epoch, sequence }
-                ) if *lane == LaneId::new(0) && *epoch == 1 && *sequence == 2
-            ));
-        }
-        #[test]
-        fn validate_keep_voting_block_rejects_da_commitment_hash_mismatch() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let record = DaCommitmentRecord::new(
-                LaneId::new(0),
-                1,
-                1,
-                BlobDigest::new([0xAA; 32]),
-                ManifestDigest::new([0xBB; 32]),
-                DaProofScheme::MerkleSha256,
-                Hash::prehashed([0xCC; 32]),
-                None,
-                RetentionClass::default(),
-                StorageTicketId::new([0xDD; 32]),
-                checked_da_ack_signature(0xEE),
-            );
-            let bundle = DaCommitmentBundle::new(vec![record]);
-            let expected = bundle.merkle_commitment();
-            let forged = Some(HashOf::<DaCommitmentBundle>::from_untyped_unchecked(
-                Hash::prehashed([0xFA; 32]),
-            ));
-            let chained = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle));
-            let mut chained = with_current_state_da_sidecars(chained, &state);
-            chained.0.header.set_da_commitments_hash(forged);
-            let signed: SignedBlock = chained.sign(leader.private_key()).unpack(|_| {}).into();
-            validate_signed_voting_test_block!(
-                signed,
-                topology,
-                state,
-                time_source,
-                result,
-                validator_keys,
-                Duration::from_millis(1)
-            );
-            let Err((_, err)) = result else {
-                panic!("expected DA commitment hash mismatch rejection");
-            };
-            assert!(matches!(
-                err.as_ref(),
-                BlockValidationError::DaCommitmentHashMismatch { expected: seen_expected, actual }
-                    if *seen_expected == expected && *actual == forged
-            ));
-        }
-        #[test]
-        fn validate_keep_voting_block_rejects_da_pin_intent_hash_mismatch() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let intent = test_da_pin_intent(
-                LaneId::new(0),
-                1,
-                1,
-                StorageTicketId::new([0xAA; 32]),
-                ManifestDigest::new([0xBB; 32]),
-            );
-            let bundle = DaPinIntentBundle::new(vec![intent]);
-            let expected = bundle.merkle_commitment();
-            let forged = Some(HashOf::<DaPinIntentBundle>::from_untyped_unchecked(
-                Hash::prehashed([0xFB; 32]),
-            ));
-            let mut chained = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .with_da_pin_intents(Some(bundle));
-            chained = with_current_state_da_sidecars(chained, &state);
-            chained.0.header.set_da_pin_intents_hash(forged);
-            assert_ne!(expected, forged, "fixture forged hash must differ");
-            let signature = BlockSignature::new(
-                0,
-                checked_block_signature(leader.private_key(), chained.0.header.hash()),
-            );
-            let signed = SignedBlock::presigned_with_payload(
-                signature,
-                BlockPayload {
-                    header: chained.0.header,
-                    external_entrypoints: Vec::new(),
-                    execution_context: chained.0.execution_context,
-                    da_commitments: chained.0.da_commitments,
-                    da_proof_policies: chained.0.da_proof_policies,
-                    da_pin_intents: chained.0.da_pin_intents,
-                    npos_consensus_effects: chained.0.npos_consensus_effects,
-                    global_beacon_pulse: chained.0.global_beacon_pulse,
-                },
-            );
-            validate_signed_voting_test_block!(
-                signed,
-                topology,
-                state,
-                time_source,
-                result,
-                validator_keys,
-                Duration::from_millis(1)
-            );
-            let Err((_, err)) = result else {
-                panic!("expected DA pin-intent hash mismatch rejection");
-            };
-            match err.as_ref() {
-                BlockValidationError::DaPinIntentHashMismatch {
-                    expected: seen_expected,
-                    actual,
-                } if *seen_expected == expected && *actual == forged => {}
-                other => panic!("expected DA pin-intent hash mismatch, got {other:?}"),
-            }
-        }
-        #[test]
-        fn validate_keep_voting_block_rejects_duplicate_da_pin_intent_ticket() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            insert_test_da_owner(&mut world);
-            let state = State::new_with_chain_and_network_id_for_testing(
-                world,
-                Arc::clone(&kura),
-                query,
-                iroha_model_base::chain::ChainId::from("da-duplicate-ticket-test"),
-                test_da_network_id(),
-            );
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let first = test_da_pin_intent(
-                LaneId::new(0),
-                1,
-                1,
-                StorageTicketId::new([0xAA; 32]),
-                ManifestDigest::new([0xB1; 32]),
-            );
-            let duplicate_ticket = test_da_pin_intent(
-                LaneId::new(0),
-                1,
-                2,
-                StorageTicketId::new([0xAA; 32]),
-                ManifestDigest::new([0xB2; 32]),
-            );
-            let bundle = DaPinIntentBundle::new(vec![first, duplicate_ticket]);
-            let signed: SignedBlock =
-                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                    .chain(0, state.view().latest_block().as_deref())
-                    .with_da_pin_intents(Some(bundle))
-                    .sign(leader.private_key())
-                    .unpack(|_| {})
-                    .into();
-            validate_signed_voting_test_block!(
-                signed,
-                topology,
-                state,
-                time_source,
-                result,
-                validator_keys,
-                Duration::from_millis(1)
-            );
-            let Err((_, err)) = result else {
-                panic!("expected DA pin-intent duplicate-ticket rejection");
-            };
-            assert!(
-                matches!(
-                    err.as_ref(),
-                    BlockValidationError::DaPinIntentBundle(
-                        DaPinIntentValidationError::DuplicateStorageTicket {
-                            lane,
-                            epoch: 1,
-                            sequence: 2
-                        }
-                    ) if *lane == LaneId::new(0)
-                ),
-                "unexpected duplicate-ticket error: {err:?}"
-            );
-        }
-        #[test]
         fn validate_keep_voting_block_enforces_consensus_da_ingest_quota() {
             setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
             insert_test_da_owner(&mut world);
@@ -19610,49 +13380,6 @@ pub(crate) mod valid {
                 ),
                 "unexpected committed manifest reuse error: {err:?}"
             );
-        }
-        #[test]
-        fn validate_keep_voting_block_rejects_unsupported_da_pin_intent_version() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let intent = test_da_pin_intent(
-                LaneId::new(0),
-                1,
-                1,
-                StorageTicketId::new([0xAA; 32]),
-                ManifestDigest::new([0xBB; 32]),
-            );
-            let mut bundle = DaPinIntentBundle::new(vec![intent]);
-            bundle.version = DaPinIntentBundle::VERSION_V1 + 1;
-            let signed: SignedBlock =
-                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                    .chain(0, state.view().latest_block().as_deref())
-                    .with_da_pin_intents(Some(bundle))
-                    .sign(leader.private_key())
-                    .unpack(|_| {})
-                    .into();
-            validate_signed_voting_test_block!(
-                signed,
-                topology,
-                state,
-                time_source,
-                result,
-                validator_keys,
-                Duration::from_millis(1)
-            );
-            let Err((_, err)) = result else {
-                panic!("expected DA pin-intent version rejection");
-            };
-            assert!(matches!(
-                err.as_ref(),
-                BlockValidationError::DaPinIntentBundle(
-                    DaPinIntentValidationError::UnsupportedVersion { version }
-                ) if *version == DaPinIntentBundle::VERSION_V1 + 1
-            ));
         }
         #[test]
         fn validate_keep_voting_block_rejects_da_cursor_regression() {
@@ -20058,6 +13785,17 @@ pub(crate) mod valid {
         }
         #[test]
         fn maps_block_validation_errors() {
+            for reason in [
+                ivm::error::ExecutionDeferral::AllocationUnavailable,
+                ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+            ] {
+                assert_eq!(
+                    map_block_err_to_reason(&BlockValidationError::ExecutionDeferred(
+                        reason.into()
+                    )),
+                    None
+                );
+            }
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::MerkleRootMismatch),
                 Some(Reason::MerkleRootMismatch)
@@ -20073,7 +13811,7 @@ pub(crate) mod valid {
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::TooManyTransactions {
                     actual: 2,
-                    max: 1,
+                    max: 1
                 }),
                 Some(Reason::TransactionValidationFailed)
             );
@@ -20152,112 +13890,6 @@ pub(crate) mod valid {
                 map_block_err_to_reason(&err),
                 Some(Reason::TransactionInTheFuture)
             );
-        }
-        #[test]
-        fn empty_block_rejected_during_validation() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            let prev_hash = state.view().latest_block().expect("fixture parent").hash();
-            // Candidate block with no overlays (should be rejected).
-            let candidate_block = {
-                let valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-                    header.set_height(nonzero!(2_u64));
-                    header.set_prev_block_hash(Some(prev_hash));
-                    header.creation_time_ms = 1;
-                    header.merkle_root = None;
-                });
-                let mut signed = SignedBlock::from(valid);
-                signed.set_da_proof_policies(Some(
-                    crate::da::active_proof_policy_bundle_at_height(
-                        &state.nexus_snapshot(),
-                        signed.header().height().get(),
-                    ),
-                ));
-                with_current_state_confidential_features(signed, &state, &[(0, &leader_private)])
-            };
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            {
-                let mut state_block = state.block(candidate_block.header());
-                let validate_result = ValidBlock::validate_sumeragi_v2_fixture(
-                    candidate_block.clone(),
-                    &topology,
-                    &ALICE_ID,
-                    &time_source,
-                    &mut state_block,
-                )
-                .unpack(|_| {});
-                let err = match validate_result {
-                    Ok(_) => panic!("empty block should be rejected"),
-                    Err(err) => err,
-                };
-                assert!(
-                    matches!(err.1.as_ref(), BlockValidationError::EmptyBlock),
-                    "expected empty-block rejection, got {:?}",
-                    err.1
-                );
-            }
-            {
-                let mut state_block = state.block(candidate_block.header());
-                let events = std::cell::RefCell::new(Vec::new());
-                let validate_result = ValidBlock::validate_sumeragi_v2_fixture_with_events(
-                    candidate_block.clone(),
-                    &topology,
-                    &ALICE_ID,
-                    &time_source,
-                    &mut state_block,
-                    |event| {
-                        events.borrow_mut().push(event);
-                    },
-                )
-                .unpack(|_| {});
-                let err = match validate_result {
-                    Ok(_) => panic!("empty block should be rejected"),
-                    Err(err) => err,
-                };
-                assert!(
-                    matches!(err.1.as_ref(), BlockValidationError::EmptyBlock),
-                    "expected empty-block rejection with events, got {:?}",
-                    err.1
-                );
-                assert!(events.borrow().iter().any(|event| {
-                    matches!(
-                        event,
-                        PipelineEventBox::Block(block_event)
-                            if matches!(block_event.status, BlockStatus::Rejected(Reason::EmptyBlock))
-                    )
-                }));
-            }
-            let v2_cadence = Duration::from_millis(1);
-            let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
-                candidate_block.clone(),
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                v2_cadence,
-                SumeragiV2ValidationContext::from_height_context(
-                    &authenticated_permissioned_successor_context(&state, &validator_keys),
-                ),
-                &state,
-            )
-            .unpack(|_| {});
-            let error = match v2_result {
-                Ok(_) => panic!("Sumeragi v2 must reject a truly idle body"),
-                Err(error) => error,
-            };
-            assert!(matches!(error.1.as_ref(), BlockValidationError::EmptyBlock));
-            let result = validate_voting_test_block!(
-                candidate_block,
-                &topology,
-                &time_source,
-                &state,
-                &validator_keys,
-                Duration::from_millis(1)
-            )
-            .unpack(|_| {});
-            let err = match result {
-                Ok(_) => panic!("empty block should be rejected"),
-                Err(err) => err,
-            };
-            assert!(matches!(err.1.as_ref(), BlockValidationError::EmptyBlock));
         }
         #[test]
         fn v2_validation_is_wall_clock_independent_and_uses_height_context_for_reconfiguration() {
@@ -20498,126 +14130,6 @@ pub(crate) mod valid {
                         BlockValidationError::SnapshotBootstrapParentInvalid(_)
                     )
             ));
-        }
-        #[test]
-        fn da_only_block_is_not_rejected_as_empty() {
-            setup_da_validation_world!(kura, query, leader, topology, world, validator_keys);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
-            let _prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let record = DaCommitmentRecord::new(
-                LaneId::new(0),
-                1,
-                1,
-                BlobDigest::new([0xAA; 32]),
-                ManifestDigest::new([0xBB; 32]),
-                DaProofScheme::MerkleSha256,
-                Hash::prehashed([0xCC; 32]),
-                None,
-                RetentionClass::default(),
-                StorageTicketId::new([0xEE; 32]),
-                checked_da_ack_signature(0x11),
-            );
-            let bundle = DaCommitmentBundle::new(vec![record]);
-            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle));
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let signed_block: SignedBlock = new_block.into();
-            let (_validation_handle, validation_time_source) =
-                TimeSource::new_mock(signed_block.header().creation_time());
-            {
-                let mut state_block = state.block(signed_block.header());
-                ValidBlock::validate_sumeragi_v2_fixture(
-                    signed_block.clone(),
-                    &topology,
-                    &ALICE_ID,
-                    &validation_time_source,
-                    &mut state_block,
-                )
-                .unpack(|_| {})
-                .expect("DA-only block should be accepted");
-            }
-            {
-                let mut state_block = state.block(signed_block.header());
-                let events = std::cell::RefCell::new(Vec::new());
-                ValidBlock::validate_sumeragi_v2_fixture_with_events(
-                    signed_block.clone(),
-                    &topology,
-                    &ALICE_ID,
-                    &validation_time_source,
-                    &mut state_block,
-                    |event| {
-                        events.borrow_mut().push(event);
-                    },
-                )
-                .unpack(|_| {})
-                .expect("DA-only block should be accepted");
-                assert!(events.borrow().is_empty(), "no rejection events expected");
-            }
-            {
-                validate_voting_test_block!(
-                    signed_block.clone(),
-                    &topology,
-                    &validation_time_source,
-                    &state,
-                    &validator_keys,
-                    Duration::from_millis(1)
-                )
-                .unpack(|_| {})
-                .expect("DA-only block should be accepted");
-            }
-        }
-        #[test]
-        fn rejection_only_block_is_not_treated_as_empty() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            // Build a transaction that will be rejected (authority account is absent).
-            let (authority, signer) = gen_account_in("wonderland");
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "reject-only".to_owned())])
-            .sign(signer.private_key());
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            // Assemble and validate a block that contains the rejected transaction.
-            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
-            let builder = builder.chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let result = validate_voting_test_block!(
-                signed_block,
-                &topology,
-                &time_source,
-                &state,
-                &validator_keys,
-                Duration::from_millis(10)
-            )
-            .unpack(|_| {});
-            let (valid_block, state_block) =
-                result.expect("rejection-only block should not be treated as empty");
-            assert_eq!(valid_block.as_ref().external_transactions().count(), 1);
-            assert!(
-                valid_block
-                    .as_ref()
-                    .network_output_at(0)
-                    .is_some_and(|(_, output)| output.result.is_err())
-            );
-            assert_eq!(valid_block.as_ref().committed_fragment_count(), Some(0));
-            assert_eq!(
-                state_block.committed_fragment_count(),
-                0,
-                "a rejected input with no matching callback creates no phantom applied fragment"
-            );
         }
         #[test]
         fn validate_keep_voting_block_rejects_forged_committed_fragment_count() {
@@ -21133,176 +14645,6 @@ pub(crate) mod valid {
             assert_external_queue_plan_role_rejected(error.as_ref());
         }
         #[test]
-        fn validate_keep_voting_block_uses_block_time_for_ttl_checks() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            // Build a transaction that is valid at block time but would be expired against wall-clock now.
-            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
-            let (authority, signer) = gen_account_in("ttl-synced-block");
-            let mut builder = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &tx_time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            );
-            builder.set_ttl(Duration::from_millis(100));
-            let tx = builder
-                .with_instructions([Log::new(Level::INFO, "ttl-valid-at-block-time".to_owned())])
-                .sign(signer.private_key());
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            let (_block_handle, block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(50));
-            let builder =
-                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let builder = builder.chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let signed_block: SignedBlock = SignedBlock::from(new_block);
-            // Validate using a clock far in the future; TTL should be evaluated at block time.
-            let (_handle, validation_time_source) = TimeSource::new_mock(Duration::from_secs(10));
-            let result = validate_voting_test_block!(
-                signed_block,
-                &topology,
-                &validation_time_source,
-                &state,
-                &validator_keys,
-                Duration::from_millis(50)
-            )
-            .unpack(|_| {});
-            assert!(
-                result.is_ok(),
-                "block validation should use block timestamp for TTL checks"
-            );
-        }
-        #[test]
-        fn validate_keep_voting_block_populates_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
-            build_cacheable_block!(
-                state,
-                leader_private,
-                accepted,
-                _block_handle,
-                block_time_source,
-                signed_block
-            );
-            let result = validate_voting_test_block!(
-                signed_block,
-                &topology,
-                &block_time_source,
-                &state,
-                &validator_keys,
-                Duration::from_millis(1)
-            )
-            .unpack(|_| {});
-            assert!(
-                result.is_ok(),
-                "validation should succeed and warm stateless cache"
-            );
-            let cache = state.stateless_validation_cache().lock();
-            assert!(
-                cache.contains_key(&tx_hash),
-                "successful static validation should populate stateless cache",
-            );
-        }
-        #[test]
-        fn block_validation_rejects_invalid_signature_despite_warmed_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
-            let (authority, signer) = gen_account_in("cache-signature-test");
-            let (other_authority, _) = gen_account_in("cache-signature-test");
-            let valid_tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &tx_time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
-            .sign(signer.private_key());
-            let valid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(valid_tx.clone()));
-            let (_valid_block_handle, valid_block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(10));
-            let valid_builder =
-                BlockBuilder::new_with_time_source(vec![valid_accepted], valid_block_time_source)
-                    .chain(0, state.view().latest_block().as_deref());
-            let valid_block = with_current_state_da_sidecars(valid_builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let valid_signed_block: SignedBlock = valid_block.into();
-            validate_voting_test_block!(
-                valid_signed_block,
-                &topology,
-                &TimeSource::new_system(),
-                &state,
-                &validator_keys,
-                Duration::from_millis(10)
-            )
-            .unpack(|_| {})
-            .expect("valid block should warm stateless cache");
-            let invalid_tx = valid_tx.with_authority(other_authority);
-            let invalid_hash = crate::tx::StatelessValidationCacheKey::new(&invalid_tx);
-            let invalid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx));
-            let (_invalid_block_handle, invalid_block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(20));
-            let invalid_builder = BlockBuilder::new_with_time_source(
-                vec![invalid_accepted],
-                invalid_block_time_source,
-            )
-            .chain(0, state.view().latest_block().as_deref());
-            let invalid_block = with_current_state_da_sidecars(invalid_builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let invalid_signed_block: SignedBlock = invalid_block.into();
-            {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.insert_ok(invalid_hash.clone(), None, 0);
-                assert!(
-                    cache.contains_key(&invalid_hash),
-                    "test setup should present the invalid transaction as cache-warmed",
-                );
-            }
-            let v2_cadence = Duration::from_millis(20);
-            let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
-                invalid_signed_block.clone(),
-                &topology,
-                &ALICE_ID,
-                &TimeSource::new_system(),
-                v2_cadence,
-                SumeragiV2ValidationContext::from_height_context(
-                    &authenticated_permissioned_successor_context(&state, &validator_keys),
-                ),
-                &state,
-            )
-            .unpack(|_| {});
-            let Err(v2_error) = v2_result else {
-                panic!("v2 candidate validation must still reject invalid transaction signatures");
-            };
-            assert!(matches!(
-                *v2_error.1,
-                BlockValidationError::TransactionAccept(
-                    AcceptTransactionFail::SignatureVerification(_)
-                )
-            ));
-            let result = validate_voting_test_block!(
-                invalid_signed_block,
-                &topology,
-                &TimeSource::new_system(),
-                &state,
-                &validator_keys,
-                Duration::from_millis(20)
-            )
-            .unpack(|_| {});
-            let Err(err) = result else {
-                panic!("invalid transaction signature must reject the block");
-            };
-            assert!(matches!(
-                *err.1,
-                BlockValidationError::TransactionAccept(
-                    AcceptTransactionFail::SignatureVerification(_)
-                )
-            ));
-        }
-        #[test]
         fn transaction_signature_validation_has_no_bypass_terms() {
             let needles = [
                 ["signature", "_", "override"].concat(),
@@ -21382,70 +14724,6 @@ pub(crate) mod valid {
                 cache.contains_key(&tx_hash),
                 "successful static validation with events should populate stateless cache",
             );
-        }
-        #[test]
-        fn fixture_voting_adapters_enforce_configured_block_cadence() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, _tx_hash, accepted);
-            build_cacheable_block!(
-                state,
-                leader_private,
-                accepted,
-                _block_handle,
-                block_time_source,
-                canonical
-            );
-            let context = authenticated_permissioned_successor_context(&state, &validator_keys);
-            for creation_time_ms in [1, 2] {
-                let mut candidate = canonical.clone();
-                let mut header = candidate.header();
-                header.creation_time_ms = creation_time_ms;
-                candidate.replace_header_for_testing(header);
-                let candidate = with_current_state_confidential_features(
-                    candidate,
-                    &state,
-                    &[(0, &leader_private)],
-                );
-                for prevalidated in [false, true] {
-                    let mut timings = ValidationTimings::new();
-                    let validation_context =
-                        SumeragiV2ValidationContext::from_height_context(&context);
-                    let result = if prevalidated {
-                        ValidBlock::validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing(
-                            candidate.clone(), &topology, &ALICE_ID, &block_time_source,
-                            Duration::from_millis(1), &state,
-                            validation_context, &mut timings, |_| {},
-                        ).unpack(|_| {})
-                    } else {
-                        ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
-                            candidate.clone(),
-                            &topology,
-                            &ALICE_ID,
-                            &block_time_source,
-                            Duration::from_millis(1),
-                            &state,
-                            false,
-                            false,
-                            validation_context,
-                        )
-                        .unpack(|_| {})
-                    };
-                    if creation_time_ms == 1 {
-                        drop(result.expect("configured cadence accepts the canonical candidate"));
-                    } else {
-                        let Err((_, error)) = result else {
-                            panic!("candidate time cannot redefine validation cadence");
-                        };
-                        assert!(matches!(
-                            *error,
-                            BlockValidationError::NonCanonicalV2BlockTime {
-                                expected_ms: 1,
-                                actual_ms: 2,
-                            }
-                        ));
-                    }
-                }
-            }
         }
         #[test]
         fn prevalidated_commit_skips_only_the_authenticated_block_signature() {
@@ -21578,72 +14856,6 @@ pub(crate) mod valid {
                 invalid_events.len(),
                 1,
                 "signature rejection should emit exactly one block event"
-            );
-        }
-        #[test]
-        fn sumeragi_v2_fixture_populates_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
-            build_cacheable_block!(
-                state,
-                leader_private,
-                accepted,
-                _block_handle,
-                block_time_source,
-                signed_block
-            );
-            let mut state_block = state.block(signed_block.header());
-            let result = ValidBlock::validate_sumeragi_v2_fixture(
-                signed_block,
-                &topology,
-                &ALICE_ID,
-                &block_time_source,
-                &mut state_block,
-            )
-            .unpack(|_| {});
-            if let Err((_, error)) = result {
-                panic!("validation should warm stateless cache: {error:?}");
-            }
-            drop(state_block);
-            let cache = state.stateless_validation_cache().lock();
-            assert!(
-                cache.contains_key(&tx_hash),
-                "successful static validation should populate stateless cache",
-            );
-        }
-        #[test]
-        fn sumeragi_v2_fixture_with_events_populates_stateless_cache() {
-            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
-            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
-            build_cacheable_block!(
-                state,
-                leader_private,
-                accepted,
-                _block_handle,
-                block_time_source,
-                signed_block
-            );
-            let mut state_block = state.block(signed_block.header());
-            let events = std::cell::RefCell::new(Vec::new());
-            let result = ValidBlock::validate_sumeragi_v2_fixture_with_events(
-                signed_block,
-                &topology,
-                &ALICE_ID,
-                &block_time_source,
-                &mut state_block,
-                |event| events.borrow_mut().push(event),
-            )
-            .unpack(|_| {});
-            assert!(
-                result.is_ok(),
-                "validation with events should warm stateless cache"
-            );
-            assert!(events.borrow().is_empty(), "no rejection events expected");
-            drop(state_block);
-            let cache = state.stateless_validation_cache().lock();
-            assert!(
-                cache.contains_key(&tx_hash),
-                "successful static validation with events should populate stateless cache",
             );
         }
         #[test]
@@ -21969,42 +15181,15 @@ pub(crate) mod valid {
 }
 mod commit {
     use super::*;
-    /// Represents a block accepted by consensus.
-    ///
-    /// Blocks committed through exact Sumeragi-v2 finality retain an opaque,
-    /// transient reference to the verified artifact. State application uses
-    /// that capability to distinguish authenticated v2 finality from ordinary
-    /// or unchecked fixture commits; it is never serialized with the block.
-    /// Every [`Self`] will have a different height.
+    /// Executed block lifecycle wrapper. Native consensus authentication is held by the
+    /// original canonical carrier and `sumeragi::certified_chain::CommittedBlock`.
     #[derive(Debug, Clone)]
     pub struct CommittedBlock {
         block: ValidBlock,
-        verified_v2_finality:
-            Option<Arc<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>>,
     }
     impl CommittedBlock {
-        pub(super) fn without_v2_finality(block: ValidBlock) -> Self {
-            Self {
-                block,
-                verified_v2_finality: None,
-            }
-        }
-
-        pub(super) fn with_verified_v2_finality(
-            block: ValidBlock,
-            artifact: super::VerifiedV2FinalityArtifact,
-        ) -> Self {
-            Self {
-                block,
-                verified_v2_finality: Some(artifact.into_arc()),
-            }
-        }
-
-        /// Return the exact v2 finality artifact whose verification created this commit.
-        pub(crate) fn verified_v2_finality_artifact(
-            &self,
-        ) -> Option<&iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact> {
-            self.verified_v2_finality.as_deref()
+        pub(super) fn from_execution(block: ValidBlock) -> Self {
+            Self { block }
         }
     }
     impl From<CommittedBlock> for ValidBlock {
@@ -22030,2896 +15215,7 @@ mod commit {
     }
     #[cfg(all(test, feature = "app_api"))]
     mod axt_validation_tests {
-        use super::*;
-        use crate::{
-            block::valid::{
-                axt_canonical_proof_decode_count, axt_fastpq_proof_verification_count,
-                axt_proof_amount_fact_resolution_count, reset_axt_fastpq_proof_verification_count,
-                validate_axt_envelopes,
-            },
-            kura::Kura,
-            query::store::LiveQueryStore,
-            state::{State, World},
-        };
-        use iroha_data_model::Registrable;
-        use iroha_data_model::fastpq::{
-            TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
-            TransferTranscript,
-        };
-        use iroha_data_model::nexus::{
-            AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEffectBinding,
-            AxtEnvelopeRecord, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
-            AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope,
-            AxtProofFragment, AxtRemoteSpendClaimV1, AxtReplayRecord, AxtTouchFragment,
-            AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
-            MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES, ManifestVersion, ProofBlob, RemoteSpendIntent,
-            SpendOp, TouchManifest, UniversalAccountId,
-        };
-        use iroha_model_base::domain::DomainId;
-        use iroha_primitives::time::TimeSource;
-        use std::{collections::BTreeMap, time::Duration};
-        const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-        const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
-        fn binding_for_descriptor(descriptor: &AxtDescriptor) -> AxtBinding {
-            descriptor.binding().expect("descriptor binding")
-        }
-        fn sample_asset_definition_id() -> AssetDefinitionId {
-            AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-            ])
-            .expect("valid AXT fixture asset id")
-        }
-        fn sample_handle(
-            binding: AxtBinding,
-            lane: LaneId,
-            dsid: DataSpaceId,
-            expiry_slot: u64,
-            manifest_root: [u8; 32],
-        ) -> AxtHandleFragment {
-            AxtHandleFragment {
-                handle: AssetHandle {
-                    asset_definition_id: sample_asset_definition_id(),
-                    scope: vec!["transfer".to_owned()],
-                    subject: HandleSubject {
-                        account: ACCOUNT_FROM_LITERAL.to_owned(),
-                        origin_dsid: Some(dsid),
-                    },
-                    budget: HandleBudget {
-                        remaining: "10".parse().expect("canonical handle quantity"),
-                        per_use: Some("10".parse().expect("canonical handle quantity")),
-                    },
-                    handle_era: 1,
-                    sub_nonce: 1,
-                    group_binding: GroupBinding {
-                        composability_group_id: vec![0; 32],
-                        epoch_id: 1,
-                    },
-                    target_lane: lane,
-                    axt_binding: binding,
-                    manifest_view_root: manifest_root,
-                    expiry_slot,
-                    max_clock_skew_ms: Some(0),
-                    issuer_context: Default::default(),
-                    issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-                },
-                intent: RemoteSpendIntent {
-                    asset_dsid: dsid,
-                    op: SpendOp {
-                        asset_definition_id: sample_asset_definition_id(),
-                        kind: "transfer".to_owned(),
-                        from: ACCOUNT_FROM_LITERAL.to_owned(),
-                        to: ACCOUNT_TO_LITERAL.to_owned(),
-                        amount: Some("5".parse().expect("canonical spend quantity")),
-                    },
-                },
-                proof: None,
-                amount: Some("5".parse().expect("canonical fragment quantity")),
-                amount_commitment: None,
-            }
-        }
-        fn proof_blob_for(
-            dsid: DataSpaceId,
-            manifest_root: [u8; 32],
-            proof_seed: &[u8],
-            expiry_slot: u64,
-        ) -> ProofBlob {
-            proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                proof_seed,
-                expiry_slot,
-                None,
-                None,
-                Vec::new(),
-            )
-        }
-        fn proof_blob_for_with_amount(
-            dsid: DataSpaceId,
-            manifest_root: [u8; 32],
-            proof_seed: &[u8],
-            expiry_slot: u64,
-            committed_amount: Option<u128>,
-            amount_commitment: Option<[u8; 32]>,
-            remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
-        ) -> ProofBlob {
-            proof_blob_for_with_profile(
-                dsid,
-                manifest_root,
-                proof_seed,
-                expiry_slot,
-                committed_amount,
-                amount_commitment,
-                remote_spend_claims,
-                false,
-            )
-        }
-        fn opaque_proof_blob_for(
-            dsid: DataSpaceId,
-            manifest_root: [u8; 32],
-            proof_seed: &[u8],
-            expiry_slot: u64,
-        ) -> ProofBlob {
-            proof_blob_for_with_profile(
-                dsid,
-                manifest_root,
-                proof_seed,
-                expiry_slot,
-                None,
-                None,
-                Vec::new(),
-                true,
-            )
-        }
-        #[allow(clippy::too_many_arguments)]
-        fn proof_blob_for_with_profile(
-            dsid: DataSpaceId,
-            manifest_root: [u8; 32],
-            proof_seed: &[u8],
-            expiry_slot: u64,
-            committed_amount: Option<u128>,
-            amount_commitment: Option<[u8; 32]>,
-            mut remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
-            opaque: bool,
-        ) -> ProofBlob {
-            assert!(
-                !opaque || remote_spend_claims.is_empty(),
-                "opaque proof fixture cannot carry remote-spend claims"
-            );
-            let source_tx_commitment = test_digest(b"axt-block-test:source-tx", &[proof_seed]);
-            let claim_digest = test_digest(b"axt-block-test:claim", &[proof_seed]);
-            let witness_commitment = test_digest(b"axt-block-test:witness", &[proof_seed]);
-            let policy_commitment = test_digest(b"axt-block-test:policy", &[&manifest_root[..]]);
-            remote_spend_claims
-                .sort_by_key(iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1);
-            let remote_spend_intent_commitments = remote_spend_claims
-                .iter()
-                .map(iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1)
-                .collect::<Vec<_>>();
-            let source_asset = remote_spend_claims
-                .first()
-                .map(|claim| claim.asset_definition_id.clone());
-            assert!(
-                remote_spend_claims
-                    .iter()
-                    .all(|claim| Some(&claim.asset_definition_id) == source_asset.as_ref()),
-                "one FASTPQ proof fixture must use one exact asset definition"
-            );
-            let binding = iroha_data_model::nexus::AxtFastpqBinding {
-                parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
-                source_dsid: dsid.as_u64(),
-                source_dataspace: format!("test-dataspace-{}", dsid.as_u64()),
-                source_receipt_id: format!(
-                    "receipt-{}",
-                    hex::encode(source_tx_commitment.as_ref())
-                ),
-                source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
-                claim_type: if opaque {
-                    "authorization".to_owned()
-                } else {
-                    "tx_predicate".to_owned()
-                },
-                claim_digest: hex::encode(claim_digest.as_ref()),
-                witness_commitment: hex::encode(witness_commitment.as_ref()),
-                policy_commitment: hex::encode(policy_commitment.as_ref()),
-                verified_effect_type: "test_effect".to_owned(),
-                corridor: "test-corridor".to_owned(),
-                verifier_id: "fastpq".to_owned(),
-                verifier_version: "v1".to_owned(),
-                target_dsids: vec![dsid.as_u64()],
-                effect_binding: source_asset.as_ref().map(|asset| AxtEffectBinding {
-                    destination_domain: None,
-                    destination_account_id: None,
-                    vault_account_id: None,
-                    issuance_account_id: None,
-                    source_asset_definition_id: Some(asset.to_string()),
-                    destination_asset_definition_id: None,
-                    source_amount_i64: None,
-                    destination_amount_i64: None,
-                }),
-                remote_spend_intent_commitments,
-            };
-            let mut dsid_bytes = [0_u8; 16];
-            dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
-            let mut batch = fastpq_prover::TransitionBatch::new(
-                fastpq_prover::AXT_DEFAULT_PARAMETER,
-                fastpq_prover::PublicInputs {
-                    dsid: dsid_bytes,
-                    slot: expiry_slot,
-                    old_root: test_digest(b"axt-block-test:old-root", &[proof_seed]).into(),
-                    new_root: manifest_root,
-                    perm_root: test_digest(b"axt-block-test:perm-root", &[proof_seed]).into(),
-                    tx_set_hash: test_digest(b"axt-block-test:tx-set", &[proof_seed]).into(),
-                },
-            );
-            if opaque {
-                batch.push(fastpq_prover::StateTransition::new(
-                    b"axt/block/proof".to_vec(),
-                    proof_seed.to_vec(),
-                    manifest_root.to_vec(),
-                    fastpq_prover::OperationKind::MetaSet,
-                ));
-            } else {
-                let batch_hash = source_tx_commitment;
-                let mut transcripts = if remote_spend_claims.is_empty() {
-                    let from =
-                        AccountId::parse_encoded(ACCOUNT_FROM_LITERAL).expect("canonical sender");
-                    let to =
-                        AccountId::parse_encoded(ACCOUNT_TO_LITERAL).expect("canonical receiver");
-                    vec![TransferTranscript {
-                        batch_hash,
-                        deltas: vec![TransferDeltaTranscript {
-                            from_account: from,
-                            to_account: to,
-                            asset_definition: sample_asset_definition_id(),
-                            amount: Quantity::from(1_u64),
-                            from_balance_before: Quantity::from(1_000_000_u64),
-                            from_balance_after: Quantity::from(999_999_u64),
-                            to_balance_before: Quantity::from(100_u64),
-                            to_balance_after: Quantity::from(101_u64),
-                            from_smt_witness: TransferSmtWitness::default(),
-                            to_smt_witness: TransferSmtWitness::default(),
-                        }],
-                        authority_digest: Hash::new(b"axt-block-transfer-authority"),
-                        poseidon_preimage_digest: None,
-                    }]
-                } else {
-                    remote_spend_claims
-                        .iter()
-                        .map(|claim| {
-                            let from =
-                                AccountId::parse_encoded(&claim.from).expect("canonical sender");
-                            let to =
-                                AccountId::parse_encoded(&claim.to).expect("canonical receiver");
-                            let amount = iroha_data_model::fastpq::normalized_numeric_to_u64(
-                                claim.effective_amount.as_numeric(),
-                                0,
-                            )
-                            .expect("fixture transfer amount is an exact scale-zero u64");
-                            TransferTranscript {
-                                batch_hash,
-                                deltas: vec![TransferDeltaTranscript {
-                                    from_account: from,
-                                    to_account: to,
-                                    asset_definition: claim.asset_definition_id.clone(),
-                                    amount: claim.effective_amount.clone(),
-                                    from_balance_before: Quantity::from(1_000_000_u64),
-                                    from_balance_after: Quantity::from(1_000_000_u64 - amount),
-                                    to_balance_before: Quantity::from(100_u64),
-                                    to_balance_after: Quantity::from(100_u64 + amount),
-                                    from_smt_witness: TransferSmtWitness::default(),
-                                    to_smt_witness: TransferSmtWitness::default(),
-                                }],
-                                authority_digest: Hash::new(b"axt-block-transfer-authority"),
-                                poseidon_preimage_digest: None,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                };
-                let (old_root, new_root) =
-                    fastpq_prover::gadgets::transfer::attach_transfer_smt_witnesses(
-                        &mut transcripts,
-                    )
-                    .expect("attach transfer SMT witnesses");
-                batch.public_inputs.old_root = old_root;
-                batch.public_inputs.new_root = new_root;
-                for transcript in &mut transcripts {
-                    transcript.poseidon_preimage_digest =
-                        Some(fastpq_prover::gadgets::transfer::compute_poseidon_digest(
-                            &transcript.deltas[0],
-                            &transcript.batch_hash,
-                        ));
-                    for delta in &transcript.deltas {
-                        let balance_bytes = |value: &Quantity| {
-                            iroha_data_model::fastpq::normalized_numeric_to_u64(
-                                value.as_numeric(),
-                                0,
-                            )
-                            .expect("fixture balance is an exact u64")
-                            .to_le_bytes()
-                            .to_vec()
-                        };
-                        batch.push(fastpq_prover::StateTransition::new(
-                            iroha_data_model::fastpq::transfer_balance_key(
-                                &delta.asset_definition,
-                                &delta.from_account,
-                            )
-                            .expect("canonical balance key"),
-                            balance_bytes(&delta.from_balance_before),
-                            balance_bytes(&delta.from_balance_after),
-                            fastpq_prover::OperationKind::Transfer,
-                        ));
-                        batch.push(fastpq_prover::StateTransition::new(
-                            iroha_data_model::fastpq::transfer_balance_key(
-                                &delta.asset_definition,
-                                &delta.to_account,
-                            )
-                            .expect("canonical balance key"),
-                            balance_bytes(&delta.to_balance_before),
-                            balance_bytes(&delta.to_balance_after),
-                            fastpq_prover::OperationKind::Transfer,
-                        ));
-                    }
-                }
-                batch.metadata.insert(
-                    TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
-                    norito::to_bytes(&transcripts).expect("encode transfer transcripts"),
-                );
-                fastpq_prover::set_axt_remote_spend_claims(
-                    &mut batch,
-                    &binding,
-                    &remote_spend_claims,
-                )
-                .expect("attach remote-spend claims");
-            }
-            batch.sort();
-            batch.metadata.insert(
-                "entry_hash".to_owned(),
-                source_tx_commitment.as_ref().to_vec(),
-            );
-            crate::fastpq::quantity_fixture::materialize(&mut batch);
-            fastpq_prover::bind_axt_batch_with_proof_metadata(
-                &mut batch,
-                &binding,
-                manifest_root,
-                None,
-                committed_amount,
-                (expiry_slot != 0).then_some(expiry_slot),
-            )
-            .expect("bind AXT test batch");
-            let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
-                .expect("FASTPQ prover")
-                .prove_axt_bound(&batch, &binding)
-                .expect("FASTPQ proof");
-            let fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof)
-                .expect("AXT FASTPQ payload");
-            let envelope = AxtProofEnvelope {
-                dsid,
-                manifest_root,
-                da_commitment: None,
-                proof: fastpq_payload,
-                fastpq_binding: Some(binding),
-                committed_amount,
-                amount_commitment,
-            };
-            ProofBlob {
-                payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
-                expiry_slot: Some(expiry_slot),
-            }
-        }
-        fn remote_spend_claim(
-            handle: &AxtHandleFragment,
-            effective_amount: &Quantity,
-        ) -> AxtRemoteSpendClaimV1 {
-            AxtRemoteSpendClaimV1::new(
-                AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle),
-                handle.intent.op.asset_definition_id.clone(),
-                handle.intent.op.kind.clone(),
-                handle.intent.op.from.clone(),
-                handle.intent.op.to.clone(),
-                effective_amount.clone(),
-            )
-        }
-        fn install_test_asset_incarnation(
-            state: &mut State,
-            asset_definition_id: &AssetDefinitionId,
-        ) -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
-            let registration_header = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"iroha:block:axt-test-asset-registration",
-            ));
-            let execution_identity = Hash::new(b"iroha:block:axt-test-asset-execution");
-            let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
-                &state.network_id,
-                asset_definition_id,
-                &registration_header,
-                &execution_identity,
-                0,
-            );
-            let mut incarnations = state.world.axt_asset_incarnations.block();
-            incarnations.insert(asset_definition_id.clone(), incarnation);
-            incarnations.commit();
-            incarnation
-        }
-        fn authenticated_axt_validation_state_for(
-            entries: &[(DataSpaceId, LaneId, u8)],
-        ) -> (
-            State,
-            KeyPair,
-            UniversalAccountId,
-            BTreeMap<DataSpaceId, [u8; 32]>,
-        ) {
-            authenticated_axt_validation_state_for_with_asset_policy(
-                entries,
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-        }
-        fn authenticated_axt_validation_state_for_with_asset_policy(
-            entries: &[(DataSpaceId, LaneId, u8)],
-            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
-        ) -> (
-            State,
-            KeyPair,
-            UniversalAccountId,
-            BTreeMap<DataSpaceId, [u8; 32]>,
-        ) {
-            let issuer = crate::block::checked_keypair();
-            let issuer_account_id = AccountId::new(issuer.public_key().clone());
-            let mut uaid_seed = b"axt-authenticated-validation-issuer".to_vec();
-            for (dsid, lane, fixture_tag) in entries {
-                uaid_seed.extend_from_slice(&dsid.as_u64().to_le_bytes());
-                uaid_seed.extend_from_slice(&lane.as_u32().to_le_bytes());
-                uaid_seed.push(*fixture_tag);
-            }
-            let issuer_uaid = UniversalAccountId::from_hash(Hash::new(uaid_seed));
-            let issuer_account = iroha_data_model::account::Account::new(issuer_account_id.clone())
-                .with_uaid(Some(issuer_uaid))
-                .build(&issuer_account_id);
-            let asset_domain_id =
-                DomainId::try_new("axt-fixture", "universal").expect("valid AXT fixture domain");
-            let asset_domain = iroha_data_model::domain::Domain::new(asset_domain_id.clone())
-                .build(&issuer_account_id);
-            let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
-                sample_asset_definition_id(),
-                "AXT fixture asset",
-                asset_policy,
-                None,
-            )
-            .with_owning_domain(Some(asset_domain_id))
-            .build(&issuer_account_id);
-            let mut world = World::with([asset_domain], [issuer_account], [asset_definition]);
-            let mut manifest_set =
-                crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
-            let mut manifest_roots = BTreeMap::new();
-            for (dsid, _, _) in entries {
-                let manifest = AssetPermissionManifest {
-                    version: ManifestVersion::default(),
-                    uaid: issuer_uaid,
-                    dataspace: *dsid,
-                    issued_ms: 0,
-                    activation_epoch: 1,
-                    expiry_epoch: None,
-                    entries: Vec::new(),
-                };
-                let mut record =
-                    crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
-                record.lifecycle.mark_activated(1);
-                let mut manifest_root = [0_u8; 32];
-                manifest_root.copy_from_slice(record.manifest_hash.as_ref());
-                manifest_roots.insert(*dsid, manifest_root);
-                manifest_set.upsert(record);
-            }
-            world
-                .space_directory_manifests_mut_for_testing()
-                .insert(issuer_uaid, manifest_set);
-            let mut issuer_bindings =
-                crate::nexus::space_directory::UaidDataspaceBindings::default();
-            for (dsid, _, _) in entries {
-                issuer_bindings.bind_account(*dsid, issuer_account_id.clone());
-            }
-            world
-                .uaid_dataspaces_mut_for_testing()
-                .insert(issuer_uaid, issuer_bindings);
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(world, kura, query);
-            install_test_asset_incarnation(&mut state, &sample_asset_definition_id());
-            for (dsid, lane, _) in entries {
-                state.set_axt_policy(
-                    *dsid,
-                    AxtPolicyEntry {
-                        manifest_root: manifest_roots[dsid],
-                        target_lane: *lane,
-                        active_handle_era: 1,
-                        next_handle_counter: 1,
-                        current_slot: 0,
-                    },
-                );
-            }
-            (state, issuer, issuer_uaid, manifest_roots)
-        }
-        fn authenticated_axt_validation_state(
-            dsid: DataSpaceId,
-            lane: LaneId,
-            fixture_tag: u8,
-        ) -> (State, KeyPair, UniversalAccountId, [u8; 32]) {
-            let (state, issuer, issuer_uaid, manifest_roots) =
-                authenticated_axt_validation_state_for(&[(dsid, lane, fixture_tag)]);
-            (state, issuer, issuer_uaid, manifest_roots[&dsid])
-        }
-        fn sign_axt_validation_handle(
-            fragment: AxtHandleFragment,
-            state: &State,
-            issuer: &KeyPair,
-            issuer_uaid: UniversalAccountId,
-            manifest_root: [u8; 32],
-        ) -> AxtHandleFragment {
-            let asset_definition_incarnation = state
-                .world
-                .axt_asset_incarnations
-                .view()
-                .get(&fragment.handle.asset_definition_id)
-                .copied()
-                .expect("authenticated AXT fixture asset incarnation");
-            sign_axt_validation_handle_with_incarnation(
-                fragment,
-                state,
-                issuer,
-                issuer_uaid,
-                manifest_root,
-                asset_definition_incarnation,
-            )
-        }
-        fn sign_axt_validation_handle_with_incarnation(
-            mut fragment: AxtHandleFragment,
-            state: &State,
-            issuer: &KeyPair,
-            issuer_uaid: UniversalAccountId,
-            manifest_root: [u8; 32],
-            asset_definition_incarnation: iroha_data_model::nexus::AxtAssetIncarnationV1,
-        ) -> AxtHandleFragment {
-            let dsid = fragment.intent.asset_dsid;
-            let context = AxtHandleIssuerContextV1 {
-                network_id: state.network_id,
-                asset_dsid: dsid,
-                asset_definition_incarnation,
-                issuer: issuer_uaid,
-                issuer_manifest_root: manifest_root,
-                code_root: [0xC1; 32],
-                abi_version: 1,
-                abi_hash: [0xA1; 32],
-            };
-            fragment.handle = fragment
-                .handle
-                .draft()
-                .sign_by_issuer_v1(context, issuer.private_key())
-                .expect("sign authenticated AXT validation handle");
-            fragment
-        }
-        fn proof_blob_for_with_authenticated_amount(
-            dsid: DataSpaceId,
-            manifest_root: [u8; 32],
-            proof_seed: &[u8],
-            expiry_slot: u64,
-            committed_amount: u128,
-            remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
-        ) -> (ProofBlob, [u8; 32]) {
-            let mut proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                proof_seed,
-                expiry_slot,
-                Some(committed_amount),
-                None,
-                remote_spend_claims,
-            );
-            let amount = committed_amount
-                .to_string()
-                .parse()
-                .expect("u128 is a canonical proof quantity");
-            let commitment =
-                ivm::axt::derive_amount_commitment(dsid, &amount, Some(proof.payload.as_slice()));
-            let mut envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
-                .expect("decode proof envelope for commitment binding");
-            envelope.amount_commitment = Some(commitment);
-            proof.payload =
-                norito::to_bytes(&envelope).expect("encode commitment-bound proof envelope");
-            (proof, commitment)
-        }
-        fn hidden_amount_fixture(
-            dsid: u64,
-            manifest_tag: u8,
-            proof_seed: &[u8],
-        ) -> (State, AxtEnvelopeRecord) {
-            hidden_amount_fixture_with_asset_policy(
-                dsid,
-                manifest_tag,
-                proof_seed,
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-        }
-        fn hidden_amount_fixture_with_asset_policy(
-            dsid: u64,
-            manifest_tag: u8,
-            proof_seed: &[u8],
-            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
-        ) -> (State, AxtEnvelopeRecord) {
-            amount_fixture_with_asset_policy(dsid, manifest_tag, proof_seed, asset_policy, false)
-        }
-        fn clear_amount_fixture(
-            dsid: u64,
-            manifest_tag: u8,
-            proof_seed: &[u8],
-        ) -> (State, AxtEnvelopeRecord) {
-            amount_fixture_with_asset_policy(
-                dsid,
-                manifest_tag,
-                proof_seed,
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                true,
-            )
-        }
-        fn clear_amount_fixture_with_asset_policy(
-            dsid: u64,
-            manifest_tag: u8,
-            proof_seed: &[u8],
-            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
-        ) -> (State, AxtEnvelopeRecord) {
-            amount_fixture_with_asset_policy(dsid, manifest_tag, proof_seed, asset_policy, true)
-        }
-        fn amount_fixture_with_asset_policy(
-            dsid: u64,
-            manifest_tag: u8,
-            proof_seed: &[u8],
-            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
-            clear: bool,
-        ) -> (State, AxtEnvelopeRecord) {
-            let dsid = DataSpaceId::new(dsid);
-            let lane = LaneId::new(1);
-            let (state, issuer, issuer_uaid, manifest_roots) =
-                authenticated_axt_validation_state_for_with_asset_policy(
-                    &[(dsid, lane, manifest_tag)],
-                    asset_policy,
-                );
-            let manifest_root = manifest_roots[&dsid];
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: vec![AxtTouchSpec {
-                    dsid,
-                    read: Vec::new(),
-                    write: Vec::new(),
-                }],
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let mut handle = sample_handle(binding, lane, dsid, 5, manifest_root);
-            let effective_amount = Quantity::from(5_u64);
-            handle.intent.op.amount = clear.then(|| effective_amount.clone());
-            handle.amount = clear.then(|| effective_amount.clone());
-            let mut handle =
-                sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
-            let (proof, commitment) = proof_blob_for_with_authenticated_amount(
-                dsid,
-                manifest_root,
-                proof_seed,
-                12,
-                5,
-                vec![remote_spend_claim(&handle, &effective_amount)],
-            );
-            handle.amount_commitment = Some(commitment);
-            handle.proof = Some(proof);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: vec![AxtTouchFragment {
-                    dsid,
-                    manifest: TouchManifest {
-                        read: Vec::new(),
-                        write: Vec::new(),
-                    },
-                }],
-                proofs: Vec::new(),
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            (state, envelope)
-        }
-        fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
-            let mut payload = Vec::new();
-            payload.extend_from_slice(domain);
-            for part in parts {
-                payload.extend_from_slice(part);
-            }
-            iroha_crypto::Hash::new(payload)
-        }
-        fn build_block_with_envelopes(
-            envelope: AxtEnvelopeRecord,
-            snapshot: AxtPolicySnapshot,
-        ) -> SignedBlock {
-            build_block_with_envelope_records(vec![envelope], snapshot)
-        }
-        fn build_block_with_envelope_records(
-            envelopes: Vec<AxtEnvelopeRecord>,
-            snapshot: AxtPolicySnapshot,
-        ) -> SignedBlock {
-            build_block_with_envelope_records_at_ms(envelopes, snapshot, 0)
-        }
-        fn build_block_with_envelope_records_at_ms(
-            envelopes: Vec<AxtEnvelopeRecord>,
-            snapshot: AxtPolicySnapshot,
-            timestamp_ms: u64,
-        ) -> SignedBlock {
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(timestamp_ms));
-            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
-            let signer = crate::block::checked_keypair();
-            let mut block: SignedBlock = builder
-                .chain(0, None)
-                .sign(signer.private_key())
-                .unpack(|_| {})
-                .into();
-            let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
-            let results: Vec<TransactionResultInner> = Vec::new();
-            block
-                .set_execution_outputs(
-                    crate::execution_output_test_support::structural_network_outputs(
-                        &block,
-                        &entry_hashes,
-                        results,
-                    ),
-                    u64::try_from(block.network_entrypoint_count())
-                        .expect("fixture input count fits u64"),
-                    BTreeMap::new(),
-                    envelopes,
-                    snapshot,
-                    BTreeSet::new(),
-                    Vec::new(),
-                    &crate::execution_output_test_support::structural_output_limits(),
-                )
-                .expect("empty test block should attach AXT envelope results");
-            block
-        }
-        fn axt_policy_snapshot_for_validation_test(state: &State) -> AxtPolicySnapshot {
-            let mut entries: Vec<_> = state
-                .world
-                .axt_policies
-                .view()
-                .iter()
-                .map(|(dsid, policy)| AxtPolicyBinding {
-                    dsid: *dsid,
-                    policy: *policy,
-                })
-                .collect();
-            entries.sort_by_key(|binding| binding.dsid);
-            AxtPolicySnapshot {
-                version: AxtPolicySnapshot::compute_version(&entries),
-                entries,
-            }
-        }
-        fn axt_validation_state() -> State {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            State::new_for_testing(World::new(), kura, query)
-        }
-        fn expect_axt_error(
-            err: BlockValidationError,
-            reason: AxtRejectReason,
-            needle: &str,
-        ) -> AxtEnvelopeValidationDetails {
-            match err {
-                BlockValidationError::AxtEnvelopeValidationFailed(details) => {
-                    assert_eq!(details.reason, reason);
-                    assert!(
-                        details.message.contains(needle),
-                        "expected `{}` in `{}`",
-                        needle,
-                        details.message
-                    );
-                    details
-                }
-                other => panic!("unexpected error: {other:?}"),
-            }
-        }
-        fn expect_unanchored_axt_spend_rejection(result: Result<(), BlockValidationError>) {
-            expect_axt_error(
-                result.expect_err("unanchored remote spend must remain unavailable"),
-                AxtRejectReason::Proof,
-                crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
-            );
-        }
-        fn expect_axt_envelope_error(
-            state: &State,
-            envelope: AxtEnvelopeRecord,
-            reason: AxtRejectReason,
-            needle: &str,
-        ) -> AxtEnvelopeValidationDetails {
-            let snapshot = axt_policy_snapshot_for_validation_test(state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let error = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(error, reason, needle)
-        }
-        #[derive(Clone, Copy, Debug)]
-        enum AxtSinglePolicyRejectionCase {
-            HandleClockSkew,
-            DuplicateHandleFragmentKey,
-            HandleAmountMismatch,
-            MissingTouchManifest,
-            HandleWithoutTouchManifest,
-            TouchManifestPrefixViolation,
-            DescriptorBindingMismatch,
-            BudgetOverspendAcrossSubNonces,
-            MissingProofForDataspace,
-            ExpiredProof,
-            ZeroProofExpirySlot,
-            ProofExpiryBeforeHandleWithSkew,
-            BudgetOverspendInBlock,
-            HandleEraBelowPolicy,
-            ZeroHandleExpirySlot,
-            ZeroManifestRoot,
-            ZeroManifestRootInPolicy,
-            ZeroManifestRootInHandle,
-        }
-        struct AxtSinglePolicyRejectionSpec {
-            dsid: DataSpaceId,
-            policy: AxtPolicyEntry,
-            handle_expiry_slot: Option<u64>,
-            canonical_proof: Option<(&'static [u8], u64)>,
-            reason: AxtRejectReason,
-            needle: &'static str,
-        }
-        impl AxtSinglePolicyRejectionSpec {
-            #[allow(clippy::too_many_arguments)]
-            fn new(
-                dsid: u64,
-                lane: u32,
-                manifest_root: u8,
-                active_handle_era: u64,
-                current_slot: u64,
-                handle_expiry_slot: Option<u64>,
-                canonical_proof: Option<(&'static [u8], u64)>,
-                reason: AxtRejectReason,
-                needle: &'static str,
-            ) -> Self {
-                Self {
-                    dsid: DataSpaceId::new(dsid),
-                    policy: AxtPolicyEntry {
-                        manifest_root: [manifest_root; 32],
-                        target_lane: LaneId::new(lane),
-                        active_handle_era,
-                        next_handle_counter: 1,
-                        current_slot,
-                    },
-                    handle_expiry_slot,
-                    canonical_proof,
-                    reason,
-                    needle,
-                }
-            }
-
-            fn canonical_proof_blob(
-                &self,
-                remote_spend_claims: Vec<AxtRemoteSpendClaimV1>,
-            ) -> ProofBlob {
-                let (seed, expiry_slot) = self
-                    .canonical_proof
-                    .expect("case must declare its canonical proof");
-                proof_blob_for_with_amount(
-                    self.dsid,
-                    self.policy.manifest_root,
-                    seed,
-                    expiry_slot,
-                    None,
-                    None,
-                    remote_spend_claims,
-                )
-            }
-        }
-        impl AxtSinglePolicyRejectionCase {
-            fn spec(self) -> AxtSinglePolicyRejectionSpec {
-                use AxtRejectReason::{
-                    Budget, Descriptor, Duplicate, Expiry, HandleEra, Manifest, Proof,
-                };
-                match self {
-                    Self::HandleClockSkew => AxtSinglePolicyRejectionSpec::new(
-                        99,
-                        0,
-                        0x42,
-                        1,
-                        10,
-                        Some(50),
-                        Some((b"handle-clock-skew", 50)),
-                        Expiry,
-                        "max_clock_skew_ms exceeds configured bound",
-                    ),
-                    Self::DuplicateHandleFragmentKey => AxtSinglePolicyRejectionSpec::new(
-                        7,
-                        1,
-                        0x11,
-                        1,
-                        0,
-                        Some(5),
-                        Some((b"duplicate-handle", 12)),
-                        Duplicate,
-                        "handle fragments are not strictly ordered by producer key",
-                    ),
-                    Self::HandleAmountMismatch => AxtSinglePolicyRejectionSpec::new(
-                        7,
-                        1,
-                        0x11,
-                        1,
-                        0,
-                        Some(5),
-                        Some((b"amount-mismatch", 12)),
-                        Budget,
-                        "amount",
-                    ),
-                    Self::MissingTouchManifest => AxtSinglePolicyRejectionSpec::new(
-                        7,
-                        1,
-                        0x11,
-                        1,
-                        0,
-                        Some(5),
-                        Some((b"missing-touch", 12)),
-                        Descriptor,
-                        "missing touch manifest",
-                    ),
-                    Self::HandleWithoutTouchManifest => AxtSinglePolicyRejectionSpec::new(
-                        9,
-                        1,
-                        0x23,
-                        1,
-                        0,
-                        Some(5),
-                        Some((b"handle-without-touch", 12)),
-                        Descriptor,
-                        "missing touch manifest",
-                    ),
-                    Self::TouchManifestPrefixViolation => AxtSinglePolicyRejectionSpec::new(
-                        7,
-                        1,
-                        0x11,
-                        1,
-                        0,
-                        Some(5),
-                        Some((b"touch-prefix", 12)),
-                        Descriptor,
-                        "touch manifest read entry",
-                    ),
-                    Self::DescriptorBindingMismatch => AxtSinglePolicyRejectionSpec::new(
-                        7,
-                        1,
-                        0x11,
-                        1,
-                        0,
-                        Some(5),
-                        Some((b"descriptor-binding", 12)),
-                        Descriptor,
-                        "descriptor binding does not match envelope binding",
-                    ),
-                    Self::BudgetOverspendAcrossSubNonces => AxtSinglePolicyRejectionSpec::new(
-                        20,
-                        5,
-                        0x11,
-                        1,
-                        0,
-                        Some(10),
-                        Some((b"overspend-subnonce", 15)),
-                        Budget,
-                        "budget",
-                    ),
-                    Self::MissingProofForDataspace => AxtSinglePolicyRejectionSpec::new(
-                        21,
-                        8,
-                        0x44,
-                        1,
-                        2,
-                        Some(5),
-                        None,
-                        Proof,
-                        "missing proof",
-                    ),
-                    Self::ExpiredProof => AxtSinglePolicyRejectionSpec::new(
-                        22,
-                        9,
-                        0x45,
-                        1,
-                        70_000,
-                        None,
-                        Some((b"expired-proof", 4)),
-                        Expiry,
-                        "expired",
-                    ),
-                    Self::ZeroProofExpirySlot => AxtSinglePolicyRejectionSpec::new(
-                        23,
-                        10,
-                        0x46,
-                        1,
-                        1,
-                        Some(5),
-                        Some((b"zero-proof-expiry", 0)),
-                        Proof,
-                        "proof expiry slot is zero",
-                    ),
-                    Self::ProofExpiryBeforeHandleWithSkew => AxtSinglePolicyRejectionSpec::new(
-                        23,
-                        10,
-                        0x55,
-                        1,
-                        1,
-                        Some(9),
-                        Some((b"proof-before-handle", 8)),
-                        Expiry,
-                        "proof expires before handle",
-                    ),
-                    Self::BudgetOverspendInBlock => AxtSinglePolicyRejectionSpec::new(
-                        23,
-                        10,
-                        0x46,
-                        1,
-                        1,
-                        Some(5),
-                        Some((b"budget-block", 10)),
-                        Budget,
-                        "budget",
-                    ),
-                    Self::HandleEraBelowPolicy => AxtSinglePolicyRejectionSpec::new(
-                        9,
-                        2,
-                        0x22,
-                        2,
-                        0,
-                        Some(5),
-                        Some((b"handle-era", 10)),
-                        HandleEra,
-                        "authenticated handle does not use the committed manifest era",
-                    ),
-                    Self::ZeroHandleExpirySlot => AxtSinglePolicyRejectionSpec::new(
-                        9,
-                        2,
-                        0x22,
-                        1,
-                        0,
-                        Some(0),
-                        Some((b"zero-handle-expiry", 10)),
-                        AxtRejectReason::PolicyDenied,
-                        "handle fields are not canonical, authenticated, or usable",
-                    ),
-                    Self::ZeroManifestRoot => AxtSinglePolicyRejectionSpec::new(
-                        10,
-                        3,
-                        0,
-                        1,
-                        1,
-                        Some(5),
-                        None,
-                        Manifest,
-                        "manifest root is zeroed",
-                    ),
-                    Self::ZeroManifestRootInPolicy => AxtSinglePolicyRejectionSpec::new(
-                        10,
-                        3,
-                        0,
-                        1,
-                        0,
-                        Some(5),
-                        None,
-                        Manifest,
-                        "authenticated handle does not match its committed policy scope",
-                    ),
-                    Self::ZeroManifestRootInHandle => AxtSinglePolicyRejectionSpec::new(
-                        11,
-                        4,
-                        0x33,
-                        1,
-                        0,
-                        Some(5),
-                        Some((b"zero-root-handle", 8)),
-                        Manifest,
-                        "authenticated handle does not match its committed policy scope",
-                    ),
-                }
-            }
-            fn descriptor_touches(self, dsid: DataSpaceId) -> Vec<AxtTouchSpec> {
-                match self {
-                    Self::HandleClockSkew
-                    | Self::DuplicateHandleFragmentKey
-                    | Self::HandleAmountMismatch => vec![AxtTouchSpec {
-                        dsid,
-                        read: Vec::new(),
-                        write: Vec::new(),
-                    }],
-                    Self::MissingTouchManifest | Self::TouchManifestPrefixViolation => {
-                        vec![AxtTouchSpec {
-                            dsid,
-                            read: vec!["orders/".to_owned()],
-                            write: vec!["ledger/".to_owned()],
-                        }]
-                    }
-                    Self::HandleWithoutTouchManifest => vec![AxtTouchSpec {
-                        dsid,
-                        read: vec!["orders/".to_owned()],
-                        write: Vec::new(),
-                    }],
-                    _ => Vec::new(),
-                }
-            }
-            fn envelope_touches(self, dsid: DataSpaceId) -> Vec<AxtTouchFragment> {
-                match self {
-                    Self::DuplicateHandleFragmentKey
-                    | Self::HandleAmountMismatch
-                    | Self::MissingTouchManifest => vec![AxtTouchFragment {
-                        dsid,
-                        manifest: TouchManifest {
-                            read: Vec::new(),
-                            write: Vec::new(),
-                        },
-                    }],
-                    Self::TouchManifestPrefixViolation => vec![AxtTouchFragment {
-                        dsid,
-                        manifest: TouchManifest {
-                            read: vec!["payments/123".to_owned()],
-                            write: Vec::new(),
-                        },
-                    }],
-                    _ => Vec::new(),
-                }
-            }
-        }
-        #[allow(clippy::too_many_lines)]
-        fn run_axt_single_policy_rejection(case: AxtSinglePolicyRejectionCase) {
-            let mut spec = case.spec();
-            let (mut state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(spec.dsid, spec.policy.target_lane, 0xA5);
-            if spec.policy.manifest_root != [0; 32] {
-                spec.policy.manifest_root = manifest_root;
-            }
-            if matches!(
-                case,
-                AxtSinglePolicyRejectionCase::BudgetOverspendAcrossSubNonces
-            ) {
-                let mut counters = state.world.axt_handle_counters.block();
-                counters.insert(
-                    spec.dsid,
-                    iroha_data_model::nexus::AxtHandleCounterRecord::try_from_parts(
-                        3,
-                        spec.policy.active_handle_era,
-                    )
-                    .expect("budget fixture counter is canonical"),
-                );
-                counters.commit();
-                spec.policy.next_handle_counter = 3;
-            }
-            match case {
-                AxtSinglePolicyRejectionCase::ExpiredProof => {
-                    state.nexus.get_mut().axt.max_clock_skew_ms = 0;
-                }
-                AxtSinglePolicyRejectionCase::ProofExpiryBeforeHandleWithSkew => {
-                    state.nexus.get_mut().axt.max_clock_skew_ms = 1;
-                }
-                _ => {}
-            }
-            state.set_axt_policy(spec.dsid, spec.policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![spec.dsid],
-                touches: case.descriptor_touches(spec.dsid),
-            };
-            let canonical_binding = binding_for_descriptor(&descriptor);
-            let binding = if matches!(
-                case,
-                AxtSinglePolicyRejectionCase::DescriptorBindingMismatch
-            ) {
-                let mut wrong_bytes = *canonical_binding.as_bytes();
-                wrong_bytes[0] ^= 0xFF;
-                AxtBinding::new(wrong_bytes)
-            } else {
-                canonical_binding
-            };
-            let mut handles = match spec.handle_expiry_slot {
-                Some(expiry_slot) => vec![sample_handle(
-                    binding,
-                    spec.policy.target_lane,
-                    spec.dsid,
-                    expiry_slot,
-                    spec.policy.manifest_root,
-                )],
-                None => Vec::new(),
-            };
-            match case {
-                AxtSinglePolicyRejectionCase::HandleClockSkew => {
-                    let handle = &mut handles[0];
-                    handle.handle.max_clock_skew_ms = Some(1_000);
-                }
-                AxtSinglePolicyRejectionCase::DuplicateHandleFragmentKey => {
-                    let mut earlier = handles[0].clone();
-                    earlier.handle.sub_nonce = 2;
-                    handles.insert(0, earlier);
-                }
-                AxtSinglePolicyRejectionCase::HandleAmountMismatch => {
-                    handles[0].amount = Some("4".parse().expect("canonical fragment quantity"));
-                }
-                AxtSinglePolicyRejectionCase::BudgetOverspendAcrossSubNonces => {
-                    let first = &mut handles[0];
-                    first.handle.sub_nonce = 3;
-                    first.handle.budget.remaining = Quantity::from(10_u64);
-                    first.handle.budget.per_use = Some(Quantity::from(10_u64));
-                    first.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
-                    first.amount = Some("7".parse().expect("canonical fragment quantity"));
-                    let mut second = first.clone();
-                    second.handle.sub_nonce = 4;
-                    second.amount = Some("7".parse().expect("canonical fragment quantity"));
-                    handles.push(second);
-                }
-                AxtSinglePolicyRejectionCase::BudgetOverspendInBlock => {
-                    let first = &mut handles[0];
-                    first.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
-                    first.amount = Some("7".parse().expect("canonical fragment quantity"));
-                    let mut second = first.clone();
-                    second.handle.sub_nonce = 2;
-                    second.amount = Some("7".parse().expect("canonical fragment quantity"));
-                    handles.push(second);
-                }
-                AxtSinglePolicyRejectionCase::ZeroManifestRoot => {
-                    handles.clear();
-                }
-                AxtSinglePolicyRejectionCase::ZeroManifestRootInPolicy => {
-                    handles[0].handle.manifest_view_root = [0x55; 32];
-                }
-                AxtSinglePolicyRejectionCase::ZeroManifestRootInHandle => {
-                    handles[0].handle.manifest_view_root = [0; 32];
-                }
-                _ => {}
-            }
-            for handle in &mut handles {
-                *handle = sign_axt_validation_handle(
-                    handle.clone(),
-                    &state,
-                    &issuer,
-                    issuer_uaid,
-                    spec.policy.manifest_root,
-                );
-            }
-            let remote_spend_claims = handles
-                .iter()
-                .map(|handle| {
-                    let amount = handle
-                        .intent
-                        .op
-                        .amount
-                        .as_ref()
-                        .expect("table fixture uses a cleartext spend amount");
-                    remote_spend_claim(handle, amount)
-                })
-                .collect();
-            let embedded_proof = matches!(
-                case,
-                AxtSinglePolicyRejectionCase::HandleClockSkew
-                    | AxtSinglePolicyRejectionCase::ProofExpiryBeforeHandleWithSkew
-            );
-            let mut proofs = Vec::new();
-            if spec.canonical_proof.is_some() {
-                let proof = spec.canonical_proof_blob(remote_spend_claims);
-                if embedded_proof {
-                    handles[0].proof = Some(proof);
-                } else {
-                    proofs.push(AxtProofFragment {
-                        dsid: spec.dsid,
-                        proof,
-                    });
-                }
-            }
-            match case {
-                AxtSinglePolicyRejectionCase::ZeroManifestRoot => {
-                    proofs.push(AxtProofFragment {
-                        dsid: spec.dsid,
-                        proof: ProofBlob {
-                            payload: vec![0; 32],
-                            expiry_slot: Some(10),
-                        },
-                    });
-                }
-                AxtSinglePolicyRejectionCase::ZeroManifestRootInPolicy => {
-                    proofs.push(AxtProofFragment {
-                        dsid: spec.dsid,
-                        proof: ProofBlob {
-                            payload: vec![0; 32],
-                            expiry_slot: Some(9),
-                        },
-                    });
-                }
-                _ => {}
-            }
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane: spec.policy.target_lane,
-                descriptor,
-                touches: case.envelope_touches(spec.dsid),
-                proofs,
-                handles,
-                commit_height: 1,
-            };
-            if matches!(case, AxtSinglePolicyRejectionCase::ExpiredProof) {
-                let (_, expiry_slot) = spec
-                    .canonical_proof
-                    .expect("expired-proof case declares its proof expiry");
-                let timestamp_ms = expiry_slot
-                    .saturating_add(1)
-                    .saturating_mul(state.nexus.read().axt.slot_length_ms.get());
-                let snapshot = axt_policy_snapshot_for_validation_test(&state);
-                let block =
-                    build_block_with_envelope_records_at_ms(vec![envelope], snapshot, timestamp_ms);
-                let state_block = state.block(block.header());
-                let error = validate_axt_envelopes(&block, &state_block).unwrap_err();
-                expect_axt_error(error, spec.reason, spec.needle);
-            } else {
-                expect_axt_envelope_error(&state, envelope, spec.reason, spec.needle);
-            }
-        }
-        macro_rules! axt_single_policy_rejection_tests {
-            ($($name:ident => $case:ident),+ $(,)?) => {
-                $(
-                    #[test]
-                    fn $name() {
-                        run_axt_single_policy_rejection(AxtSinglePolicyRejectionCase::$case);
-                    }
-                )+
-            };
-        }
-        axt_single_policy_rejection_tests! {
-            axt_validation_rejects_handle_clock_skew_above_config => HandleClockSkew,
-            axt_validation_rejects_duplicate_handle_fragment_key => DuplicateHandleFragmentKey,
-            axt_validation_rejects_handle_amount_mismatch => HandleAmountMismatch,
-            axt_validation_rejects_missing_touch_manifest => MissingTouchManifest,
-            axt_validation_rejects_handle_without_touch_manifest => HandleWithoutTouchManifest,
-            axt_validation_rejects_touch_manifest_prefix_violation => TouchManifestPrefixViolation,
-            axt_validation_rejects_descriptor_binding_mismatch => DescriptorBindingMismatch,
-            axt_validation_rejects_budget_overspend_across_sub_nonces =>
-                BudgetOverspendAcrossSubNonces,
-            axt_validation_rejects_missing_proof_for_dataspace => MissingProofForDataspace,
-            axt_validation_rejects_expired_proof => ExpiredProof,
-            axt_validation_rejects_zero_proof_expiry_slot => ZeroProofExpirySlot,
-            axt_validation_rejects_proof_expiry_before_handle_with_skew =>
-                ProofExpiryBeforeHandleWithSkew,
-            axt_validation_rejects_budget_overspend_in_block => BudgetOverspendInBlock,
-            axt_validation_rejects_handle_era_below_policy => HandleEraBelowPolicy,
-            axt_validation_rejects_zero_handle_expiry_slot => ZeroHandleExpirySlot,
-            axt_validation_rejects_zero_manifest_root => ZeroManifestRoot,
-            axt_validation_rejects_zero_manifest_root_in_policy => ZeroManifestRootInPolicy,
-            axt_validation_rejects_zero_manifest_root_in_handle => ZeroManifestRootInHandle,
-        }
-        #[test]
-        fn axt_validation_rejects_mismatched_commit_heights() {
-            let state = axt_validation_state();
-            for commit_height in [0, 2] {
-                let descriptor = AxtDescriptor {
-                    dsids: vec![DataSpaceId::new(1)],
-                    touches: Vec::new(),
-                };
-                let envelope = AxtEnvelopeRecord {
-                    binding: binding_for_descriptor(&descriptor),
-                    lane: LaneId::new(0),
-                    descriptor,
-                    touches: Vec::new(),
-                    proofs: Vec::new(),
-                    handles: Vec::new(),
-                    commit_height,
-                };
-                let block = build_block_with_envelopes(envelope, AxtPolicySnapshot::default());
-                let state_block = state.block(block.header());
-                let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-                expect_axt_error(
-                    err,
-                    AxtRejectReason::Descriptor,
-                    &format!("commit height {commit_height} does not match block height 1"),
-                );
-            }
-        }
-        #[test]
-        fn axt_validation_rejects_resultless_block_without_policy_snapshot() {
-            let state = axt_validation_state();
-            let descriptor = AxtDescriptor {
-                dsids: vec![DataSpaceId::new(1)],
-                touches: Vec::new(),
-            };
-            let envelope = AxtEnvelopeRecord {
-                binding: binding_for_descriptor(&descriptor),
-                lane: LaneId::new(0),
-                descriptor,
-                touches: Vec::new(),
-                proofs: Vec::new(),
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-            let block = build_block_with_envelopes(envelope, AxtPolicySnapshot::default())
-                .canonical_resultless_proposal();
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            let details = expect_axt_error(
-                err,
-                AxtRejectReason::MissingPolicy,
-                "block result is missing its required AXT policy snapshot",
-            );
-            assert_eq!(
-                details.snapshot_version, None,
-                "a resultless block must not borrow the live state's snapshot version"
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_noncanonical_embedded_policy_snapshots() {
-            let state = axt_validation_state();
-            let descriptor = AxtDescriptor {
-                dsids: vec![DataSpaceId::new(1)],
-                touches: Vec::new(),
-            };
-            let envelope = AxtEnvelopeRecord {
-                binding: binding_for_descriptor(&descriptor),
-                lane: LaneId::new(0),
-                descriptor,
-                touches: Vec::new(),
-                proofs: Vec::new(),
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-            let base = build_block_with_envelopes(envelope, AxtPolicySnapshot::default());
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x42; 32],
-                target_lane: LaneId::new(0),
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 1,
-            };
-            let first = AxtPolicyBinding {
-                dsid: DataSpaceId::new(1),
-                policy,
-            };
-            let second = AxtPolicyBinding {
-                dsid: DataSpaceId::new(2),
-                policy,
-            };
-            let duplicate_entries = vec![first, first];
-            let reversed_entries = vec![second, first];
-            let canonical_entries = vec![first, second];
-            let invalid_snapshots = [
-                AxtPolicySnapshot {
-                    version: AxtPolicySnapshot::compute_version(&duplicate_entries),
-                    entries: duplicate_entries,
-                },
-                AxtPolicySnapshot {
-                    version: AxtPolicySnapshot::compute_version(&reversed_entries),
-                    entries: reversed_entries,
-                },
-                AxtPolicySnapshot {
-                    version: AxtPolicySnapshot::compute_version(&canonical_entries).wrapping_add(1),
-                    entries: canonical_entries,
-                },
-            ];
-            for invalid_snapshot in invalid_snapshots {
-                let mut block = base.clone();
-                block
-                    .replace_axt_policy_snapshot_for_testing(invalid_snapshot)
-                    .expect("test block has execution results");
-                let state_block = state.block(block.header());
-                let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-                expect_axt_error(
-                    err,
-                    AxtRejectReason::PolicyDenied,
-                    "invalid AXT policy snapshot",
-                );
-            }
-        }
-        #[test]
-        fn axt_validation_accepts_cross_lane_handles() {
-            let dsid_a = DataSpaceId::new(7);
-            let dsid_b = DataSpaceId::new(8);
-            let lane_a = LaneId::new(1);
-            let lane_b = LaneId::new(2);
-            let (state, issuer, issuer_uaid, manifest_roots) =
-                authenticated_axt_validation_state_for(&[
-                    (dsid_a, lane_a, 0x11),
-                    (dsid_b, lane_b, 0x22),
-                ]);
-            let manifest_root_a = manifest_roots[&dsid_a];
-            let manifest_root_b = manifest_roots[&dsid_b];
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid_a, dsid_b],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let mut cross_origin_handle =
-                sample_handle(binding, lane_a, dsid_a, 20, manifest_root_a);
-            cross_origin_handle.handle.subject.origin_dsid = Some(dsid_b);
-            let handle_a = sign_axt_validation_handle(
-                cross_origin_handle,
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root_a,
-            );
-            let handle_b = sign_axt_validation_handle(
-                sample_handle(binding, lane_b, dsid_b, 20, manifest_root_b),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root_b,
-            );
-            let amount = Quantity::from(5_u64);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane: lane_a,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![
-                    AxtProofFragment {
-                        dsid: dsid_a,
-                        proof: proof_blob_for_with_amount(
-                            dsid_a,
-                            manifest_root_a,
-                            b"cross-lane-a",
-                            25,
-                            None,
-                            None,
-                            vec![remote_spend_claim(&handle_a, &amount)],
-                        ),
-                    },
-                    AxtProofFragment {
-                        dsid: dsid_b,
-                        proof: proof_blob_for_with_amount(
-                            dsid_b,
-                            manifest_root_b,
-                            b"cross-lane-b",
-                            25,
-                            None,
-                            None,
-                            vec![remote_spend_claim(&handle_b, &amount)],
-                        ),
-                    },
-                ],
-                handles: vec![handle_a, handle_b],
-                commit_height: 1,
-            };
-            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
-            for entry in &mut snapshot.entries {
-                entry.policy.next_handle_counter = 2;
-            }
-            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let mut reversed_envelope = envelope.clone();
-            reversed_envelope.handles.reverse();
-            let reversed_block = build_block_with_envelopes(reversed_envelope, snapshot.clone());
-            let reversed_state_block = state.block(reversed_block.header());
-            let err = validate_axt_envelopes(&reversed_block, &reversed_state_block).unwrap_err();
-            expect_axt_error(
-                err,
-                AxtRejectReason::Duplicate,
-                "handle fragments are not strictly ordered by producer key",
-            );
-            drop(reversed_state_block);
-            let block = build_block_with_envelopes(envelope.clone(), snapshot);
-            let mut state_block = state.block(block.header());
-            {
-                let mut executed = state_block.transaction();
-                executed
-                    .record_axt_envelope(envelope)
-                    .expect("cross-lane control must execute");
-                executed.apply();
-            }
-            let result = validate_axt_envelopes(&block, &state_block);
-            expect_unanchored_axt_spend_rejection(result);
-        }
-        #[test]
-        fn axt_validation_reuses_one_dataspace_proof_for_two_bound_intents() {
-            let dsid = DataSpaceId::new(72);
-            let lane = LaneId::new(3);
-            let (state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x72);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let handle_a = sample_handle(binding, lane, dsid, 20, manifest_root);
-            let mut handle_b = handle_a.clone();
-            handle_b.handle.sub_nonce = 2;
-            let mut handle_a =
-                sign_axt_validation_handle(handle_a, &state, &issuer, issuer_uaid, manifest_root);
-            let mut handle_b =
-                sign_axt_validation_handle(handle_b, &state, &issuer, issuer_uaid, manifest_root);
-            let amount = Quantity::from(5_u64);
-            let claims = vec![
-                remote_spend_claim(&handle_a, &amount),
-                remote_spend_claim(&handle_b, &amount),
-            ];
-            let mut proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"same-dataspace-proof-reuse",
-                25,
-                None,
-                None,
-                claims,
-            );
-            let amount_commitment =
-                ivm::axt::derive_amount_commitment(dsid, &amount, Some(proof.payload.as_slice()));
-            let mut proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
-                .expect("decode proof for cleartext commitment");
-            proof_envelope.amount_commitment = Some(amount_commitment);
-            proof.payload =
-                norito::to_bytes(&proof_envelope).expect("encode cleartext-committed proof");
-            handle_a.amount_commitment = Some(amount_commitment);
-            handle_b.amount_commitment = Some(amount_commitment);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment { dsid, proof }],
-                handles: vec![handle_a, handle_b],
-                commit_height: 1,
-            };
-            let mut unconsumed_claim = envelope.clone();
-            unconsumed_claim
-                .handles
-                .pop()
-                .expect("fixture has a second proof-bound handle");
-            expect_axt_envelope_error(
-                &state,
-                unconsumed_claim,
-                AxtRejectReason::Proof,
-                "claims were not consumed exactly once",
-            );
-            let mut attached_envelope = envelope.clone();
-            let attached_proof = attached_envelope
-                .proofs
-                .pop()
-                .expect("fixture has one fallback proof")
-                .proof;
-            for handle in &mut attached_envelope.handles {
-                handle.proof = Some(attached_proof.clone());
-            }
-            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
-            snapshot.entries[0].policy.next_handle_counter = 3;
-            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope.clone(), snapshot.clone());
-            let mut state_block = state.block(block.header());
-            {
-                let mut executed = state_block.transaction();
-                executed
-                    .record_axt_envelope(envelope)
-                    .expect("two-claim fallback control must execute");
-                executed.apply();
-            }
-            reset_axt_fastpq_proof_verification_count();
-            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
-            assert_eq!(
-                axt_fastpq_proof_verification_count(),
-                1,
-                "one exact fallback proof must be verified cryptographically only once"
-            );
-            assert_eq!(
-                axt_canonical_proof_decode_count(),
-                1,
-                "one exact fallback proof must be canonically decoded only once"
-            );
-            assert_eq!(
-                axt_proof_amount_fact_resolution_count(),
-                1,
-                "two same-amount fallback uses must derive the variable commitment once"
-            );
-            drop(state_block);
-            let attached_block = build_block_with_envelopes(attached_envelope.clone(), snapshot);
-            let mut attached_state_block = state.block(attached_block.header());
-            {
-                let mut executed = attached_state_block.transaction();
-                executed
-                    .record_axt_envelope(attached_envelope)
-                    .expect("two-claim attached control must execute");
-                executed.apply();
-            }
-            reset_axt_fastpq_proof_verification_count();
-            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(
-                &attached_block,
-                &attached_state_block,
-            ));
-            assert_eq!(
-                axt_fastpq_proof_verification_count(),
-                1,
-                "exact attached proof duplicates must share one cryptographic verification"
-            );
-            assert_eq!(
-                axt_canonical_proof_decode_count(),
-                1,
-                "exact attached proof duplicates must share one canonical decode"
-            );
-            assert_eq!(
-                axt_proof_amount_fact_resolution_count(),
-                1,
-                "two same-amount attached uses must derive the variable commitment once"
-            );
-        }
-        include!("block/axt_shared_budget_across_envelopes_test.rs");
-        #[test]
-        fn axt_validation_rejects_duplicate_authenticated_handle_usage() {
-            let (state, mut envelope) = clear_amount_fixture(119, 0x77, b"duplicate-proof-claim");
-            envelope.handles.push(envelope.handles[0].clone());
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::ReplayCache,
-                "duplicate authenticated handle usage in block",
-            );
-        }
-
-        #[test]
-        fn axt_validation_rejects_signed_origin_outside_bound_descriptor() {
-            let dsid = DataSpaceId::new(120);
-            let lane = LaneId::new(1);
-            let (state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x78);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let mut handle = sample_handle(binding, lane, dsid, 12, manifest_root);
-            handle.handle.subject.origin_dsid = Some(DataSpaceId::new(9_999));
-            let handle =
-                sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
-            let amount = Quantity::from(5_u64);
-            let proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"signed-undeclared-origin",
-                12,
-                None,
-                None,
-                vec![remote_spend_claim(&handle, &amount)],
-            );
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment { dsid, proof }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Descriptor,
-                "origin dataspace is not declared",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_correctly_signed_handle_for_another_asset() {
-            let dsid = DataSpaceId::new(121);
-            let lane = LaneId::new(1);
-            let (mut state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x79);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let mut handle = sample_handle(binding, lane, dsid, 12, manifest_root);
-            handle.handle.asset_definition_id = AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 2,
-            ])
-            .expect("valid alternate AXT fixture asset id");
-            install_test_asset_incarnation(&mut state, &handle.handle.asset_definition_id);
-            let handle =
-                sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
-            let amount = Quantity::from(5_u64);
-            let proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"signed-other-asset",
-                12,
-                None,
-                None,
-                vec![remote_spend_claim(&handle, &amount)],
-            );
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment { dsid, proof }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::PolicyDenied,
-                "handle asset does not match remote spend intent asset",
-            );
-        }
-        #[test]
-        fn axt_validation_enforces_exact_block_start_asset_incarnation() {
-            let dsid = DataSpaceId::new(122);
-            let lane = LaneId::new(1);
-            let (state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x7A);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let amount = Quantity::from(5_u64);
-            let current_handle = sign_axt_validation_handle(
-                sample_handle(binding, lane, dsid, 12, manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root,
-            );
-            let current_proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"block-current-asset-incarnation",
-                12,
-                None,
-                None,
-                vec![remote_spend_claim(&current_handle, &amount)],
-            );
-            let current_envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor: descriptor.clone(),
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: current_proof,
-                }],
-                handles: vec![current_handle],
-                commit_height: 1,
-            };
-            let mut control_snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let control_policy = control_snapshot
-                .entries
-                .iter_mut()
-                .find(|binding| binding.dsid == dsid)
-                .expect("fixture policy");
-            control_policy.policy.next_handle_counter = 2;
-            control_snapshot.version =
-                AxtPolicySnapshot::compute_version(&control_snapshot.entries);
-            let current_block =
-                build_block_with_envelopes(current_envelope.clone(), control_snapshot);
-            let mut current_state_block = state.block(current_block.header());
-            {
-                let mut executed = current_state_block.transaction();
-                executed
-                    .record_axt_envelope(current_envelope.clone())
-                    .expect("current-incarnation control must execute");
-                executed.apply();
-            }
-            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(
-                &current_block,
-                &current_state_block,
-            ));
-            drop(current_state_block);
-
-            let stale_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
-                &state.network_id,
-                &sample_asset_definition_id(),
-                &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"axt-block-stale-asset-registration",
-                )),
-                &Hash::new(b"axt-block-stale-asset-execution"),
-                7,
-            );
-            assert_ne!(
-                stale_incarnation,
-                state
-                    .world
-                    .axt_asset_incarnations
-                    .view()
-                    .get(&sample_asset_definition_id())
-                    .copied()
-                    .expect("fixture current incarnation")
-            );
-
-            let stale_handle = sign_axt_validation_handle_with_incarnation(
-                sample_handle(binding, lane, dsid, 12, manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root,
-                stale_incarnation,
-            );
-            let stale_proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"block-stale-signed-asset-incarnation",
-                12,
-                None,
-                None,
-                vec![remote_spend_claim(&stale_handle, &amount)],
-            );
-            expect_axt_envelope_error(
-                &state,
-                AxtEnvelopeRecord {
-                    binding,
-                    lane,
-                    descriptor,
-                    touches: Vec::new(),
-                    proofs: vec![AxtProofFragment {
-                        dsid,
-                        proof: stale_proof,
-                    }],
-                    handles: vec![stale_handle],
-                    commit_height: 1,
-                },
-                AxtRejectReason::PolicyDenied,
-                "stable block-start asset incarnation",
-            );
-
-            let mut changed_state_block = state.block(current_block.header());
-            changed_state_block
-                .world
-                .axt_asset_incarnations
-                .insert(sample_asset_definition_id(), stale_incarnation);
-            let error = validate_axt_envelopes(&current_block, &changed_state_block)
-                .expect_err("a same-block asset reincarnation must invalidate AXT admission");
-            expect_axt_error(
-                error,
-                AxtRejectReason::PolicyDenied,
-                "stable block-start asset incarnation",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_historical_incarnation_proof_for_current_handle() {
-            let dsid = DataSpaceId::new(123);
-            let lane = LaneId::new(1);
-            let (state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x7B);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let amount = Quantity::from(5_u64);
-            let current_handle = sign_axt_validation_handle(
-                sample_handle(binding, lane, dsid, 12, manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root,
-            );
-            let historical_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
-                &state.network_id,
-                &sample_asset_definition_id(),
-                &HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"axt-block-historical-proof-registration",
-                )),
-                &Hash::new(b"axt-block-historical-proof-execution"),
-                9,
-            );
-            assert_ne!(
-                historical_incarnation,
-                current_handle
-                    .handle
-                    .issuer_context
-                    .asset_definition_incarnation
-            );
-            let historical_handle = sign_axt_validation_handle_with_incarnation(
-                sample_handle(binding, lane, dsid, 12, manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root,
-                historical_incarnation,
-            );
-            let historical_proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"block-historical-incarnation-proof",
-                12,
-                None,
-                None,
-                vec![remote_spend_claim(&historical_handle, &amount)],
-            );
-            expect_axt_envelope_error(
-                &state,
-                AxtEnvelopeRecord {
-                    binding,
-                    lane,
-                    descriptor: descriptor.clone(),
-                    touches: Vec::new(),
-                    proofs: vec![AxtProofFragment {
-                        dsid,
-                        proof: historical_proof,
-                    }],
-                    handles: vec![current_handle.clone()],
-                    commit_height: 1,
-                },
-                AxtRejectReason::Proof,
-                "FASTPQ proof does not commit to the exact remote spend intent",
-            );
-
-            let current_proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"block-current-incarnation-proof",
-                12,
-                None,
-                None,
-                vec![remote_spend_claim(&current_handle, &amount)],
-            );
-            let current_envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: current_proof,
-                }],
-                handles: vec![current_handle],
-                commit_height: 1,
-            };
-            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let policy = snapshot
-                .entries
-                .iter_mut()
-                .find(|binding| binding.dsid == dsid)
-                .expect("fixture policy");
-            policy.policy.next_handle_counter = 2;
-            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(current_envelope.clone(), snapshot);
-            let mut state_block = state.block(block.header());
-            {
-                let mut executed = state_block.transaction();
-                executed
-                    .record_axt_envelope(current_envelope)
-                    .expect("current-incarnation proof control must execute");
-                executed.apply();
-            }
-            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
-        }
-        #[test]
-        fn axt_validation_rejects_proof_reused_for_another_remote_spend_recipient() {
-            let (state, mut envelope) =
-                clear_amount_fixture(71, 0x71, b"remote-spend-recipient-binding");
-            envelope.handles[0].intent.op.to = ACCOUNT_FROM_LITERAL.to_owned();
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Proof,
-                "does not commit to the exact remote spend intent",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_mutated_proof_amount_with_recomputed_commitment() {
-            let (state, mut envelope) = clear_amount_fixture(18, 0x32, b"mutated-proof-amount");
-            let handle = &mut envelope.handles[0];
-            let proof = handle
-                .proof
-                .as_mut()
-                .expect("fixture has an embedded proof");
-            let mut proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
-                .expect("decode authenticated amount proof");
-            let forged_amount = Quantity::from(7_u64);
-            proof_envelope.committed_amount = Some(7);
-            proof_envelope.amount_commitment = None;
-            proof.payload = norito::to_bytes(&proof_envelope).expect("encode mutated amount proof");
-            let forged_commitment = ivm::axt::derive_amount_commitment(
-                proof_envelope.dsid,
-                &forged_amount,
-                Some(proof.payload.as_slice()),
-            );
-            proof_envelope.amount_commitment = Some(forged_commitment);
-            proof.payload = norito::to_bytes(&proof_envelope)
-                .expect("encode mutated proof with recomputed commitment");
-            handle.amount_commitment = Some(forged_commitment);
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Proof,
-                "committed_amount does not match proof-bound batch metadata",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_stale_fragment_commitment() {
-            let (state, mut envelope) =
-                clear_amount_fixture(19, 0x33, b"stale-fragment-commitment");
-            envelope.handles[0]
-                .amount_commitment
-                .as_mut()
-                .expect("fixture has an amount commitment")[0] ^= 0x01;
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Budget,
-                "handle amount commitment does not match",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_account_alias_in_remote_spend_intent() {
-            let (state, mut envelope) =
-                clear_amount_fixture(20, 0x34, b"noncanonical-intent-account");
-            envelope.handles[0].intent.op.to = "merchant@wonder".to_owned();
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::PolicyDenied,
-                "remote spend intent fields are not canonical or usable",
-            );
-        }
-        #[test]
-        fn axt_validation_accepts_same_replay_and_budget_tuple_from_distinct_dataspaces() {
-            let dsid_a = DataSpaceId::new(7);
-            let dsid_b = DataSpaceId::new(8);
-            let lane = LaneId::new(1);
-            let issuer = crate::block::checked_keypair();
-            let issuer_account_id = AccountId::new(issuer.public_key().clone());
-            let issuer_uaid =
-                UniversalAccountId::from_hash(Hash::new(b"axt-block-replay-scope-issuer"));
-            let issuer_account = iroha_data_model::account::Account::new(issuer_account_id.clone())
-                .with_uaid(Some(issuer_uaid))
-                .build(&issuer_account_id);
-            let asset_domain_id =
-                DomainId::try_new("axt-scope", "universal").expect("valid fixture domain");
-            let asset_domain = iroha_data_model::domain::Domain::new(asset_domain_id.clone())
-                .build(&issuer_account_id);
-            let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
-                sample_asset_definition_id(),
-                "AXT scope fixture asset",
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                None,
-            )
-            .with_owning_domain(Some(asset_domain_id))
-            .build(&issuer_account_id);
-            let mut world = World::with([asset_domain], [issuer_account], [asset_definition]);
-            let manifest_for = |dataspace| AssetPermissionManifest {
-                version: ManifestVersion::default(),
-                uaid: issuer_uaid,
-                dataspace,
-                issued_ms: 0,
-                activation_epoch: 1,
-                expiry_epoch: None,
-                entries: Vec::new(),
-            };
-            let mut record_a = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
-                manifest_for(dsid_a),
-            );
-            record_a.lifecycle.mark_activated(1);
-            let mut record_b = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
-                manifest_for(dsid_b),
-            );
-            record_b.lifecycle.mark_activated(1);
-            let mut manifest_root_a = [0_u8; 32];
-            manifest_root_a.copy_from_slice(record_a.manifest_hash.as_ref());
-            let mut manifest_root_b = [0_u8; 32];
-            manifest_root_b.copy_from_slice(record_b.manifest_hash.as_ref());
-            let mut manifest_set =
-                crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
-            manifest_set.upsert(record_a);
-            manifest_set.upsert(record_b);
-            world
-                .space_directory_manifests_mut_for_testing()
-                .insert(issuer_uaid, manifest_set);
-            let mut issuer_bindings =
-                crate::nexus::space_directory::UaidDataspaceBindings::default();
-            issuer_bindings.bind_account(dsid_a, issuer_account_id.clone());
-            issuer_bindings.bind_account(dsid_b, issuer_account_id);
-            world
-                .uaid_dataspaces_mut_for_testing()
-                .insert(issuer_uaid, issuer_bindings);
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(world, kura, query);
-            let asset_definition_incarnation =
-                install_test_asset_incarnation(&mut state, &sample_asset_definition_id());
-            for (dsid, manifest_root) in [(dsid_a, manifest_root_a), (dsid_b, manifest_root_b)] {
-                state.set_axt_policy(
-                    dsid,
-                    AxtPolicyEntry {
-                        manifest_root,
-                        target_lane: lane,
-                        active_handle_era: 1,
-                        next_handle_counter: 1,
-                        current_slot: 0,
-                    },
-                );
-            }
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid_a, dsid_b],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let signed_fragment = |dsid, manifest_root| {
-                let mut fragment = sample_handle(binding, lane, dsid, 5, manifest_root);
-                fragment.handle.subject.origin_dsid = Some(dsid);
-                fragment.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
-                fragment.amount = Some("7".parse().expect("canonical fragment quantity"));
-                let context = AxtHandleIssuerContextV1 {
-                    network_id: state.network_id,
-                    asset_dsid: dsid,
-                    asset_definition_incarnation,
-                    issuer: issuer_uaid,
-                    issuer_manifest_root: manifest_root,
-                    code_root: [0xC1; 32],
-                    abi_version: 1,
-                    abi_hash: [0xA1; 32],
-                };
-                fragment.handle = fragment
-                    .handle
-                    .draft()
-                    .sign_by_issuer_v1(context, issuer.private_key())
-                    .expect("sign scoped AXT handle");
-                fragment
-            };
-            let handle_a = signed_fragment(dsid_a, manifest_root_a);
-            let handle_b = signed_fragment(dsid_b, manifest_root_b);
-            let amount = Quantity::from(7_u64);
-            let proofs = vec![
-                AxtProofFragment {
-                    dsid: dsid_a,
-                    proof: proof_blob_for_with_amount(
-                        dsid_a,
-                        manifest_root_a,
-                        b"cross-dsid-a",
-                        12,
-                        None,
-                        None,
-                        vec![remote_spend_claim(&handle_a, &amount)],
-                    ),
-                },
-                AxtProofFragment {
-                    dsid: dsid_b,
-                    proof: proof_blob_for_with_amount(
-                        dsid_b,
-                        manifest_root_b,
-                        b"cross-dsid-b",
-                        12,
-                        None,
-                        None,
-                        vec![remote_spend_claim(&handle_b, &amount)],
-                    ),
-                },
-            ];
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs,
-                handles: vec![handle_a, handle_b],
-                commit_height: 1,
-            };
-            let mut same_dataspace_replay = envelope.clone();
-            same_dataspace_replay.handles[1] = same_dataspace_replay.handles[0].clone();
-            same_dataspace_replay.handles[1].intent.op.amount =
-                Some("8".parse().expect("canonical replay amount"));
-            same_dataspace_replay.handles[1].amount =
-                Some("8".parse().expect("canonical replay fragment amount"));
-            expect_axt_envelope_error(
-                &state,
-                same_dataspace_replay,
-                AxtRejectReason::ReplayCache,
-                "duplicate authenticated handle usage in block",
-            );
-            let mut advertised = axt_policy_snapshot_for_validation_test(&state);
-            for binding in &mut advertised.entries {
-                binding.policy.next_handle_counter = 2;
-            }
-            advertised.version = AxtPolicySnapshot::compute_version(&advertised.entries);
-            let block = build_block_with_envelopes(envelope.clone(), advertised);
-            let mut state_block = state.block(block.header());
-            {
-                let mut executed = state_block.transaction();
-                executed
-                    .record_axt_envelope(envelope)
-                    .expect("cross-dataspace replay-scope control must execute");
-                executed.apply();
-            }
-            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
-        }
-        #[test]
-        fn axt_validation_rejects_raw_manifest_root_proof() {
-            let mut state = axt_validation_state();
-            let dsid = DataSpaceId::new(21);
-            let lane = LaneId::new(8);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x44; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
-                }],
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Proof,
-                "not an AXT proof envelope",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_oversized_proof_before_decode() {
-            let mut state = axt_validation_state();
-            let dsid = DataSpaceId::new(22);
-            let lane = LaneId::new(9);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x45; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let envelope = AxtEnvelopeRecord {
-                binding: binding_for_descriptor(&descriptor),
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: vec![0; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
-                        expiry_slot: Some(12),
-                    },
-                }],
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-
-            expect_axt_envelope_error(&state, envelope, AxtRejectReason::Proof, "decode limit");
-        }
-        #[test]
-        fn axt_validation_rejects_extended_proof_expiry() {
-            let mut state = axt_validation_state();
-            let dsid = DataSpaceId::new(72);
-            let lane = LaneId::new(12);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x72; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 3,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let mut proof = proof_blob_for(dsid, policy.manifest_root, b"extended-expiry", 12);
-            proof.expiry_slot = Some(120);
-            let envelope = AxtEnvelopeRecord {
-                binding: binding_for_descriptor(&descriptor),
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment { dsid, proof }],
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Proof,
-                "expiry_slot does not match proof-bound batch metadata",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_manifest_rotation_and_da_relabelling() {
-            let dsid = DataSpaceId::new(73);
-            let lane = LaneId::new(13);
-            let old_manifest = [0x73; 32];
-            let current_manifest = [0x74; 32];
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let make_record = |proof| AxtEnvelopeRecord {
-                binding: binding_for_descriptor(&descriptor),
-                lane,
-                descriptor: descriptor.clone(),
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment { dsid, proof }],
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-
-            let mut state = axt_validation_state();
-            state.set_axt_policy(
-                dsid,
-                AxtPolicyEntry {
-                    manifest_root: current_manifest,
-                    target_lane: lane,
-                    active_handle_era: 1,
-                    next_handle_counter: 1,
-                    current_slot: 3,
-                },
-            );
-            let mut rotated = proof_blob_for(dsid, old_manifest, b"rotated-manifest", 12);
-            let mut proof_envelope =
-                norito::decode_from_bytes::<AxtProofEnvelope>(&rotated.payload)
-                    .expect("decode bound proof envelope");
-            proof_envelope.manifest_root = current_manifest;
-            rotated.payload =
-                norito::to_bytes(&proof_envelope).expect("encode relabelled manifest envelope");
-            expect_axt_envelope_error(
-                &state,
-                make_record(rotated),
-                AxtRejectReason::Proof,
-                "manifest_root does not match proof-bound batch metadata",
-            );
-
-            state.set_axt_policy(
-                dsid,
-                AxtPolicyEntry {
-                    manifest_root: old_manifest,
-                    target_lane: lane,
-                    active_handle_era: 1,
-                    next_handle_counter: 1,
-                    current_slot: 3,
-                },
-            );
-            let mut relabelled_da = proof_blob_for(dsid, old_manifest, b"relabelled-da", 12);
-            let mut proof_envelope =
-                norito::decode_from_bytes::<AxtProofEnvelope>(&relabelled_da.payload)
-                    .expect("decode bound proof envelope");
-            proof_envelope.da_commitment = Some([0xDA; 32]);
-            relabelled_da.payload =
-                norito::to_bytes(&proof_envelope).expect("encode relabelled DA envelope");
-            expect_axt_envelope_error(
-                &state,
-                make_record(relabelled_da),
-                AxtRejectReason::Proof,
-                "da_commitment does not match proof-bound batch metadata",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_manifest_mismatch_in_proof() {
-            let dsid = DataSpaceId::new(23);
-            let lane = LaneId::new(10);
-            let (state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x77);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let handle = sign_axt_validation_handle(
-                sample_handle(binding, lane, dsid, 8, manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root,
-            );
-            let mismatched_envelope = AxtProofEnvelope {
-                dsid,
-                manifest_root: [0x99; 32],
-                da_commitment: None,
-                proof: vec![0xAA],
-                fastpq_binding: None,
-                committed_amount: None,
-                amount_commitment: None,
-            };
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: norito::to_bytes(&mismatched_envelope)
-                            .expect("encode mismatched envelope"),
-                        expiry_slot: Some(12),
-                    },
-                }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(&state, envelope, AxtRejectReason::Manifest, "manifest");
-        }
-        #[test]
-        fn axt_validation_rejects_proof_dsid_mismatch() {
-            let dsid = DataSpaceId::new(24);
-            let lane = LaneId::new(11);
-            let (state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x78);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let handle = sign_axt_validation_handle(
-                sample_handle(binding, lane, dsid, 9, manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root,
-            );
-            let wrong_envelope = iroha_data_model::nexus::AxtProofEnvelope {
-                dsid: DataSpaceId::new(dsid.as_u64() + 1),
-                manifest_root,
-                da_commitment: None,
-                proof: vec![0xAA],
-                fastpq_binding: None,
-                committed_amount: None,
-                amount_commitment: None,
-            };
-            let payload = norito::to_bytes(&wrong_envelope).expect("encode proof envelope");
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload,
-                        expiry_slot: Some(13),
-                    },
-                }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(&state, envelope, AxtRejectReason::Manifest, "manifest");
-        }
-        #[test]
-        fn axt_validation_accepts_authenticated_block_snapshot() {
-            let dsid = DataSpaceId::new(12);
-            let lane = LaneId::new(5);
-            let (mut state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x11);
-            state.set_axt_policy(
-                dsid,
-                AxtPolicyEntry {
-                    manifest_root,
-                    target_lane: lane,
-                    active_handle_era: 1,
-                    next_handle_counter: 1,
-                    current_slot: 3,
-                },
-            );
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let handle = sign_axt_validation_handle(
-                sample_handle(binding, lane, dsid, 5, manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                manifest_root,
-            );
-            let proof = proof_blob_for_with_amount(
-                dsid,
-                manifest_root,
-                b"snapshot-fallback",
-                9,
-                None,
-                None,
-                vec![remote_spend_claim(&handle, &Quantity::from(5_u64))],
-            );
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment { dsid, proof }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
-            snapshot.entries[0].policy.next_handle_counter = 2;
-            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope.clone(), snapshot);
-            let mut state_block = state.block(block.header());
-            {
-                let mut executed = state_block.transaction();
-                executed
-                    .record_axt_envelope(envelope)
-                    .expect("authenticated block-snapshot control must execute");
-                executed.apply();
-            }
-            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
-        }
-        #[test]
-        fn axt_validation_uses_policy_slot_per_dataspace() {
-            let dsid_a = DataSpaceId::new(50);
-            let dsid_b = DataSpaceId::new(51);
-            let lane = LaneId::new(6);
-            let (mut state, issuer, issuer_uaid, manifest_roots) =
-                authenticated_axt_validation_state_for(&[
-                    (dsid_a, lane, 0x21),
-                    (dsid_b, lane, 0x22),
-                ]);
-            let policy_a = AxtPolicyEntry {
-                manifest_root: manifest_roots[&dsid_a],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 100,
-            };
-            let policy_b = AxtPolicyEntry {
-                manifest_root: manifest_roots[&dsid_b],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 5,
-            };
-            state.set_axt_policy(dsid_a, policy_a);
-            state.set_axt_policy(dsid_b, policy_b);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid_b],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let handle = sign_axt_validation_handle(
-                sample_handle(binding, lane, dsid_b, 10, policy_b.manifest_root),
-                &state,
-                &issuer,
-                issuer_uaid,
-                policy_b.manifest_root,
-            );
-            let proof = proof_blob_for_with_amount(
-                dsid_b,
-                policy_b.manifest_root,
-                b"policy-slot-dsid",
-                10,
-                None,
-                None,
-                vec![remote_spend_claim(&handle, &Quantity::from(5_u64))],
-            );
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid: dsid_b,
-                    proof,
-                }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
-            snapshot
-                .entries
-                .iter_mut()
-                .find(|entry| entry.dsid == dsid_b)
-                .expect("dataspace B policy")
-                .policy
-                .next_handle_counter = 2;
-            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope.clone(), snapshot);
-            let mut state_block = state.block(block.header());
-            {
-                let mut executed = state_block.transaction();
-                executed
-                    .record_axt_envelope(envelope)
-                    .expect("per-dataspace policy-slot control must execute");
-                executed.apply();
-            }
-            let result = validate_axt_envelopes(&block, &state_block);
-            expect_unanchored_axt_spend_rejection(result);
-        }
-        #[test]
-        fn axt_validation_rejects_empty_policy_snapshot() {
-            let state = axt_validation_state();
-            let dsid = DataSpaceId::new(13);
-            let lane = LaneId::new(6);
-            let manifest_root = [0x12; 32];
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: vec![AxtTouchSpec {
-                    dsid,
-                    read: Vec::new(),
-                    write: Vec::new(),
-                }],
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let handle = sample_handle(binding, lane, dsid, 9, manifest_root);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: vec![AxtTouchFragment {
-                    dsid,
-                    manifest: TouchManifest {
-                        read: Vec::new(),
-                        write: Vec::new(),
-                    },
-                }],
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: proof_blob_for(dsid, manifest_root, b"missing-policy-snapshot", 15),
-                }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
-            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
-            let signer = crate::block::checked_keypair();
-            let mut block: SignedBlock = builder
-                .chain(0, None)
-                .sign(signer.private_key())
-                .unpack(|_| {})
-                .into();
-            let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
-            let results: Vec<TransactionResultInner> = Vec::new();
-            block
-                .set_execution_outputs(
-                    crate::execution_output_test_support::structural_network_outputs(
-                        &block,
-                        &entry_hashes,
-                        results,
-                    ),
-                    u64::try_from(block.network_entrypoint_count())
-                        .expect("fixture input count fits u64"),
-                    BTreeMap::new(),
-                    vec![envelope],
-                    AxtPolicySnapshot::default(),
-                    BTreeSet::new(),
-                    Vec::new(),
-                    &crate::execution_output_test_support::structural_output_limits(),
-                )
-                .expect("empty test block should attach AXT envelope results");
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
-                AxtRejectReason::MissingPolicy,
-                "no block-start policy for dataspace",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_zero_manifest_root_from_snapshot() {
-            let mut state = axt_validation_state();
-            let dsid = DataSpaceId::new(14);
-            let lane = LaneId::new(7);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0; 32],
-                target_lane: lane,
-                active_handle_era: 0,
-                next_handle_counter: 0,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: Vec::new(),
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: Vec::new(),
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: vec![0; 32],
-                        expiry_slot: Some(12),
-                    },
-                }],
-                handles: Vec::new(),
-                commit_height: 1,
-            };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
-                AxtRejectReason::Manifest,
-                "policy manifest root is zeroed",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_redacted_intent_before_unanchored_spend() {
-            let (state, envelope) = hidden_amount_fixture(61, 0x61, b"hidden-amount");
-            let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
-            snapshot.entries[0].policy.next_handle_counter = 2;
-            snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-            let block = build_block_with_envelopes(envelope.clone(), snapshot);
-            let mut state_block = state.block(block.header());
-            {
-                let mut executed = state_block.transaction();
-                let error = executed
-                    .record_axt_envelope(envelope)
-                    .expect_err("redacted intent cannot stage family budget consumption");
-                assert!(
-                    error.to_string().contains("MissingAmount"),
-                    "unexpected redacted amount rejection: {error}"
-                );
-            }
-            let result = validate_axt_envelopes(&block, &state_block);
-            expect_axt_error(
-                result.expect_err("public proof scalar cannot authorize a redacted intent"),
-                AxtRejectReason::Budget,
-                "redacted remote spend amount has no qualified private proof relation",
-            );
-        }
-        #[test]
-        fn axt_validation_rejects_clear_amount_commitment_mismatch() {
-            let dsid = DataSpaceId::new(62);
-            let lane = LaneId::new(9);
-            let (mut state, issuer, issuer_uaid, manifest_root) =
-                authenticated_axt_validation_state(dsid, lane, 0x62);
-            let policy = AxtPolicyEntry {
-                manifest_root,
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
-            let descriptor = AxtDescriptor {
-                dsids: vec![dsid],
-                touches: vec![AxtTouchSpec {
-                    dsid,
-                    read: Vec::new(),
-                    write: Vec::new(),
-                }],
-            };
-            let binding = binding_for_descriptor(&descriptor);
-            let proof = proof_blob_for_with_amount(
-                dsid,
-                policy.manifest_root,
-                b"clear-amount-mismatch",
-                9,
-                Some(5),
-                None,
-                Vec::new(),
-            );
-            let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.intent.op.amount = Some(Quantity::from(5_u64));
-            handle.amount = Some(Quantity::from(5_u64));
-            handle.amount_commitment = Some([0xFF; 32]);
-            let handle =
-                sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
-            let envelope = AxtEnvelopeRecord {
-                binding,
-                lane,
-                descriptor,
-                touches: vec![AxtTouchFragment {
-                    dsid,
-                    manifest: TouchManifest {
-                        read: Vec::new(),
-                        write: Vec::new(),
-                    },
-                }],
-                proofs: vec![AxtProofFragment { dsid, proof }],
-                handles: vec![handle],
-                commit_height: 1,
-            };
-            expect_axt_envelope_error(
-                &state,
-                envelope,
-                AxtRejectReason::Budget,
-                "amount commitment does not match",
-            );
-        }
+        include!("block/axt_anchored_spend_admission_tests.rs");
     }
 }
 mod event {
@@ -25106,6 +15402,7 @@ mod event {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
             | BlockValidationError::StateStorageAdmission(_)
             | BlockValidationError::EvidencePreparation(_)
+            | BlockValidationError::ExecutionDeferred(_)
             | BlockValidationError::BlockHashAdmission(_)
             | BlockValidationError::MembershipAdmission(_) => return None,
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
@@ -25135,7 +15432,8 @@ mod event {
             },
             BlockValidationError::TopologyMismatch { .. } => Reason::TopologyMismatch,
             BlockValidationError::SignatureVerification(e) => map_sig_err_to_reason(e),
-            BlockValidationError::InvalidGenesis(_) => Reason::InvalidGenesis,
+            BlockValidationError::InvalidGenesis(_)
+            | BlockValidationError::GenesisPolicyMismatch { .. } => Reason::InvalidGenesis,
             BlockValidationError::BlockInThePast => Reason::BlockInThePast,
             BlockValidationError::BlockInTheFuture => Reason::BlockInTheFuture,
             BlockValidationError::NonCanonicalV2BlockTime { .. }
@@ -27110,7 +17408,7 @@ pub(crate) mod tests {
             .expect("empty state accepts focused confidential limits");
 
         let fixture = crate::zk::test_utils::halo2_fixture_envelope(
-            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            "halo2/pasta/ipa/kaigi-usage-v1",
             [0_u8; 32],
         );
         let proof = fixture.proof_box("halo2/ipa");

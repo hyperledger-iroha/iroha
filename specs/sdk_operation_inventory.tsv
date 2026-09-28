@@ -647,10 +647,6 @@ zk.attachment.create	POST	/v1/zk/attachments	public	canonical_account_signature	
 zk.attachment.delete	DELETE	/v1/zk/attachments/{id}	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 zk.attachment.list	GET	/v1/zk/attachments	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 zk.attachment.read	GET	/v1/zk/attachments/{id}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
-zk.ivm.derive	POST	/v1/zk/ivm/derive	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
-zk.ivm.prove	POST	/v1/zk/ivm/prove	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
-zk.ivm.prove_job.delete	DELETE	/v1/zk/ivm/prove/{job_id}	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
-zk.ivm.prove_job.read	GET	/v1/zk/ivm/prove/{job_id}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 zk.merkle_path.build	POST	/v1/zk/merkle-path	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	false	true
 zk.proof.verify_batch	POST	/v1/zk/verify-batch	public	canonical_account_signature	authenticated_account	compute	http	feature(zk-verify-batch)	true	true	false	true
 zk.roots.read	POST	/v1/zk/roots	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	false	true

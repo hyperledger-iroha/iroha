@@ -51,10 +51,9 @@ use crate::privacy_engines::prover_randomness::{
     HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use crate::privacy_engines::transparent_stark::GOLDILOCKS_GENERATOR_V1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
-    goldilocks_evaluate_coset_v1, grind_nonce_v1, masked_trace_lde_column_v1,
+    GOLDILOCKS_GENERATOR_V1, goldilocks_evaluate_coset_v1, grind_nonce_v1,
+    masked_trace_lde_column_v1,
 };
 use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},

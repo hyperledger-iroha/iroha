@@ -129,6 +129,28 @@ production handle/revision/policy digest before and after qualification, but it
 does not call readiness or perform a durability, signing, or inventory effect.
 The stock broker does not implement these roles.
 
+`ExternalSoftwareSignerMusubiProviderAttestationAdapterV1` supplies the concrete
+approval-only software custody leaf for the existing injected signer role. Each
+isolated service pins the network, provider, complete canonical owner account,
+and governed policy ID/revision/predecessor/digest. Provisioning imports a
+runtime-only key through the existing encrypted-envelope owner after checking
+controller membership. The adapter commits its fixed ordered endpoint/controller
+set in the configured policy digest and requires every configured member on each
+replay-stable operation. The service validates the complete typed payload and
+persists its approval before returning; revocation and an exact retry survive
+service restart. Generic rotation cannot replace a controller outside the pinned
+owner. A finalized successor owner or policy requires independently provisioned
+and qualified successor custody.
+
+This leaf is injected through
+`IrohaRuntimeDeps::with_sorafs_musubi_provider_attestation_approval_signer` and
+uses the existing finalized-owner governed wrapper. It does not implement the
+stock broker roles or activate publication routes. Tests use the real encrypted
+service and journal for signing/restart controls and real Unix peer credentials
+for rejection controls. Positive cross-UID socket deployment qualification still
+requires separately administered service, client, and administrator accounts.
+Software custody does not claim protection from privileged offline rollback.
+
 These slots remain inert. Private daemon wrappers now pin the signer to its
 configured adapter, chain/genesis/provider context, and finalized
 `State::provider_owners()` value, and pin inventory calls and returned data to

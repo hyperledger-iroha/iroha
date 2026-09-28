@@ -1,3 +1,4 @@
+//! Admission coverage for authenticated V1 contract metadata and callable-table rules.
 use iroha_data_model::{
     smart_contract::entrypoint::{
         EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1, EntrypointListTypeNodeV1,
@@ -66,7 +67,7 @@ fn contract_artifact_with_access_hints(
         abi_version,
         entrypoints,
         access_set_hints,
-        &[ivm::encoding::wide::encode_halt()],
+        &common::unit_return_words(),
     )
 }
 fn contract_artifact_with_code(
@@ -76,6 +77,96 @@ fn contract_artifact_with_code(
     code: &[u32],
 ) -> Vec<u8> {
     contract_artifact_with_mode_and_code(abi_version, 0, 0, entrypoints, access_set_hints, code)
+}
+fn callable_frame_bytes(code: &[u32], entry_pc: u64) -> u32 {
+    use ivm::instruction::wide;
+    match code.get(entry_pc as usize / 4).copied() {
+        Some(word)
+            if wide::opcode(word) == wide::arithmetic::ADDI
+                && wide::rd(word) == 31
+                && wide::rs1(word) == 31
+                && wide::imm8(word) < 0 =>
+        {
+            u32::from(wide::imm8(word).unsigned_abs())
+        }
+        _ => 0,
+    }
+}
+// A real caller frame: saved return address/result base plus disjoint child result scratch.
+fn unit_caller_with_helper(long_call: bool, helper_body: &[u32]) -> Vec<u32> {
+    use ivm::{encoding::wide as enc, instruction::wide};
+    let mut code = vec![
+        enc::encode_ri(wide::arithmetic::ADDI, 31, 31, -32),
+        enc::encode_store(wide::memory::STORE64, 31, 1, 0),
+        enc::encode_store(wide::memory::STORE64, 31, 12, 8),
+        enc::encode_ri(wide::arithmetic::ADDI, 10, 0, 0),
+        enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 0),
+        enc::encode_ri(wide::arithmetic::ADDI, 12, 31, 16),
+        enc::encode_ri(wide::arithmetic::ADDI, 13, 0, 1),
+        if long_call {
+            enc::encode_offset24(wide::control::JALS, 8)
+        } else {
+            enc::encode_jump(wide::control::JAL, 1, 8)
+        },
+        enc::encode_load(wide::memory::LOAD64, 12, 31, 8),
+        enc::encode_store(wide::memory::STORE64, 12, 0, 0),
+        enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
+        enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
+        enc::encode_load(wide::memory::LOAD64, 1, 31, 0),
+        enc::encode_ri(wide::arithmetic::ADDI, 31, 31, 32),
+        enc::encode_rr(wide::control::JALR, 0, 1, 0),
+    ];
+    code.extend_from_slice(helper_body);
+    code.extend_from_slice(&common::unit_return_words());
+    code
+}
+fn callable_descriptors(
+    entrypoints: &[ivm::EmbeddedEntrypointDescriptor],
+    code: &[u32],
+) -> Vec<ivm_abi::call::EmbeddedCallableV1> {
+    use ivm::instruction::wide;
+    use ivm_abi::call::CallWordV1;
+    let mut callables = std::collections::BTreeMap::new();
+    for entry in entrypoints {
+        callables.insert(
+            entry.entry_pc,
+            ivm_abi::call::EmbeddedCallableV1 {
+                entry_pc: entry.entry_pc,
+                frame_bytes: callable_frame_bytes(code, entry.entry_pc),
+                argument_words: entry
+                    .argument_schema
+                    .as_ref()
+                    .and_then(|schema| schema.word_kinds())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(CallWordV1::from_entrypoint_word)
+                    .collect(),
+                result_words: entry
+                    .return_schema
+                    .as_ref()
+                    .and_then(|schema| schema.word_kinds())
+                    .unwrap_or_else(|| vec![ivm_abi::entrypoint::EntrypointValueWordKindV1::Unit])
+                    .into_iter()
+                    .map(CallWordV1::from_entrypoint_word)
+                    .collect(),
+            },
+        );
+    }
+    for (index, word) in code.iter().copied().enumerate() {
+        let offset = match wide::opcode(word) {
+            wide::control::JALS => i64::from(wide::imm24(word)),
+            wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::imm16(word)),
+            _ => continue,
+        };
+        if let Some(target) = (index as u64 * 4).checked_add_signed(offset * 4) {
+            callables.entry(target).or_insert_with(|| {
+                let mut callable = common::unit_callable(target);
+                callable.frame_bytes = callable_frame_bytes(code, target);
+                callable
+            });
+        }
+    }
+    callables.into_values().collect()
 }
 fn contract_artifact_with_mode_and_code(
     abi_version: u8,
@@ -94,6 +185,7 @@ fn contract_artifact_with_mode_and_code(
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: callable_descriptors(&entrypoints, code),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -121,6 +213,7 @@ fn contract_artifact_with_error_types(error_types: Vec<ContractErrorTypeDescript
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -133,7 +226,9 @@ fn contract_artifact_with_error_types(error_types: Vec<ContractErrorTypeDescript
     };
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());
-    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
     bytes
 }
 fn contract_artifact_with_states(states: Vec<ivm::EmbeddedStateDescriptor>) -> Vec<u8> {
@@ -152,6 +247,7 @@ fn contract_artifact_with_access_hints_and_states(
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -164,7 +260,9 @@ fn contract_artifact_with_access_hints_and_states(
     };
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());
-    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
     bytes
 }
 fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
@@ -177,6 +275,7 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: seiyaku_name.to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -189,7 +288,9 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
     };
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());
-    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
     bytes
 }
 fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> Vec<u8> {
@@ -202,6 +303,7 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: "FeatureBinding".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -214,7 +316,9 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
     };
     let mut bytes = metadata.encode();
     bytes.extend_from_slice(&interface.encode_section());
-    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
     bytes
 }
 fn value_type(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
@@ -273,21 +377,28 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     let artifact = contract_artifact(1, vec![return_mismatch]);
     let error = ivm::verify_contract_artifact(&artifact)
         .expect_err("return schema/type mismatch must fail");
-    assert!(error.to_string().contains("return schema"));
+    assert!(error.to_string().contains("return schema"), "{error}");
     let mut oversized = entrypoint("inspect", EntryPointKind::View, 0);
-    oversized.return_type = Some(format!("({})", vec!["int"; 14].join(", ")));
+    oversized.return_type = Some(format!("({})", vec!["int"; 256].join(", ")));
     oversized.return_schema = Some(EntrypointValueTypeV1 {
-        nodes: std::iter::once(EntrypointValueTypeNodeV1::Tuple(14))
+        nodes: std::iter::once(EntrypointValueTypeNodeV1::Tuple(256))
             .chain(std::iter::repeat_n(
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int),
-                14,
+                256,
             ))
             .collect(),
     });
     let artifact = contract_artifact(1, vec![oversized]);
+    assert!(matches!(
+        ivm::ProgramMetadata::parse(&artifact),
+        Err(ivm::VMError::InvalidMetadata)
+    ));
     let error = ivm::verify_contract_artifact(&artifact)
-        .expect_err("14-word public return must fail closed");
-    assert!(error.to_string().contains("public register window"));
+        .expect_err("return schema beyond the 256-node boundary must fail closed");
+    assert!(
+        error.to_string().contains("metadata parse failed"),
+        "{error}"
+    );
 }
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -604,7 +715,7 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     );
     assert_eq!(
         hex::encode(admitted.code_hash.as_ref()),
-        "503f4936525f4790f6a9a123aacfaa49a7fd636bde4e1704833bf7a729c99f1f"
+        "6105b45abb0080bc6aea6e72093990ee7f5749c604683ea2f75a60b95a88d4fb"
     );
 }
 #[test]
@@ -696,7 +807,7 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
     }
 }
 #[test]
-fn public_entrypoint_descriptor_targets_halting_wrapper() {
+fn public_entrypoint_descriptor_targets_authenticated_callable() {
     let src = r#"
         seiyaku Demo {
             kotoage fn main()  authorize("Entry") {}
@@ -722,9 +833,9 @@ fn public_entrypoint_descriptor_targets_halting_wrapper() {
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&bytes).expect("load artifact");
     vm.set_program_counter(parsed.prefix_len() as u64 + run.entry_pc)
-        .expect("seek run wrapper");
-    vm.run().expect("run entrypoint wrapper");
-    assert_eq!(common::decode_i64_register(&vm, 10), 42);
+        .expect("select run entrypoint");
+    vm.run().expect("run entrypoint");
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 42);
 }
 #[test]
 fn contract_artifact_with_cntr_requires_explicit_entrypoint_selection() {
@@ -758,14 +869,17 @@ seiyaku ContractArtifactFixture {
     );
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&bytes).expect("load artifact");
-    vm.run().expect("raw non-dispatching halt");
-    assert_eq!(vm.register(10), 0, "raw PC 0 must not invoke main");
+    assert_eq!(vm.run(), Err(ivm::VMError::DecodeError));
+    assert!(
+        vm.call_result_word_count().is_err(),
+        "unselected root cannot complete"
+    );
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&bytes).expect("load artifact");
     vm.set_program_counter(parsed.prefix_len() as u64 + main.entry_pc)
-        .expect("seek CNTR main wrapper");
+        .expect("select CNTR main entrypoint");
     vm.run().expect("run selected main entrypoint");
-    assert_eq!(common::decode_i64_register(&vm, 10), 7);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 7);
 }
 #[test]
 fn verify_rejects_missing_cntr() {
@@ -992,22 +1106,19 @@ fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode(
         wide::system::SCALL,
         ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
     );
+    let mut code = unit_caller_with_helper(true, &[private_input]);
+    let plain_pc = (code.len() * 4) as u64;
+    code.extend_from_slice(&common::unit_return_words());
     let bytes = contract_artifact_with_mode_and_code(
         1,
         ivm::ivm_mode::ZK,
         ivm::CONTRACT_FEATURE_BIT_ZK,
         vec![
             entrypoint("private_commitment", EntryPointKind::Kotoage, 0),
-            entrypoint("plain", EntryPointKind::Kotoage, 16),
+            entrypoint("plain", EntryPointKind::Kotoage, plain_pc),
         ],
         None,
-        &[
-            ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
-            ivm::encoding::wide::encode_halt(),
-            private_input,
-            ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
-            ivm::encoding::wide::encode_halt(),
-        ],
+        &code,
     );
     let prepared = ivm::prepare_contract(std::sync::Arc::from(bytes.into_boxed_slice()))
         .expect("valid ZK contract prepares");
@@ -1029,24 +1140,8 @@ fn verify_derives_transitive_view_effects_from_bytecode() {
         wide::system::SCALL,
         ivm::syscalls::SYSCALL_STATE_SET as u8,
     );
-    let return_from_helper = ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0);
-    let calls = [
-        (
-            "JAL",
-            ivm::encoding::wide::encode_jump(wide::control::JAL, 1, 2),
-        ),
-        (
-            "JALS",
-            ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
-        ),
-    ];
-    for (encoding, call_helper) in calls {
-        let code = [
-            call_helper,
-            ivm::encoding::wide::encode_halt(),
-            state_write,
-            return_from_helper,
-        ];
+    for (encoding, long_call) in [("JAL", false), ("JALS", true)] {
+        let code = unit_caller_with_helper(long_call, &[state_write]);
         let malicious_view = contract_artifact_with_code(
             1,
             vec![entrypoint("inspect", EntryPointKind::View, 0)],
@@ -1108,11 +1203,11 @@ fn strict_return_integrity_traps_view_return_address_poisoning_before_the_write(
     assert_eq!(vm.pc(), entry_pc + 4, "the hidden write was not reached");
 }
 #[test]
-fn strict_outer_return_cannot_switch_between_valid_halt_sentinels() {
+fn strict_outer_return_cannot_redirect_to_an_in_code_halt() {
     use ivm::instruction::wide;
     let code = [
-        // The invocation starts with r1 pointing at the first HALT. Bytecode
-        // then attempts to replace it with a different, otherwise valid HALT.
+        // Runtime binds the root return to the end of code. An in-code HALT
+        // cannot substitute for that authenticated completion target.
         ivm::encoding::wide::encode_ri(wide::arithmetic::ADDI, 1, 2, 0),
         ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
         ivm::encoding::wide::encode_halt(),
@@ -1125,18 +1220,17 @@ fn strict_outer_return_cannot_switch_between_valid_halt_sentinels() {
         &code,
     );
     let prepared = ivm::prepare_contract(std::sync::Arc::from(bytes.into_boxed_slice()))
-        .expect("dual-HALT fixture prepares");
+        .expect("poisoned return fixture prepares");
     let entry_pc = prepared
         .entrypoint_pc("inspect")
         .expect("view entrypoint is indexed");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_prepared(&prepared).expect("prepared view loads");
-    vm.set_register(1, entry_pc + 8);
     vm.set_register(2, entry_pc + 12);
     vm.set_program_counter(entry_pc).expect("select view");
     assert_eq!(
         vm.run()
-            .expect_err("outer return must remain bound to the initial HALT"),
+            .expect_err("outer return must remain bound to the end of code"),
         ivm::VMError::AssertionFailed
     );
     assert_eq!(vm.pc(), entry_pc + 4);
@@ -1144,23 +1238,22 @@ fn strict_outer_return_cannot_switch_between_valid_halt_sentinels() {
 #[test]
 fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
     use ivm::instruction::wide;
-    let code = [
-        ivm::encoding::wide::encode_offset24(wide::control::JALS, 4),
-        ivm::encoding::wide::encode_halt(),
-        ivm::encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm::syscalls::SYSCALL_STATE_SET as u8,
-        ),
-        ivm::encoding::wide::encode_halt(),
-        ivm::encoding::wide::encode_sys(
+    let mut code = unit_caller_with_helper(
+        true,
+        &[ivm::encoding::wide::encode_sys(
             wide::system::SCALL,
             ivm::syscalls::SYSCALL_STATE_GET as u8,
-        ),
-        ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
-    ];
+        )],
+    );
     let mut inspect = entrypoint("inspect", EntryPointKind::View, 0);
     inspect.read_keys = vec!["state:*".to_owned()];
-    let mut mutate = entrypoint("mutate", EntryPointKind::Kotoage, 8);
+    let mutate_pc = (code.len() * 4) as u64;
+    code.push(ivm::encoding::wide::encode_sys(
+        wide::system::SCALL,
+        ivm::syscalls::SYSCALL_STATE_SET as u8,
+    ));
+    code.extend_from_slice(&common::unit_return_words());
+    let mut mutate = entrypoint("mutate", EntryPointKind::Kotoage, mutate_pc);
     mutate.write_keys = vec!["state:*".to_owned()];
     let bytes = contract_artifact_with_code(1, vec![inspect, mutate], None, &code);
     ivm::verify_contract_artifact(&bytes).expect(
@@ -1169,36 +1262,24 @@ fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
 }
 #[test]
 fn strict_return_integrity_allows_nested_direct_calls_for_raw_and_prepared_loads() {
-    use ivm::instruction::wide;
-    let code = [
-        // Outer call: return to the HALT at pc 4.
-        ivm::encoding::wide::encode_jump(wide::control::JAL, 1, 2),
-        ivm::encoding::wide::encode_halt(),
-        // Non-leaf helper saves r1, calls the leaf, restores r1, and returns.
-        ivm::encoding::wide::encode_store(wide::memory::STORE64, 31, 1, -8),
-        ivm::encoding::wide::encode_offset24(wide::control::JALS, 3),
-        ivm::encoding::wide::encode_ri(wide::memory::LOAD64, 1, 31, -8),
-        ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
-        ivm::encoding::wide::encode_ri(wide::arithmetic::ADDI, 7, 0, 9),
-        ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
-    ];
-    let bytes = contract_artifact_with_code(
-        1,
-        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
-        None,
-        &code,
-    );
-    let prepared = ivm::prepare_contract(std::sync::Arc::from(bytes.clone().into_boxed_slice()))
-        .expect("nested call fixture prepares");
+    let bytes = ivm::KotodamaCompiler::new().compile_source(
+        "seiyaku Calls { fn leaf() -> bool { true } fn middle() -> bool { leaf() } view fn main() -> bool { middle() } }"
+    ).expect("compile nested table calls");
+    let prepared =
+        ivm::prepare_contract(std::sync::Arc::from(bytes.clone())).expect("prepare nested calls");
+    let entry = prepared.entrypoint_pc("main").expect("public root");
     let mut raw = ivm::IVM::new(u64::MAX);
-    raw.load_program(&bytes).expect("raw contract loads");
-    raw.run().expect("raw contract nested calls return");
-    assert_eq!(raw.register(7), 9);
+    raw.load_program(&bytes).expect("cold contract loads");
+    raw.set_program_counter(entry).unwrap();
+    raw.run().expect("cold nested table calls return");
+    assert_eq!(raw.public_call_result_word(0), Ok(1));
     let mut warm = ivm::IVM::new(u64::MAX);
     warm.load_prepared(&prepared)
         .expect("prepared contract loads");
-    warm.run().expect("prepared contract nested calls return");
-    assert_eq!(warm.register(7), 9);
+    warm.set_program_counter(entry).unwrap();
+    warm.run().expect("prepared nested table calls return");
+    assert_eq!(warm.public_call_result_word(0), Ok(1));
+    assert_eq!(raw.remaining_gas(), warm.remaining_gas());
 }
 #[test]
 fn verifier_rejects_self_recursive_direct_calls_before_execution() {
@@ -1261,9 +1342,15 @@ fn verifier_does_not_confuse_an_ordinary_branch_loop_with_recursion() {
         vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
         None,
         &[
-            ivm::encoding::wide::encode_branch(wide::control::BNE, 2, 0, 0),
-            ivm::encoding::wide::encode_halt(),
-        ],
+            &[ivm::encoding::wide::encode_branch(
+                wide::control::BNE,
+                2,
+                0,
+                0,
+            )][..],
+            &common::unit_return_words(),
+        ]
+        .concat(),
     );
     ivm::verify_contract_artifact(&bytes)
         .expect("an ordinary control-flow loop is not a recursive function call");
@@ -1271,15 +1358,13 @@ fn verifier_does_not_confuse_an_ordinary_branch_loop_with_recursion() {
 #[test]
 fn verify_view_can_call_a_read_only_helper_when_the_artifact_has_no_writes() {
     use ivm::instruction::wide;
-    let code = [
-        ivm::encoding::wide::encode_jump(wide::control::JAL, 1, 2),
-        ivm::encoding::wide::encode_halt(),
-        ivm::encoding::wide::encode_sys(
+    let code = unit_caller_with_helper(
+        true,
+        &[ivm::encoding::wide::encode_sys(
             wide::system::SCALL,
             ivm::syscalls::SYSCALL_STATE_GET as u8,
-        ),
-        ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
-    ];
+        )],
+    );
     let mut inspect = entrypoint("inspect", EntryPointKind::View, 0);
     inspect.read_keys = vec!["state:*".to_owned()];
     let bytes = contract_artifact_with_code(1, vec![inspect], None, &code);
@@ -1357,10 +1442,11 @@ fn verify_view_effect_analysis_ignores_unreachable_write_code() {
         vec![entrypoint("inspect", EntryPointKind::View, 0)],
         None,
         &[
-            ivm::encoding::wide::encode_halt(),
-            state_write,
-            ivm::encoding::wide::encode_halt(),
-        ],
+            &common::unit_return_words()[..],
+            &[state_write],
+            &common::unit_return_words(),
+        ]
+        .concat(),
     );
     ivm::verify_contract_artifact(&bytes)
         .expect("unreachable code must not contaminate a read-only entrypoint");
@@ -1678,7 +1764,7 @@ fn verify_rejects_inconsistent_access_completeness() {
 }
 #[test]
 fn verify_rejects_invalid_entry_pc() {
-    for invalid_pc in [1, 2, 3, 4, u64::MAX] {
+    for invalid_pc in [1, 2, 3, 16, u64::MAX] {
         let bytes = contract_artifact(
             1,
             vec![entrypoint("main", EntryPointKind::Kotoage, invalid_pc)],

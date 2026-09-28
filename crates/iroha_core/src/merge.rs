@@ -224,8 +224,9 @@ pub fn merge_activation_root(active_lanes: &[MergeLaneBinding]) -> Hash {
 }
 /// Compute the canonical consensus configuration hash embedded in an active merge binding.
 ///
-/// Human-facing aliases, descriptions, and arbitrary instrumentation metadata remain committed by
-/// the exact lifecycle catalog hash, but do not alter this functional projection.
+/// Aliases affect autoscale ownership and lifecycle admission, so they are
+/// committed here. Descriptions and arbitrary instrumentation metadata remain
+/// committed by the exact lifecycle catalog hash, but not this projection.
 #[must_use]
 pub fn merge_lane_config_hash(lane: &LaneConfig) -> Hash {
     let encoded = lane.consensus_projection().encode();
@@ -508,7 +509,7 @@ mod tests {
         LaneLifecycleParameterV1::catalog_hash(&catalog)
     }
     #[test]
-    fn merge_lane_config_hash_excludes_display_fields_but_exact_catalog_hash_keeps_them() {
+    fn merge_lane_config_hash_binds_alias_and_excludes_presentation_fields() {
         let base = LaneConfig {
             description: Some("Primary settlement lane".to_owned()),
             ..LaneConfig::default()
@@ -522,15 +523,21 @@ mod tests {
             .metadata
             .insert("operator.policy".to_owned(), "strict".to_owned());
         let consensus_hash = merge_lane_config_hash(&base);
-        assert_eq!(merge_lane_config_hash(&renamed), consensus_hash);
+        assert_ne!(merge_lane_config_hash(&renamed), consensus_hash);
         assert_eq!(merge_lane_config_hash(&redescribed), consensus_hash);
         assert_eq!(merge_lane_config_hash(&reannotated), consensus_hash);
         let consensus_catalog_hash = merge_lane_consensus_catalog_hash(
             &LaneCatalog::new(NonZeroU32::MIN, vec![base.clone()]).expect("base catalog"),
         );
-        for lane in [&renamed, &redescribed, &reannotated] {
+        let renamed_catalog =
+            LaneCatalog::new(NonZeroU32::MIN, vec![renamed.clone()]).expect("renamed catalog");
+        assert_ne!(
+            merge_lane_consensus_catalog_hash(&renamed_catalog),
+            consensus_catalog_hash
+        );
+        for lane in [&redescribed, &reannotated] {
             let catalog = LaneCatalog::new(NonZeroU32::MIN, vec![lane.clone()])
-                .expect("display-only variant catalog");
+                .expect("presentation-only variant catalog");
             assert_eq!(
                 merge_lane_consensus_catalog_hash(&catalog),
                 consensus_catalog_hash
@@ -640,7 +647,7 @@ mod tests {
             .insert("operator.policy".to_owned(), "strict".to_owned());
         assert_eq!(
             merge_lane_config_hash(&lane).to_string(),
-            "24e4eae584318ad03184f31d855660d0514bba520ba27e474f1cdfbcdbea75f5"
+            "4ef3bd7ca44860b35361351a80c39918fba105f51bd694c5167e0a416196d7e5"
         );
     }
     #[test]

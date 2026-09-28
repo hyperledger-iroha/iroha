@@ -293,6 +293,8 @@ impl norito::json::JsonDeserialize for NewAccount {
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::OpaqueAccountId")]
 pub struct OpaqueAccountId(Hash);
 impl OpaqueAccountId {
     /// Construct an opaque identifier from a pre-hashed value.
@@ -1197,6 +1199,31 @@ pub mod prelude {
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
+    #[test]
+    fn canonical_registry_schema_identity_roundtrips() {
+        let value = OpaqueAccountId::from_hash(Hash::new(b"opaque-state-key"));
+        assert_eq!(
+            <OpaqueAccountId as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::account::OpaqueAccountId"
+        );
+        let encoded = norito::encode_canonical(&value).expect("canonical owner frame");
+        assert_eq!(
+            encoded[6..22],
+            norito::schema::identity::frame_hash::<OpaqueAccountId>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<OpaqueAccountId>(&encoded)
+                .expect("canonical owner roundtrip"),
+            value
+        );
+        let mut wrong_owner = encoded;
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<OpaqueAccountId>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_model_base::name::Name;

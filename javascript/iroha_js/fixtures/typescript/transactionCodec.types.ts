@@ -31,6 +31,7 @@ const networkId = NetworkId.parse(
 
 const input: BrowserTransferInput = {
   networkId,
+  networkPrefix: 753,
   authority: "sora-test-authority",
   sourceAssetHoldingId: "asset#sora-test-authority",
   quantity: "1",
@@ -57,6 +58,7 @@ const retiredSnakeChain: BrowserTransferInput = {
 };
 const batchInput: BrowserExecutableBatchInput = {
   networkId,
+  networkPrefix: 753,
   authority: "sora-test-authority",
   entries: [
     { kind: "instruction", instruction: { Log: { level: "INFO", message: "before" } } },

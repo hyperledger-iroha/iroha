@@ -2322,7 +2322,7 @@ where
             (None, None) => {}
         }
     }
-    let mut vm = ivm::IVM::new(gas_limit);
+    let mut vm = ivm::IVM::try_new(gas_limit).map_err(|e| format!("ivm.new: {e}"))?;
     let heap_limit = state_ro
         .world()
         .parameters()
@@ -2515,6 +2515,62 @@ mod tests {
             recipient: b"alice@main".to_vec(),
         }
     }
+    fn fixture_callable(code: &[u8], pc: u64) -> ivm::call::EmbeddedCallableV1 {
+        use ivm::instruction::wide;
+        let mut callable = crate::ivm_test_support::unit_callable(pc);
+        if let Some(bytes) = code.get(pc as usize..pc as usize + 4) {
+            let word = u32::from_le_bytes(bytes.try_into().expect("instruction word"));
+            if wide::opcode(word) == wide::arithmetic::ADDI
+                && wide::rd(word) == 31
+                && wide::rs1(word) == 31
+                && wide::imm8(word) < 0
+            {
+                callable.frame_bytes = u32::from(wide::imm8(word).unsigned_abs());
+            }
+        }
+        callable
+    }
+    fn literal_clobber_call_program(long_call: bool, fresh_literal: bool) -> Vec<u8> {
+        use ivm::{encoding::wide as enc, instruction::wide};
+        // r16 is caller-clobbered. Descriptor staging does not erase its literal,
+        // so provenance must be invalidated specifically at the direct call.
+        let mut words = vec![
+            enc::encode_ri(wide::arithmetic::ADDI, 31, 31, -32),
+            enc::encode_store(wide::memory::STORE64, 31, 1, 0),
+            enc::encode_store(wide::memory::STORE64, 31, 12, 8),
+            enc::encode_literal(wide::memory::LDLIT, 16, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 10, 0, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 12, 31, 16),
+            enc::encode_ri(wide::arithmetic::ADDI, 13, 0, 1),
+            0,
+            if fresh_literal {
+                enc::encode_literal(wide::memory::LDLIT, 10, 0)
+            } else {
+                enc::encode_ri(wide::arithmetic::ADDI, 10, 16, 0)
+            },
+            enc::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
+            enc::encode_load(wide::memory::LOAD64, 12, 31, 8),
+            enc::encode_store(wide::memory::STORE64, 12, 0, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
+            enc::encode_load(wide::memory::LOAD64, 1, 31, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 31, 31, 32),
+            enc::encode_rr(wide::control::JALR, 0, 1, 0),
+            enc::encode_literal(wide::memory::LDLIT, 16, 1),
+        ];
+        words[8] = if long_call {
+            enc::encode_offset24(wide::control::JALS, 10)
+        } else {
+            enc::encode_jump(wide::control::JAL, 1, 10)
+        };
+        let mut code = words
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        code.extend_from_slice(&crate::ivm_test_support::unit_return());
+        code
+    }
     fn test_contract_artifact(
         code: Vec<u8>,
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
@@ -2554,7 +2610,23 @@ mod tests {
                 entry_pc: 0,
             })
             .collect();
+        let mut callables = std::collections::BTreeMap::new();
+        callables.insert(0, fixture_callable(&code, 0));
+        for (index, bytes) in code.chunks_exact(4).enumerate() {
+            use ivm::instruction::wide;
+            let word = u32::from_le_bytes(bytes.try_into().expect("instruction word"));
+            let offset = match wide::opcode(word) {
+                wide::control::JALS => i64::from(wide::imm24(word)),
+                wide::control::JAL if wide::rd(word) == 1 => i64::from(wide::imm16(word)),
+                _ => continue,
+            };
+            let target = (index as u64 * 4)
+                .checked_add_signed(offset * 4)
+                .expect("call target");
+            callables.insert(target, fixture_callable(&code, target));
+        }
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: callables.into_values().collect(),
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "access-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -2832,7 +2904,7 @@ mod tests {
             )
             .to_le_bytes(),
         );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        code.extend_from_slice(&crate::ivm_test_support::unit_return());
         let mut entrypoint = default_test_entrypoint();
         entrypoint.read_keys = vec!["state:*".to_owned()];
         test_contract_artifact(code, None, vec![entrypoint]).0
@@ -2934,7 +3006,7 @@ mod tests {
     #[test]
     fn verified_empty_entrypoint_access_is_distinct_from_missing_or_incomplete_metadata() {
         let program = test_contract_artifact(
-            ivm::encoding::wide::encode_halt().to_le_bytes().to_vec(),
+            crate::ivm_test_support::unit_return().to_vec(),
             None,
             vec![default_test_entrypoint()],
         )
@@ -2985,7 +3057,7 @@ mod tests {
     #[test]
     fn protected_entrypoint_reads_the_authorization_scheduler_epoch() {
         let program = test_contract_artifact(
-            ivm::encoding::wide::encode_halt().to_le_bytes().to_vec(),
+            crate::ivm_test_support::unit_return().to_vec(),
             None,
             vec![default_test_entrypoint()],
         )
@@ -3012,7 +3084,7 @@ mod tests {
             crate::query::store::LiveQueryStore::start_test(),
         );
         let entrypoint = default_test_entrypoint();
-        let code = ivm::encoding::wide::encode_halt().to_le_bytes().to_vec();
+        let code = crate::ivm_test_support::unit_return().to_vec();
         let (artifact, _, _) = test_contract_artifact(code, None, vec![entrypoint]);
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -3327,30 +3399,8 @@ seiyaku HelperStaticAccess {
                 &norito::to_bytes(&runtime_path).expect("encode runtime path"),
             ),
         ];
-        for (label, call) in [
-            (
-                "JALS",
-                ivm::encoding::wide::encode_offset24(ivm::instruction::wide::control::JALS, 3),
-            ),
-            (
-                "JAL r1",
-                ivm::encoding::wide::encode_jump(ivm::instruction::wide::control::JAL, 1, 3),
-            ),
-        ] {
-            // The helper overwrites r10 with a different authenticated StatePath and
-            // returns. Trusting the literal loaded before the call would let a
-            // forged exact CNTR key omit the path actually used by STATE_SET.
-            let code = [
-                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
-                call,
-                ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
-                ivm::encoding::wide::encode_halt(),
-                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1),
-                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
-            ]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect::<Vec<_>>();
+        for (label, long_call) in [("JALS", true), ("JAL r1", false)] {
+            let code = literal_clobber_call_program(long_call, false);
             let mut entrypoint = default_test_entrypoint();
             entrypoint.write_keys = vec!["state:claimed".to_owned()];
             let (program, code_hash, manifest) =
@@ -3386,31 +3436,8 @@ seiyaku HelperStaticAccess {
                 &norito::to_bytes(&runtime_path).expect("encode runtime path"),
             ),
         ];
-        for (label, call) in [
-            (
-                "JALS",
-                ivm::encoding::wide::encode_offset24(ivm::instruction::wide::control::JALS, 4),
-            ),
-            (
-                "JAL r1",
-                ivm::encoding::wide::encode_jump(ivm::instruction::wide::control::JAL, 1, 4),
-            ),
-        ] {
-            // The helper clobbers r10 but performs no state access. A fresh
-            // authenticated load in the caller is sufficient to prove the
-            // subsequent STATE_SET target exactly.
-            let code = [
-                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
-                call,
-                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
-                ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
-                ivm::encoding::wide::encode_halt(),
-                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1),
-                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
-            ]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect::<Vec<_>>();
+        for (label, long_call) in [("JALS", true), ("JAL r1", false)] {
+            let code = literal_clobber_call_program(long_call, true);
             let mut entrypoint = default_test_entrypoint();
             entrypoint.write_keys = vec!["state:claimed".to_owned()];
             let (program, code_hash, manifest) =
@@ -4513,10 +4540,7 @@ seiyaku DynamicAccessCounter {
             dynamic_reads: Vec::new(),
             dynamic_writes: Vec::new(),
         };
-        let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
-            .into_iter()
-            .flatten()
-            .collect();
+        let code = crate::ivm_test_support::unit_return().to_vec();
         let mut entrypoint = default_test_entrypoint();
         entrypoint.read_keys = hints.read_keys.clone();
         entrypoint.write_keys = hints.write_keys.clone();
@@ -4581,10 +4605,7 @@ seiyaku DynamicAccessCounter {
             dynamic_reads: Vec::new(),
             dynamic_writes: Vec::new(),
         };
-        let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
-            .into_iter()
-            .flatten()
-            .collect();
+        let code = crate::ivm_test_support::unit_return().to_vec();
         let mut entrypoint = default_test_entrypoint();
         entrypoint.read_keys = hints.read_keys.clone();
         entrypoint.write_keys = hints.write_keys.clone();
@@ -4625,7 +4646,7 @@ seiyaku DynamicAccessCounter {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
         let (prog, code_hash, _) = test_contract_artifact(
-            ivm::encoding::wide::encode_halt().to_le_bytes().to_vec(),
+            crate::ivm_test_support::unit_return().to_vec(),
             None,
             vec![default_test_entrypoint()],
         );
@@ -5270,10 +5291,7 @@ seiyaku DynamicAccessCounter {
                 dynamic_reads: Vec::new(),
                 dynamic_writes: Vec::new(),
             };
-            let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
-                .into_iter()
-                .flatten()
-                .collect();
+            let code = crate::ivm_test_support::unit_return().to_vec();
             let mut entrypoint = default_test_entrypoint();
             entrypoint.read_keys = hints.read_keys.clone();
             entrypoint.write_keys = hints.write_keys.clone();
@@ -5390,10 +5408,7 @@ seiyaku DynamicAccessCounter {
                 dynamic_reads: Vec::new(),
                 dynamic_writes: Vec::new(),
             };
-            let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
-                .into_iter()
-                .flatten()
-                .collect();
+            let code = crate::ivm_test_support::unit_return().to_vec();
             let mut entrypoint = default_test_entrypoint();
             entrypoint.read_keys = hints.read_keys.clone();
             entrypoint.write_keys = hints.write_keys.clone();

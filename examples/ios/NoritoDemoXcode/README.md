@@ -61,18 +61,13 @@ NoritoDemoXcode/
 
 ### Hardware acceleration
 
-`NoritoDemoXcode/App.swift` calls `DemoAccelerationConfig.load()` during launch. The
-loader checks the following sources in order:
-
-1. `NORITO_ACCEL_CONFIG_PATH` (see `.env` template) — points at an `iroha_config`
-   JSON/TOML file on disk.
-2. Bundled resources named `acceleration.{json,toml}` or `client.{json,toml}`.
-3. Default workspace settings (`AccelerationSettings()`).
-
-This keeps the SwiftUI demo aligned with the node/operator configuration. Drop a
-config file into the target, or point the environment variable at a manifest on disk to
-toggle Metal/NEON and Merkle thresholds. Devices without Metal automatically fall back
-to the scalar implementation even when acceleration is requested.
+`NoritoDemoXcode/App.swift` loads a bundled `acceleration.{json,toml}` or
+`client.{json,toml}` file at launch. The SDK also accepts an explicit file URL.
+Use the canonical `[accel]` and `[accel.resource_limits]` tables; malformed present
+configuration stops startup. When no file exists, SIMD, Metal and CUDA are enabled
+with finite process resource ceilings. Unsupported or unqualified devices use CPU
+execution. Explicit zero limits remain zero; omitted optional counts inherit the
+native defaults. Runtime environment variables do not select acceleration policy.
 
 ### Pipeline submission walkthrough
 

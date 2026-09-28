@@ -130,7 +130,7 @@ def test_fixed_native_tip_and_facts_join_original_inputs_vectors_and_deadline(pi
         assert tip.reader.first_height == 1 and tip.reader.last_height == 100
         assert receipt.facts == p.outputs.artifact('facts') and receipt.journal_sha256 == p.journal.sha256
         assert receipt.original_anchor_sha256 == p.c.inputs.anchors_sha256
-        assert receipt.finality_sha256 == p.outputs.artifact('finality').sha256
+        assert receipt.carrier_sha256 == p.outputs.artifact('carrier').sha256
         assert receipt.queries_sha256 == p.outputs.artifact('queries').sha256
         assert value._phase == 'complete'
         assert len(p.c.commands.calls) == 2
@@ -259,7 +259,7 @@ def test_every_transport_deadline_and_original_custody_failure_is_terminal(pipel
         elif failure == 'input': child.wait_hook = lambda: p.c.inputs.roles[0].node_config.write_bytes(b'changed private')
         elif failure == 'vectors':
             if operation == 'facts':
-                path = p.outputs.artifact('finality').path
+                path = p.outputs.artifact('carrier').path
                 child.wait_hook = lambda: path.write_bytes(b'changed')
             else: child.wait_hook = lambda: (p.outputs.directory / 'unallocated').write_bytes(b'changed')
     p.c.commands.after_spawn = setup
@@ -368,7 +368,7 @@ def test_close_keeps_original_journal_until_owned_child_is_reaped(pipeline):
         value.close()
 
 # Exact current native Args + flattened ReaderArgs flag contract, independently captured.
-NATIVE_FACTS_FLAGS = ('--account', '--assembly-decode-max-bytes', '--block-store', '--chain-discriminant', '--chain-id', '--context', '--context-max-bytes', '--context-sha256', '--drain-ns', '--facts-max-bytes', '--facts-output', '--finality', '--finality-max-bytes', '--finality-sha256', '--first-height', '--genesis-public-key', '--invocation-id', '--journal', '--journal-max-bytes', '--journal-max-requests', '--journal-sha256', '--lanes', '--last-height', '--manifest', '--manifest-max-bytes', '--manifest-sha256', '--max-carrier-bytes', '--max-committed-blocks', '--max-decode-allocation-bytes', '--max-heights', '--max-in-flight', '--max-leaves-per-carrier', '--max-merge-frames', '--max-merge-log-bytes', '--max-requests', '--max-status-requests', '--max-store-data-bytes', '--max-submissions', '--measurement-ns', '--merge-log', '--network-id', '--owner-uid', '--pair-index', '--peer-config', '--peer-config-max-bytes', '--peer-config-sha256', '--poll-interval-ns', '--preparation-ahead-ns', '--preparation-concurrency', '--preparation-lookahead', '--proof-max-bytes', '--queries', '--queries-max-bytes', '--queries-sha256', '--rate-denominator', '--rate-numerator', '--reader-max-output-bytes', '--reply-max-bytes', '--resource-interval-ns', '--resource-max-start-lag-ns', '--resource-response-deadline-ns', '--signed-genesis', '--signed-genesis-max-bytes', '--signed-genesis-sha256', '--source-max-bytes', '--submission-lag-bound-ns', '--total-max-bytes', '--validator', '--verification-input-max-bytes', '--verification-output-max-bytes', '--warmup-ns', '--workload-seed')
+NATIVE_FACTS_FLAGS = ('--account', '--assembly-decode-max-bytes', '--block-store', '--chain-discriminant', '--chain-id', '--context', '--context-max-bytes', '--context-sha256', '--drain-ns', '--facts-max-bytes', '--facts-output', '--carrier', '--carrier-max-bytes', '--carrier-sha256', '--first-height', '--genesis-public-key', '--invocation-id', '--journal', '--journal-max-bytes', '--journal-max-requests', '--journal-sha256', '--lanes', '--last-height', '--manifest', '--manifest-max-bytes', '--manifest-sha256', '--max-carrier-bytes', '--max-committed-blocks', '--max-decode-allocation-bytes', '--max-heights', '--max-in-flight', '--max-leaves-per-carrier', '--max-merge-frames', '--max-merge-log-bytes', '--max-requests', '--max-status-requests', '--max-store-data-bytes', '--max-submissions', '--measurement-ns', '--merge-log', '--network-id', '--owner-uid', '--pair-index', '--peer-config', '--peer-config-max-bytes', '--peer-config-sha256', '--poll-interval-ns', '--preparation-ahead-ns', '--preparation-concurrency', '--preparation-lookahead', '--proof-max-bytes', '--queries', '--queries-max-bytes', '--queries-sha256', '--rate-denominator', '--rate-numerator', '--reader-max-output-bytes', '--reply-max-bytes', '--resource-interval-ns', '--resource-max-start-lag-ns', '--resource-response-deadline-ns', '--signed-genesis', '--signed-genesis-max-bytes', '--signed-genesis-sha256', '--source-max-bytes', '--submission-lag-bound-ns', '--total-max-bytes', '--validator', '--verification-input-max-bytes', '--verification-output-max-bytes', '--warmup-ns', '--workload-seed')
 
 
 @pytest.mark.parametrize('wrong_vector_height', [False, True])
@@ -377,17 +377,18 @@ def test_actual_typed_tip_vector_and_facts_owners_share_original_store_and_clock
     p = pipeline; value = owner(p)
     original_spawn = command.subprocess.Popen
     def spawn(argv, **options):
-        if 'collect-scaling-inputs' not in argv:
+        if argv[6] != 'collect':
             return original_spawn(argv, **options)
         invocation = argv[argv.index('--invocation-id') + 1]
         context = next(row for row in p.c.inputs.generation.artifacts if row.path == 'genesis-context.nrt')
-        reply = dict(version=1, operation='collect_scaling_inputs', invocation_id=invocation,
-            client_config_sha256=p.c.inputs.roles[0].client_config_sha256,
-            committed_height=101 if wrong_vector_height else 100, finality_count=100, query_count=84,
+        genesis = next(row for row in p.c.inputs.generation.artifacts if row.path == 'genesis.signed.nrt')
+        reply = dict(version=1, operation='collect_native_inputs', invocation_id=invocation,
+            genesis_sha256=genesis.sha256, genesis_bytes=genesis.bytes,
+            committed_height=101 if wrong_vector_height else 100, carrier_count=100, query_count=84,
             context_sha256=context.sha256, context_bytes=context.bytes)
-        for role in ('finality', 'queries'):
+        for role in ('carrier', 'queries'):
             path = Path(argv[argv.index('--' + role + '-out') + 1])
-            stage = path.with_name(path.name + '.collecting')
+            stage = path.with_name(path.name + '.publishing')
             sha, size = write(stage, ('fake-vector-' + role).encode()); stage.rename(path)
             reply.update({role + '_sha256': sha, role + '_bytes': size})
         p.c.commands.raws[len(p.c.commands.calls)] = json.dumps(reply, separators=(',', ':')).encode() + b'\n'
@@ -405,7 +406,7 @@ def test_actual_typed_tip_vector_and_facts_owners_share_original_store_and_clock
         else:
             receipt = collection.run()
             result = value.produce_facts()
-            assert result.finality_sha256 == receipt.finality.sha256
+            assert result.carrier_sha256 == receipt.carrier.sha256
             assert result.queries_sha256 == receipt.queries.sha256
             assert result.stopped_height == receipt.stopped_height == tip.reader.last_height
             assert value._commands.deadline_ns == collection._commands.deadline_ns

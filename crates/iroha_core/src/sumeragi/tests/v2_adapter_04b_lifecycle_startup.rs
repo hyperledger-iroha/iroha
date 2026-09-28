@@ -774,13 +774,7 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
         super::super::v2_block_sync::V2BlockSyncDiscovery::new(context.clone(), local_peer, 64)
             .expect("open CompleteTip block-sync discovery");
     let mut block_sync_request = None;
-    let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
-        &context,
-        state.as_ref(),
-        Some(local_validator),
-        None,
-    )
-    .expect("open CompleteTip global beacon lifecycle");
+
     let first = super::super::v2_runner::drain_lifecycle_v2_ingress(
         &mut activated,
         &mut active_runner,
@@ -791,7 +785,6 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
         &mut block_sync_server,
         &mut block_sync,
         &mut block_sync_request,
-        &mut npos_beacon,
         1,
         None,
     )
@@ -822,7 +815,6 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
             &mut block_sync_server,
             &mut block_sync,
             &mut block_sync_request,
-            &mut npos_beacon,
             1,
             None,
         )
@@ -964,6 +956,9 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
     // instead attempt to rebind Kura's already authenticated lane journal.
     let wrong_network_state = Arc::new(
         crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             crate::state::World::default(),
             Arc::clone(&kura),
             crate::query::store::LiveQueryStore::start_test(),
@@ -1535,6 +1530,9 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let mut state =
             crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+                crate::state::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
                 crate::state::World::with(
                     [],
                     [iroha_data_model::Registrable::build(
@@ -2808,13 +2806,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             )
             .expect("open ordinary-tail block-sync discovery");
             let mut block_sync_request = None;
-            let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
-                &recovered_context,
-                state.as_ref(),
-                Some(local_validator),
-                None,
-            )
-            .expect("open ordinary-tail global beacon lifecycle");
+
             assert_eq!(
                 activated
                     .consume_prepared_ordinary_ingress_turn(
@@ -2826,7 +2818,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                         &mut block_sync_server,
                         &mut block_sync,
                         &mut block_sync_request,
-                        &mut npos_beacon,
                     )
                     .expect("consume the exact ordinary runner handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2870,7 +2861,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                         &mut block_sync_server,
                         &mut block_sync,
                         &mut block_sync_request,
-                        &mut npos_beacon,
                     )
                     .expect("consume the exact malformed-response ordinary handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2906,7 +2896,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &mut block_sync_server,
                 &mut block_sync,
                 &mut block_sync_request,
-                &mut npos_beacon,
                 1,
                 None,
             )

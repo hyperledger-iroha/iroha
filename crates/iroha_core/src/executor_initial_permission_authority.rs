@@ -1369,6 +1369,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierPolicyInstallV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1,
+        iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -1428,6 +1431,11 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     // publisher/network/body binding, admitted provider owner and receipt proof
     // inside Core. Replay also requires the immutable original registrant.
     if is_any!(iroha_data_model::isi::musubi::RegisterMusubiArchiveV1) {
+        return true;
+    }
+    // The signed authority can only ratchet its own network-bound outbox digest. The native
+    // handler enforces exact predecessor, session lineage, and signed-transaction context.
+    if is_any!(iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1) {
         return true;
     }
     // The Initial executor is a deliberately narrow CBDC bootstrap profile.

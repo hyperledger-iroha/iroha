@@ -1,4 +1,4 @@
-//! The B-Chain style topology overlay (spec §2): a per-committee permutation, the skipped-leader
+//! The B-Chain style topology overlay (spec §2): a per-epoch permutation, the skipped-leader
 //! demotion set `D_h`, the order of every round `(h, v)` with slot substitution, the roles
 //! (leader, set A, proxy tail, set B) and the stage-1 hint (§5.2).
 //!
@@ -11,7 +11,8 @@ use crate::{
     message::{BlockHeader, Qc},
     preimage,
     types::{
-        Committee, Hash32, PublicKey, ValidatorIndex, fault_threshold, index_of, quorum, usize_of,
+        Committee, EpochConfig, Hash32, PublicKey, ValidatorIndex, fault_threshold, index_of,
+        quorum, usize_of,
     },
 };
 
@@ -43,14 +44,15 @@ pub fn prf_shuffle(crypto: &dyn Crypto, seed: &Hash32, n: usize) -> Vec<Validato
     out
 }
 
-/// `perm_C = prf_shuffle(H(TAG_TOPOLOGY ‖ I ‖ committee_digest(C)), n)` (§2.1). Depends only on
-/// the committee and the instance, never on a block, so nobody can grind it.
+/// `perm_C = prf_shuffle(H(TAG_TOPOLOGY ‖ I ‖ E ‖ leader_seed ‖ committee_digest(C)), n)` (§2.1). Depends only on
+/// the authenticated epoch context, fresh leader seed, committee and instance.
 pub fn committee_permutation(
     crypto: &dyn Crypto,
     instance: &Hash32,
+    epoch: &EpochConfig,
     committee: &Committee,
 ) -> Vec<ValidatorIndex> {
-    let seed = preimage::topology_seed(crypto, instance, committee);
+    let seed = preimage::topology_seed(crypto, instance, epoch, committee);
     prf_shuffle(crypto, &seed, committee.n())
 }
 
@@ -167,17 +169,18 @@ impl Topology {
     }
 
     /// Compute the topology of `height` for `committee = C_h` (§2.1): permutation from the
-    /// committee and instance, `D_h` from the committed headers of the window.
+    /// authenticated epoch, committee and instance, `D_h` from the committed headers of the window.
     pub fn compute(
         crypto: &dyn Crypto,
         instance: &Hash32,
+        epoch: &EpochConfig,
         committee: &Committee,
         height: u64,
         genesis_height: u64,
         window: u64,
         headers: &[BlockHeader],
     ) -> Self {
-        let perm = committee_permutation(crypto, instance, committee);
+        let perm = committee_permutation(crypto, instance, epoch, committee);
         let demoted = demoted_set(committee, height, genesis_height, window, headers);
         // A permutation of 0..n with n ≥ 1 always yields a topology.
         Self::from_parts(perm, &demoted, height).unwrap_or_else(|| Self::trivial(height))
@@ -384,6 +387,8 @@ mod tests {
 
     fn header(height: u64, skipped: &[PublicKey]) -> BlockHeader {
         BlockHeader {
+            control_witness: crate::types::ControlWitness::empty(),
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: I,
             height,
             origin_view: u64::try_from(skipped.len()).unwrap(),
@@ -399,6 +404,8 @@ mod tests {
 
     fn commit_qc(n: usize, view: u64, signers: &[ValidatorIndex]) -> Qc {
         Qc {
+            attestation_witness: None,
+            epoch: crate::testing::TEST_EPOCH.id,
             kind: VoteKind::Commit,
             instance: I,
             height: 1,
@@ -439,23 +446,29 @@ mod tests {
             vec![4, 6, 2, 1, 5, 3, 0]
         );
         assert_eq!(
-            committee_permutation(&crypto, &I, &committee(4)),
-            vec![2, 3, 1, 0]
+            committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &committee(4)),
+            vec![3, 0, 1, 2]
         );
         assert_eq!(
-            committee_permutation(&crypto, &I, &committee(7)),
-            vec![6, 4, 5, 2, 3, 0, 1]
+            committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &committee(7)),
+            vec![0, 4, 6, 1, 3, 2, 5]
         );
         // Permutations for every size are permutations.
         for n in 1..=31u8 {
-            let mut perm = committee_permutation(&crypto, &I, &committee(n));
+            let mut perm =
+                committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &committee(n));
             perm.sort_unstable();
             assert_eq!(perm, (0..u32::from(n)).collect::<Vec<_>>());
         }
         // The instance separates topologies.
         assert_ne!(
-            committee_permutation(&crypto, &I, &committee(7)),
-            committee_permutation(&crypto, &Hash32([0x12; 32]), &committee(7))
+            committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &committee(7)),
+            committee_permutation(
+                &crypto,
+                &Hash32([0x12; 32]),
+                &crate::testing::TEST_EPOCH,
+                &committee(7)
+            )
         );
     }
 
@@ -507,7 +520,7 @@ mod tests {
         let crypto = FakeCrypto::new();
         for n in 1..=13u8 {
             let c = committee(n);
-            let perm = committee_permutation(&crypto, &I, &c);
+            let perm = committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &c);
             let nn = usize::from(n);
             for height in 0..30u64 {
                 let topo = Topology::from_parts(perm.clone(), &[], height).unwrap();
@@ -585,7 +598,7 @@ mod tests {
         // n = 4 and n = 7 with the fake-hash permutation, |D| ∈ {0, f − 1, f}, views 0, 1, 2.
         let crypto = FakeCrypto::new();
         let c7 = committee(7);
-        let perm7 = committee_permutation(&crypto, &I, &c7);
+        let perm7 = committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &c7);
         let got: Vec<Vec<Vec<u32>>> = [vec![], vec![perm7[3]], vec![perm7[3], perm7[4]]]
             .iter()
             .map(|demoted| {
@@ -594,27 +607,27 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            got,
+            got, /* golden updated */
             vec![
                 vec![
-                    vec![2, 3, 0, 1, 6, 4, 5],
-                    vec![3, 0, 1, 6, 4, 5, 2],
-                    vec![0, 1, 6, 4, 5, 2, 3]
+                    vec![1, 3, 2, 5, 0, 4, 6],
+                    vec![3, 2, 5, 0, 4, 6, 1],
+                    vec![2, 5, 0, 4, 6, 1, 3]
                 ],
                 vec![
-                    vec![3, 0, 1, 6, 4, 5, 2],
-                    vec![0, 1, 6, 4, 5, 3, 2],
-                    vec![1, 6, 4, 5, 3, 0, 2]
+                    vec![3, 2, 5, 0, 4, 6, 1],
+                    vec![2, 5, 0, 4, 6, 3, 1],
+                    vec![5, 0, 4, 6, 3, 2, 1]
                 ],
                 vec![
-                    vec![0, 1, 6, 4, 5, 2, 3],
-                    vec![1, 6, 4, 5, 0, 2, 3],
-                    vec![6, 4, 5, 0, 1, 2, 3]
+                    vec![2, 5, 0, 4, 6, 1, 3],
+                    vec![5, 0, 4, 6, 2, 1, 3],
+                    vec![0, 4, 6, 2, 5, 1, 3]
                 ]
             ]
         );
         let c4 = committee(4);
-        let perm4 = committee_permutation(&crypto, &I, &c4);
+        let perm4 = committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &c4);
         let got: Vec<Vec<Vec<u32>>> = [vec![], vec![perm4[1]]]
             .iter()
             .map(|demoted| {
@@ -623,10 +636,10 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            got,
+            got, /* golden updated */
             vec![
-                vec![vec![3, 1, 0, 2], vec![1, 0, 2, 3], vec![0, 2, 3, 1]],
-                vec![vec![1, 0, 2, 3], vec![0, 2, 1, 3], vec![2, 1, 0, 3]]
+                vec![vec![0, 1, 2, 3], vec![1, 2, 3, 0], vec![2, 3, 0, 1]],
+                vec![vec![1, 2, 3, 0], vec![2, 3, 1, 0], vec![3, 1, 2, 0]]
             ]
         );
     }
@@ -766,18 +779,37 @@ mod tests {
         for n in [4u8, 7] {
             let c = committee(n);
             let nn = usize::from(n);
-            let perm = committee_permutation(&crypto, &I, &c);
+            let perm = committee_permutation(&crypto, &I, &crate::testing::TEST_EPOCH, &c);
             let g = 0u64;
             let h = 20u64;
-            let base = Topology::compute(&crypto, &I, &c, h, g, 128, &[]);
+            let base =
+                Topology::compute(&crypto, &I, &crate::testing::TEST_EPOCH, &c, h, g, 128, &[]);
             let silent = base.leader(0);
             let committed = header(h, &[c.get(silent).unwrap().clone()]);
             let headers = [committed];
             // h + 1 does not see the header of h yet (window ends at h − 1).
-            let t1 = Topology::compute(&crypto, &I, &c, h + 1, g, 128, &headers);
+            let t1 = Topology::compute(
+                &crypto,
+                &I,
+                &crate::testing::TEST_EPOCH,
+                &c,
+                h + 1,
+                g,
+                128,
+                &headers,
+            );
             assert!(t1.demoted().is_empty());
             for later in (h + 2)..(h + 2 + 2 * u64::from(n)) {
-                let t = Topology::compute(&crypto, &I, &c, later, g, 128, &headers);
+                let t = Topology::compute(
+                    &crypto,
+                    &I,
+                    &crate::testing::TEST_EPOCH,
+                    &c,
+                    later,
+                    g,
+                    128,
+                    &headers,
+                );
                 let plain = Topology::from_parts(perm.clone(), &[], later).unwrap();
                 assert_eq!(t.demoted(), &[silent], "n={n} h={later}");
                 assert_ne!(t.leader(0), silent);
@@ -793,7 +825,16 @@ mod tests {
                 }
             }
             // After W heights the member is reinstated.
-            let t = Topology::compute(&crypto, &I, &c, h + 2 + 128, g, 128, &headers);
+            let t = Topology::compute(
+                &crypto,
+                &I,
+                &crate::testing::TEST_EPOCH,
+                &c,
+                h + 2 + 128,
+                g,
+                128,
+                &headers,
+            );
             assert!(t.demoted().is_empty());
         }
     }
@@ -835,7 +876,16 @@ mod tests {
         // Golden: fake-hash permutation, n = 4.
         let crypto = FakeCrypto::new();
         let c4 = committee(4);
-        let parent = Topology::compute(&crypto, &I, &c4, 5, 0, 128, &[]);
+        let parent = Topology::compute(
+            &crypto,
+            &I,
+            &crate::testing::TEST_EPOCH,
+            &c4,
+            5,
+            0,
+            128,
+            &[],
+        );
         let set_a = parent.round(0).set_a().to_vec();
         assert_eq!(initial_stage(&parent, Some(&commit_qc(4, 0, &set_a))), 0);
         let set_b = parent.round(0).set_b().to_vec();

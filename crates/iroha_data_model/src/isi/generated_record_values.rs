@@ -3,7 +3,7 @@
 //! Opaque artifact fields exercise byte preservation. These codec fixtures do not
 //! claim that an artifact is qualified or that an instruction passes ledger admission.
 
-use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_primitives::numeric::Quantity;
 use norito::json::Value;
 
@@ -13,8 +13,8 @@ use crate::{
     asset::{AssetDefinitionId, AssetId},
     confidential::{ConfidentialParamsId, ConfidentialStatus, PoseidonParams},
     isi::{
-        confidential, content, runtime_upgrade, smart_contract_code, soradns, sorafs, staking,
-        transfer, transparent,
+        confidential, content, musubi, runtime_upgrade, smart_contract_code, soradns, sorafs,
+        staking, transfer, transparent,
     },
     nexus::{
         PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
@@ -349,7 +349,21 @@ pub(super) fn values() -> Vec<Value> {
     records.extend(transfer_and_metadata_values());
     records.extend(soradns_values());
     records.extend(sorafs_values());
-    assert_eq!(records.len(), 30);
+    let pin_outbox_advance = musubi::AdvanceMusubiPinOutboxV1 {
+        network_id: crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0xa5; 32]),
+        )),
+        pin_authority: account(0x82),
+        session_id: [0x82; 32],
+        expected_revision: 0,
+        expected_inventory_digest: [0; 32],
+        inventory_digest: [0x83; 32],
+    };
+    pin_outbox_advance
+        .validate()
+        .expect("canonical pin-outbox generated record fixture");
+    records.push(capture(pin_outbox_advance));
+    assert_eq!(records.len(), 31);
     records
 }
 

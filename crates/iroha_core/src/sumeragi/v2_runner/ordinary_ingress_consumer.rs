@@ -431,7 +431,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
-    npos_beacon: &mut V2GlobalBeaconLifecycle,
 ) -> Result<ProductionPreparedOrdinaryIngressConsumptionV1, V2RunnerError> {
     let services_output_guard = services.lifecycle_output_guard();
     if !prepared.matches_output_guard(&services_output_guard) {
@@ -573,16 +572,10 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
     }
     match message.payload {
-        wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
-            drop(ingress_ownership);
-            match npos_beacon.accept_partial(partial, &sender, executor.current_tag().view()) {
-                Ok(outcome) => {
-                    iroha_logger::trace!(?outcome, "admitted global threshold-beacon partial");
-                }
-                Err(error) => {
-                    iroha_logger::debug!(%error, "rejected global threshold-beacon partial");
-                }
-            }
+        wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+            // A retired envelope cannot enter the native threshold reducer. Finish its exact
+            // ingress occurrence without creating signing or application work.
+            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
         }
         wire::ConsensusMessageV2Payload::Proposal(proposal) => {
             if !terminal_decision {

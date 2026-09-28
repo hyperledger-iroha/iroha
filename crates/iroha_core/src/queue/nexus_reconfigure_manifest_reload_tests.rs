@@ -31,7 +31,7 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    queue.install_lane_manifests_with_state(&frozen, &state);
+    queue.install_lane_manifests_with_state_for_testing(&frozen, &state);
     assert!(!frozen.has_manifest_source_alias("future"));
     let expanded = LaneCatalog::new(
         nonzero!(2_u32),
@@ -108,14 +108,14 @@ fn nexus_reconfiguration_uses_state_authority_instead_of_empty_or_stale_queue_ca
                 LiveQueryStore::start_test(),
             );
             if state_has_authority {
-                state.install_lane_manifests(&registry(canonical_validator.clone()));
+                state.install_lane_manifests_for_testing(&registry(canonical_validator.clone()));
             }
             let installed = state.lane_manifests.read().clone();
             let nexus = state.nexus_snapshot();
             let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
             let queue = Queue::test(config_factory(), &time_source);
             if queue_is_stale {
-                queue.install_lane_manifests(&registry(stale_validator.clone()));
+                queue.install_lane_manifests_for_testing(&registry(stale_validator.clone()));
             }
             assert_ne!(
                 queue.lane_manifests.read().consensus_policy_digest(),

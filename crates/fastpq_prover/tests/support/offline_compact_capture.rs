@@ -166,11 +166,31 @@ impl CaptureFixture {
             .map(compute_remote_spend_claim_commitment_v1)
             .collect();
         let outer_amount = 5 * u128::try_from(occurrences).unwrap();
+        let occurrences = remote
+            .iter()
+            .zip(&statement.transcripts)
+            .enumerate()
+            .map(|(ordinal, (claim, transcript))| {
+                iroha_data_model::nexus::AxtSourceTransferOccurrenceV1 {
+                    source_success_receipt_digest: [0x51; 32],
+                    source_tx_commitment: batch_hash.into(),
+                    source_tx_index: 0,
+                    transcript_index: ordinal as u32,
+                    delta_index: 0,
+                    pair_ordinal: ordinal as u32,
+                    transfer_digest: iroha_data_model::nexus::axt_source_transfer_digest_v1(
+                        &transcript.deltas[0],
+                    ),
+                    remote_spend_claim_commitment: compute_remote_spend_claim_commitment_v1(claim),
+                }
+            })
+            .collect();
         Self {
             statement,
             expected,
             binding,
             metadata: FastpqAxtPublicMetadataV1 {
+                source_transfer_occurrences: occurrences,
                 parameter: AXT_DEFAULT_PARAMETER.into(),
                 entry_hash: batch_hash.into(),
                 // Retain the original five-unit outer mirror per occurrence,

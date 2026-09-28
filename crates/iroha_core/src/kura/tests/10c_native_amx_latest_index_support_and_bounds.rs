@@ -2116,6 +2116,9 @@ fn native_amx_latest_strict_read_defers_authenticated_pending_tip_metadata() {
         let (kura, _) =
             Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog).unwrap();
         let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
