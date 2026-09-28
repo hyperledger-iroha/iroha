@@ -383,6 +383,11 @@ impl World {
         let slots = sc
             .committees
             .iter()
+            .chain(
+                sc.instance_committees
+                    .iter()
+                    .flat_map(|(_, schedule)| schedule.iter()),
+            )
             .flat_map(|(_, members)| members.iter().map(|(_, slot)| *slot + 1))
             .max()
             .unwrap_or(1);
@@ -393,7 +398,10 @@ impl World {
                 derive_key(key_seed, m * 16 + base, slot)
             };
             let schedule = sc
-                .committees
+                .instance_committees
+                .iter()
+                .find(|(inst, _)| *inst == i && i != 0)
+                .map_or(&sc.committees, |(_, schedule)| schedule)
                 .iter()
                 .map(|(from, members)| {
                     let keys = members.iter().map(|(m, s)| key_of(*m, *s)).collect();
@@ -439,7 +447,7 @@ impl World {
                     .map(|slot| derive_key(key_seed, m * 16 + base, slot))
                     .filter(|key| inst.schedule.iter().any(|(_, c)| c.contains(key)))
                     .collect();
-                let observer = m >= sc.n && keys.is_empty();
+                let observer = keys.is_empty() && (m >= sc.n || sc.follow_all_instances);
                 let keys = if observer {
                     vec![derive_key(key_seed, m * 16 + base, 0)]
                 } else {
@@ -2020,6 +2028,7 @@ impl World {
             // from signing wherever it may have signed (Lemma 0), a store behind the record
             // (R6) below the record's height.
             let t = init.tip.height;
+            self.oracle.reps[r].at_start = Some(t);
             let instance = self.instances[rep.inst].id;
             for key in &rep.keys {
                 let below = match rep.records.get(key) {

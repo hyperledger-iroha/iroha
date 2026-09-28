@@ -392,6 +392,6 @@ Remaining:
    applies `active_from` and stopped after retirement; `net.rs` routes frames by instance id;
    O9 isolation tests.
 2. **Status, telemetry, Torii and SDK DTOs; kagami/localnet lane policies.**
-3. **Tests:** multi-instance node tests (two lanes, merge order, restart), a four-peer network
-   test with elastic scale-out and scale-in under load, and simulator coverage of a lane
-   instance next to `G`.
+3. **Tests:** a P2P network soak with elastic scale-out and scale-in under load and restarts
+   (in-process four-validator node tests and the simulator's F38 — a lane next to `G`, followed by
+   every node — already pass).

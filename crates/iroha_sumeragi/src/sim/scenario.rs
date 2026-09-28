@@ -369,6 +369,14 @@ pub struct Scenario {
     /// Committee schedule: from height → members as `(machine, key slot)`; the first entry
     /// must start at height 0 (it is the genesis committee).
     pub committees: Vec<(u64, Vec<(usize, usize)>)>,
+    /// Committee schedules of individual instances that differ from [`Self::committees`]
+    /// (`(instance, schedule)`), e.g. a lane instance whose committee is a subset of the global
+    /// one. Instance 0 always uses [`Self::committees`].
+    pub instance_committees: Vec<(usize, Vec<(u64, Vec<(usize, usize)>)>)>,
+    /// Every machine follows every instance: a machine without a key in an instance's schedule
+    /// runs it as an observer (the node's lane rule, `specs/sumeragi_lanes.md` §4.1). Otherwise
+    /// only machines outside the initial committee observe.
+    pub follow_all_instances: bool,
     /// Oracles and bounds.
     pub checks: Checks,
     /// Pre-built committed chain length (F17): machines in `prebuilt_holders` start with it.
@@ -407,6 +415,8 @@ impl Scenario {
             io_kill: None,
             workload: Some(Workload::default()),
             committees: vec![(0, (0..n).map(|m| (m, 0)).collect())],
+            instance_committees: Vec::new(),
+            follow_all_instances: false,
             checks: Checks::default(),
             prebuilt: 0,
             prebuilt_holders: Vec::new(),

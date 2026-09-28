@@ -259,6 +259,32 @@ fn f31_independent_finality() {
     }
 }
 
+/// F38: a lane instance next to the global one, followed by every machine.
+#[test]
+fn f38_lane_next_to_global() {
+    for world in sweep("F38", scenarios::f38) {
+        let lane: Vec<usize> = (0..world.replicas.len())
+            .filter(|r| world.replicas[*r].inst == 1)
+            .collect();
+        assert_eq!(
+            lane.len(),
+            world.machines.len(),
+            "every machine runs the lane: its committee as members, the rest as observers"
+        );
+        // Every lane replica, observers included, reached the lane's committed tip (minus the
+        // heights still in flight at the end of the run).
+        let tip = world.oracle.refs[1].keys().max().copied().unwrap_or(0);
+        assert!(tip >= 5, "the lane committed {tip} heights");
+        for r in lane {
+            assert!(
+                world.committed(r) + 3 >= tip,
+                "lane replica {r} committed {} of {tip}",
+                world.committed(r)
+            );
+        }
+    }
+}
+
 /// F22 over 100 000 retry intervals (flat memory, no idle blocks). Heavy: run with `--release
 /// --ignored`.
 #[test]

@@ -1,4 +1,4 @@
-//! Fault scenarios F1–F37 of §13.3, each a function of the seed. Committee sizes rotate over
+//! Fault scenarios F1–F38 of §13.3, each a function of the seed. Committee sizes rotate over
 //! `n ∈ {1, 4, 5, 7, 22}` where meaningful (small sizes first, so that the few default seeds of
 //! a debug run stay fast); every other random choice is drawn from a side stream of the seed.
 
@@ -54,6 +54,7 @@ pub const ALL: &[(&str, Builder)] = &[
     ("F35", f35),
     ("F36", f36),
     ("F37", f37),
+    ("F38", f38),
 ];
 
 fn pick<T: Copy>(seed: u64, options: &[T]) -> T {
@@ -1546,5 +1547,33 @@ pub fn f37(seed: u64) -> Scenario {
         );
     }
     sc.checks.progress = 10;
+    sc
+}
+
+/// F38: a lane instance next to the global one (`specs/sumeragi_lanes.md` §4.1). The lane's
+/// pinned committee is four of the global validators; every other machine follows the lane as an
+/// observer. The lane stalls for a while and the global instance keeps finalizing; a lane
+/// observer crashes and restarts. Every honest replica of both instances, observers included,
+/// commits after the lane recovers.
+pub fn f38(seed: u64) -> Scenario {
+    let n = pick(seed, &[5, 7, 6]);
+    let mut sc = sized("F38", seed, n);
+    sc.instances = 2;
+    sc.follow_all_instances = true;
+    // The lane committee: the last four global validators (their lane keys are distinct from
+    // their global keys: instances do not share keys here).
+    sc.instance_committees = vec![(1, vec![(0, (n - 4..n).map(|m| (m, 0)).collect())])];
+    sc.net_rules = vec![NetRule::StallInstance {
+        inst: 1,
+        from: 10_000,
+        until: 25_000,
+    }];
+    // Machine 0 validates the global instance and only observes the lane.
+    sc.script = vec![(15_000, Fault::Crash(0)), (20_000, Fault::Restart(0))];
+    sc.checks.stalled = vec![(1, 25_000)];
+    sc.checks.windows = vec![(0, 10_000, 25_000, 3)];
+    sc.heal_at = 22_000;
+    sc.duration = 60_000;
+    sc.checks.progress = 5;
     sc
 }

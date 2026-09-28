@@ -2690,7 +2690,12 @@ attestations, a Byzantine proxy tail strips the attestations of the CommitQCs it
 their flag, and it over-aggregates the genuine attested votes it receives into `q + 1`-signer
 CommitQCs; one honest member has no attestation authority (or a misconfigured one) while `q`
 members still attest; on every other seed one attesting honest member executes non-empty blocks
-slowly (the PrepareQC often reaches it before its execution ends) → O-ATT, O-LIVE.
+slowly (the PrepareQC often reaches it before its execution ends) → O-ATT, O-LIVE · F38 a lane
+instance next to the global one (`specs/sumeragi_lanes.md` §4.1): the lane's pinned committee is
+four of the global validators, every other machine follows the lane as an observer (a node runs
+every instance), the lane stalls while the global instance keeps finalizing, and a global validator
+that only observes the lane crashes and restarts → every replica of both instances, observers
+included, commits after the lane recovers (O-LIVE, O-AGR).
 
 ### 13.4 Mutations that MUST be detected
 

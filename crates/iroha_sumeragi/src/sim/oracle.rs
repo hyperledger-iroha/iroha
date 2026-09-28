@@ -56,6 +56,8 @@ pub struct RepObs {
     pub deadline: Millis,
     /// Committed height at heal time.
     pub at_heal: Option<u64>,
+    /// Committed height when the replica last (re)started (its store tip).
+    pub at_start: Option<u64>,
     /// First commit after heal.
     pub first_after_heal: Option<Millis>,
     /// Commit gaps after heal: `(height, gap, t̂)` with `t̂ = φ·T(level)/2` (§8.2).
@@ -1222,7 +1224,8 @@ impl World {
             }
             let started = self.machines[self.replicas[r].machine].started_at;
             let base = if started > heal {
-                self.oracle.reps[r].committed.min(self.committed(r))
+                // Started after heal: progress counts from its store tip at the start.
+                self.oracle.reps[r].at_start.unwrap_or(0)
             } else {
                 self.oracle.reps[r].at_heal.unwrap_or(0)
             };
