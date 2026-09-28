@@ -6,14 +6,7 @@ mod tests {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_crypto::{Algorithm, Hash, HashOf};
     use iroha_data_model::{
-        block::{
-            BlockHeader,
-            consensus_v2::{
-                ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
-                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
-                SumeragiV2StatusPhase,
-            },
-        },
+        block::BlockHeader,
         events::{
             EventBox,
             pipeline::{BlockEvent, BlockStatus},
@@ -496,51 +489,16 @@ mod tests {
     }
     #[test]
     fn malformed_npos_diagnostics_are_rejected() {
-        let reducer = SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"node"),
-            build_fingerprint: Hash::new(b"build"),
-            config_fingerprint: Hash::new(b"config"),
-            restart_required: false,
-            height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-                Hash::new(b"height-context"),
-            )),
-            height: 42,
-            view: 3,
-            phase: SumeragiV2StatusPhase::Prepare,
-            leader: 2,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Validated,
-            pending_persistence_id: None,
-            last_committed_height: 41,
-            last_committed_subject: None,
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: 1,
-                epoch_end_height: 100,
-                mode: ConsensusMode::Permissioned,
-                epoch_seed: [0xA5; 32],
-                validator_count: 4,
-                quorum: DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: None,
-            liveness: Default::default(),
-            beacon_horizon: None,
-        };
         let zero_seed = iroha_data_model::parameter::system::SumeragiNposParameters {
             epoch_seed: [0; 32],
             ..Default::default()
         };
-        assert!(super::sumeragi_npos_diagnostics(&zero_seed, &reducer).is_err());
+        assert!(super::sumeragi_npos_diagnostics(&zero_seed).is_err());
         let invalid_windows = iroha_data_model::parameter::system::SumeragiNposParameters {
             epoch_length_blocks: NonZeroU64::new(10).expect("non-zero epoch length"),
             ..Default::default()
         };
-        assert!(super::sumeragi_npos_diagnostics(&invalid_windows, &reducer).is_err());
+        assert!(super::sumeragi_npos_diagnostics(&invalid_windows).is_err());
     }
     #[tokio::test]
     async fn status_accept_header_returns_codec_norito() {

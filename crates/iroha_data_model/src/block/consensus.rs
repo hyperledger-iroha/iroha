@@ -3862,7 +3862,7 @@ pub struct SumeragiProposalGateStatus {
     #[norito(default)]
     pub last_successful_proposal_age_ms: u64,
 }
-/// Current `NPoS` schedule and PRF context for operator diagnostics.
+/// Current `NPoS` epoch schedule for operator diagnostics.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, DeriveJsonSerialize, DeriveJsonDeserialize,
 )]
@@ -3874,10 +3874,6 @@ pub struct SumeragiNposDiagnostics {
     pub epoch_length_blocks: NonZeroU64,
     /// Non-zero epoch seed used for deterministic leader and validator election.
     pub epoch_seed: [u8; 32],
-    /// Height associated with the recorded PRF context.
-    pub prf_height: u64,
-    /// View associated with the recorded PRF context.
-    pub prf_view: u64,
 }
 impl SumeragiNposDiagnostics {
     /// Validate cross-field invariants that scalar wire types cannot express.

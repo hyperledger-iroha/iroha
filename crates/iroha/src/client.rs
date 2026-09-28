@@ -81,7 +81,6 @@ use iroha_data_model::{
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
     block::consensus::SumeragiDiagnosticsStatus,
-    block::consensus_v2::SumeragiV2QcResponse,
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
         types::{BlobDigest, ExtraMetadata},
@@ -9003,10 +9002,6 @@ fn decode_parameters_for_test(
 ) -> Result<iroha_data_model::parameter::Parameters> {
     decode_parameters_response(resp)
 }
-fn sumeragi_qc_json_payload(response: &SumeragiV2QcResponse) -> Result<norito::json::Value> {
-    norito::json::to_value(response)
-        .map_err(|error| eyre!("Failed to render Sumeragi v2 QC response as JSON: {error}"))
-}
 impl Client {
     fn ensure_response_status(
         response: &Response<Vec<u8>>,
@@ -9861,18 +9856,6 @@ impl Client {
         )?;
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
-    /// GET `/v1/sumeragi/leader` — leader index snapshot with optional PRF context.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_leader_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/leader");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi leader")
-    }
     /// GET `/v1/sumeragi/params` — on-chain Sumeragi parameters snapshot.
     ///
     /// # Errors
@@ -9896,43 +9879,6 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         decode_parameters_response(&resp)
-    }
-    /// GET `/v1/sumeragi/qc` — authoritative v2 `PrepareQC` references.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or the negotiated
-    /// representation is not the canonical [`SumeragiV2QcResponse`] schema.
-    pub fn get_sumeragi_qc(&self) -> Result<SumeragiV2QcResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/qc");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_NORITO),
-        )?;
-        Self::ensure_response_status(&resp, StatusCode::OK, "Failed to get sumeragi qc", " ")?;
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        let response = if Self::is_norito_content_type(content_type) {
-            decode_from_bytes::<SumeragiV2QcResponse>(resp.body())
-                .map_err(|error| eyre!("Failed to decode Sumeragi v2 QC Norito payload: {error}"))?
-        } else if Self::is_exact_json_content_type(content_type) {
-            norito::json::from_slice::<SumeragiV2QcResponse>(resp.body())
-                .map_err(|error| eyre!("Failed to decode Sumeragi v2 QC JSON payload: {error}"))?
-        } else {
-            return Err(eyre!(
-                "Failed to decode Sumeragi v2 QC response: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
-            ));
-        };
-        Ok(response)
-    }
-    /// Render the canonical `/v1/sumeragi/qc` response as JSON for generic CLI output.
-    ///
-    /// # Errors
-    /// Returns an error if the typed request or canonical JSON rendering fails.
-    pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
-        sumeragi_qc_json_payload(&self.get_sumeragi_qc()?)
     }
     /// GET `/v1/sumeragi/evidence/count` — total committed evidence entries.
     ///
@@ -25706,10 +25652,6 @@ mod tests {
                 SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
                 SumeragiPipelineExecutionStatus,
             },
-            consensus_v2::{
-                BlockSubject, ConsensusRound, ExecutionCommitment, GlobalPhase, HeightContext,
-                HeightContextId, QuorumCertificateRef,
-            },
         },
         da::{
             ingest::DaStripeLayout,
@@ -34760,10 +34702,10 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 2] = [
-            ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
-            ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
-        ];
+        let cases: [SumeragiEndpointCase; 1] = [(
+            "/v1/sumeragi/params",
+            Client::get_sumeragi_params_json,
+        )];
         for (path, request) in cases {
             let (result, snapshot) =
                 capture_request(json_response(StatusCode::OK, "{}"), |mock_transport| {
@@ -34779,10 +34721,10 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_reject_malformed_ok_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 2] = [
-            ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
-            ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
-        ];
+        let cases: [SumeragiEndpointCase; 1] = [(
+            "/v1/sumeragi/params",
+            Client::get_sumeragi_params_json,
+        )];
         for (path, request) in cases {
             let (result, snapshot) = capture_request(
                 json_response(StatusCode::OK, r#"{"broken":"#),
@@ -34808,18 +34750,11 @@ mod tests {
             &'static str,
             fn(&Client) -> Result<norito::json::Value>,
         );
-        let cases: [SumeragiEndpointCase; 2] = [
-            (
-                "/v1/sumeragi/leader",
-                "Failed to get sumeragi leader",
-                Client::get_sumeragi_leader_json,
-            ),
-            (
-                "/v1/sumeragi/params",
-                "Failed to get sumeragi params",
-                Client::get_sumeragi_params_json,
-            ),
-        ];
+        let cases: [SumeragiEndpointCase; 1] = [(
+            "/v1/sumeragi/params",
+            "Failed to get sumeragi params",
+            Client::get_sumeragi_params_json,
+        )];
         for (path, context, request) in cases {
             let (result, snapshot) = capture_request(
                 json_response(StatusCode::TOO_MANY_REQUESTS, "rate limited"),
@@ -35411,8 +35346,6 @@ mod tests {
             iroha_data_model::block::consensus::SumeragiNposDiagnostics {
                 epoch_length_blocks: NonZeroU64::new(100).unwrap(),
                 epoch_seed: [0; 32],
-                prf_height: 12,
-                prf_view: 5,
             },
         );
         let error = request_sumeragi_diagnostics(
@@ -36804,75 +36737,6 @@ mod tests {
         "limit=50&after_sequence=12&after_block_height=7&after_block_hash_hex=aa&after_event_index=3",
     );
     include!("client/uaid_literal_tests.rs");
-    #[test]
-    fn sumeragi_v2_qc_response_roundtrip_to_json_preserves_fields() {
-        let context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-            Hash::new(b"client-qc-height-context"),
-        ));
-        let round = ConsensusRound {
-            context_id,
-            height: 14,
-            view: 6,
-        };
-        let certificate = QuorumCertificateRef {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Prepare,
-            subject: BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"client-qc-block",
-                )),
-                payload_hash: Hash::new(b"client-qc-payload"),
-            },
-            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"client-qc-parent-state"),
-                Hash::new(b"client-qc-post-state"),
-                Hash::new(b"client-qc-writes"),
-                1,
-                Hash::new(b"client-qc-executed-wire"),
-            ),
-        };
-        let response = SumeragiV2QcResponse {
-            highest_prepare_qc: Some(certificate),
-            locked_prepare_qc: Some(certificate),
-        };
-        let json = sumeragi_qc_json_payload(&response).expect("render canonical v2 QC response");
-        let highest = json
-            .get("highest_prepare_qc")
-            .and_then(norito::json::Value::as_object)
-            .expect("highest PrepareQC object");
-        let highest_round = highest
-            .get("round")
-            .and_then(norito::json::Value::as_object)
-            .expect("highest PrepareQC round");
-        assert_eq!(
-            highest_round
-                .get("height")
-                .and_then(norito::json::Value::as_u64),
-            Some(14)
-        );
-        assert_eq!(
-            highest_round
-                .get("view")
-                .and_then(norito::json::Value::as_u64),
-            Some(6)
-        );
-        let locked = json
-            .get("locked_prepare_qc")
-            .and_then(norito::json::Value::as_object)
-            .expect("locked PrepareQC object");
-        let locked_round = locked
-            .get("round")
-            .and_then(norito::json::Value::as_object)
-            .expect("locked PrepareQC round");
-        assert_eq!(
-            locked_round
-                .get("view")
-                .and_then(norito::json::Value::as_u64),
-            Some(6)
-        );
-    }
     fn sccp_client_with_base_url(url: Url) -> Client {
         let mut client = client_with_base_url(url);
         client.chain = ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);

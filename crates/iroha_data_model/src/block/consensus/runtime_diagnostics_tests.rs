@@ -3,8 +3,6 @@ fn npos_diagnostics() -> SumeragiNposDiagnostics {
     SumeragiNposDiagnostics {
         epoch_length_blocks: NonZeroU64::new(100).unwrap(),
         epoch_seed: [0xA5; 32],
-        prf_height: 7,
-        prf_view: 2,
     }
 }
 fn diagnostics(npos: Option<SumeragiNposDiagnostics>) -> SumeragiDiagnosticsStatus {

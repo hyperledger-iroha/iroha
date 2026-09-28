@@ -2849,11 +2849,13 @@ fn fault_config_for(config: &ChaosConfig) -> FaultConfig {
             .then_some(DiskSaturationConfig::default()),
     }
 }
-fn parse_sumeragi_leader_index(value: norito::json::Value) -> Option<usize> {
-    let norito::json::Value::Object(root) = value else {
-        return None;
-    };
-    root.get("leader_index")?.as_u64()?.try_into().ok()
+/// Index of the current round's leader (a peer's Sumeragi status `leader`) among `peers`.
+fn sumeragi_leader_index(
+    leader: Option<&iroha_crypto::PublicKey>,
+    peers: &[iroha_crypto::PublicKey],
+) -> Option<usize> {
+    let leader = leader?;
+    peers.iter().position(|key| key == leader)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SumeragiLeaderTarget {
@@ -2867,21 +2869,19 @@ async fn sample_sumeragi_leader_target(
         let mut last_error = None;
         for (sampled_from_peer_index, peer) in peers.iter().cloned().enumerate() {
             let client = peer.client();
-            match client.client().get_sumeragi_leader_json() {
-                Ok(value) => {
-                    let Some(peer_index) = parse_sumeragi_leader_index(value) else {
+            match client.client().get_sumeragi_status() {
+                Ok(status) => {
+                    let keys = peers
+                        .iter()
+                        .map(|peer| peer.public_key().clone())
+                        .collect::<Vec<_>>();
+                    let Some(peer_index) = sumeragi_leader_index(status.leader.as_ref(), &keys) else {
                         last_error = Some(format!(
-                            "leader payload from peer index {sampled_from_peer_index} missing leader_index"
-                        ));
-                        continue;
-                    };
-                    if peer_index >= peers.len() {
-                        last_error = Some(format!(
-                            "leader index {peer_index} from peer index {sampled_from_peer_index} outside {}-peer topology",
+                            "status from peer index {sampled_from_peer_index} names no leader in the {}-peer topology",
                             peers.len()
                         ));
                         continue;
-                    }
+                    };
                     return Ok(SumeragiLeaderTarget {
                         peer_index,
                         sampled_from_peer_index,
@@ -10347,16 +10347,14 @@ mod tests {
         );
     }
     #[test]
-    fn parses_sumeragi_leader_index_from_status_payload() {
-        let value = norito::json!({
-            "leader_index": 3,
-            "prf": {
-                "height": 7,
-                "view": 2,
-                "epoch_seed": "abcd",
-            },
-        });
-        assert_eq!(parse_sumeragi_leader_index(value), Some(3));
+    fn sumeragi_leader_index_maps_the_status_leader_to_a_peer() {
+        let keys = (0..4)
+            .map(|_| KeyPair::random().public_key().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(sumeragi_leader_index(None, &keys), None);
+        assert_eq!(sumeragi_leader_index(Some(&keys[3]), &keys), Some(3));
+        let stranger = KeyPair::random().public_key().clone();
+        assert_eq!(sumeragi_leader_index(Some(&stranger), &keys), None);
     }
     #[test]
     fn fault_target_selection_diverges_with_different_seeds() {

@@ -1193,7 +1193,6 @@ pub use gov::{
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 #[cfg(feature = "telemetry")]
-pub use iroha_data_model::block::consensus_v2::SumeragiV2QcResponse;
 pub use limits::RateLimiter as BenchRateLimiter;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
@@ -1257,8 +1256,7 @@ pub use routing::{
 pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share, handle_v1_kaigi_relays,
     handle_v1_kaigi_relays_health, handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics,
-    handle_v1_sumeragi_leader, handle_v1_sumeragi_params, handle_v1_sumeragi_qc,
-    handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_sumeragi_params, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
 };
 #[cfg(all(feature = "app_api", feature = "bench"))]
 pub use routing::{
@@ -31866,64 +31864,6 @@ async fn handler_sumeragi_status_sse(
     )
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_leader(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/leader",
-        app.authenticated_api_token_principal(&headers),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/leader",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    routing::handle_v1_sumeragi_leader(accept).await
-}
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_qc(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/qc",
-        app.authenticated_api_token_principal(&headers),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/qc",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sumeragi_qc(accept)
-        .await?
-        .into_response())
-}
 async fn handler_bridge_finality_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -44000,9 +43940,7 @@ impl Torii {
                 STATUS => operator_get(handler_sumeragi_status, app_state);
                 DIAGNOSTICS => operator_get(handler_sumeragi_diagnostics, app_state);
                 STATUS_SSE => operator_get(handler_sumeragi_status_sse, app_state);
-                LEADER => operator_get(handler_sumeragi_leader, app_state);
                 BLS_KEYS => operator_get(handler_sumeragi_bls_keys, app_state);
-                QC => operator_get(handler_sumeragi_qc, app_state);
                 CONSENSUS_KEYS => operator_get(handler_sumeragi_consensus_keys, app_state);
                 PARAMETERS => operator_get(handler_sumeragi_params, app_state);
             );
