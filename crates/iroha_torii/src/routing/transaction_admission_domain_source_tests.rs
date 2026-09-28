@@ -20,7 +20,6 @@ mod transaction_admission_domain_source_tests {
             "handle_transaction",
             "handle_transaction_with_metrics",
             "handle_transaction_with_metrics_and_routing_plan",
-            "handle_transaction_with_metrics_and_routing_plan_sync",
             "prepare_contract_call_request",
             "handle_post_contract_call_multisig_propose",
             "handle_post_contract_call_multisig_approve",

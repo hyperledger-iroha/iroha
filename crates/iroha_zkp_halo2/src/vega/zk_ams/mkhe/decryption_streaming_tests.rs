@@ -409,14 +409,6 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
     assert!(evidence.staged_prover_output_implemented);
     assert_eq!(evidence.staged_prover_release_kat_digest, [0; 32]);
     assert!(evidence.bounded_compact_authority_construction_implemented);
-    assert_eq!(evidence.implementation_blocker_count, 0);
-    assert_eq!(
-        evidence.implementation_blockers,
-        [
-            ZkAmsMkheDecryptionStreamingBlockerV1::NoBlocker,
-            ZkAmsMkheDecryptionStreamingBlockerV1::NoBlocker,
-        ]
-    );
     assert_eq!(
         evidence.authenticated_peak_residency_digest,
         ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1

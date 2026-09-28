@@ -2,10 +2,7 @@
 // carrier preparation. Every candidate remains unpublished and inactive live.
 
 fn native_preparation_global_keys(context: &HeightContext) -> Vec<KeyPair> {
-    let mut keys = (0xD3_u8..=0xD6)
-        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
-        .collect::<Vec<_>>();
-    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let keys = merge_carrier_finality_fixture_keypairs();
     assert_eq!(keys.len(), 4);
     assert!(
         keys.iter()

@@ -95,8 +95,6 @@ sorafs_chunker = { path = "../crates/sorafs_chunker" }
 integration_tests = { path = "../integration_tests" }
 time = { version = "0.3.44", features = ["formatting", "macros"] }
 thiserror = "2.0.17"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
 toml = "0.9.8"
 eyre = { workspace = true }
 once_cell = { workspace = true }

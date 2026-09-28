@@ -1,8 +1,7 @@
 #![no_main]
 use arbitrary::{Arbitrary, Unstructured};
-use fastpq_prover::{
-    OperationKind, StateTransition, TransitionBatch, build_trace, fastpq_isi_v1::FASTPQ_FINAL_V1_ID,
-};
+use fastpq_isi::FASTPQ_FINAL_V1_ID;
+use fastpq_prover::{OperationKind, StateTransition, TransitionBatch, build_trace};
 use libfuzzer_sys::fuzz_target;
 use std::collections::BTreeMap;
 const MAX_TRANSITIONS: usize = 32;

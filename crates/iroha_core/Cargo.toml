@@ -270,6 +270,7 @@ required-features = ["bench"]
 [[bench]]
 name = "kura"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "state"

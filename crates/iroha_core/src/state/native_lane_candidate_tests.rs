@@ -95,8 +95,8 @@ fn assemble_native_handoff_for_test(
         native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
     let context = verified.context();
     let local = context.leader(0);
-    // Global and lane committees are distinct fixture authorities. Sign with
-    // the actual global leader, never a key selected from the native committee.
+    // Every route uses the scheduled global committee. Select the actual global
+    // leader from the verified applying context, in canonical committee order.
     let keys = native_preparation_global_keys(context);
     let key = &keys[local as usize];
     let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(

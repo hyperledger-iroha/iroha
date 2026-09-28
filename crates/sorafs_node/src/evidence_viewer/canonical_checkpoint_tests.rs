@@ -1,11 +1,7 @@
 // Canonical V1 persistence and signed identities use real viewer lifecycle records.
 
-fn viewer_layouts() -> Vec<u8> {
-    let flags = (0..=u8::MAX)
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-        .collect::<Vec<_>>();
-    assert_eq!(flags.len(), 10, "all supported V1 caller layouts");
-    flags
+fn viewer_layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 
 fn independent_viewer_frame<T: norito::NoritoSerialize>(output: &mut Vec<u8>, value: &T) {

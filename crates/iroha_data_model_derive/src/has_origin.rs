@@ -13,7 +13,6 @@ mod kw {
 const HAS_ORIGIN_ATTR: &str = "has_origin";
 pub struct HasOriginEnum {
     ident: Ident,
-    #[allow(unused)]
     generics: syn::Generics,
     variants: Vec<HasOriginVariant>,
     origin: Type,

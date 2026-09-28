@@ -13,11 +13,9 @@ use iroha_data_model::{
 use tokio::time::{Instant, sleep};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
-#[cfg(any(feature = "privacy-release-evidence", feature = "zk-stark"))]
 const NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
 
 /// Run real genesis preexecution and all async workers on bounded 32-MiB stacks.
-#[cfg(any(feature = "privacy-release-evidence", feature = "zk-stark"))]
 pub(super) fn run_network_case<F, Fut>(name: &'static str, body: F) -> Result<()>
 where
     F: FnOnce() -> Fut + Send + 'static,

@@ -276,6 +276,21 @@ Production templates select that same byte-exact file through validator
 `genesis.expected_hash_file` and client `network_id_file`; do not copy the value
 into independently rendered inline settings.
 
+After an intentional genesis change, such as `iroha taira seat-parliament`, use
+`genesis sign --replace-expected-hash '<PRIOR_NETWORK_ID>'` together with
+`--expected-hash-out`, `--out-file`, and `--bound-manifest-out`. Seating prints
+this command with the observed prior identity. Kagami locks and checks the
+owner-held, single-link identity before output writes; a missing, stale, unsafe,
+or concurrently held identity leaves the requested outputs unchanged. Without
+this explicit option, publishing a different identity remains forbidden.
+
+Replacement stages all three outputs, publishes the signed block and bound
+manifest, then publishes the identity last as a commit marker. This is not a
+multi-file atomic transaction. After interruption, consumers must reject any
+bundle disagreement; retry the same command with the same prior identity. If
+that prior is already stale, verify the exact signed block, manifest, and
+published identity before proceeding. Do not rename identity files manually.
+
 For seedless `kagami docker`, place that body and checked network identity beside the canonical
 `genesis.public_key` and exact `peerN.toml` validator configs. Generation rejects
 any signer, hash, identity, trusted-roster, or PoP disagreement. The generated

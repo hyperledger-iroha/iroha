@@ -37,7 +37,7 @@ impl SerializePayload for ProjectedSequence<'_> {
 }
 
 fn layouts() -> impl Iterator<Item = u8> {
-    (0..=supported_header_flags()).filter(|flags| validate_header_flags(*flags).is_ok())
+    [0, header_flags::COMPACT_LEN].into_iter()
 }
 
 #[test]
@@ -125,94 +125,13 @@ fn element_sequences_reject_wrong_reported_cardinality_in_both_destinations() {
                 Err(Error::LengthMismatch)
             ));
             let mut expected = u64::try_from(reported).unwrap().to_le_bytes().to_vec();
-            if !use_packed_seq() {
-                for item in items.iter().take(actual.min(reported)) {
-                    write_len_with_flags(&mut expected, 2, flags).unwrap();
-                    expected.extend_from_slice(&item.to_le_bytes());
-                }
+            for item in items.iter().take(actual.min(reported)) {
+                write_len_with_flags(&mut expected, 2, flags).unwrap();
+                expected.extend_from_slice(&item.to_le_bytes());
             }
             assert_eq!(
                 bytes, expected,
                 "actual {actual}, reported {reported}, {flags:#x}"
-            );
-        }
-    }
-}
-
-struct DifferentClone<'a> {
-    current: WrongCount<'a>,
-    cloned: &'a [u16],
-}
-
-impl Clone for DifferentClone<'_> {
-    fn clone(&self) -> Self {
-        Self {
-            current: WrongCount {
-                remaining: self.cloned,
-                reported: self.current.reported,
-            },
-            cloned: self.cloned,
-        }
-    }
-}
-
-impl<'a> Iterator for DifferentClone<'a> {
-    type Item = &'a u16;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.current.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.current.size_hint()
-    }
-}
-
-impl ExactSizeIterator for DifferentClone<'_> {}
-
-#[test]
-fn packed_sequences_reject_clone_cardinality_changes_in_measurement_and_emission() {
-    let items = [0x1234_u16, 0x5678];
-    for flags in layouts().filter(|flags| flags & header_flags::PACKED_SEQ != 0) {
-        let _flags = DecodeFlagsGuard::enter(flags);
-        for (original, cloned, reported) in [(2, 1, 2), (1, 2, 2), (2, 1, 1), (1, 2, 1)] {
-            let make_iter = || DifferentClone {
-                current: WrongCount {
-                    remaining: &items[..original],
-                    reported,
-                },
-                cloned: &items[..cloned],
-            };
-            let mut counter = LengthCountingWriter::default();
-            assert!(matches!(
-                write_element_sequence::<u16, _>(
-                    &mut Encoder::for_counting(&mut counter),
-                    make_iter(),
-                    u64::MAX,
-                ),
-                Err(Error::LengthMismatch)
-            ));
-            let mut bytes = Vec::new();
-            assert!(matches!(
-                write_element_sequence::<u16, _>(
-                    &mut Encoder::for_buffer(&mut bytes),
-                    make_iter(),
-                    u64::MAX,
-                ),
-                Err(Error::LengthMismatch)
-            ));
-            let mut expected = u64::try_from(reported).unwrap().to_le_bytes().to_vec();
-            if cloned == reported {
-                for offset in 0..=reported {
-                    expected.extend_from_slice(&u64::try_from(offset * 2).unwrap().to_le_bytes());
-                }
-                for item in items.iter().take(original.min(reported)) {
-                    expected.extend_from_slice(&item.to_le_bytes());
-                }
-            }
-            assert_eq!(
-                bytes, expected,
-                "original {original}, clone {cloned}, reported {reported}"
             );
         }
     }
@@ -249,12 +168,7 @@ impl SerializePayload for PayloadView<'_> {
 
 fn element_prefix(length: usize, flags: u8) -> Vec<u8> {
     let mut prefix = 1_u64.to_le_bytes().to_vec();
-    if flags & header_flags::PACKED_SEQ != 0 {
-        prefix.extend_from_slice(&0_u64.to_le_bytes());
-        prefix.extend_from_slice(&u64::try_from(length).unwrap().to_le_bytes());
-    } else {
-        write_len_with_flags(&mut prefix, u64::try_from(length).unwrap(), flags).unwrap();
-    }
+    write_len_with_flags(&mut prefix, u64::try_from(length).unwrap(), flags).unwrap();
     prefix
 }
 
@@ -327,43 +241,6 @@ fn projected_sequences_preserve_measurement_and_emission_errors() {
 }
 
 #[test]
-fn projected_sequences_apply_packed_limits_before_visiting_or_writing_payloads() {
-    let items = [0x1234_u16, 0x5678];
-    for flags in layouts().filter(|flags| flags & header_flags::PACKED_SEQ != 0) {
-        let _flags = DecodeFlagsGuard::enter(flags);
-        for limit in [23, 27, 28] {
-            let projected = Cell::new(0);
-            let visits = Cell::new(0);
-            let mut bytes = Vec::new();
-            let result = write_element_sequence::<CountedScalar<'_>, _>(
-                &mut Encoder::for_buffer(&mut bytes),
-                items.iter().map(|value| {
-                    projected.set(projected.get() + 1);
-                    CountedScalar(value, &visits)
-                }),
-                limit,
-            );
-            if limit == 28 {
-                result.unwrap();
-                assert_eq!(bytes.len(), 8 + 28);
-                assert_eq!(projected.get(), 4);
-                assert_eq!(visits.get(), 4);
-            } else {
-                assert!(matches!(
-                    result,
-                    Err(Error::ArchiveLengthExceeded { length, limit: actual })
-                        if actual == limit && length == if limit == 23 { 24 } else { 28 }
-                ));
-                assert_eq!(bytes, 2_u64.to_le_bytes());
-                let expected_visits = if limit == 23 { 0 } else { 2 };
-                assert_eq!(projected.get(), expected_visits);
-                assert_eq!(visits.get(), expected_visits);
-            }
-        }
-    }
-}
-
-#[test]
 fn generalized_payload_helpers_preserve_map_columns_and_counting() {
     let entries = [(0x1234_u16, 0x5678_u16), (0x9abc, 0xdef0)];
     for flags in layouts() {
@@ -381,24 +258,10 @@ fn generalized_payload_helpers_preserve_map_columns_and_counting() {
         assert_eq!(visits.get(), entries.len() * 2);
         assert_eq!(length, actual.len());
         let mut expected = 2_u64.to_le_bytes().to_vec();
-        if use_packed_seq() {
-            for _ in 0..2 {
-                for offset in [0_u64, 2, 4] {
-                    expected.extend_from_slice(&offset.to_le_bytes());
-                }
-            }
-            for (key, _) in entries {
-                expected.extend_from_slice(&key.to_le_bytes());
-            }
-            for (_, value) in entries {
-                expected.extend_from_slice(&value.to_le_bytes());
-            }
-        } else {
-            for (key, value) in entries {
-                for field in [key, value] {
-                    write_len_with_flags(&mut expected, 2, flags).unwrap();
-                    expected.extend_from_slice(&field.to_le_bytes());
-                }
+        for (key, value) in entries {
+            for field in [key, value] {
+                write_len_with_flags(&mut expected, 2, flags).unwrap();
+                expected.extend_from_slice(&field.to_le_bytes());
             }
         }
         assert_eq!(actual, expected, "map columns changed for flags {flags:#x}");

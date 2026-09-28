@@ -230,8 +230,8 @@ pub(super) fn assign_sponge(
                     }
                     state[index] = state[index] + pair[index].1;
                 }
-                for index in 0..3 {
-                    region.assign_advice(config.poseidon.state[index], start, state[index]);
+                for (column, value) in config.poseidon.state.iter().zip(state) {
+                    region.assign_advice(*column, start, value);
                 }
                 for round in 0..POSEIDON_ROUNDS {
                     for index in 0..3 {

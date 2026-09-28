@@ -995,11 +995,7 @@ mod tests {
         let expected_root = baseline.mixed_root();
         let expected_alphas = baseline.alphas().to_vec();
         let expected_next = baseline.into_transcript().challenge_extension("next");
-        for flags in [
-            0,
-            norito::core::header_flags::PACKED_SEQ,
-            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
-        ] {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
             let before = norito::core::to_bytes(&vec![1_u64, 2, 3]).unwrap();
             let phase = finish(committed().commit_auxiliary(&auxiliary(8)).unwrap());

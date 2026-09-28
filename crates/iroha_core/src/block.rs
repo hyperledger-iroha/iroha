@@ -4132,31 +4132,6 @@ pub(crate) mod valid {
     use iroha_model_base::chain::ChainId;
     use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroUsize, time::Instant};
-    #[cfg(test)]
-    pub(super) fn rejected_live_batch_fees_are_chargeable(
-        gas_used: u64,
-        rejection_reason: &TransactionRejectionReason,
-    ) -> bool {
-        rejected_live_batch_gas_is_accountable(gas_used, rejection_reason)
-            && !matches!(
-                rejection_reason,
-                TransactionRejectionReason::Validation(error)
-                    if crate::executor::is_live_batch_overlay_limit_rejection(error)
-            )
-    }
-    #[cfg(test)]
-    pub(super) fn rejected_live_batch_gas_is_accountable(
-        gas_used: u64,
-        rejection_reason: &TransactionRejectionReason,
-    ) -> bool {
-        gas_used > 0
-            && !matches!(
-                rejection_reason,
-                TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InternalError(_)
-                )
-            )
-    }
     /// Block that was validated and accepted.
     #[derive(Debug, Clone)]
     pub struct ValidBlock {

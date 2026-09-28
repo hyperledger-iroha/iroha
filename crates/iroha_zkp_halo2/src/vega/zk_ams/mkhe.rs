@@ -97,8 +97,8 @@ mod collective_keys;
 #[cfg(test)]
 #[path = "mkhe/cpk_ceremony.rs"]
 mod cpk_ceremony;
-// TODO: Remove all three CPK-membership dead-code allowances when the complete
-// streamed RNS relation and contribution-authentication verifier is connected.
+// TODO: Remove both CPK dead-code allowances (relation and persistent membership
+// evidence) when the complete streamed RNS/authentication verifier is connected.
 #[cfg(test)]
 #[allow(
     dead_code,
@@ -108,10 +108,6 @@ mod cpk_ceremony;
 mod cpk_relation;
 #[path = "mkhe/decryption.rs"]
 mod decryption;
-#[allow(
-    dead_code,
-    reason = "the direct ceremony remains private and fail-closed until its proof adapter is complete"
-)]
 #[path = "mkhe/direct_collective_eval_ceremony.rs"]
 mod direct_collective_eval_ceremony;
 #[path = "mkhe/direct_object_transport.rs"]
@@ -123,10 +119,6 @@ mod direct_object_transport;
 )]
 #[path = "mkhe/direct_rkg_ephemeral_membership.rs"]
 mod direct_rkg_ephemeral_membership;
-#[allow(
-    dead_code,
-    reason = "native CPK relation remains private and fail-closed until the complete streamed RNS/auth verifier is wired"
-)]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
 #[path = "mkhe/global_lookup_statement_v1.rs"]
@@ -159,10 +151,6 @@ mod phase23_mask_proof;
 mod phase23_materialized_wire;
 #[path = "mkhe/phase23_rns_link.rs"]
 mod phase23_rns_link;
-#[allow(
-    dead_code,
-    reason = "the verified-receipt audit remains fail-closed until every opaque handoff is wired"
-)]
 #[path = "mkhe/receipt_capability_audit.rs"]
 mod receipt_capability_audit;
 #[path = "mkhe/release_evidence.rs"]
@@ -178,10 +166,6 @@ mod rns_native_centering_subtraction_relation;
 )]
 #[path = "mkhe/rns_native_claimed_successor.rs"]
 mod rns_native_claimed_successor;
-#[allow(
-    dead_code,
-    reason = "the retained private comparator seam remains unreachable while composite verification is fail-closed"
-)]
 #[path = "mkhe/rns_native_comparator_product.rs"]
 mod rns_native_comparator_product;
 #[path = "mkhe/rns_native_comparator_range_carry_product.rs"]
@@ -189,10 +173,6 @@ mod rns_native_comparator_range_carry_product;
 #[cfg(test)]
 #[path = "mkhe/rns_native_composite_verifier.rs"]
 mod rns_native_composite_verifier;
-#[allow(
-    dead_code,
-    reason = "the retained private inventory seam remains unreachable while composite verification is fail-closed"
-)]
 #[path = "mkhe/rns_native_cross_field_inventory.rs"]
 mod rns_native_cross_field_inventory;
 #[path = "mkhe/rns_native_cross_field_rlwe_direct.rs"]
@@ -246,18 +226,10 @@ mod rns_native_resource_budget;
 mod rns_native_qpcs_tree;
 #[path = "mkhe/rns_native_radix_complement_linear_relation.rs"]
 mod rns_native_radix_complement_linear_relation;
-#[allow(
-    dead_code,
-    reason = "the private source-statement prerequisite remains non-authorizing until the concrete RLWE/qPCS relation verifier consumes it"
-)]
 #[path = "mkhe/rns_native_rlwe_source_statement.rs"]
 mod rns_native_rlwe_source_statement;
 #[path = "mkhe/rns_native_section_codec.rs"]
 mod rns_native_section_codec;
-#[allow(
-    dead_code,
-    reason = "the retained private successor seam remains unreachable while composite verification is fail-closed"
-)]
 #[path = "mkhe/rns_native_small_sign_disjointness_product.rs"]
 mod rns_native_small_sign_disjointness_product;
 #[path = "mkhe/rns_native_source.rs"]
@@ -374,10 +346,9 @@ pub use decryption::{
     ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1,
     ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
     ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionResourceEvidenceV1,
-    ZkAmsMkheDecryptionStreamingBlockerV1, ZkAmsMkheDecryptionStreamingResidencyEvidenceV1,
-    ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkheStagedDecryptionShareV1,
-    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
-    prove_zk_ams_mkhe_decryption_share_staged_v1,
+    ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
+    ZkAmsMkheStagedDecryptionShareV1, ZkAmsMkheStreamingDecryptionStatementV1,
+    ZkAmsMkheStreamingFullRosterDecryptionResultV1, prove_zk_ams_mkhe_decryption_share_staged_v1,
     verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
     zk_ams_mkhe_decryption_resource_evidence_v1,
     zk_ams_mkhe_decryption_streaming_residency_evidence_v1,
@@ -406,6 +377,7 @@ pub use direct_collective_eval_ceremony::{
 pub use direct_collective_eval_ceremony::{
     ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheDirectPolynomialRoleV1,
 };
+#[cfg(test)]
 pub use direct_object_transport::ZkAmsMkheDirectObjectKindV1;
 #[cfg(test)]
 pub use direct_object_transport::{

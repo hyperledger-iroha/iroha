@@ -2,8 +2,8 @@
   "scope": "Pre-declaration development capture; selected inputs and observed executable identity only. This is not a release seal or a complete build/environment reconstruction.",
   "fixture": {
     "path": "owned_storage_identity_frames.json",
-    "bytes": 1167413,
-    "sha256": "93a70352e47926baf33b0e64b016d20fa17c1a94885095394acb526ea964b156"
+    "bytes": 360896,
+    "sha256": "3d291812d99e26e8e85860f0521a2790d201af1dfc3e2e04d10b7d6f92204f53"
   },
   "selected_inputs": {
     "path": "owned_storage_identity_capture_inputs.json",

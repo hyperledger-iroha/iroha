@@ -135,8 +135,7 @@ fn validate_hijiri_quote_transfer_count(qualifying_transfer_count: u32) -> Resul
         || qualifying_transfer_count > VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1
     {
         return Err(format!(
-            "qualifying_transfer_count must be between 1 and {}",
-            VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1
+            "qualifying_transfer_count must be between 1 and {VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1}"
         ));
     }
     Ok(())
@@ -367,6 +366,10 @@ impl ValidationFeeHijiriQuoteProjectionV1 {
     /// Returns an error when a schema marker, canonical decimal/hash, height relationship,
     /// optional account-risk pair, protected base-fee invariant, or Q16 fee calculation is
     /// incoherent.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered V1 coherence checks preserve fail-closed validation and stable error precedence"
+    )]
     pub fn validate_coherence(&self) -> Result<(), String> {
         if self.schema != VALIDATION_FEE_HIJIRI_QUOTE_PROJECTION_SCHEMA_NAME
             || self.version != VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1
@@ -594,6 +597,10 @@ impl ValidationFeeHijiriQuoteBaseV1 {
     ///
     /// Returns an error for zero/non-adjacent heights, zero versions, non-canonical hashes or fee
     /// coordinates, or a base amount/scale outside the protected V1 policy invariant.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the validating constructor takes each private V1 base-policy fact exactly once"
+    )]
     pub fn try_new(
         evaluated_state_height: u64,
         quoted_execution_height: u64,
@@ -1704,6 +1711,10 @@ mod tests {
         HijiriParametersV1::try_new(1, None, fee_policy, default_account_risk)
             .expect("valid global Hijiri parameter")
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture binds every certificate field to its derived identity"
+    )]
     fn parliament_authorization(
         proposal_fingerprint: [u8; 32],
         enacted_at_height: u64,

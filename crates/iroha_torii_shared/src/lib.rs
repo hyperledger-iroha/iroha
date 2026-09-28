@@ -1858,31 +1858,23 @@ mod tests {
             AccountId::new(checked_test_keypair(0x35).public_key().clone()),
             "other".parse().expect("valid sponsor-program name"),
         );
+        let sponsor_program_id = quote
+            .intent
+            .sponsor_program()
+            .expect("sponsored fixture")
+            .0
+            .clone();
         let sponsor_decision_mutations = [
             FeeQuoteDecision::Accepted {
                 debit_source: FeeDebitSource::SponsorProgram(other_program_id),
                 program_revision: Some(7),
             },
             FeeQuoteDecision::Accepted {
-                debit_source: FeeDebitSource::SponsorProgram(
-                    quote
-                        .intent
-                        .sponsor_program()
-                        .expect("sponsored fixture")
-                        .0
-                        .clone(),
-                ),
+                debit_source: FeeDebitSource::SponsorProgram(sponsor_program_id.clone()),
                 program_revision: Some(8),
             },
             FeeQuoteDecision::Accepted {
-                debit_source: FeeDebitSource::SponsorProgram(
-                    quote
-                        .intent
-                        .sponsor_program()
-                        .expect("sponsored fixture")
-                        .0
-                        .clone(),
-                ),
+                debit_source: FeeDebitSource::SponsorProgram(sponsor_program_id.clone()),
                 program_revision: None,
             },
             FeeQuoteDecision::Accepted {
@@ -1918,14 +1910,7 @@ mod tests {
                 program_revision: Some(1),
             },
             FeeQuoteDecision::Accepted {
-                debit_source: FeeDebitSource::SponsorProgram(
-                    quote
-                        .intent
-                        .sponsor_program()
-                        .expect("sponsored fixture")
-                        .0
-                        .clone(),
-                ),
+                debit_source: FeeDebitSource::SponsorProgram(sponsor_program_id),
                 program_revision: Some(7),
             },
         ];
@@ -2431,7 +2416,7 @@ mod tests {
             }
         }
         for invalid in [
-            r#"{}"#,
+            r"{}",
             r#"{"hash":"abc","scope":"global","extra":0}"#,
             r#"{"hash":"abc","scope":"global","scope":"local"}"#,
         ] {

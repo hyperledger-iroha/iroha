@@ -4438,16 +4438,6 @@ mod tests {
             }
             actual
         }
-        #[allow(dead_code)]
-        fn render() -> String {
-            let fixture = sample_fixture();
-            let value =
-                json::to_value(&fixture).expect("vpn vector fixture should convert to json value");
-            let mut rendered =
-                to_string_pretty(&value).expect("vpn vector fixture should render to json");
-            rendered.push('\n');
-            rendered
-        }
     }
     impl VpnVectorFixture {
         fn class(&self) -> VpnCellClassV1 {

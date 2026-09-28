@@ -2593,12 +2593,10 @@ fn validate_governed_ivm_proved_execution_policy<R: StateReadOnly>(
 }
 #[derive(Clone, Debug)]
 pub(crate) struct ContractRuntimeExecutionContext {
-    #[allow(dead_code)]
     pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
     pub(crate) contract_subject: AccountId,
     // Retained as canonical provenance for queued/nested calls. Authorization must never branch
     // on this value; caller metadata is canonicalized against WSV before this context is built.
-    #[allow(dead_code)]
     pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     pub(crate) entrypoint: String,
 }
@@ -2891,11 +2889,6 @@ pub(crate) struct ContractInvocationOutcome {
     pub(crate) executed_instructions: Vec<InstructionBox>,
     /// Trigger-local NFT sequence after successful guest execution.
     pub(crate) next_nft_sequence: Option<u64>,
-}
-#[derive(Clone, Copy, Debug)]
-enum LiveGasAccounting {
-    Initialize,
-    RetainAccumulated,
 }
 impl ContractCallExecutionContext {
     pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
@@ -4582,86 +4575,6 @@ fn charge_fees_for_applied_overlay_inner(
     }
     Ok(())
 }
-/// Charge fees for rejected live execution after its staged business effects were discarded.
-///
-/// Mixed batches and exact standalone governance ballots execute directly against a live
-/// [`StateTransaction`] instead of producing a [`crate::pipeline::overlay::TxOverlay`]. The caller
-/// must therefore pass the gas captured before dropping that failed transaction and invoke this
-/// helper on a fresh fee-only transaction.
-pub(crate) fn charge_fees_for_rejected_live_batch(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    transaction: &SignedTransaction,
-    gas_used: u64,
-) -> Result<(), ValidationFail> {
-    if is_initial_genesis_context(state_transaction) {
-        return Ok(());
-    }
-    let instruction_count = match transaction.instructions() {
-        Executable::Instructions(items)
-            if matches!(
-                crate::state::standalone_governance_ballot_instruction_v1(
-                    transaction.instructions()
-                ),
-                Ok(Some(_))
-            ) =>
-        {
-            items.len()
-        }
-        Executable::Batch(items) => items
-            .iter()
-            .filter(|item| matches!(item, ExecutableBatchItem::Instruction(_)))
-            .count(),
-        _ => {
-            return Err(ValidationFail::InternalError(
-                "non-live transaction reached rejected live-execution fee settlement".to_owned(),
-            ));
-        }
-    };
-    let tx_bytes_len = to_bytes(transaction.payload())
-        .map(|bytes| bytes.len())
-        .map_err(|err| {
-            ValidationFail::InternalError(format!(
-                "failed to encode transaction payload for fee metering: {err}"
-            ))
-        })?;
-    let fee_sponsor = transaction
-        .fee_payment_intent()
-        .sponsor_program()
-        .map(|(program_id, _)| program_id.clone());
-    let skip_nexus_fee = fee_exempt_transaction(
-        &state_transaction.world,
-        &state_transaction.nexus,
-        transaction,
-        state_transaction.block_unix_timestamp_ms(),
-    );
-    let gas_asset_opt = transaction
-        .fee_payment_intent()
-        .charge_limits()
-        .iter()
-        .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
-        .map(|limit| limit.asset_definition_id.canonical_address());
-    let tx_hash = transaction.hash();
-    let settlement_source_id = {
-        let mut bytes = [0_u8; iroha_crypto::Hash::LENGTH];
-        bytes.copy_from_slice(tx_hash.as_ref());
-        bytes
-    };
-    Executor::settle_live_transaction_fees(
-        state_transaction,
-        authority,
-        transaction,
-        tx_hash,
-        settlement_source_id,
-        gas_used,
-        instruction_count,
-        tx_bytes_len,
-        gas_asset_opt,
-        fee_sponsor,
-        skip_nexus_fee,
-        LiveGasAccounting::Initialize,
-    )
-}
 #[cfg(test)]
 fn live_batch_overlay_byte_size(instructions: &[InstructionBox]) -> u64 {
     instructions.iter().fold(0_u64, |total, instruction| {
@@ -4678,16 +4591,6 @@ fn live_batch_contract_execution_limit(
         .unwrap_or(u64::MAX)
         .saturating_sub(direct_gas_used)
         .min(block_remaining_at_start.saturating_sub(accountable_gas_used))
-}
-/// Return whether live execution rejected only because its retained overlay crossed a configured
-/// preparation limit.
-pub(crate) fn is_live_batch_overlay_limit_rejection(error: &ValidationFail) -> bool {
-    matches!(
-        error,
-        ValidationFail::NotPermitted(message)
-            if message.starts_with("overlay exceeds max instructions: ")
-                || message.starts_with("overlay exceeds max bytes: ")
-    )
 }
 fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
     const MULTISIG_SIGNATORY_NAMESPACE: &str = "MULTISIG_SIGNATORY";
@@ -6242,27 +6145,13 @@ impl Executor {
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<FeeSponsorProgramId>,
         skip_nexus_fee: bool,
-        gas_accounting: LiveGasAccounting,
     ) -> Result<(), ValidationFail> {
-        let accountable_gas_used = match gas_accounting {
-            LiveGasAccounting::Initialize => {
-                if state_transaction.last_tx_gas_used != 0 {
-                    return Err(ValidationFail::InternalError(
-                        "fresh live fee settlement started with accumulated gas".to_owned(),
-                    ));
-                }
-                state_transaction.last_tx_gas_used = direct_gas_used;
-                direct_gas_used
-            }
-            LiveGasAccounting::RetainAccumulated => {
-                if state_transaction.last_tx_gas_used < direct_gas_used {
-                    return Err(ValidationFail::InternalError(
-                        "live fee settlement lost staged direct gas".to_owned(),
-                    ));
-                }
-                state_transaction.last_tx_gas_used
-            }
-        };
+        if state_transaction.last_tx_gas_used < direct_gas_used {
+            return Err(ValidationFail::InternalError(
+                "live fee settlement lost staged direct gas".to_owned(),
+            ));
+        }
+        let accountable_gas_used = state_transaction.last_tx_gas_used;
         Self::enforce_transaction_gas_fits_block(state_transaction, accountable_gas_used)?;
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
@@ -6825,7 +6714,6 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
-                    LiveGasAccounting::RetainAccumulated,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Batch(items)) => {
@@ -6948,7 +6836,6 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
-                    LiveGasAccounting::RetainAccumulated,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
@@ -9090,8 +8977,6 @@ mod tests {
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
     };
-    #[allow(unused_imports)]
-    use ivm::instruction;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     #[test]
@@ -11450,7 +11335,6 @@ mod tests {
                 &state_transaction,
                 &legitimate_root,
                 &malformed,
-                None,
             )
             .expect_err("malformed scoped governance payload must fail closed");
             assert!(
@@ -11481,7 +11365,6 @@ mod tests {
                     &state_transaction,
                     &legitimate_root,
                     permission,
-                    None,
                 )
                 .expect("legitimate root lookup"),
                 Some(*expected_root),
@@ -11502,7 +11385,6 @@ mod tests {
                     &state_transaction,
                     &adjacent_owner,
                     permission,
-                    None,
                 )
                 .expect("adjacent-owner root lookup"),
                 Some(false),
@@ -15353,27 +15235,6 @@ mod tests {
             message.contains("live authorization") && message.contains("sequential")));
     }
     use std::collections::{BTreeMap, BTreeSet};
-    #[allow(dead_code)]
-    fn encode_load(rd: u8, base: u8, imm12: u16, funct3: u8) -> u32 {
-        let imm = u32::from(imm12 & 0x0fff);
-        (imm << 20)
-            | ((u32::from(base) & 0x1f) << 15)
-            | ((u32::from(funct3) & 0x7) << 12)
-            | ((u32::from(rd) & 0x1f) << 7)
-            | 0x03
-    }
-    #[allow(dead_code)]
-    fn encode_store(base: u8, rs: u8, imm12: u16, funct3: u8) -> u32 {
-        let imm = u32::from(imm12 & 0x0fff);
-        let imm_hi = (imm >> 5) & 0x7f;
-        let imm_lo = imm & 0x1f;
-        (imm_hi << 25)
-            | ((u32::from(rs) & 0x1f) << 20)
-            | ((u32::from(base) & 0x1f) << 15)
-            | ((u32::from(funct3) & 0x7) << 12)
-            | (imm_lo << 7)
-            | 0x23
-    }
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn preverify_and_dedup_across_transactions_in_block() {

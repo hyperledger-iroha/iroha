@@ -3882,15 +3882,11 @@ pub struct SessionSecrets {
     pub telemetry_payload: Option<Vec<u8>>,
 }
 /// Opaque state retained by the client between its hello and the relay response.
-#[allow(dead_code)]
 pub struct ClientState {
     client_nonce: [u8; 32],
     client_ephemeral_secret: StaticSecret,
-    client_ephemeral_public: [u8; 32],
     client_static_secret: StaticSecret,
-    client_static_public: [u8; 32],
     client_kem_secret: Zeroizing<Vec<u8>>,
-    client_kem_public: Vec<u8>,
     forward_kem_secret: Option<Zeroizing<Vec<u8>>>,
     forward_kem_public: Option<Vec<u8>>,
     client_capabilities: Vec<u8>,
@@ -3925,11 +3921,8 @@ impl ClientHelloMaterials {
         ClientState {
             client_nonce: self.nonce,
             client_ephemeral_secret: self.ephemeral_secret,
-            client_ephemeral_public: self.ephemeral_public,
             client_static_secret: self.static_secret,
-            client_static_public: self.static_public,
             client_kem_secret: self.kem_secret,
-            client_kem_public: self.kem_public,
             forward_kem_secret,
             forward_kem_public,
             client_capabilities: params.client_capabilities.to_vec(),
@@ -4126,7 +4119,6 @@ fn fixture_kem_artifacts(shared: &[u8], ciphertext: &[u8]) -> RuntimeKemArtifact
         ciphertext: ciphertext.to_vec(),
     }
 }
-#[allow(dead_code)]
 struct HybridRelayParsed {
     relay_nonce: [u8; 32],
     relay_ephemeral_pub: [u8; NOISE_SECRET_LEN],
@@ -4139,7 +4131,6 @@ struct HybridRelayParsed {
     signed_relay_body: Vec<u8>,
     relay_authentication: RelayAuthenticationSignaturesV1,
 }
-#[allow(dead_code)]
 struct PqfsRelayParsed {
     relay_nonce: [u8; 32],
     relay_ephemeral_pub: [u8; NOISE_SECRET_LEN],
@@ -4156,7 +4147,6 @@ struct PqfsRelayParsed {
     signed_relay_body: Vec<u8>,
     relay_authentication: RelayAuthenticationSignaturesV1,
 }
-#[allow(dead_code)]
 fn parse_hybrid_relay_response(
     relay_message: &[u8],
     expected_descriptor: &[u8],
@@ -4225,7 +4215,6 @@ fn parse_hybrid_relay_response(
         relay_authentication,
     })
 }
-#[allow(dead_code)]
 fn parse_pqfs_relay_response(
     relay_message: &[u8],
     expected_descriptor: &[u8],
@@ -4934,7 +4923,6 @@ fn compute_relay_transcript(
     }
     .compute_hash()
 }
-#[allow(dead_code)]
 fn build_hybrid_relay_response(
     client_init: &[u8],
     params: &RuntimeParams<'_>,
@@ -4983,7 +4971,6 @@ struct PqfsRelayResponseInputs<'ctx> {
     dual_mix: &'ctx [u8],
     relay_authentication: &'ctx RelayAuthenticationSignerV1,
 }
-#[allow(dead_code)]
 fn build_pqfs_relay_response(
     inputs: &PqfsRelayResponseInputs<'_>,
 ) -> Result<Vec<u8>, HarnessError> {

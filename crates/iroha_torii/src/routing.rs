@@ -159,8 +159,6 @@ use iroha_torii_shared::sumeragi_evidence_api::{
     SumeragiEvidenceCountResponse, SumeragiEvidenceListWireResponse,
 };
 use mv::storage::StorageReadOnly;
-#[cfg(test)]
-use norito::to_bytes;
 use norito::{
     codec::{Decode, Encode},
     json::{self, Map, Value},
@@ -486,12 +484,10 @@ impl DataspaceReadVisibility {
 use iroha_data_model as dm;
 use iroha_data_model::{
     account,
-    block::{
-        consensus::{
-            SumeragiCommittedLaneBlock, SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus,
-            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiNposDiagnostics,
-            SumeragiPipelineExecutionStatus, SumeragiRuntimeUpgradeHook,
-        },
+    block::consensus::{
+        SumeragiCommittedLaneBlock, SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus,
+        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiNposDiagnostics,
+        SumeragiPipelineExecutionStatus, SumeragiRuntimeUpgradeHook,
     },
     events::{
         EventBox,
@@ -10023,37 +10019,6 @@ async fn handle_transaction_with_metrics_and_routing_plan(
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
     let result = handle_transaction_inner(queue, state, tx, &telemetry, routing_plan).await;
-    #[cfg(feature = "telemetry")]
-    observe_route_stage_latency(
-        &telemetry,
-        "transaction",
-        "handle",
-        if result.is_ok() { "ok" } else { "error" },
-        start.elapsed(),
-    );
-    #[cfg(feature = "telemetry")]
-    if let Ok(decision) = &result {
-        observe_lane_admission_latency(
-            &telemetry,
-            endpoint,
-            decision.lane_id,
-            start.elapsed().as_secs_f64(),
-        );
-    }
-    result
-}
-#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-fn handle_transaction_with_metrics_and_routing_plan_sync(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    tx: impl Into<TransactionEntrypoint>,
-    telemetry: MaybeTelemetry,
-    routing_plan: Option<RoutingPlan>,
-    endpoint: &'static str,
-) -> Result<RoutingDecision> {
-    #[cfg(feature = "telemetry")]
-    let start = std::time::Instant::now();
-    let result = handle_transaction_inner_sync(queue, state, tx, &telemetry, routing_plan);
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
         &telemetry,
@@ -21710,8 +21675,45 @@ mod multisig_selector_tests {
         assert_eq!(queue.active_len(), 0);
     }
     routing_test! { async contract_call_detached_handler_requires_durable_public_admission
-        let (state, queue, key, request) = public_contract_call_fixture();
-        let (request, _) = detached_public_contract_call(&state, &queue, &key, &request);
+        let (mut state, queue, key, request) = public_contract_call_fixture();
+        let validators = (0xc1_u8..=0xc4)
+            .map(|seed| super::checked_routing_fixture_keypair(
+                seed, iroha_crypto::Algorithm::BlsNormal, "derive contract-call validator",
+            ))
+            .collect::<Vec<_>>();
+        {
+            let state = Arc::get_mut(&mut state).expect("unique contract-call state");
+            {
+                let mut world = state.world.block();
+                let mut peers = world.peers_mut_for_testing().transaction();
+                for validator in &validators {
+                    peers.push(iroha_model_base::peer::PeerId::new(validator.public_key().clone()));
+                }
+                peers.apply();
+                world.commit();
+            }
+            for validator in &validators {
+                let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                    .expect("prove contract-call validator possession");
+                state.world.register_validator_pop_for_testing(validator.public_key().clone(), pop);
+            }
+        }
+        let (request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
+        let transaction = builder.try_sign(key.private_key()).expect("sign retained call");
+        let encoded = iroha_version::codec::EncodeVersioned::encode_versioned(&transaction);
+        let decoded = iroha_core::tx::DecodedVersionedSignedTransaction::decode_versioned(&encoded)
+            .expect("decode current public call envelope");
+        let accepted = accept_decoded_signed_transaction_for_ingress(
+            state.clone(), decoded, &MaybeTelemetry::disabled(),
+        ).expect("fixture must pass public transaction policy before testing absent custody");
+        let plan = queue.route_plan_with_state(&accepted, &state)
+            .expect("current contract-call route");
+        let context = queue.plan_admission_context_with_state(&state, &plan)
+            .expect("fixture must have current route authority before testing absent custody");
+        assert_eq!(context.authority_height, 0);
+        assert_eq!(context.proposal_height, 1);
+        assert_eq!(context.route_incarnations.len(), 1);
+        assert_eq!(context.route_incarnations[0].validator_count, 4);
         let mut app = crate::mk_app_state_for_tests();
         let inner = Arc::get_mut(&mut app).expect("unique fixture AppState");
         inner.state = state;
@@ -21722,9 +21724,10 @@ mod multisig_selector_tests {
             axum::extract::ConnectInfo("127.0.0.1:3030".parse().expect("remote")),
             NoritoJson(request),
         ).await.unwrap_or_else(axum::response::IntoResponse::into_response);
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let status = response.status();
         let bytes = response.into_body().collect().await.expect("response body").to_bytes();
         let error: iroha_torii_shared::ErrorEnvelope = norito::decode_from_bytes(&bytes).expect("public error envelope");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{error:?}");
         #[cfg(feature = "connect")]
         assert_eq!(error.code(), "queue_plan_journal_unavailable");
         #[cfg(not(feature = "connect"))]
@@ -27476,39 +27479,6 @@ pub struct ContractCallSimulateResponseDto {
     #[norito(default)]
     pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
-}
-fn strict_json_object_from_parser(
-    parser: &mut norito::json::Parser<'_>,
-    allowed_fields: &[&str],
-) -> Result<Value, norito::json::Error> {
-    let mut object = norito::json::MapVisitor::new(parser)?;
-    let mut values = Map::new();
-    while let Some(key) = object.next_key()? {
-        if !allowed_fields.contains(&key.as_str()) {
-            return Err(norito::json::MapVisitor::unknown_field(key.as_str()));
-        }
-        let key = key.as_str().to_owned();
-        if values.contains_key(&key) {
-            return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
-        }
-        values.insert(key, object.parse_value::<Value>()?);
-    }
-    object.finish()?;
-    Ok(Value::Object(values))
-}
-fn reject_unknown_json_object_fields(
-    value: &Value,
-    allowed_fields: &[&str],
-) -> Result<(), norito::json::Error> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| norito::json::Error::Message("expected a JSON request object".to_owned()))?;
-    for key in object.keys() {
-        if !allowed_fields.contains(&key.as_str()) {
-            return Err(norito::json::Error::unknown_field(key));
-        }
-    }
-    Ok(())
 }
 app_api_items! {
 derived_items! {

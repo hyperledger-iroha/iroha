@@ -125,16 +125,7 @@ fn bare_bytes(value: &dyn SerializePayload, flags: u8) -> Vec<u8> {
 }
 #[test]
 fn exact_and_unknown_field_paths_have_identical_wire_bytes() {
-    let flags = [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ
-            | header_flags::PACKED_STRUCT
-            | header_flags::FIELD_BITSET
-            | header_flags::COMPACT_LEN,
-    ];
+    let flags = [0, header_flags::COMPACT_LEN];
     for flags in flags {
         assert_eq!(
             bare_bytes(

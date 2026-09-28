@@ -1,20 +1,8 @@
 // Fixed V1 reputation hashes, byte admission, and durable checkpoint boundaries.
 
-/// Every admitted V1 flag combination, including combined packed sequences and structs.
-pub(super) fn supported_layouts() -> [u8; 10] {
-    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-    [
-        0,
-        COMPACT_LEN,
-        PACKED_SEQ,
-        PACKED_SEQ | COMPACT_LEN,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT_LEN,
-        PACKED_SEQ | PACKED_STRUCT,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-    ]
+/// Both admitted V1 layouts: sequential (`0`) and compact length prefixes (`COMPACT_LEN`).
+pub(super) fn supported_layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 
 /// Encode an oracle independently of the fixed-frame convenience helpers under test.

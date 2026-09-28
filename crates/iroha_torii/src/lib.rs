@@ -6381,7 +6381,7 @@ pub(crate) struct QueryAdmissionPermit {
     _body: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 impl QueryAdmissionPermit {
-    #[cfg(feature = "app_api")]
+    #[cfg(all(test, feature = "app_api"))]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
         self
@@ -17486,6 +17486,11 @@ fn resolve_signed_query_routing_for_app(
     query: &SignedQuery,
 ) -> Result<RoutingDecision, queue::RoutingResolveError> {
     match signed_query_scope_for_app(app, query) {
+        SignedQueryScope::TargetAccount(account_id)
+            if is_known_global_asset_balance_query(app, query, &account_id) =>
+        {
+            resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL)
+        }
         SignedQueryScope::TargetAccount(account_id) => {
             resolve_torii_target_account_routes(app, &account_id)
                 .and_then(|routes| require_signed_query_route(routes, DataSpaceId::UNIVERSAL))
@@ -20476,6 +20481,28 @@ fn signed_query_scope_for_app_bounded(
     };
     Ok(scope)
 }
+fn is_known_global_asset_balance_query(
+    app: &AppState,
+    request: &impl SignedQueryScopeInput,
+    target: &AccountId,
+) -> bool {
+    use iroha_data_model::{
+        asset::{AssetBalancePolicy, AssetBalanceScope},
+        query::{QueryRequest, SingularQueryBox},
+    };
+    let QueryRequest::Singular(SingularQueryBox::FindAssetById(query)) =
+        request.request_with_authority().request()
+    else {
+        return false;
+    };
+    query.id.account() == target
+        && matches!(query.id.scope(), AssetBalanceScope::Global)
+        && app
+            .state
+            .world_view()
+            .asset_definition(query.id.definition())
+            .is_ok_and(|definition| definition.balance_scope_policy() == AssetBalancePolicy::Global)
+}
 fn torii_authorized_signed_query_routes(
     app: &AppState,
     request: &impl SignedQueryScopeInput,
@@ -20511,6 +20538,15 @@ fn torii_authorized_signed_query_routes(
         SignedQueryScope::LocalReplicated => Vec::new(),
         SignedQueryScope::AuthorityRouted => unreachable!("handled above"),
         SignedQueryScope::CrossDataspaceFanout => torii_all_dataspace_routes(app),
+        SignedQueryScope::TargetAccount(account_id)
+            if is_known_global_asset_balance_query(app, request, account_id) =>
+        {
+            // Global balances have one authoritative bucket, independently of
+            // the holder's aliases or the definition's owning domain. Preserve
+            // TargetAccount authorization below and the executor's exact-holder
+            // permission check without querying unrelated dataspaces.
+            vec![torii_nexus_route(app)?]
+        }
         SignedQueryScope::TargetAccount(account_id) => {
             torii_target_account_routes(app, account_id)?
         }

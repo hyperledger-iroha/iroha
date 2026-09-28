@@ -1,10 +1,10 @@
 #![allow(unexpected_cfgs, clippy::uninlined_format_args, clippy::doc_markdown)]
-//! Regression: ensure hybrid packed-struct bitset aligns for (u64, `SignatureOf`<T>).
+//! Regression: derived records mixing a fixed-size `u64` with `Signature` or
+//! `SignatureOf`<T> round-trip through the header-framed default layout.
 //!
-//! This test encodes a simple struct consisting of a fixed-size field (u64)
-//! followed by a signature wrapper (`SignatureOf`<()>). Because signatures are
-//! now encoded as fixed-size payloads, the packed-struct bitset should remain
-//! zero for both positions.
+//! Each fixture pairs a fixed-size field with a signature wrapper in both
+//! field orders, so the per-field length prefixes must stay aligned with the
+//! signature's own sequence framing.
 use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature, SignatureOf};
 #[derive(
     norito::derive::Encode,
@@ -59,7 +59,7 @@ fn packed_bitset_alignment_for_u64_signatureof() {
     let value = USig { a: 42, b: sig };
     // Encode via header-framed Norito path
     let bytes = norito::core::to_bytes(&value).expect("encode");
-    // Header flags live in the last header byte; PACKED_STRUCT is bit 0x04
+    // Decode under the flags advertised by the header's last byte.
     let archived = norito::core::from_bytes::<USig>(&bytes).expect("from_bytes");
     let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);

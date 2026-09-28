@@ -158,10 +158,8 @@ public sealed class ConfidentialMerklePath : IDisposable
         if (siblings.Count != 16 || directions.Length != 16) throw new ConfidentialProverException(-14);
         for (var i = 0; i < 16; i++) { ArgumentNullException.ThrowIfNull(siblings[i]); ConfidentialChecks.Word(siblings[i]); if (directions[i] != ((leafIndex >> i) & 1)) throw new ConfidentialProverException(-16); }
         secret = new ConfidentialSecret(560); LeafIndex = leafIndex;
-        var r = root.ToArray(); var d = directions.ToArray();
-        try { secret.Write(value => { r.CopyTo(value, 0); for (var i = 0; i < 16; i++) siblings[i].CopyTo(value, 32 + 32 * i); d.CopyTo(value, 544); }); }
+        try { secret.WriteSpan(0, root); secret.WriteSpan(544, directions); secret.Write(value => { for (var i = 0; i < 16; i++) siblings[i].CopyTo(value, 32 + 32 * i); }); }
         catch { secret.Dispose(); throw; }
-        finally { CryptographicOperations.ZeroMemory(r); CryptographicOperations.ZeroMemory(d); }
     }
     internal ConfidentialMerklePath(byte[] encoded, int index) { secret = new ConfidentialSecret(560); LeafIndex = index; secret.Write(value => encoded.CopyTo(value, 0)); }
     public byte[] Root => secret.Read(value => value.AsSpan(0, 32).ToArray());
@@ -187,8 +185,8 @@ public sealed class ConfidentialTreeEvidence : IDisposable
         ConfidentialChecks.Word(root); ArgumentNullException.ThrowIfNull(leaves);
         if (leaves.Count > ConfidentialChecks.Capacity) throw new ConfidentialProverException(-12);
         for (var i = 0; i < leaves.Count; i++) { ArgumentNullException.ThrowIfNull(leaves[i]); ConfidentialChecks.Word(leaves[i]); }
-        var evidence = new ConfidentialTreeEvidence(32 + leaves.Count * 32, leaves.Count, false, null); var r = root.ToArray();
-        try { evidence.secret.Write(value => { r.CopyTo(value, 0); for (var i = 0; i < leaves.Count; i++) leaves[i].CopyTo(value, 32 + i * 32); }); return evidence; }
+        var count = leaves.Count; var evidence = new ConfidentialTreeEvidence(32 + count * 32, count, false, null); var r = root.ToArray();
+        try { evidence.secret.Write(value => { r.CopyTo(value, 0); for (var i = 0; i < count; i++) leaves[i].CopyTo(value, 32 + i * 32); }); return evidence; }
         catch { evidence.Dispose(); throw; }
         finally { CryptographicOperations.ZeroMemory(r); }
     }
@@ -198,7 +196,7 @@ public sealed class ConfidentialTreeEvidence : IDisposable
         ConfidentialChecks.Word(root); ArgumentNullException.ThrowIfNull(membership);
         if (membership.Count is < 1 or > 2) throw new ConfidentialProverException(-13);
         var evidence = new ConfidentialTreeEvidence(32 + membership.Count * 528, membership.Count, true, new int[membership.Count]);
-        var r = root.ToArray(); var siblings = new byte[membership.Count * 512]; var directions = new byte[membership.Count * 16];
+        var r = new byte[32]; var siblings = new byte[membership.Count * 512]; var directions = new byte[membership.Count * 16]; root.CopyTo(r);
         try { for (var i = 0; i < membership.Count; i++) { ArgumentNullException.ThrowIfNull(membership[i]); membership[i].CopyTo(r, siblings, directions, i); evidence.indices![i] = membership[i].LeafIndex; }
             evidence.secret.Write(value => { r.CopyTo(value, 0); siblings.CopyTo(value, 32); directions.CopyTo(value, 32 + siblings.Length); }); return evidence; }
         catch { evidence.Dispose(); throw; }

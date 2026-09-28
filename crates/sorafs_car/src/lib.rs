@@ -424,7 +424,7 @@ impl FilePayload {
             validate_payload_metadata(&linked)?;
             let mut options = OpenOptions::new();
             options.read(true);
-            set_atomic_no_follow(&mut options);
+            set_no_follow_flag(&mut options);
             let file = options.open(path)?;
             Self::from_open_file(path, file)
         }
@@ -814,7 +814,7 @@ fn open_confined_payload_file(
     }
     let mut options = OpenOptions::new();
     options.read(true);
-    set_atomic_no_follow(&mut options);
+    set_no_follow_flag(&mut options);
     let file = options.open(path)?;
     validate_payload_file_handle(path, &file, expected_len, captured)?;
     let canonical_path = fs::canonicalize(path)?;
@@ -1823,12 +1823,20 @@ fn remove_path_no_follow(path: &Path) {
 fn sync_directory(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
 }
-#[cfg(unix)]
-fn set_atomic_no_follow(options: &mut OpenOptions) {
+/// Refuse to follow a final-component symlink when `options` opens a path.
+///
+/// Shared by the crate's writers and the SoraFS command-line tools; a no-op off Unix.
+#[doc(hidden)]
+pub fn set_no_follow_flag(options: &mut std::fs::OpenOptions) {
+    #[cfg(unix)]
     options.custom_flags(platform_no_follow_flag());
+    #[cfg(not(unix))]
+    let _ = options;
 }
+/// Platform `O_NOFOLLOW` bit, or zero where the target has no such flag.
+#[doc(hidden)]
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
+pub fn platform_no_follow_flag() -> i32 {
     rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
@@ -1843,7 +1851,8 @@ fn platform_no_follow_flag() -> i32 {
         target_os = "dragonfly"
     )
 ))]
-fn platform_no_follow_flag() -> i32 {
+#[doc(hidden)]
+pub fn platform_no_follow_flag() -> i32 {
     0x100
 }
 #[cfg(all(
@@ -1859,7 +1868,8 @@ fn platform_no_follow_flag() -> i32 {
         target_os = "dragonfly"
     ))
 ))]
-fn platform_no_follow_flag() -> i32 {
+#[doc(hidden)]
+pub fn platform_no_follow_flag() -> i32 {
     0
 }
 #[cfg(unix)]
@@ -2028,7 +2038,7 @@ impl DirectoryChunkSink {
             let candidate = parent.join(format!(".{file_name}.{}.partial", hex::encode(nonce)));
             let mut options = OpenOptions::new();
             options.write(true).create_new(true);
-            set_atomic_no_follow(&mut options);
+            set_no_follow_flag(&mut options);
             #[cfg(unix)]
             options.mode(0o600);
             match options.open(&candidate) {
@@ -2247,7 +2257,7 @@ impl DirectoryChunkSink {
             let path = staging.join(format!("chunk_{index:05}.bin"));
             let mut options = OpenOptions::new();
             options.read(true);
-            set_atomic_no_follow(&mut options);
+            set_no_follow_flag(&mut options);
             let mut file = options
                 .open(&path)
                 .map_err(|error| chunk_io_error("open staged readback", Some(index), error))?;
@@ -7527,7 +7537,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).expect("symlink");
         let mut options = OpenOptions::new();
         options.read(true);
-        set_atomic_no_follow(&mut options);
+        set_no_follow_flag(&mut options);
         assert!(
             options.open(&link).is_err(),
             "the kernel must reject the link before validation or reading"

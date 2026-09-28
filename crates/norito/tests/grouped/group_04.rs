@@ -56,16 +56,12 @@ mod ncb_views_neg;
 mod ncb_views_truncation;
 #[path = "../opt_column_prop.rs"]
 mod opt_column_prop;
-#[path = "../packed_seq_roundtrip.rs"]
-mod packed_seq_roundtrip;
-#[path = "../packed_struct_bitset.rs"]
-mod packed_struct_bitset;
-#[path = "../packed_struct_boundaries.rs"]
-mod packed_struct_boundaries;
-#[path = "../packed_struct_self_delimiting.rs"]
-mod packed_struct_self_delimiting;
 #[path = "../prelude_macros.rs"]
 mod prelude_macros;
+#[path = "../struct_boundaries.rs"]
+mod struct_boundaries;
+#[path = "../struct_self_delimiting.rs"]
+mod struct_self_delimiting;
 
 #[path = "../json_object_field_order.rs"]
 mod json_object_field_order;

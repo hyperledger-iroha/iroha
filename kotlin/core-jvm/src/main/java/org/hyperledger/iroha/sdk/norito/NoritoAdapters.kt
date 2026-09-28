@@ -144,14 +144,10 @@ object NoritoAdapters {
     private object ByteVecAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
             encoder.writeLength(value.size.toLong(), false)
-            if ((encoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                encodePacked(encoder, value)
-            } else {
-                val compactLen = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
-                for (b in value) {
-                    encoder.writeLength(1L, compactLen)
-                    encoder.writeByte(b.toInt())
-                }
+            val compactLen = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
+            for (b in value) {
+                encoder.writeLength(1L, compactLen)
+                encoder.writeByte(b.toInt())
             }
         }
 
@@ -159,9 +155,6 @@ object NoritoAdapters {
             val length = decoder.readLength(false)
             require(length <= Int.MAX_VALUE) { "Byte vector too large" }
             val count = length.toInt()
-            if ((decoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                return decodePacked(decoder, count)
-            }
             val out = ByteArray(count)
             val compactLen = decoder.compactLenActive()
             for (i in 0 until count) {
@@ -184,58 +177,6 @@ object NoritoAdapters {
         }
 
         override fun isSelfDelimiting(): Boolean = true
-
-        private fun encodePacked(encoder: NoritoEncoder, value: ByteArray) {
-            var offset = 0L
-            encoder.writeUInt(offset, 64)
-            for (i in value.indices) {
-                offset += 1
-                encoder.writeUInt(offset, 64)
-            }
-            encoder.writeBytes(value)
-        }
-
-        private fun decodePacked(decoder: NoritoDecoder, count: Int): ByteArray {
-            if (count == 0) {
-                val tailLen = decoder.remaining()
-                if (tailLen == 0) return ByteArray(0)
-                if (tailLen >= java.lang.Long.BYTES) {
-                    val prefix = decoder.readBytes(java.lang.Long.BYTES)
-                    for (b in prefix) {
-                        require(b.toInt() == 0) {
-                            "Packed byte vector declared zero length but carried trailing data"
-                        }
-                    }
-                    return ByteArray(0)
-                }
-                throw IllegalArgumentException(
-                    "Packed byte vector declared zero length but carried trailing data"
-                )
-            }
-
-            val sizes = ArrayList<Int>(count)
-            var previous = decoder.readUInt(64)
-            require(previous == 0L) { "Packed offsets must start at 0" }
-            for (i in 0 until count) {
-                val current = decoder.readUInt(64)
-                val delta = current - previous
-                require(delta in 0..Int.MAX_VALUE) { "Invalid packed offsets" }
-                sizes.add(delta.toInt())
-                previous = current
-            }
-
-            val out = ByteArray(count)
-            for (i in 0 until count) {
-                val payload = decoder.readBytes(sizes[i])
-                val child = NoritoDecoder(payload, decoder.flags)
-                val value = child.readByte()
-                require(child.remaining() == 0) {
-                    "Packed byte element did not consume all bytes"
-                }
-                out[i] = value.toByte()
-            }
-            return out
-        }
     }
 
     /**
@@ -328,35 +269,13 @@ object NoritoAdapters {
     private class SequenceAdapter<T>(private val element: TypeAdapter<T>) : TypeAdapter<List<T>> {
         override fun encode(encoder: NoritoEncoder, value: List<T>) {
             encoder.writeLength(value.size.toLong(), false)
-            if ((encoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                encodePacked(encoder, value)
-            } else {
-                val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
-                for (elementValue in value) {
-                    val child = encoder.childEncoder()
-                    element.encode(child, elementValue)
-                    val payload = child.toByteArray()
-                    encoder.writeLength(payload.size.toLong(), compact)
-                    encoder.writeBytes(payload)
-                }
-            }
-        }
-
-        private fun encodePacked(encoder: NoritoEncoder, values: List<T>) {
-            val encodedElements = ArrayList<ByteArray>(values.size)
-            for (value in values) {
+            val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
+            for (elementValue in value) {
                 val child = encoder.childEncoder()
-                element.encode(child, value)
-                encodedElements.add(child.toByteArray())
-            }
-            var offset = 0L
-            encoder.writeUInt(offset, 64)
-            for (chunk in encodedElements) {
-                offset += chunk.size
-                encoder.writeUInt(offset, 64)
-            }
-            for (chunk in encodedElements) {
-                encoder.append(chunk)
+                element.encode(child, elementValue)
+                val payload = child.toByteArray()
+                encoder.writeLength(payload.size.toLong(), compact)
+                encoder.writeBytes(payload)
             }
         }
 
@@ -364,9 +283,6 @@ object NoritoAdapters {
             val length = decoder.readLength(false)
             require(length <= Int.MAX_VALUE) { "Sequence too large" }
             val count = length.toInt()
-            if ((decoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                return decodePacked(decoder, count)
-            }
             val values = ArrayList<T>(count)
             val compact = decoder.compactLenActive()
             for (i in 0 until count) {
@@ -384,48 +300,6 @@ object NoritoAdapters {
         }
 
         override fun isSelfDelimiting(): Boolean = true
-
-        private fun decodePacked(decoder: NoritoDecoder, count: Int): List<T> {
-            if (count == 0) {
-                val tailLen = decoder.remaining()
-                if (tailLen == 0) return emptyList()
-                if (tailLen >= java.lang.Long.BYTES) {
-                    val prefix = decoder.readBytes(java.lang.Long.BYTES)
-                    for (b in prefix) {
-                        require(b.toInt() == 0) {
-                            "Packed sequence declared zero length but carried trailing data"
-                        }
-                    }
-                    return emptyList()
-                }
-                throw IllegalArgumentException(
-                    "Packed sequence declared zero length but carried trailing data"
-                )
-            }
-
-            val sizes = ArrayList<Int>(count)
-            var previous = decoder.readUInt(64)
-            require(previous == 0L) { "Packed offsets must start at 0" }
-            for (i in 0 until count) {
-                val current = decoder.readUInt(64)
-                val delta = current - previous
-                require(delta in 0..Int.MAX_VALUE) { "Invalid packed offsets" }
-                sizes.add(delta.toInt())
-                previous = current
-            }
-
-            val values = ArrayList<T>(count)
-            for (size in sizes) {
-                val chunk = decoder.readBytes(size)
-                val child = NoritoDecoder(chunk, decoder.flags)
-                val value = element.decode(child)
-                require(child.remaining() == 0) {
-                    "Packed element did not consume all bytes"
-                }
-                values.add(value)
-            }
-            return values
-        }
     }
 
     private class MapAdapter<K, V>(
@@ -436,22 +310,13 @@ object NoritoAdapters {
         override fun encode(encoder: NoritoEncoder, value: Map<K, V>) {
             val entries = sortedEntries(value)
             encoder.writeLength(entries.size.toLong(), false)
-            if ((encoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                encodePacked(encoder, entries)
-            } else {
-                encodeDelimited(encoder, entries)
-            }
+            encodeDelimited(encoder, entries)
         }
 
         override fun decode(decoder: NoritoDecoder): Map<K, V> {
             val length = decoder.readLength(false)
             require(length <= Int.MAX_VALUE) { "Map too large" }
-            val count = length.toInt()
-            return if ((decoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                decodePacked(decoder, count)
-            } else {
-                decodeDelimited(decoder, count)
-            }
+            return decodeDelimited(decoder, length.toInt())
         }
 
         override fun isSelfDelimiting(): Boolean = true
@@ -467,25 +332,6 @@ object NoritoAdapters {
                 val valueLen = decoder.readLength(compactLen)
                 require(valueLen <= Int.MAX_VALUE) { "Map value too large" }
                 val decodedValue = decodeSizedField(value, decoder, valueLen.toInt())
-                map[decodedKey] = decodedValue
-            }
-            return map
-        }
-
-        private fun decodePacked(decoder: NoritoDecoder, count: Int): Map<K, V> {
-            val keySizes = readFixedOffsets(decoder, count, "Map key")
-            val valueSizes = readFixedOffsets(decoder, count, "Map value")
-
-            val keys = ArrayList<K>(count)
-            for (size in keySizes) {
-                keys.add(decodeSizedField(key, decoder, size))
-            }
-
-            val map = LinkedHashMap<K, V>(count)
-            for (i in 0 until count) {
-                val decodedValue = decodeSizedField(value, decoder, valueSizes[i])
-                val decodedKey = keys[i]
-                require(!map.containsKey(decodedKey)) { "Duplicate map key" }
                 map[decodedKey] = decodedValue
             }
             return map
@@ -531,34 +377,6 @@ object NoritoAdapters {
             }
         }
 
-        private fun encodePacked(encoder: NoritoEncoder, entries: List<Map.Entry<K, V>>) {
-            if (entries.isEmpty()) {
-                writeFixedOffsets(encoder, emptyList())
-                writeFixedOffsets(encoder, emptyList())
-                return
-            }
-            val keySizes = ArrayList<Int>(entries.size)
-            val valueSizes = ArrayList<Int>(entries.size)
-            val keyPayloads = ArrayList<ByteArray>(entries.size)
-            val valuePayloads = ArrayList<ByteArray>(entries.size)
-            for (entry in entries) {
-                val keyBytes = encodeField(encoder, key, entry.key)
-                val valueBytes = encodeField(encoder, value, entry.value)
-                keySizes.add(keyBytes.size)
-                valueSizes.add(valueBytes.size)
-                keyPayloads.add(keyBytes)
-                valuePayloads.add(valueBytes)
-            }
-            writeFixedOffsets(encoder, keySizes)
-            writeFixedOffsets(encoder, valueSizes)
-            for (keyBytes in keyPayloads) {
-                encoder.append(keyBytes)
-            }
-            for (valueBytes in valuePayloads) {
-                encoder.append(valueBytes)
-            }
-        }
-
         private fun encodeField(
             encoder: NoritoEncoder,
             adapter: TypeAdapter<*>,
@@ -579,33 +397,6 @@ object NoritoAdapters {
             val value = adapter.decode(child)
             require(child.remaining() == 0) { "Map entry did not consume all bytes" }
             return value
-        }
-
-        private fun readFixedOffsets(
-            decoder: NoritoDecoder,
-            count: Int,
-            label: String,
-        ): List<Int> {
-            val sizes = ArrayList<Int>(count)
-            var previous = decoder.readUInt(64)
-            require(previous == 0L) { "$label offsets must start at 0" }
-            for (i in 0 until count) {
-                val current = decoder.readUInt(64)
-                val delta = current - previous
-                require(delta in 0..Int.MAX_VALUE) { "Invalid $label offsets" }
-                sizes.add(delta.toInt())
-                previous = current
-            }
-            return sizes
-        }
-
-        private fun writeFixedOffsets(encoder: NoritoEncoder, sizes: List<Int>) {
-            var offset = 0L
-            encoder.writeUInt(offset, 64)
-            for (size in sizes) {
-                offset += size
-                encoder.writeUInt(offset, 64)
-            }
         }
     }
 

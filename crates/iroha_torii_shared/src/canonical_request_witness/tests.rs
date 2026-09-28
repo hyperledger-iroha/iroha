@@ -92,9 +92,7 @@ fn borrowed_witness_signature_payload_preserves_owned_wire_bytes() {
     };
     let _canonical = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     assert_eq!(encode_bare(&borrowed), encode_bare(&owned));
-    let flags = norito::core::header_flags::PACKED_STRUCT
-        | norito::core::header_flags::FIELD_BITSET
-        | norito::core::header_flags::COMPACT_LEN;
+    let flags = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _flags = DecodeFlagsGuard::enter(flags);
     assert_eq!(encode_bare(&borrowed), encode_bare(&owned));
 }

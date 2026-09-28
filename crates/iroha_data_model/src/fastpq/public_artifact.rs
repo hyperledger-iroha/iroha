@@ -877,7 +877,7 @@ mod tests {
                 .is_err()
         );
         let mut reserved_flags = raw;
-        reserved_flags[39] |= norito::core::header_flags::VARINT_OFFSETS;
+        reserved_flags[39] |= 0x08; // reserved header bit
         assert!(
             FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
                 &reserved_flags,

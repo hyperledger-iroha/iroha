@@ -122,7 +122,10 @@ public sealed class ConfidentialProver : IDisposable
         ArgumentNullException.ThrowIfNull(tree); ArgumentNullException.ThrowIfNull(inputValues);
         if (inputValues.Count is < 1 or > 2) throw new ConfidentialProverException(-11);
         if (outputValues is not null && outputValues.Count is < 1 or > 2) throw new ConfidentialProverException(-18);
-        var inputs = inputValues.ToArray(); var outputs = outputValues?.ToArray();
+        var inputs = new ConfidentialInputNote[inputValues.Count];
+        for (var i = 0; i < inputs.Length; i++) inputs[i] = inputValues[i];
+        var outputs = outputValues is null ? null : new ConfidentialOutputNote[outputValues.Count];
+        if (outputs is not null) for (var i = 0; i < outputs.Length; i++) outputs[i] = outputValues![i];
         ConfidentialNativeJob? job = null; byte[]? root = null;
         try
         {
@@ -156,7 +159,7 @@ public sealed class ConfidentialProver : IDisposable
             if (outputs is not null) foreach (var output in outputs) output.Append(driver, id);
             change?.Append(driver, id); tree.Append(driver, id);
             var accepted = job; var expectedRoot = root; var count = inputs.Length;
-            var task = Task.Run(() => { using (accepted) { return ConfidentialProof.Decode(accepted.Prove(), relation, expectedRoot, count, outputCount); } });
+            var task = Task.Run(() => { try { using (accepted) { return ConfidentialProof.Decode(accepted.Prove(), relation, expectedRoot, count, outputCount); } } finally { CryptographicOperations.ZeroMemory(expectedRoot); } });
             job = null; root = null; return task;
         }
         finally

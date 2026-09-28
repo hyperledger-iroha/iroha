@@ -1070,10 +1070,7 @@ mod codec_tests {
     }
     fn assert_wire_lengths_match_active_layout<T: 'static>(predicate: &CompoundPredicate<T>) {
         let wire = predicate.to_wire();
-        for flags in [
-            norito::core::default_encode_flags(),
-            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT,
-        ] {
+        for flags in [norito::core::default_encode_flags(), 0] {
             let predicate_bytes = bare_bytes_with_flags(predicate, flags);
             let wire_bytes = bare_bytes_with_flags(&wire, flags);
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
@@ -1224,12 +1221,6 @@ mod codec_tests {
         );
         assert_wire_lengths_match_active_layout(&json);
         assert_wire_lengths_match_active_layout(&tree);
-        let packed_flags =
-            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
-        let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
-        assert!(json.encoded_len_exact().is_some());
-        assert_eq!(tree.encoded_len_hint(), None);
-        assert_eq!(tree.encoded_len_exact(), None);
     }
     #[test]
     fn raw_json_predicate_retained_graph_is_measured_and_limited() {

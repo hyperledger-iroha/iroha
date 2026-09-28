@@ -3,6 +3,7 @@ use ed25519_dalek::VerifyingKey;
 use iroha_crypto::sha256;
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::chunker_registry;
+use sorafs_car::set_no_follow_flag;
 use sorafs_manifest::{
     AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ProviderAdvertBuildError,
@@ -583,7 +584,7 @@ fn build_report(
     advert_obj.insert("version".into(), Value::from(advert.version));
     advert_obj.insert(
         "network_id_hex".into(),
-        Value::from(hex(&advert.network_id)),
+        Value::from(hex::encode(&advert.network_id)),
     );
     advert_obj.insert("issued_at".into(), Value::from(advert.issued_at));
     advert_obj.insert("expires_at".into(), Value::from(advert.expires_at));
@@ -599,7 +600,7 @@ fn build_report(
     let mut body_obj = Map::new();
     body_obj.insert(
         "provider_id_hex".into(),
-        Value::from(hex(&advert.body.provider_id)),
+        Value::from(hex::encode(&advert.body.provider_id)),
     );
     body_obj.insert(
         "profile_id".into(),
@@ -634,7 +635,7 @@ fn build_report(
     }
     body_obj.insert(
         "stake_pool_id_hex".into(),
-        Value::from(hex(&advert.body.stake.pool_id)),
+        Value::from(hex::encode(&advert.body.stake.pool_id)),
     );
     body_obj.insert(
         "stake_amount".into(),
@@ -659,7 +660,7 @@ fn build_report(
         .map(|cap| {
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from(capability_name(cap.cap_type)));
-            obj.insert("payload_hex".into(), Value::from(hex(&cap.payload)));
+            obj.insert("payload_hex".into(), Value::from(hex::encode(&cap.payload)));
             if cap.cap_type == CapabilityType::ChunkRangeFetch {
                 match ProviderCapabilityRangeV1::from_bytes(&cap.payload) {
                     Ok(range) => {
@@ -760,7 +761,7 @@ fn build_report(
                 .map(|entry| {
                     let mut mobj = Map::new();
                     mobj.insert("key".into(), Value::from(endpoint_metadata_name(entry.key)));
-                    mobj.insert("value_hex".into(), Value::from(hex(&entry.value)));
+                    mobj.insert("value_hex".into(), Value::from(hex::encode(&entry.value)));
                     Value::Object(mobj)
                 })
                 .collect();
@@ -806,20 +807,20 @@ fn build_report(
     );
     sig_obj.insert(
         "public_key_hex".into(),
-        Value::from(hex(&advert.signature.public_key)),
+        Value::from(hex::encode(&advert.signature.public_key)),
     );
     sig_obj.insert(
         "public_key_fingerprint_sha256".into(),
-        Value::from(hex(public_key_fingerprint_sha256)),
+        Value::from(hex::encode(public_key_fingerprint_sha256)),
     );
     sig_obj.insert(
         "signature_hex".into(),
-        Value::from(hex(&advert.signature.signature)),
+        Value::from(hex::encode(&advert.signature.signature)),
     );
     advert_obj.insert("signature".into(), Value::Object(sig_obj));
     advert_obj.insert("signature_verified".into(), Value::from(signature_verified));
     advert_obj.insert("norito_len".into(), Value::from(bytes.len() as u64));
-    advert_obj.insert("norito_hex".into(), Value::from(hex(bytes)));
+    advert_obj.insert("norito_hex".into(), Value::from(hex::encode(bytes)));
     Value::Object(advert_obj)
 }
 fn build_signing_request_report(
@@ -835,19 +836,19 @@ fn build_signing_request_report(
     report.insert("signature_algorithm".into(), Value::from("ed25519"));
     report.insert(
         "network_id_hex".into(),
-        Value::from(hex(&advert.network_id)),
+        Value::from(hex::encode(&advert.network_id)),
     );
     report.insert(
         "public_key_hex".into(),
-        Value::from(hex(&advert.signature.public_key)),
+        Value::from(hex::encode(&advert.signature.public_key)),
     );
     report.insert(
         "public_key_fingerprint_sha256".into(),
-        Value::from(hex(public_key_fingerprint_sha256)),
+        Value::from(hex::encode(public_key_fingerprint_sha256)),
     );
     report.insert(
         "signing_payload_sha256".into(),
-        Value::from(hex(&sha256(signing_payload))),
+        Value::from(hex::encode(&sha256(signing_payload))),
     );
     report.insert(
         "signing_payload_len".into(),
@@ -855,7 +856,7 @@ fn build_signing_request_report(
     );
     report.insert(
         "provider_id_hex".into(),
-        Value::from(hex(&advert.body.provider_id)),
+        Value::from(hex::encode(&advert.body.provider_id)),
     );
     report.insert("issued_at".into(), Value::from(advert.issued_at));
     report.insert("expires_at".into(), Value::from(advert.expires_at));
@@ -1680,47 +1681,6 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
-}
 fn capability_name(cap: CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
@@ -1768,15 +1728,6 @@ fn signature_alg_name(alg: SignatureAlgorithm) -> &'static str {
         SignatureAlgorithm::Ed25519 => "ed25519",
         SignatureAlgorithm::MultiSig => "multi-sig",
     }
-}
-fn hex(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 #[cfg(test)]
 mod tests {

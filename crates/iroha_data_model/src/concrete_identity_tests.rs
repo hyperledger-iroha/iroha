@@ -20,7 +20,7 @@ use crate::{
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
     isi::{InstructionBox, Log},
-    smart_contract::payloads::{ExecutorContext, SmartContractContext},
+    smart_contract::payloads::ExecutorContext,
     trigger::{
         TriggerId,
         action::{Action, Repeats, TimeTriggerRetryPolicy},
@@ -245,8 +245,8 @@ fn captured_family_frame(label: &str) -> Vec<u8> {
 
 #[test]
 fn concrete_header_inputs_match_capture() {
-    let context: SmartContractContext =
-        norito::decode_from_bytes(&captured_family_frame("smart-contract-context"))
+    let context: ExecutorContext =
+        norito::decode_from_bytes(&captured_family_frame("executor-context"))
             .expect("decode captured context");
     let header = header();
     assert_eq!(header, context.curr_block);
@@ -363,13 +363,6 @@ fn concrete_identity_frames() -> Vec<Value> {
             }),
         ),
         family(
-            "smart-contract-context",
-            SmartContractContext {
-                authority: account(),
-                curr_block: header(),
-            },
-        ),
-        family(
             "executor-context",
             ExecutorContext {
                 authority: account(),
@@ -411,7 +404,7 @@ fn concrete_identity_frames_match_capture() {
     let rows = concrete_identity_frames();
     assert_eq!(
         rows.len(),
-        8 + usize::from(cfg!(feature = "governance")) + 3 * usize::from(cfg!(feature = "http"))
+        7 + usize::from(cfg!(feature = "governance")) + 3 * usize::from(cfg!(feature = "http"))
     );
     let expected = fixture_values(include_str!(
         "../tests/fixtures/model_concrete_identity_frames.json"
@@ -430,7 +423,6 @@ fn concrete_identity_frames_match_capture() {
             "data-peer-added",
             "data-account-metadata",
             "data-game-session",
-            "smart-contract-context",
             "executor-context",
             "data-governance-submitted",
             "block-subscription-first",

@@ -21,6 +21,26 @@ Run only the early native gate:
 
     python3 scripts/taira_release.py check
 
+For an ordinary Mac client using the exact deployed source, create the
+owner-private `target/taira-macos-client` directory once and reuse it. After the
+candidate is signed, build only the normal Musubi executable:
+
+    python3 scripts/taira_release.py prepare-client \
+      --expected-commit FULL_SIGNED_COMMIT \
+      --expected-signer FULL_SIGNER_FINGERPRINT \
+      --output-dir /absolute/iroha/target/client-observations/ATTEMPT
+
+This separate fixed lane uses the existing signed Git-object capture and source/
+Cargo locks, the captured Rust toolchain, Apple linker and native jobserver. It
+excludes worktree edits and inherited compiler hooks. `request.json`, the Cargo
+JSON log and `result.json` bind the commit, source snapshot, compiler/linker and
+exact copied `musubi` hash. Run that retained executable for the public workflow;
+its package-version display alone does not prove source identity. This is an
+ordinary client build, with no network, keys, deployment or qualification step;
+Musubi remains outside the four-binary validator import contract. Existing
+outputs are never replayed or overwritten. On failure, inspect the retained log
+and select a fresh observation directory while reusing the same Cargo lane.
+
 Linux development checks default to the installed LLVM 18 compiler and linker;
 macOS keeps the system Apple linker. Linux requires executable
 `/usr/bin/clang-18` and `/usr/bin/ld.lld-18`. Missing or nonexecutable tools fail
@@ -475,11 +495,12 @@ See the [maintained retry caller](taira_retry.md) for the current path records
 and preparation order.
 
 The signed genesis must leave room for onboarding, funding, the canary's real
-QueuePlan admission and execution carriers, real DKG completion, and the
+Ordinary transactions, real DKG completion, and the
 certificate installation before the first mandatory beacon pulse. Finalization
 uses the authenticated observed height. The sole threshold-key certificate uses
 signed Ordinary admission with exact next-height and current-roster quorum
-checks; other public transactions continue to use QueuePlanSynced admission.
+checks. Supported public prepared transactions use signed Ordinary single-route
+admission; unsupported multi-route intents fail before durable acceptance.
 The certificate must be committed on all four validators, followed by all four
 `BeaconActivate` provider installations before restart proof. Epoch retention
 observes complete authenticated Retain transitions on finalized workload

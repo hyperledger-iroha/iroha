@@ -3569,18 +3569,20 @@ impl ProposalKind {
                     GovernanceSubjectPreimageV1::MusubiRegistryPolicy
                 }
             },
-            Self::SorafsProviderGovernance(proposal) => {
-                match proposal.action.as_ref() {
-                    SorafsProviderGovernanceActionV1::Admission(action) => {
-                        match action.provider_id().map_err(|error| norito::Error::Message(error.to_string()))? {
-                            Some(provider) => GovernanceSubjectPreimageV1::SorafsProviderAdmission(provider),
-                            None => GovernanceSubjectPreimageV1::SorafsAdmissionCouncil,
-                        }
-                    }
-                    _ => GovernanceSubjectPreimageV1::SorafsProvider(
-                        proposal.action.provider_id().ok_or_else(|| norito::Error::Message("missing provider identity".into()))?),
-                }
-            }
+            Self::SorafsProviderGovernance(proposal) => match proposal.action.as_ref() {
+                SorafsProviderGovernanceActionV1::Admission(action) => action
+                    .provider_id()
+                    .map_err(|error| norito::Error::Message(error.to_string()))?
+                    .map_or(
+                        GovernanceSubjectPreimageV1::SorafsAdmissionCouncil,
+                        GovernanceSubjectPreimageV1::SorafsProviderAdmission,
+                    ),
+                _ => GovernanceSubjectPreimageV1::SorafsProvider(
+                    proposal.action.provider_id().ok_or_else(|| {
+                        norito::Error::Message("missing provider identity".into())
+                    })?,
+                ),
+            },
             Self::GlobalDataTriggerPermissionGovernance(proposal) => {
                 GovernanceSubjectPreimageV1::GlobalDataTriggerPermission(proposal.authority.clone())
             }

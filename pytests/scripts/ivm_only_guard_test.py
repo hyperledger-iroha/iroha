@@ -40,6 +40,7 @@ def run_guard(root):
     ("javascript/run.cjs", 'const { WASI } = require("node:wasi");\n'),
     ("javascript/run.mjs", 'const runtime = await import("node:wasi");\n'),
     ("javascript/build.mjs", 'execFileSync("cargo", ["build", "--target", "wasm32-unknown-unknown"]);\n'),
+    ("javascript/targetRemoval.test.js", 'const unsupportedTarget = "wasm32-" + "unknown-unknown";\n'),
     ("javascript/view.tsx", "const module = await WebAssembly.compile(bytes);\n"),
     ("javascript/view.jsx", "const module = await WebAssembly.compile(bytes);\n"),
     ("kotlin/codec/build.gradle.kts", "kotlin { wasmJs { browser() } }\n"),
@@ -134,46 +135,4 @@ def test_go_target_files_and_build_comments_are_checked(repository, relative, co
     path.write_text(contents)
     assert run_guard(repository).returncode == 1
     subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
-    assert run_guard(repository).returncode == 1
-
-
-NEGATIVE_TARGET_FIXTURE = '''const unsupportedTarget = "wasm32-" + "unknown-unknown";
-assert.equal(
-  readRepositoryFile(".github/workflows/kotodama_perf.yml").includes(
-    unsupportedTarget,
-  ),
-  false,
-);
-'''
-
-
-def test_literal_target_absence_assertion_is_allowed_without_hiding_runtime_uses(repository):
-    path = repository / "javascript/targetRemoval.test.js"
-    path.parent.mkdir()
-    path.write_text(NEGATIVE_TARGET_FIXTURE)
-    assert run_guard(repository).returncode == 0
-    subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
-    for extra in [
-        'execFileSync("cargo", ["build", "--target", unsupportedTarget]);\n',
-        'const target = unsupportedTarget;\n',
-        'export { unsupportedTarget };\n',
-        'eval(unsupportedTarget);\n',
-        'await WebAssembly.instantiate(bytes);\n',
-        'import { WASI } from "node:wasi";\n',
-    ]:
-        path.write_text(NEGATIVE_TARGET_FIXTURE + extra)
-        assert run_guard(repository).returncode == 1, extra
-
-
-@pytest.mark.parametrize("filename,contents", [
-    ("runtime.mjs", NEGATIVE_TARGET_FIXTURE),
-    ("targetRemoval.test.js", NEGATIVE_TARGET_FIXTURE.replace("false,", "true,")),
-    ("targetRemoval.test.js", NEGATIVE_TARGET_FIXTURE.replace(
-        'const unsupportedTarget = "wasm32-" + "unknown-unknown";',
-        'const unsupportedTarget = select("wasm32-unknown-unknown");',
-    )),
-])
-def test_target_fixture_exception_requires_literal_data_and_negative_test_use(repository, filename, contents):
-    path = repository / filename
-    path.write_text(contents)
     assert run_guard(repository).returncode == 1

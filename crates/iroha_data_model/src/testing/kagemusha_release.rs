@@ -80,38 +80,38 @@ impl KagemushaExperimentalReleaseFixtureV1 {
     }
 }
 
-pub(crate) const STATE_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x31; 32];
-pub(crate) const STATE_EP_PROTOCOL_DIGEST: [u8; 32] = [0x32; 32];
-pub(crate) const TERMINAL_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x33; 32];
-pub(crate) const TERMINAL_AUTHORIZATION_EP_PROTOCOL_DIGEST: [u8; 32] = [0x34; 32];
-pub(crate) const MINT_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3B; 32];
-pub(crate) const MINT_AUTHORIZATION_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3C; 32];
-pub(crate) const MINT_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x35; 32];
-pub(crate) const MINT_EP_PROTOCOL_DIGEST: [u8; 32] = [0x36; 32];
-pub(crate) const CREDENTIAL_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x37; 32];
-pub(crate) const CREDENTIAL_EP_PROTOCOL_DIGEST: [u8; 32] = [0x38; 32];
-pub(crate) const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
-pub(crate) const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
-pub(crate) const COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3D; 32];
-pub(crate) const COMMIT_WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3E; 32];
-pub(crate) const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
-pub(crate) const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
-pub(crate) const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
-pub(crate) const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
-pub(crate) const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
-pub(crate) const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
-pub(crate) const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
-pub(crate) const GUARD_EP_PROOF_BYTES: u32 = 12_032;
-pub(crate) const MINT_HASH_SHARD_EQ_PROOF_BYTES: u32 = 4_000;
-pub(crate) const MINT_HASH_SHARD_EP_PROOF_BYTES: u32 = 4_032;
-pub(crate) const MINT_HASH_CLAIM_EQ_PROOF_BYTES: u32 = 6_016;
-pub(crate) const MINT_HASH_CLAIM_EP_PROOF_BYTES: u32 = 6_048;
+pub const STATE_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x31; 32];
+pub const STATE_EP_PROTOCOL_DIGEST: [u8; 32] = [0x32; 32];
+pub const TERMINAL_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x33; 32];
+pub const TERMINAL_AUTHORIZATION_EP_PROTOCOL_DIGEST: [u8; 32] = [0x34; 32];
+pub const MINT_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3B; 32];
+pub const MINT_AUTHORIZATION_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3C; 32];
+pub const MINT_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x35; 32];
+pub const MINT_EP_PROTOCOL_DIGEST: [u8; 32] = [0x36; 32];
+pub const CREDENTIAL_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x37; 32];
+pub const CREDENTIAL_EP_PROTOCOL_DIGEST: [u8; 32] = [0x38; 32];
+pub const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
+pub const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
+pub const COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3D; 32];
+pub const COMMIT_WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3E; 32];
+pub const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
+pub const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
+pub const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
+pub const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
+pub const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
+pub const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
+pub const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
+pub const GUARD_EP_PROOF_BYTES: u32 = 12_032;
+pub const MINT_HASH_SHARD_EQ_PROOF_BYTES: u32 = 4_000;
+pub const MINT_HASH_SHARD_EP_PROOF_BYTES: u32 = 4_032;
+pub const MINT_HASH_CLAIM_EQ_PROOF_BYTES: u32 = 6_016;
+pub const MINT_HASH_CLAIM_EP_PROOF_BYTES: u32 = 6_048;
 
-pub(crate) fn release_network(seed: u8) -> NetworkId {
+pub fn release_network(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed; 32])))
 }
 
-pub(crate) fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
+pub fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
     vec![
         KagemushaHelperProtocolV1 {
             helper: KagemushaQualifiedHelperCircuitV1::MintAuthorization,
@@ -158,7 +158,7 @@ pub(crate) fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
     ]
 }
 
-pub(crate) fn evidence(seed: u8) -> KagemushaEvidenceFileV1 {
+pub fn evidence(seed: u8) -> KagemushaEvidenceFileV1 {
     let seed = if seed == 0 { u8::MAX } else { seed };
     KagemushaEvidenceFileV1 {
         sha256: [seed; 32],
@@ -188,7 +188,7 @@ pub(crate) fn artifacts() -> Vec<KagemushaArtifactBindingV1> {
         .collect()
 }
 
-pub(crate) fn artifact(
+pub fn artifact(
     artifacts: &[KagemushaArtifactBindingV1],
     role: KagemushaArtifactRoleV1,
 ) -> KagemushaArtifactBindingV1 {
@@ -198,13 +198,13 @@ pub(crate) fn artifact(
         .expect("fixture contains every artifact role")
 }
 
-pub(crate) fn device_public_key(seed: u8) -> KagemushaDevicePublicKeyV1 {
+pub fn device_public_key(seed: u8) -> KagemushaDevicePublicKeyV1 {
     let signing_key = SigningKey::from_bytes((&[seed; 32]).into()).expect("P-256 signing key");
     let encoded = signing_key.verifying_key().to_encoded_point(false);
     KagemushaDevicePublicKeyV1::from_sec1_bytes(encoded.as_bytes()).expect("device public key")
 }
 
-pub(crate) fn hardware_profile(
+pub fn hardware_profile(
     seed: u8,
     suite_id: [u8; 32],
     qualification_report_digest: [u8; 32],
@@ -232,7 +232,7 @@ pub(crate) fn hardware_profile(
     .expect("hardware profile identity")
 }
 
-pub(crate) fn enabled_profile(seed: u8, vk_digest: [u8; 32]) -> KagemushaEnabledProfileV1 {
+pub fn enabled_profile(seed: u8, vk_digest: [u8; 32]) -> KagemushaEnabledProfileV1 {
     let suite_id = [seed.wrapping_add(0x10); 32];
     let qualification_report = evidence(seed.wrapping_add(0x20));
     let hardware_profile = hardware_profile(seed, suite_id, qualification_report.sha256);
@@ -247,7 +247,7 @@ pub(crate) fn enabled_profile(seed: u8, vk_digest: [u8; 32]) -> KagemushaEnabled
     }
 }
 
-pub(crate) fn relation_qualifications(
+pub fn relation_qualifications(
     artifacts: &[KagemushaArtifactBindingV1],
     report_seed: u8,
 ) -> Vec<KagemushaRelationQualificationV1> {
@@ -296,7 +296,7 @@ pub(crate) fn relation_qualifications(
         .collect()
 }
 
-pub(crate) fn helper_qualifications(
+pub fn helper_qualifications(
     artifacts: &[KagemushaArtifactBindingV1],
     helper_protocols: &[KagemushaHelperProtocolV1],
     report_seed: u8,
@@ -343,7 +343,7 @@ pub(crate) fn helper_qualifications(
         .collect()
 }
 
-pub(crate) fn profile_qualification(
+pub fn profile_qualification(
     profile: &KagemushaEnabledProfileV1,
     artifacts: &[KagemushaArtifactBindingV1],
     helper_protocols: &[KagemushaHelperProtocolV1],
@@ -416,9 +416,7 @@ pub(crate) fn profile_qualification(
     .expect("profile qualification digest")
 }
 
-pub(crate) fn receipt(
-    artifacts: &[KagemushaArtifactBindingV1],
-) -> KagemushaInternalValidationReceiptV1 {
+pub fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidationReceiptV1 {
     let artifact_set_digest = kagemusha_artifact_set_digest_v1(artifacts).expect("artifact digest");
     let helper_protocols = helper_protocols();
     let vk_digest = kagemusha_vk_set_digest_v1(
@@ -507,7 +505,7 @@ pub(crate) fn receipt(
     }
 }
 
-pub(crate) fn reduce_to_experimental_receipt(receipt: &mut KagemushaInternalValidationReceiptV1) {
+pub fn reduce_to_experimental_receipt(receipt: &mut KagemushaInternalValidationReceiptV1) {
     let absent_report = KagemushaEvidenceFileV1 {
         sha256: [0; 32],
         byte_len: 0,
@@ -557,7 +555,7 @@ pub(crate) fn reduce_to_experimental_receipt(receipt: &mut KagemushaInternalVali
         kagemusha_provider_policy_root_v1(&enabled_profiles, &receipt.provider_policy).unwrap();
 }
 
-pub(crate) fn provider_policy(
+pub fn provider_policy(
     profiles: &[KagemushaEnabledProfileV1],
 ) -> Vec<KagemushaProviderPolicyEntryV1> {
     profiles
@@ -571,7 +569,7 @@ pub(crate) fn provider_policy(
         .collect()
 }
 
-pub(crate) fn authorized_provider_entry(
+pub fn authorized_provider_entry(
     profile: &KagemushaEnabledProfileV1,
     position: u16,
     commitment: [u8; 32],
@@ -594,7 +592,7 @@ pub(crate) fn authorized_provider_entry(
     }
 }
 
-pub(crate) fn manifest(
+pub fn manifest(
     artifacts: Vec<KagemushaArtifactBindingV1>,
     receipt: &KagemushaInternalValidationReceiptV1,
 ) -> KagemushaReleaseManifestV1 {
@@ -623,7 +621,7 @@ pub(crate) fn manifest(
     .expect("seal manifest")
 }
 
-pub(crate) fn authority_keys() -> Vec<KeyPair> {
+pub fn authority_keys() -> Vec<KeyPair> {
     let mut keys = Vec::from(
         [0x41_u8, 0x42, 0x43].map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)),
     );
@@ -631,10 +629,7 @@ pub(crate) fn authority_keys() -> Vec<KeyPair> {
     keys
 }
 
-pub(crate) fn authority_policy(
-    keys: &[KeyPair],
-    threshold: u16,
-) -> KagemushaReleaseAuthorityPolicyV1 {
+pub fn authority_policy(keys: &[KeyPair], threshold: u16) -> KagemushaReleaseAuthorityPolicyV1 {
     KagemushaReleaseAuthorityPolicyV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         authority_set_id: [0x40; 32],

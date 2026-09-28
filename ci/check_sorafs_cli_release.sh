@@ -207,7 +207,7 @@ fi
 cargo test --locked -p irohad --lib "${provider_ingest_test}" -- \
   --exact --include-ignored --nocapture
 echo "[sorafs-release] full signer contract libraries"
-cargo test --locked -p sorafs_manifest -p iroha_data_model -p iroha_executor_data_model -p iroha_executor -p iroha_schema_gen --lib
+cargo test --locked -p sorafs_manifest -p iroha_data_model -p iroha_executor_data_model -p iroha_schema_gen --lib
 bash ci/check_sorafs_native_authority_runtime.sh
 echo "[sorafs-release] external software signer protocol and CLI tests"
 cargo test --locked -p irohad --lib external_software_signer

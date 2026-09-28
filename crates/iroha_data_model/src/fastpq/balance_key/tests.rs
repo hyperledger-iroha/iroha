@@ -24,21 +24,7 @@ fn balance_key_is_independent_of_chain_display_and_ambient_layout() {
     let account = account(5);
     let expected = transfer_balance_key(&asset, &account).expect("canonical key");
     let mut displays = std::collections::BTreeSet::new();
-    let bitset = norito::core::header_flags::FIELD_BITSET
-        | norito::core::header_flags::PACKED_STRUCT
-        | norito::core::header_flags::COMPACT_LEN;
-    let layouts = [
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        bitset,
-        bitset | norito::core::header_flags::PACKED_SEQ,
-    ];
+    let layouts = [0, norito::core::header_flags::COMPACT_LEN];
     for discriminant in [0, 369, 753, 65_535] {
         let _display = ChainDiscriminantGuard::enter(discriminant);
         displays.insert(account.to_string());

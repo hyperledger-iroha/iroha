@@ -1626,15 +1626,19 @@ impl Execute for ActivatePublicLaneValidator {
             activation_height,
         )?;
         let block_height = state_transaction.block_height();
-        let epoch_length = state_transaction
-            .world
-            .sumeragi_npos_parameters()
-            .map_or(
-                iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
-                |params| params.epoch_length_blocks.get(),
-            )
-            .max(1);
-        let current_epoch = current_epoch(block_height, epoch_length)?;
+        // Only the activation metric reads the epoch; `max(1)` keeps this infallible.
+        #[cfg(feature = "telemetry")]
+        let current_epoch = {
+            let epoch_length = state_transaction
+                .world
+                .sumeragi_npos_parameters()
+                .map_or(
+                    iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
+                    |params| params.epoch_length_blocks.get(),
+                )
+                .max(1);
+            current_epoch(block_height, epoch_length)?
+        };
         let validator = state_transaction
             .world
             .public_lane_validators
@@ -5815,7 +5819,9 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+            b"record_rewards_rejects_mismatched_public_lane_validator_row",
+        ));
         let lane_id = LaneId::new(59);
         let (_sink, validator, reward_asset, _) = configure_reward_fixture(&mut stx, lane_id, 500);
         let record = stx
@@ -5853,7 +5859,9 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+            b"out_of_order_sibling_lane_rewards_preserve_canonical_owner_reward_epoch",
+        ));
 
         let owner_lane = LaneId::SINGLE;
         let serviced_lane = LaneId::new(1);
@@ -9327,8 +9335,8 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-        seed_test_call_hash(&mut stx, 0xD1);
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xD1; Hash::LENGTH]));
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(0), 1_000);
         stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -9377,8 +9385,8 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-        stx.tx_call_hash = Some(Hash::prehashed([0xD2; Hash::LENGTH]));
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xD2; Hash::LENGTH]));
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(11), 500);
         stx.nexus.staking.reward_dust_threshold = 100_u64.into();
@@ -9442,8 +9450,8 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-        seed_test_call_hash(&mut stx, 0xD9);
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xD9; Hash::LENGTH]));
         let lane_id = LaneId::new(13);
         let (sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, lane_id, 50);
@@ -9507,8 +9515,8 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-        seed_test_call_hash(&mut stx, 0xD3);
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xD3; Hash::LENGTH]));
         let (_sink, validator, reward_asset, _asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(12), 200);
         stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -9605,7 +9613,8 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block
+            .transaction_for_fastpq_testing(Hash::new(b"record_rewards_rejects_underfunded_sink"));
         let (_sink, validator, reward_asset, _) =
             configure_reward_fixture(&mut stx, LaneId::new(11), 50);
         let share = PublicLaneRewardShare {
@@ -9632,7 +9641,8 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block
+            .transaction_for_fastpq_testing(Hash::new(b"record_rewards_rejects_stale_epoch"));
         let (_sink, validator, reward_asset, _) =
             configure_reward_fixture(&mut stx, LaneId::new(8), 500);
         let share = PublicLaneRewardShare {
@@ -9666,7 +9676,9 @@ mod tests {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+            b"record_rewards_rejects_zero_share_amounts",
+        ));
         let (_sink, validator, reward_asset, _) =
             configure_reward_fixture(&mut stx, LaneId::new(0), 100);
         let share = PublicLaneRewardShare {

@@ -63,17 +63,6 @@ pub mod payloads {
         codec::{Decode, Encode},
         core::DecodeFromSlice,
     };
-    /// Context for smart contract entrypoint
-    #[derive(Debug, Clone, Encode, Decode)]
-    #[norito(decode_from_slice)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::SmartContractContext")]
-    pub struct SmartContractContext {
-        /// Account that submitted the transaction containing the smart contract
-        pub authority: AccountId,
-        /// Block currently being processed
-        pub curr_block: BlockHeader,
-    }
     /// Context for migrate entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]

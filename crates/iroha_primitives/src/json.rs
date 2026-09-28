@@ -532,21 +532,16 @@ mod tests {
         assert_eq!(&packed_fields[consumed..], TRAILING_FIELD);
     }
     #[test]
-    fn slice_decode_accepts_every_packed_struct_layout() {
+    fn slice_decode_accepts_every_v1_layout() {
         let json = Json::from_raw_json("{\"expires_at_height\":42}".to_owned())
             .expect("canonical JSON fixture");
-        for flags in [
-            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT,
-            norito::core::default_encode_flags()
-                | norito::core::header_flags::PACKED_STRUCT
-                | norito::core::header_flags::FIELD_BITSET,
-        ] {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
             let mut payload = {
                 let _flags = norito::core::DecodeFlagsGuard::enter(flags);
                 let mut payload = Vec::new();
                 let mut encoder = norito::core::Encoder::for_buffer(&mut payload);
                 norito::core::SerializePayload::serialize(&json, &mut encoder)
-                    .expect("encode packed Json payload");
+                    .expect("encode Json payload");
                 payload
             };
             let payload_len = payload.len();
@@ -554,7 +549,7 @@ mod tests {
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
             let (decoded, used) =
                 <Json as norito::core::DecodeFromSlice>::decode_from_slice(&payload)
-                    .expect("decode packed Json prefix");
+                    .expect("decode Json prefix");
             assert_eq!(decoded, json);
             assert_eq!(used, payload_len);
             assert_eq!(&payload[used..], &[0xA5, 0x5A]);

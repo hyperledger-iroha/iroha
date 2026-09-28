@@ -112,13 +112,13 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .expect("install configured owner policy before genesis");
     let configured_predecessor = state.canonical_runtime.view().get().clone();
     let (validator, keypair) = bls_account_in("snapshot-owner");
-    let custody_asset = AssetId::new(
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("snapshotowner", "universal").expect("custody domain"),
-            "stake".parse().expect("custody asset name"),
-        ),
-        validator.clone(),
+    let npos = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+    assert_eq!(
+        npos.xor_asset_definition_id.to_string(),
+        configured.fees.fee_asset_id,
+        "fixture staking and fee policies select the same canonical network XOR"
     );
+    let custody_asset = AssetId::new(npos.xor_asset_definition_id.clone(), validator.clone());
     {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
@@ -126,6 +126,13 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         Register::account(Account::new(validator.clone()))
             .execute(&validator, &mut transaction)
             .expect("register staking validator account");
+        // Stake custody derives its asset from committed NPoS policy, so install
+        // that immutable identity through the fixture's initial-genesis ISI path.
+        SetParameter::new(iroha_data_model::parameter::Parameter::Custom(
+            npos.into_custom_parameter(),
+        ))
+        .execute(&validator, &mut transaction)
+        .expect("install the genesis network XOR and staking policy");
         Register::asset_definition(AssetDefinition::numeric(
             custody_asset.definition().clone(),
             "Snapshot staking reserve",

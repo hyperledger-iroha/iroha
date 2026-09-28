@@ -190,6 +190,7 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_contract_dispatch_tests.rs",
         "executor_sorafs_repair_tests.rs",
         "executor_stream_token_custody_permission_tests.rs",
+        "executor_cross_scope_permission_tests.rs",
         "executor_sorafs_market_tests.rs",
         "executor_sorafs_provider_governance_tests.rs",
         "executor_sorafs_pop_registry_tests.rs",

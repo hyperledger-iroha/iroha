@@ -51,7 +51,7 @@ fn cli_emits_chunk_metadata_for_fixture() {
         .expect("payload digest");
     assert_eq!(
         payload_digest,
-        to_hex(blake3::hash(&fixture.input).as_bytes())
+        hex::encode(blake3::hash(&fixture.input).as_bytes())
     );
     let input_bytes = json
         .get("input_bytes")
@@ -64,7 +64,7 @@ fn cli_emits_chunk_metadata_for_fixture() {
         .expect("por_root_hex");
     let mut store = ChunkStore::new();
     store.ingest_bytes(&fixture.input).expect("ingest fixture");
-    assert_eq!(por_root, to_hex(store.por_tree().root()));
+    assert_eq!(por_root, hex::encode(store.por_tree().root()));
     let specs = json
         .get("chunk_fetch_specs")
         .and_then(Value::as_array)
@@ -233,7 +233,7 @@ fn cli_writes_por_json() {
         .expect("root hex");
     let mut store = ChunkStore::new();
     store.ingest_bytes(&fixture.input).expect("ingest fixture");
-    assert_eq!(root_hex, to_hex(store.por_tree().root()));
+    assert_eq!(root_hex, hex::encode(store.por_tree().root()));
 }
 #[test]
 fn cli_writes_por_proof() {
@@ -273,7 +273,7 @@ fn cli_writes_por_proof() {
         .try_prove_leaf(0, 0, 0, &fixture.input)
         .expect("construct proof")
         .expect("generate proof");
-    let expected_leaf_hex = to_hex(&proof.leaf_bytes);
+    let expected_leaf_hex = hex::encode(&proof.leaf_bytes);
     let leaf_hex = proof_value
         .get("leaf_bytes_hex")
         .and_then(Value::as_str)
@@ -393,7 +393,10 @@ fn cli_persists_chunks_to_directory() {
             &payload[offset..offset + length],
             persisted_bytes.as_slice()
         );
-        assert_eq!(digest, to_hex(blake3::hash(&persisted_bytes).as_bytes()));
+        assert_eq!(
+            digest,
+            hex::encode(blake3::hash(&persisted_bytes).as_bytes())
+        );
     }
     let partial_files: Vec<_> = std::fs::read_dir(&chunk_dir)
         .expect("read chunk dir")
@@ -712,7 +715,7 @@ fn cli_samples_por_leaves() {
             .try_prove_leaf(chunk_idx, segment_idx, leaf_idx, &fixture.input)
             .expect("construct proof")
             .expect("generate proof");
-        let expected_leaf_hex = to_hex(&proof.leaf_bytes);
+        let expected_leaf_hex = hex::encode(&proof.leaf_bytes);
         assert_eq!(
             proof_value
                 .get("leaf_bytes_hex")
@@ -761,13 +764,4 @@ fn car_cli_truncates_samples_when_request_exceeds_leaves() {
             .unwrap_or(false),
         "expected truncation flag when requesting more leaves than available"
     );
-}
-fn to_hex(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
 }

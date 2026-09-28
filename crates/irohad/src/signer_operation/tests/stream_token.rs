@@ -404,7 +404,7 @@ fn staged_stream_receipt_fences_key_replay_after_source_rollback() {
 }
 
 #[test]
-fn stream_receipt_bytes_are_identical_under_all_ten_ambient_layouts() {
+fn stream_receipt_bytes_are_identical_under_both_ambient_layouts() {
     let mut canonical: Option<Vec<u8>> = None;
     for flags in layouts() {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);

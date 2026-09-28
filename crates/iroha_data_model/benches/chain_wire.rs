@@ -29,17 +29,6 @@ const LAYOUT_CANDIDATES: &[LayoutCandidate] = &[
         name: "compact_len",
         flags: header_flags::COMPACT_LEN,
     },
-    LayoutCandidate {
-        name: "packed_struct",
-        flags: header_flags::COMPACT_LEN | header_flags::PACKED_STRUCT | header_flags::FIELD_BITSET,
-    },
-    LayoutCandidate {
-        name: "packed_all",
-        flags: header_flags::COMPACT_LEN
-            | header_flags::PACKED_STRUCT
-            | header_flags::FIELD_BITSET
-            | header_flags::PACKED_SEQ,
-    },
 ];
 const MIXED_BLOCK_INSTRUCTION_COUNTS: &[usize] = &[0, 1, 4, 8, 16, 32];
 fn fixed_public_key() -> PublicKey {
@@ -191,11 +180,8 @@ fn bench_const_vec_instruction_box(c: &mut Criterion) {
         let instructions = (0..count).map(sample_instruction_box).collect::<Vec<_>>();
         let value = ConstVec::from(instructions);
         let candidate = LayoutCandidate {
-            name: "packed_all",
-            flags: header_flags::COMPACT_LEN
-                | header_flags::PACKED_STRUCT
-                | header_flags::FIELD_BITSET
-                | header_flags::PACKED_SEQ,
+            name: "compact_len",
+            flags: header_flags::COMPACT_LEN,
         };
         let (bare, actual_flags) = encode_with_layout(&value, candidate);
         let framed =
@@ -209,11 +195,11 @@ fn bench_const_vec_instruction_box(c: &mut Criterion) {
             actual_flags,
         );
         c.bench_function(
-            &format!("chain_wire/const_vec_instruction_box/{count}/encode_packed_all"),
+            &format!("chain_wire/const_vec_instruction_box/{count}/encode_compact_len"),
             |b| b.iter(|| black_box(encode_with_layout(black_box(&value), candidate))),
         );
         c.bench_function(
-            &format!("chain_wire/const_vec_instruction_box/{count}/decode_packed_all"),
+            &format!("chain_wire/const_vec_instruction_box/{count}/decode_compact_len"),
             |b| {
                 b.iter(|| {
                     black_box(

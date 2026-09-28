@@ -18,7 +18,7 @@
 //! deterministically (see [`StarkVerifierLimits`]).
 #![allow(clippy::needless_pass_by_value)]
 use crate::json_macros::{JsonDeserialize, JsonSerialize};
-use fastpq_prover::fastpq_isi_v1::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
+use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_data_model::privacy::{
     GoldilocksDigest384V1, PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1,
 };

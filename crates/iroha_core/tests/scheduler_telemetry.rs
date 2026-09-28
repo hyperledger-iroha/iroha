@@ -3,8 +3,8 @@
 //! Checks canonical execution and explicit lane telemetry projections.
 #![allow(unused_imports)]
 use iroha_config::parameters::actual::{
-    LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusAxt,
-    NexusEndorsement, NexusFees, NexusRelayWorker, NexusStaking, NexusStorage,
+    LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusEndorsement,
+    NexusFees, NexusRelayWorker, NexusStaking, NexusStorage,
 };
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
@@ -12,7 +12,6 @@ use iroha_core::{
         GovernanceHooks, GovernanceRules, LaneManifestRegistry, LaneManifestStatus,
         ManifestValidatorBinding, RuntimeUpgradeHook,
     },
-    state::StateReadOnly,
     telemetry::LaneTeuGaugeUpdate,
 };
 use iroha_data_model::{

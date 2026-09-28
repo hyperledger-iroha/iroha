@@ -1,6 +1,6 @@
 // Tests for allocation-free canonical frame streaming.
-use std::{cell::Cell, io::Write};
 use super::*;
+use std::{cell::Cell, io::Write};
 #[test]
 fn streamed_canonical_frame_matches_buffered_encoding() {
     let value = vec![1_u64, 2, 3, 5, 8, 13];
@@ -73,12 +73,13 @@ fn streamed_canonical_frame_rejects_second_pass_flag_drift() {
     #[norito_schema(name = "norito.test.core.write_canonical_tests.ChangingFlags")]
     struct ChangingFlags(Cell<usize>);
 
-impl SerializePayload for ChangingFlags {
+    impl SerializePayload for ChangingFlags {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let call = self.0.get();
             self.0.set(call + 1);
             if call == 0 {
-                note_fixed_offsets_emitted();
+                // Only the first pass claims a compact length prefix.
+                note_compact_len_emitted();
             }
             writer.write_all(&[0x11])?;
             Ok(())

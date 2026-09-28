@@ -539,8 +539,7 @@ SORAFS_CLI_RELEASE_GATE_SCRIPT = "ci/check_sorafs_cli_release.sh"
 SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT = "ci/check_sorafs_native_authority_runtime.sh"
 SORAFS_NATIVE_AUTHORITY_RUNTIME_TEST = "scripts/tests/sorafs_native_authority_runtime_test.py"
 SORAFS_SIGNER_CONTRACT_LIBRARIES = (
-    "sorafs_manifest", "iroha_data_model", "iroha_executor_data_model",
-    "iroha_executor", "iroha_schema_gen",
+    "sorafs_manifest", "iroha_data_model", "iroha_executor_data_model", "iroha_schema_gen",
 )
 SORAFS_SIGNER_CONTRACT_COMMAND = (
     "cargo test --locked "
@@ -744,7 +743,6 @@ SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS = frozenset(
         "crates/iroha_sccp/**",
         SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT,
         "crates/iroha_executor_data_model/**",
-        "crates/iroha_executor/**",
         "crates/iroha_schema_gen/**",
         "specs/references/schema.json",
         "crates/iroha_torii/src/sorafs/**",

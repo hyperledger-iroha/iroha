@@ -23,7 +23,7 @@ boundaries and where to make changes.
 | [`iroha_torii`](../crates/iroha_torii) | HTTP/stream handlers and routing around Core capabilities. Construction, route decomposition, and runtime service extraction remain in the redesign. |
 | [`irohad`](../crates/irohad) | The `iroha3d` process: configuration, startup, node runtime ownership, and shutdown. |
 | `ivm`, `ivm_abi`, `kotodama_lang` | Deterministic VM execution, its single V1 ABI, and the Kotodama compiler. SDK consumers do not depend on these execution packages. |
-| `iroha_executor*`, `iroha_smart_contract*` | Executor and contract implementation/model/derive boundaries. |
+| `iroha_executor_data_model`, `iroha_executor_data_model_derive` | Typed permission, parameter and custom-instruction records consumed by Core, Torii and SDKs. Core owns their validation natively; custom executors are IVM bytecode. |
 | `sorafs_chunker`, `sorafs_manifest`, `sorafs_car`, `sorafs_orchestrator`, `sorafs_node` | Chunking and records, archive primitives, orchestration, and storage runtime ownership. CLI feature-bundle retirement remains outstanding. |
 | [`iroha_storage_client`](../crates/iroha_storage_client) | Client-side archive construction, filesystem persistence, orchestrated fetch, and DA workflows above the Rust SDK and storage libraries. Its shipping feature graphs are checked against node-runtime dependencies. |
 | [`soranet_incentives`](../crates/soranet_incentives) | Deterministic reward calculation and payout accounting consumed by Core and the orchestrator. It does not depend on either runtime. |

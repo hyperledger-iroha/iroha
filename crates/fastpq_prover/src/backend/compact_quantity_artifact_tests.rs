@@ -92,7 +92,7 @@ fn fixed_quantity_profile_is_nominal_distinct_and_codec_independent() {
         hex::encode(diagnostic_profile_id().0),
         "0f1fcc226630bbf6f89e84dc6a4841868e4835b8d4a5d6a9261f057194a70676"
     );
-    for flags in [0, 1, 2, 3, norito::core::default_encode_flags()] {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(quantity_diagnostic_profile_id(), expected);
         assert_eq!(norito::core::effective_decode_flags(), Some(flags));

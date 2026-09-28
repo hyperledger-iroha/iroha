@@ -13,14 +13,7 @@ fn peer_envelope_preserves_admission_and_rejects_discriminator_substitution() {
         let expected = fixture.admission_class();
         let message = Message::Data(fixture);
         assert_eq!(message.admission_class(), expected);
-        for requested in [
-            0,
-            ncore::header_flags::COMPACT_LEN,
-            ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
-            ncore::header_flags::PACKED_STRUCT
-                | ncore::header_flags::COMPACT_LEN
-                | ncore::header_flags::FIELD_BITSET,
-        ] {
+        for requested in [0, ncore::header_flags::COMPACT_LEN] {
             let (bare, flags) = {
                 let _encode_guard = ncore::DecodeFlagsGuard::enter(requested);
                 norito::codec::encode_with_header_flags(&message)

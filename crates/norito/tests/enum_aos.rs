@@ -248,11 +248,7 @@ fn enum_slice_containers_keep_inner_boundaries_and_following_bytes() {
 #[test]
 fn enum_slice_validation_runs_once_and_malformed_tags_fail_before_validation() {
     use norito::core::{self as ncore, DecodeFromSlice};
-    for flags in [
-        0,
-        ncore::header_flags::COMPACT_LEN,
-        ncore::header_flags::PACKED_STRUCT,
-    ] {
+    for flags in [0, ncore::header_flags::COMPACT_LEN] {
         let _flags = ncore::DecodeFlagsGuard::enter(flags);
         let mut payload = prefix_payload(&PrefixEnum::Named {
             value: 7_u32,

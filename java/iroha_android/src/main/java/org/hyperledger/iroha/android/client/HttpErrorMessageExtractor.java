@@ -11,7 +11,6 @@ import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
-import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 /** Helpers for extracting stable HTTP error details from Torii responses. */
@@ -142,40 +141,7 @@ final class HttpErrorMessageExtractor {
   }
 
   private static String decodeRejectCodeField(final NoritoDecoder decoder) {
-    final TypeAdapter<Optional<String>> optionalString = NoritoAdapters.option(STRING_ADAPTER);
-    if ((decoder.flags() & NoritoHeader.PACKED_STRUCT) != 0
-        && (decoder.flags() & NoritoHeader.FIELD_BITSET) != 0) {
-      final int fieldCount = 5;
-      final byte[] bitsetData = decoder.readBytes((fieldCount + 7) / 8);
-      int bitset = 0;
-      for (int i = 0; i < bitsetData.length; i++) {
-        bitset |= (bitsetData[i] & 0xFF) << (i * 8);
-      }
-      final List<Integer> encodedSizes = new ArrayList<>(fieldCount);
-      for (int i = 0; i < fieldCount; i++) {
-        if ((bitset & (1 << i)) != 0) {
-          final long size = decoder.readVarint();
-          if (size > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Packed field too large");
-          }
-          encodedSizes.add((int) size);
-        } else {
-          encodedSizes.add(null);
-        }
-      }
-      final Integer firstSize = encodedSizes.get(0);
-      if (firstSize != null) {
-        final NoritoDecoder child =
-            new NoritoDecoder(decoder.readBytes(firstSize), decoder.flags());
-        final Optional<String> value = optionalString.decode(child);
-        if (child.remaining() != 0) {
-          throw new IllegalArgumentException("Packed reject_code field did not consume all bytes");
-        }
-        return value.orElse(null);
-      }
-      return optionalString.decode(decoder).orElse(null);
-    }
-    return optionalString.decode(decoder).orElse(null);
+    return NoritoAdapters.option(STRING_ADAPTER).decode(decoder).orElse(null);
   }
 
   private static String extractStructuredMessage(final Object value) {

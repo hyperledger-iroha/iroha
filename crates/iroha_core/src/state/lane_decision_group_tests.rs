@@ -214,9 +214,16 @@ fn sign_native_group_decision_for_test(
     use iroha_data_model::block::lane_consensus::{
         LaneDecisionV1, LanePhaseV1, LaneQcV1, LaneRoundV1, LaneVoteStatementV1,
     };
+    let canonical_size = u64::try_from(body.canonical_bytes().len()).unwrap();
+    assert!(
+        canonical_size <= lane.frozen().da_layout.max_payload_size_bytes,
+        "canonical signed native input ({canonical_size} bytes) must fit its frozen layout",
+    );
     let manifest = *crate::sumeragi::v2_lane_payload::encode_lane_input(lane, body, origin_view)
         .unwrap()
         .manifest();
+    assert_eq!(manifest.byte_len, canonical_size);
+    assert_eq!(manifest.layout, lane.frozen().da_layout);
     let mut decision = LaneDecisionV1 {
         manifest,
         commit_qc: LaneQcV1 {

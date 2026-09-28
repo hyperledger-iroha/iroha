@@ -328,7 +328,6 @@ on:
       - "specs/sorafs/negative_promotion_archive.md"
       - "specs/sorafs/final_promotion_receipt_v1.md"
       - "specs/sorafs/signer_production_authority_inventory.md"
-      - "crates/iroha_executor/**"
       - "crates/iroha_schema_gen/**"
       - "specs/references/schema.json"
       - "crates/iroha_torii/src/sorafs/**"

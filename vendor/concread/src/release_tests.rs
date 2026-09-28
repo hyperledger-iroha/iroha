@@ -651,12 +651,11 @@ fn release_batch_empty_and_foreign_transfer_preserve_original_custody() {
     let mut wrong = foreign.deferred_batch();
     let guard = source.guard(physical.lock().unwrap());
     let original = &**guard as *const u64;
-    let guard = guard
-        .try_release_into(&mut wrong, |_| -> () {
-            panic!("foreign transfer called release")
-        })
-        .err()
-        .expect("foreign batch returns original guard");
+    let Err(guard) = guard.try_release_into(&mut wrong, |_| -> () {
+        panic!("foreign transfer called release")
+    }) else {
+        panic!("foreign batch returns original guard");
+    };
     assert_eq!(&**guard as *const u64, original);
     assert!(physical.try_lock().is_err());
     drop(wrong);

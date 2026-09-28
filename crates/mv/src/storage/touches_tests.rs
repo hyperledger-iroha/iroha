@@ -247,7 +247,7 @@ fn touch_exact_joined_capacity_and_one_byte_below_preserve_original_state() {
         .try_reserve_bytes(budget.limit_bytes() - prior - demand.bytes() + 1)
         .unwrap();
     assert!(without_allocations(|| budget.try_reserve_bytes(demand.bytes())).is_err());
-    drop(plan);
+    // The abandoned plan owns nothing; its borrow of the set simply ends.
     assert_eq!(identity(&set), (0, 0, 0));
     assert_eq!(stats.copies.load(SeqCst), 0);
     budget.with_deferred_refund_notifications(|_| {

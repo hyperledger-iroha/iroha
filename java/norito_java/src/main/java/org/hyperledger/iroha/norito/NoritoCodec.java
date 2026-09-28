@@ -73,6 +73,7 @@ public final class NoritoCodec {
 
   public static <T> AdaptiveEncoding encodeAdaptive(
       T value, TypeAdapter<T> adapter, int flags) {
+    NoritoHeader.validateFlags(flags);
     Objects.requireNonNull(adapter);
     NoritoEncoder encoder = new NoritoEncoder(flags);
     adapter.encode(encoder, value);
@@ -129,6 +130,7 @@ public final class NoritoCodec {
     private boolean active;
 
     private DecodeFlagsGuard(int flags) {
+      NoritoHeader.validateFlags(flags);
       Deque<Integer> stack = DECODE_FLAGS_STACK.get();
       stack.addLast(flags & 0xFF);
       this.active = true;

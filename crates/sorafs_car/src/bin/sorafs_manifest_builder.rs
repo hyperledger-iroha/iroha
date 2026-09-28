@@ -17,6 +17,10 @@ use sorafs_car::{
     },
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
+#[path = "common/output_fs.rs"]
+mod output_fs;
+use output_fs::open_output_file;
+use sorafs_car::set_no_follow_flag;
 use sorafs_manifest::{
     AliasClaim, ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
     ManifestV1, PinPolicy, PinPolicyConstraints, ProfileId, StorageClass, chunker_registry,
@@ -24,7 +28,7 @@ use sorafs_manifest::{
     validate_manifest,
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::{
     env,
     fs::{self, File, read},
@@ -316,8 +320,8 @@ fn run() -> Result<(), String> {
             if spec.digest != chunk.digest {
                 return Err(format!(
                     "chunk fetch spec digest {} does not match computed digest {} for chunk {}",
-                    to_hex(&spec.digest),
-                    to_hex(&chunk.digest),
+                    hex::encode(&spec.digest),
+                    hex::encode(&chunk.digest),
                     index
                 ));
             }
@@ -700,7 +704,7 @@ fn run() -> Result<(), String> {
         obj.insert("suite".into(), Value::from(hybrid.envelope.suite.clone()));
         obj.insert(
             "nonce_hex".into(),
-            Value::from(to_hex(&hybrid.envelope.nonce)),
+            Value::from(hex::encode(&hybrid.envelope.nonce)),
         );
         obj.insert(
             "ciphertext_len".into(),
@@ -708,9 +712,11 @@ fn run() -> Result<(), String> {
         );
         obj.insert(
             "ciphertext_blake3".into(),
-            Value::from(to_hex(blake3::hash(&hybrid.envelope.ciphertext).as_bytes())),
+            Value::from(hex::encode(
+                blake3::hash(&hybrid.envelope.ciphertext).as_bytes(),
+            )),
         );
-        obj.insert("aad_hex".into(), Value::from(to_hex(&hybrid.aad)));
+        obj.insert("aad_hex".into(), Value::from(hex::encode(&hybrid.aad)));
         obj.insert(
             "encoded_base64".into(),
             Value::from(BASE64_STANDARD.encode(&hybrid.bytes)),
@@ -835,7 +841,10 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
             let mut obj = Map::new();
             obj.insert("offset".into(), Value::from(chunk.offset));
             obj.insert("length".into(), Value::from(chunk.length));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&chunk.digest)));
+            obj.insert(
+                "digest_blake3".into(),
+                Value::from(hex::encode(&chunk.digest)),
+            );
             Value::Object(obj)
         })
         .collect();
@@ -899,7 +908,7 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
             let mut obj = Map::new();
             obj.insert("name".into(), Value::from(alias.name.clone()));
             obj.insert("namespace".into(), Value::from(alias.namespace.clone()));
-            obj.insert("proof_hex".into(), Value::from(to_hex(&alias.proof)));
+            obj.insert("proof_hex".into(), Value::from(hex::encode(&alias.proof)));
             Value::Object(obj)
         })
         .collect();
@@ -918,7 +927,7 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     manifest_obj.insert("version".into(), Value::from(ctx.manifest.version));
     manifest_obj.insert(
         "root_cid_hex".into(),
-        Value::from(to_hex(&ctx.manifest.root_cid)),
+        Value::from(hex::encode(&ctx.manifest.root_cid)),
     );
     manifest_obj.insert("dag_codec".into(), Value::from(ctx.manifest.dag_codec.0));
     manifest_obj.insert(
@@ -935,29 +944,29 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     );
     manifest_obj.insert(
         "chunk_digest_sha3_256_hex".into(),
-        Value::from(to_hex(&ctx.manifest.chunk_digest_sha3_256)),
+        Value::from(hex::encode(&ctx.manifest.chunk_digest_sha3_256)),
     );
     manifest_obj.insert(
         "por_root_hex".into(),
-        Value::from(to_hex(&ctx.manifest.por_root)),
+        Value::from(hex::encode(&ctx.manifest.por_root)),
     );
     manifest_obj.insert(
         "car_digest_hex".into(),
-        Value::from(to_hex(&ctx.manifest.car_digest)),
+        Value::from(hex::encode(&ctx.manifest.car_digest)),
     );
     manifest_obj.insert(
         "car_cid_hex".into(),
-        Value::from(to_hex(&ctx.car_stats.car_cid)),
+        Value::from(hex::encode(&ctx.car_stats.car_cid)),
     );
     manifest_obj.insert("car_size".into(), Value::from(ctx.manifest.car_size));
     manifest_obj.insert("pin_policy".into(), Value::Object(pin_policy_obj));
     manifest_obj.insert(
         "digest_hex".into(),
-        Value::from(to_hex(ctx.manifest_digest.as_bytes())),
+        Value::from(hex::encode(ctx.manifest_digest.as_bytes())),
     );
     manifest_obj.insert(
         "manifest_hex".into(),
-        Value::from(to_hex(ctx.manifest_bytes)),
+        Value::from(hex::encode(ctx.manifest_bytes)),
     );
     manifest_obj.insert(
         "manifest_len".into(),
@@ -972,8 +981,11 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
         .iter()
         .map(|sig| {
             let mut obj = Map::new();
-            obj.insert("signer_hex".into(), Value::from(to_hex(&sig.signer)));
-            obj.insert("signature_hex".into(), Value::from(to_hex(&sig.signature)));
+            obj.insert("signer_hex".into(), Value::from(hex::encode(&sig.signer)));
+            obj.insert(
+                "signature_hex".into(),
+                Value::from(hex::encode(&sig.signature)),
+            );
             Value::Object(obj)
         })
         .collect();
@@ -988,27 +1000,30 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     report_obj.insert("chunk_fetch_specs".into(), chunk_fetch_specs);
     report_obj.insert(
         "payload_digest_hex".into(),
-        Value::from(to_hex(ctx.plan.payload_digest.as_bytes())),
+        Value::from(hex::encode(ctx.plan.payload_digest.as_bytes())),
     );
     report_obj.insert("car_size".into(), Value::from(ctx.car_stats.car_size));
     report_obj.insert(
         "car_payload_digest_hex".into(),
-        Value::from(to_hex(ctx.car_stats.car_payload_digest.as_bytes())),
+        Value::from(hex::encode(ctx.car_stats.car_payload_digest.as_bytes())),
     );
     report_obj.insert(
         "car_archive_digest_hex".into(),
-        Value::from(to_hex(ctx.car_stats.car_archive_digest.as_bytes())),
+        Value::from(hex::encode(ctx.car_stats.car_archive_digest.as_bytes())),
     );
     report_obj.insert(
         "car_cid_hex".into(),
-        Value::from(to_hex(&ctx.car_stats.car_cid)),
+        Value::from(hex::encode(&ctx.car_stats.car_cid)),
     );
-    report_obj.insert("car_root_hex".into(), Value::from(to_hex(ctx.root_cid)));
+    report_obj.insert(
+        "car_root_hex".into(),
+        Value::from(hex::encode(ctx.root_cid)),
+    );
     report_obj.insert("dag_codec".into(), Value::from(ctx.car_stats.dag_codec));
     report_obj.insert("manifest".into(), Value::Object(manifest_obj));
     report_obj.insert(
         "manifest_digest_hex".into(),
-        Value::from(to_hex(ctx.manifest_digest.as_bytes())),
+        Value::from(hex::encode(ctx.manifest_digest.as_bytes())),
     );
     report_obj.insert(
         "manifest_size".into(),
@@ -1020,7 +1035,7 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     );
     report_obj.insert(
         "por_root_hex".into(),
-        Value::from(to_hex(ctx.por_tree.root())),
+        Value::from(hex::encode(ctx.por_tree.root())),
     );
     report_obj.insert(
         "por_chunk_count".into(),
@@ -1551,15 +1566,6 @@ fn decode_hex_nibble(byte: u8) -> Result<u8, String> {
 fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     compute_chunk_plan_digest_sha3(chunks)
 }
-fn to_hex(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
 struct DirectoryPlanReader<'a> {
     root: &'a Path,
     files: &'a [FilePlan],
@@ -1731,7 +1737,7 @@ fn verify_manifest_signatures_file(
         .get("manifest_blake3")
         .and_then(Value::as_str)
         .ok_or_else(|| "manifest signatures file missing `manifest_blake3` field".to_string())?;
-    let expected_manifest_hex = to_hex(manifest_digest.as_bytes());
+    let expected_manifest_hex = hex::encode(manifest_digest.as_bytes());
     if manifest_hex != expected_manifest_hex {
         return Err(format!(
             "manifest signatures digest `{manifest_hex}` does not match computed `{expected_manifest_hex}`"
@@ -1743,7 +1749,7 @@ fn verify_manifest_signatures_file(
         .ok_or_else(|| {
             "manifest signatures file missing `chunk_digest_sha3_256` field".to_string()
         })?;
-    let expected_chunk_hex = to_hex(&chunk_digest_sha3);
+    let expected_chunk_hex = hex::encode(&chunk_digest_sha3);
     if chunk_hex != expected_chunk_hex {
         return Err(format!(
             "manifest signatures chunk digest `{chunk_hex}` does not match computed `{expected_chunk_hex}`"
@@ -1818,16 +1824,16 @@ fn write_manifest_signatures_file(
     );
     root.insert(
         "manifest_blake3".to_owned(),
-        Value::from(to_hex(manifest_digest.as_bytes())),
+        Value::from(hex::encode(manifest_digest.as_bytes())),
     );
     root.insert(
         "chunk_digest_sha3_256".to_owned(),
-        Value::from(to_hex(&chunk_digest_sha3)),
+        Value::from(hex::encode(&chunk_digest_sha3)),
     );
     let mut signature_entries = Vec::new();
     for sig in &manifest.governance.council_signatures {
-        let signer_hex = to_hex(&sig.signer);
-        let signature_hex = to_hex(&sig.signature);
+        let signer_hex = hex::encode(&sig.signer);
+        let signature_hex = hex::encode(&sig.signature);
         let signer_multihash = PublicKey::from_bytes(Algorithm::Ed25519, &sig.signer)
             .map_err(|err| format!("invalid council signature signer `{signer_hex}`: {err}"))?
             .to_string();
@@ -1876,114 +1882,6 @@ fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = open_output_file(path, "binary output")?;
     file.write_all(bytes)
         .map_err(|err| format!("failed to write {path:?}: {err}"))
-}
-fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
-    validate_output_path(path)?;
-    ensure_parent_dir(path)?;
-    validate_output_path(path)?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    set_no_follow_flag(&mut options);
-    let file = options
-        .open(path)
-        .map_err(|err| format!("failed to open {label} {path:?}: {err}"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|err| format!("failed to inspect {label} {path:?} after open: {err}"))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "failed to write {label} {path:?}: output must be a regular file"
-        ));
-    }
-    Ok(file)
-}
-fn ensure_parent_dir(path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    Ok(())
-}
-fn validate_output_path(path: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(format!("output {path:?} must not be a symlink"));
-            }
-            if metadata.is_dir() {
-                return Err(format!("output {path:?} must not be a directory"));
-            }
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
-    }
-    if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
-            }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(format!("output parent {ancestor:?} must not be a symlink"));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(format!("output parent {ancestor:?} must be a directory"));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(format!(
-                        "failed to inspect output parent {ancestor:?}: {err}"
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }
 #[cfg(test)]
 mod tests {
@@ -2296,8 +2194,8 @@ mod tests {
             .expect("test signer public key should parse");
         let mut entry = Map::new();
         entry.insert("algorithm".to_owned(), Value::from("ed25519"));
-        entry.insert("signer".to_owned(), Value::from(to_hex(&signer_bytes)));
-        entry.insert("signature".to_owned(), Value::from(to_hex(&[0u8; 64])));
+        entry.insert("signer".to_owned(), Value::from(hex::encode(&signer_bytes)));
+        entry.insert("signature".to_owned(), Value::from(hex::encode(&[0u8; 64])));
         entry.insert(
             "signer_multihash".to_owned(),
             Value::from(public_key.to_string()),
@@ -2311,11 +2209,11 @@ mod tests {
         root.insert("manifest".to_owned(), Value::from("manifest.norito"));
         root.insert(
             "manifest_blake3".to_owned(),
-            Value::from(to_hex(manifest_digest.as_bytes())),
+            Value::from(hex::encode(manifest_digest.as_bytes())),
         );
         root.insert(
             "chunk_digest_sha3_256".to_owned(),
-            Value::from(to_hex(&chunk_digest_sha3)),
+            Value::from(hex::encode(&chunk_digest_sha3)),
         );
         root.insert(
             "signatures".to_owned(),
@@ -2355,8 +2253,8 @@ mod tests {
             signature[..32].copy_from_slice(&replacement_r);
             let mut entry = Map::new();
             entry.insert("algorithm".to_owned(), Value::from("ed25519"));
-            entry.insert("signer".to_owned(), Value::from(to_hex(&signer_bytes)));
-            entry.insert("signature".to_owned(), Value::from(to_hex(&signature)));
+            entry.insert("signer".to_owned(), Value::from(hex::encode(&signer_bytes)));
+            entry.insert("signature".to_owned(), Value::from(hex::encode(&signature)));
             entry.insert(
                 "signer_multihash".to_owned(),
                 Value::from(public_key.to_string()),
@@ -2370,11 +2268,11 @@ mod tests {
             root.insert("manifest".to_owned(), Value::from("manifest.norito"));
             root.insert(
                 "manifest_blake3".to_owned(),
-                Value::from(to_hex(manifest_digest.as_bytes())),
+                Value::from(hex::encode(manifest_digest.as_bytes())),
             );
             root.insert(
                 "chunk_digest_sha3_256".to_owned(),
-                Value::from(to_hex(&chunk_digest_sha3)),
+                Value::from(hex::encode(&chunk_digest_sha3)),
             );
             root.insert(
                 "signatures".to_owned(),
@@ -2412,11 +2310,11 @@ mod tests {
             ("small-order", SMALL_ORDER_ED25519),
             ("noncanonical", NONCANONICAL_ED25519_IDENTITY),
         ] {
-            let signer_hex = to_hex(&signer_bytes);
+            let signer_hex = hex::encode(&signer_bytes);
             let mut entry = Map::new();
             entry.insert("algorithm".to_owned(), Value::from("ed25519"));
             entry.insert("signer".to_owned(), Value::from(signer_hex.clone()));
-            entry.insert("signature".to_owned(), Value::from(to_hex(&signature)));
+            entry.insert("signature".to_owned(), Value::from(hex::encode(&signature)));
             entry.insert(
                 "signer_multihash".to_owned(),
                 Value::from(format!("hex:{signer_hex}")),
@@ -2430,11 +2328,11 @@ mod tests {
             root.insert("manifest".to_owned(), Value::from("manifest.norito"));
             root.insert(
                 "manifest_blake3".to_owned(),
-                Value::from(to_hex(manifest_digest.as_bytes())),
+                Value::from(hex::encode(manifest_digest.as_bytes())),
             );
             root.insert(
                 "chunk_digest_sha3_256".to_owned(),
-                Value::from(to_hex(&chunk_digest_sha3)),
+                Value::from(hex::encode(&chunk_digest_sha3)),
             );
             root.insert(
                 "signatures".to_owned(),

@@ -732,3 +732,33 @@ independently reconstructs the new commitment before fully redeeming the change.
 These tests are added to the final Core selection and have not executed yet.
 No circuit or encoding changed. `source-with-change-helper.json` captures this
 later scope; the initial visibility-only capture is retained separately.
+
+
+## Validation recovery after interrupted sessions
+
+At 11:19 UTC, the old Apple 50577 and frozen Rust-example 74801 tool handles
+were absent, and an authoritative process inventory showed neither build still
+running. Their retained logs did not contain a terminal result. Apple had
+completed the arm64 macOS release slice and C consumer link before stopping
+during the next slice; no five-slice artifact is claimed. The unchanged candidate
+patch and all 37 captured untracked files were rehashed successfully, and the
+normal five-slice builder resumed with a fresh log and
+`apple-cache-repair/retry3-command.json` receipt. The independent concurrent
+Parliament CLI build was left running.
+
+The Rust example now runs on current Core source, including the visibility cut
+and change helper, rather than restarting the older frozen example. Its command,
+pre-build source hashes and eventual result live under
+`dist/zk-remediation/2026-09-28/rust-wallet-example-current`. Both attempts remain
+pending until their actual completion results are available.
+
+The public anonymous-transaction guide and all 20 translations now name Rust's
+`ConfidentialUnshieldOutputV3::into_input` helper. Current repository i18n and
+content-policy validators pass on a byte-for-byte scoped copy of all 21 pages;
+commands, page/validator hashes and results are in
+`dist/zk-remediation/rust-wallet-api-20260928/docs-*.json`. This is scoped content
+validation, not whole-site or independent language qualification.
+
+The same21pages now also include the stable C# helper name
+`ConfidentialChangeNote.ToInput`; both scoped validators pass again. The
+Rust-only page/result captures are retained alongside the later C# update.

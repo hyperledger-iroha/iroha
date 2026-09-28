@@ -2809,9 +2809,7 @@ mod tests {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: sdk_signature,
         });
-        let flags = norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::FIELD_BITSET
-            | norito::core::header_flags::COMPACT_LEN;
+        let flags = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
             canonical_request_witness_message(&witness).expect("server frame excludes signatures"),
@@ -2843,10 +2841,7 @@ mod tests {
             canonical_request_witness_message(&witness).expect("canonical witness message");
         let canonical_header = witness_header_value(&witness).expect("canonical witness header");
 
-        let flags = norito::core::header_flags::PACKED_SEQ
-            | norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::FIELD_BITSET
-            | norito::core::header_flags::COMPACT_LEN;
+        let flags = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
             canonical_request_witness_message(&witness).expect("guarded witness message"),
@@ -2865,7 +2860,7 @@ mod tests {
             include_str!("../tests/fixtures/bounded_request_witness_frame_identity.v1.json");
         assert_eq!(
             hex::encode(iroha_crypto::sha256(source)),
-            "be29c14a2a72fa9a07d9eeafdd306fa48e9ce9945355076b1a4387bf5be8b26f"
+            "8c5690e66b6689d38a488650aa7502cb7dcd6e964662f93617640a378ac4375f"
         );
         let fixture: norito::json::Value =
             norito::json::from_str(source).expect("original observation");
@@ -2890,7 +2885,7 @@ mod tests {
         ] {
             assert_eq!(hex::encode(hash), fixture[direction].as_str().unwrap());
         }
-        assert_eq!(fixture["frames"].as_array().unwrap().len(), 2);
+        assert_eq!(fixture["frames"].as_array().unwrap().len(), 1);
         for row in fixture["frames"].as_array().unwrap() {
             let flags = u8::try_from(row["flags"].as_u64().unwrap()).expect("recorded flags");
             let bytes =
@@ -2898,6 +2893,7 @@ mod tests {
             let header = norito::core::Header::read(&bytes[..]).expect("captured header");
             assert_eq!(header.schema, hash);
             assert_eq!(header.flags, flags);
+            assert_eq!(flags, norito::core::default_encode_flags());
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
             let limits = norito::DecodeLimits::new(
                 CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
@@ -2912,26 +2908,20 @@ mod tests {
             assert_eq!(norito::to_bytes(&bounded).expect("bounded frame"), bytes);
             let public = CanonicalRequestWitnessV1::try_from(bounded).expect("bounded conversion");
             assert_eq!(norito::to_bytes(&public).expect("public frame"), bytes);
-            if flags == norito::core::default_encode_flags() {
-                norito::decode_canonical::<BoundedCanonicalRequestWitnessV1>(&bytes)
-                    .expect("canonical frame");
-            } else {
-                assert!(matches!(
-                    norito::decode_canonical::<BoundedCanonicalRequestWitnessV1>(&bytes),
-                    Err(norito::Error::NonCanonicalEncoding)
-                ));
-            }
+            norito::decode_canonical::<BoundedCanonicalRequestWitnessV1>(&bytes)
+                .expect("canonical frame");
         }
     }
     #[test]
-    fn bounded_witness_wrapper_preserves_public_packed_wire() {
-        let signature = checked_signature(ALICE_KEYPAIR.private_key(), b"packed witness fixture");
+    fn bounded_witness_wrapper_preserves_public_noncompact_wire() {
+        let signature =
+            checked_signature(ALICE_KEYPAIR.private_key(), b"noncompact witness fixture");
         let witness = CanonicalRequestWitnessV1 {
             schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
             subject_account: ALICE_ID.clone(),
             timestamp_ms: 42,
-            nonce: "packed-layout".to_owned(),
-            canonical_request_hash: Hash::new(b"packed witness layout"),
+            nonce: "noncompact-layout".to_owned(),
+            canonical_request_hash: Hash::new(b"noncompact witness layout"),
             signatures: vec![CanonicalRequestSignatureWitnessV1 {
                 signer: ALICE_KEYPAIR.public_key().clone(),
                 signature: signature.clone(),
@@ -2950,18 +2940,14 @@ mod tests {
                 },
             ]),
         });
-        let flags = norito::core::header_flags::PACKED_SEQ
-            | norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::FIELD_BITSET
-            | norito::core::header_flags::COMPACT_LEN;
-        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        let public_bytes = norito::to_bytes(&witness).expect("encode public packed witness");
-        let bounded_bytes = norito::to_bytes(&bounded).expect("encode bounded packed witness");
+        let _flags = norito::core::DecodeFlagsGuard::enter(0);
+        let public_bytes = norito::to_bytes(&witness).expect("encode public noncompact witness");
+        let bounded_bytes = norito::to_bytes(&bounded).expect("encode bounded noncompact witness");
         assert_eq!(bounded_bytes, public_bytes);
 
         let header = norito::core::Header::read(std::io::Cursor::new(&public_bytes))
-            .expect("read packed witness header");
-        assert_eq!(header.flags & flags, flags);
+            .expect("read noncompact witness header");
+        assert_eq!(header.flags, 0);
         let limits = norito::DecodeLimits::new(
             CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
             CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
@@ -2971,9 +2957,10 @@ mod tests {
         );
         let decoded: BoundedCanonicalRequestWitnessV1 =
             norito::decode_from_bytes_with_limits(&public_bytes, limits)
-                .expect("decode public packed witness through bounded wrapper");
+                .expect("decode public noncompact witness through bounded wrapper");
         assert_eq!(
-            CanonicalRequestWitnessV1::try_from(decoded).expect("convert bounded packed witness"),
+            CanonicalRequestWitnessV1::try_from(decoded)
+                .expect("convert bounded noncompact witness"),
             witness
         );
     }

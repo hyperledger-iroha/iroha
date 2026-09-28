@@ -321,12 +321,7 @@ fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields()
 fn checked_resultless_comparison_uses_fixed_flags_independent_of_ambient_layout() {
     let proposal = complete_comparison_proposal();
     let expected_len = proposal.checked_resultless_payload_len().unwrap();
-    for flags in [
-        0,
-        norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::COMPACT_LEN
-            | norito::core::header_flags::FIELD_BITSET,
-    ] {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
             proposal.checked_resultless_payload_len().unwrap(),

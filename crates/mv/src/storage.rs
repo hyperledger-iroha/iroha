@@ -25,6 +25,17 @@ mod capture;
 pub use capture::BlockCaptureSlot;
 pub use physical::PublicationRetirement;
 
+/// An original physical map writer joined to its release notification.
+type MapWriter<'a, K, V, M> = ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>;
+
+/// Original current and undo owners released from both writers, with the
+/// cleanup that must outlive every enclosing participant.
+type DetachedPair<K, V, M, Cleanup> = (
+    BptreeMapOwned<K, V, M>,
+    BptreeMapOwned<K, Option<V>, M>,
+    Cleanup,
+);
+
 /// Published map cleanup and its original capture/installation reservations.
 /// Physical locks are already free. Retain this owner through all enclosing
 /// publication fences; cleanup drops before either reservation on every exit.
@@ -430,6 +441,10 @@ impl<K: Key, V: Value, Admission, M: StorageMode<K, V>> Detached<K, V, Admission
     /// Acquisition never waits and every refusal returns the original journal.
     /// Aggregate publication and complete resource admission remain the caller's
     /// responsibility; prepare every component before publishing the first one.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+    )]
     fn prepare_publication<'target, Installation, E>(
         self,
         target: &'target Storage<K, V, M>,
@@ -466,6 +481,10 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
     /// Reacquire the exact original untracked pair, returning custody on refusal.
     /// No successor allocation or payload copy occurs. The caller prepares every
     /// aggregate component before publication and owns separate resource admission.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+    )]
     pub fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target Storage<K, V>,
@@ -498,8 +517,8 @@ pub struct PreparedPublication<
 }
 
 struct OriginalWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {
-    revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>, M>>,
-    blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,
+    revert: MapWriter<'target, K, Option<V>, M>,
+    blocks: MapWriter<'target, K, V, M>,
 }
 
 enum StorageWriterState<'a, K: Key, V: Value, M: StorageMode<K, V>> {
@@ -525,8 +544,8 @@ struct StorageWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {
 impl<'target, K: Key, V: Value, M: StorageMode<K, V>> StorageWriters<'target, K, V, M> {
     fn new(
         target: &'target Storage<K, V, M>,
-        revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>, M>>,
-        blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,
+        revert: MapWriter<'target, K, Option<V>, M>,
+        blocks: MapWriter<'target, K, V, M>,
     ) -> Self {
         Self {
             state: Some(StorageWriterState::Attached(OriginalWriters {
@@ -683,13 +702,9 @@ impl<K: Key, V: Value, Admission, Installation, M: StorageMode<K, V>>
 // Retain both release signals until both original physical writers are free.
 // Notification unwind must not poison an already released healthy writer.
 fn detach_pair_retaining<K: Key, V: Value, M: StorageMode<K, V>>(
-    blocks: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, V, M>>,
-    revert: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, Option<V>, M>>,
-) -> (
-    BptreeMapOwned<K, V, M>,
-    BptreeMapOwned<K, Option<V>, M>,
-    crate::CaptureCleanup,
-) {
+    blocks: MapWriter<'_, K, V, M>,
+    revert: MapWriter<'_, K, Option<V>, M>,
+) -> DetachedPair<K, V, M, crate::CaptureCleanup> {
     // Both cursor flags were checked while the caller still owned its Block.
     // Exclusive ownership prevents a new edit between that check and detach.
     let (blocks, current_release) = blocks.release_deferred(|writer| writer.detach());
@@ -1135,19 +1150,17 @@ mod block {
                 &mut self.touched,
                 TransactionTouches::Untracked(BTreeSet::new()),
             ));
-            let current_retirement = self
-                .blocks
+            // Untracked checkpoints grow their buffers in place, so neither
+            // retirement owns a displaced allocation needing deferred cleanup.
+            self.blocks
                 .take()
                 .expect("live transaction current root")
                 .apply_retaining();
-            let undo_retirement = self
-                .revert
+            self.revert
                 .take()
                 .expect("live transaction undo root")
                 .apply_retaining();
             *self.parent_dirty = self.dirty;
-            drop(current_retirement);
-            drop(undo_retirement);
             self.parent_failure
                 .as_mut()
                 .expect("original parent")

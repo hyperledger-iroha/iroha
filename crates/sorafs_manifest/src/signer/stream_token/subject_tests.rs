@@ -9,20 +9,8 @@ use crate::signer::custody::{
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 
-fn layouts() -> [u8; 10] {
-    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-    [
-        0,
-        COMPACT_LEN,
-        PACKED_SEQ,
-        PACKED_SEQ | COMPACT_LEN,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT_LEN,
-        PACKED_SEQ | PACKED_STRUCT,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-    ]
+fn layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 
 fn key(seed: u8) -> KeyPair {

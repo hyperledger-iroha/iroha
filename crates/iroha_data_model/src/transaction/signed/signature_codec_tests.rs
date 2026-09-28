@@ -9,18 +9,8 @@ fn signature() -> TransactionSignature {
     )))
 }
 
-fn layouts() -> [u8; 6] {
-    [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT
-            | header_flags::PACKED_SEQ
-            | header_flags::COMPACT_LEN
-            | header_flags::FIELD_BITSET,
-    ]
+fn layouts() -> [u8; 2] {
+    [0, header_flags::COMPACT_LEN]
 }
 
 #[test]

@@ -184,15 +184,12 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         root = SCRIPT.parents[1]
         self.assertIn('include!("executor_contract_owner_permission_tests.rs");',
                       (root / "crates/iroha_core/src/executor.rs").read_text())
-        self.assertRegex((root / "crates/iroha_executor/src/default/mod.rs").read_text(),
-                         r"#\[cfg\(test\)\]\s*mod contract_deployment_permission_tests;")
         core_source = root / "crates/iroha_core/src/executor_contract_owner_permission_tests.rs"
         core_names = tuple("executor::tests::" + name for name in re.findall(
             r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(", core_source.read_text()))
         self.assertEqual(len(core_names), 3)
         groups = {
             "core": core_names,
-            "executor": tuple(name for _, names in gate.EXECUTOR_STAGES for name in names),
             "schema": tuple(name for _, names in gate.SCHEMA_STAGES for name in names),
         }
         for scope in gate.QUALIFICATION_SCOPES:
@@ -210,8 +207,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                         listing = "\n".join(case + ": test" for case in names if case != name)
                         with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
                             gate.require_tests(listing, selected[harness])
-        for harness, package in (("executor", "iroha_executor"), ("schema", "iroha_schema_gen")):
-            self.assertEqual(gate.HARNESS_TARGETS[harness][3], ["-p", package, "--lib"])
+        self.assertEqual(gate.HARNESS_TARGETS["schema"][3], ["-p", "iroha_schema_gen", "--lib"])
 
     def test_current_per_seat_bootstrap_suite_is_selected_once_with_real_test_bodies(self):
         root = SCRIPT.parents[1]
@@ -232,6 +228,95 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                     without_case = "\n".join(case + ": test" for case in selected if case != name)
                     with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
                         gate.require_tests(without_case, gate.qualification_stages(scope)["daemon"])
+
+    def test_genesis_identity_publication_controls_are_required_in_both_scopes(self):
+        cli_source = SCRIPT.parents[1] / "crates/iroha_cli/src"
+        self.assertRegex((cli_source / "main_shared.rs").read_text(), r"(?m)^mod taira;")
+        self.assertRegex((cli_source / "taira.rs").read_text(),
+                         r'#\[path = "taira_parliament_seating\.rs"\]\s*pub\(crate\) mod parliament_seating;')
+        self.assertRegex((cli_source / "taira_parliament_seating.rs").read_text(),
+                         r'#\[path = "taira_parliament_seating_tests\.rs"\]\s*mod tests;')
+        required = {"kagami": (
+            "genesis::sign::tests::identity_drift_leaves_every_requested_output_unchanged",
+            "genesis::sign::tests::expected_hash_output_matches_the_signed_consensus_header",
+            "genesis::sign::tests::network_identity_publication_is_idempotent_and_refuses_drift",
+            "genesis::sign::tests::existing_network_identity_requires_safe_single_link_custody",
+            "genesis::sign::tests::guarded_replacement_publishes_consistent_genesis_bundle",
+            "genesis::sign::tests::guarded_replacement_rejects_stale_missing_and_unsafe_prior_without_writes",
+            "genesis::sign::tests::identity_guard_serializes_publishers_and_rejects_substitution",
+            "genesis::sign::tests::interrupted_replacement_preserves_prior_identity_until_complete_retry",
+            "genesis::sign::tests::replacement_requires_complete_explicit_output_bundle",
+        ), "cli": (
+            "taira::parliament_seating::tests::seat_parliament_seats_a_generated_network_once",
+            "taira::parliament_seating::tests::resign_identity_requires_one_canonical_line",
+        )}
+        for scope in gate.QUALIFICATION_SCOPES:
+            for harness, names in required.items():
+                stages = gate.qualification_stages(scope)[harness]
+                selected = tuple(name for _, tests in stages for name in tests)
+                gate.validate_selected_source_test_inventory(SCRIPT.parents[1], {harness: stages})
+                for name in names:
+                    with self.subTest(scope=scope, harness=harness, test=name):
+                        self.assertEqual(selected.count(name), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                        self.assertEqual(tuple(focused), (harness,))
+                        missing = "\n".join(case + ": test" for case in selected if case != name)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(missing, stages)
+
+    def test_cli_seating_selectors_follow_actual_module_aliases_and_entrypoint(self):
+        sources = {
+            "Cargo.toml": '[package]\nname = "iroha_cli"\n[[bin]]\nname = "iroha"\npath = "src/bin/iroha.rs"\n',
+            "src/bin/iroha.rs": 'include!("../main_shared.rs");\n',
+            "src/main_shared.rs": 'mod taira;\n',
+            "src/taira.rs": '#[path = "taira_parliament_seating.rs"]\npub(crate) mod parliament_seating;\n',
+            "src/taira_parliament_seating.rs": '#[cfg(test)]\n#[path = "taira_parliament_seating_tests.rs"]\nmod tests;\n',
+            "src/taira_parliament_seating_tests.rs": '#[test]\nfn seating_case() {}\n',
+        }
+        def write_sources():
+            for path, text in sources.items():
+                self.source("iroha_cli", path, text)
+        def selected(name):
+            return {"cli": (("seating", (name,)),)}
+        correct = "taira::parliament_seating::tests::seating_case"
+        write_sources()
+        gate.validate_selected_source_test_inventory(self.root, selected(correct))
+        for wrong in ("taira_parliament_seating::tests::seating_case", "unrelated::seating_case"):
+            with self.subTest(selector=wrong), self.assertRaisesRegex(
+                    gate.CheckError, "CLI seating selector lacks its registered module route"):
+                gate.validate_selected_source_test_inventory(self.root, selected(wrong))
+
+        # The guard derives the alias from source; it cannot merely compare
+        # against a second hard-coded copy of the expected selector prefix.
+        self.source("iroha_cli", "src/taira.rs", sources["src/taira.rs"].replace(
+            "mod parliament_seating", "mod seated_parliament"))
+        with self.assertRaisesRegex(gate.CheckError, "registered module route"):
+            gate.validate_selected_source_test_inventory(self.root, selected(correct))
+        gate.validate_selected_source_test_inventory(
+            self.root, selected("taira::seated_parliament::tests::seating_case"))
+
+        for path, replacement in (
+            ("Cargo.toml", sources["Cargo.toml"].replace("src/bin/iroha.rs", "src/bin/unused.rs")),
+            ("Cargo.toml", sources["Cargo.toml"] + '[[bin]]\nname = "iroha"\npath = "src/bin/iroha.rs"\n'),
+            ("src/bin/iroha.rs", 'include!("../other.rs");\n'),
+            ("src/main_shared.rs", '#[path = "foreign.rs"]\nmod taira;\n'),
+            ("src/taira.rs", '/*\n' + sources["src/taira.rs"] + '*/\n'),
+            ("src/taira_parliament_seating.rs", 'const DECOY: &str = r#"\n'
+             + sources["src/taira_parliament_seating.rs"] + '"#;\n'),
+        ):
+            with self.subTest(edge=path):
+                write_sources()
+                self.source("iroha_cli", path, replacement)
+                with self.assertRaisesRegex(gate.CheckError, "CLI seating"):
+                    gate.validate_selected_source_test_inventory(self.root, selected(correct))
+        write_sources()
+        for target in (
+            ("foreign package", "iroha", "bin", ["-p", "other", "--bin", "iroha"]),
+            ("foreign binary", "other", "bin", ["-p", "iroha_cli", "--bin", "other"]),
+        ):
+            with self.subTest(target=target), patch.dict(gate.HARNESS_TARGETS, {"cli": target}):
+                with self.assertRaisesRegex(gate.CheckError, "CLI seating Cargo target registration"):
+                    gate.validate_selected_source_test_inventory(self.root, selected(correct))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+use crate::set_no_follow_flag;
 use crate::{CarWriter, ingest_single_file, verifier::CarVerifier};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
@@ -9,9 +10,7 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Map, Value};
-use output_fs::{
-    ensure_parent_dir, set_no_follow_flag, validate_output_path, validate_output_writable,
-};
+use output_fs::{ensure_parent_dir, validate_output_path, validate_output_writable};
 use std::{
     borrow::Cow,
     fs,

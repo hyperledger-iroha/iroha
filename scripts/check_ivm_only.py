@@ -63,46 +63,6 @@ def repository_paths(root: Path) -> list[Path]:
     return sorted({Path(name.decode("utf-8")) for name in output.split(b"\0") if name})
 
 
-
-def negative_target_fixture_lines(relative: Path, lines: list[str]) -> set[int]:
-    """Allow literal test data used only to assert a target is absent.
-
-    This exempts only the target-string rule on the declaration line. Tools and
-    runtime APIs are still checked, and any additional reference to the binding
-    invalidates the exemption. It is not a whole-test-file or runtime exemption.
-    """
-    if not any(relative.name.endswith(".test" + suffix) for suffix in JS_SUFFIXES):
-        return set()
-    code = "\n".join(lines)
-    literal = r'''(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')'''
-    declaration = re.compile(
-        rf"(?m)^[ \t]*const\s+([A-Za-z_$][\w$]*)\s*=\s*"
-        rf"({literal}(?:\s*\+\s*{literal})*)\s*;[ \t]*$"
-    )
-    allowed = set()
-    for match in declaration.finditer(code):
-        if not TARGET.search(match.group(2)):
-            continue
-        name = re.escape(match.group(1))
-        receiver = rf"(?:[A-Za-z_$][\w.$]*|readRepositoryFile\(\s*{literal}\s*\))"
-        assertion = re.compile(
-            rf"\bassert\.equal\(\s*{receiver}\.includes\(\s*{name}\s*,?\s*\),\s*false\s*,?\s*\)\s*;"
-        )
-        negative_uses = list(assertion.finditer(code))
-        if len(negative_uses) != 1:
-            continue
-        # All references must belong to the literal definition or this negative
-        # assertion. A later build argument, alias, export, or eval fails closed.
-        reference = re.compile(rf"(?<![\w$]){name}(?![\w$])")
-        if all(
-            match.start() <= use.start() < match.end()
-            or negative_uses[0].start() <= use.start() < negative_uses[0].end()
-            for use in reference.finditer(code)
-        ):
-            allowed.add(code.count("\n", 0, match.start()) + 1)
-    return allowed
-
-
 def check_path(root: Path, relative: Path) -> list[str]:
     """Return concrete forbidden artifacts or executable/build declarations."""
     name = relative.as_posix()
@@ -129,7 +89,7 @@ def check_path(root: Path, relative: Path) -> list[str]:
     # first-party package manifests are always checked.
     if relative.name in {"package-lock.json", "pnpm-lock.yaml"}:
         return []
-    rules = [TOOL, WASI]
+    rules = [TARGET, TOOL, WASI]
     if suffix in {".toml", ".json"}:
         rules.append(CONFIG_WASI)
     if suffix in JS_SUFFIXES:
@@ -141,13 +101,10 @@ def check_path(root: Path, relative: Path) -> list[str]:
         "" if line.lstrip().startswith(("//", "# ", "///", "//!", "* ")) else line
         for line in lines
     ]
-    negative_targets = negative_target_fixture_lines(relative, code_lines)
     findings = []
     found_lines = set()
     for number, line in enumerate(code_lines, 1):
-        if any(rule.search(line) for rule in rules) or (
-            TARGET.search(line) and number not in negative_targets
-        ):
+        if any(rule.search(line) for rule in rules):
             found_lines.add(number)
     if suffix == ".go":
         # Go selects build targets through comments. Check these before the

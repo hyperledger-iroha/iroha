@@ -5808,19 +5808,15 @@ seiyaku BallotAccess {
     }
     #[test]
     fn vendor_bridge_and_subscription_builtins_reject_invalid_arguments() {
-        for (src, expected) in [(
-            include_str!("compiler/fixtures/v1/c087.ko"),
-            "call `ledger::subscription::record_usage` expects at most 0 arguments",
-        )] {
-            let parsed = parse(src).expect("parse source");
-            let err = analyze(&parsed)
-                .expect_err("semantic analysis should reject bridge/subscription args");
-            assert!(
-                err.message.contains(expected),
-                "expected `{expected}`, got `{}`",
-                err.message
-            );
-        }
+        let expected = "call `ledger::subscription::record_usage` expects at most 0 arguments";
+        let parsed = parse(include_str!("compiler/fixtures/v1/c087.ko")).expect("parse source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject bridge/subscription args");
+        assert!(
+            err.message.contains(expected),
+            "expected `{expected}`, got `{}`",
+            err.message
+        );
         assert_internal_source_names_rejected(&[
             "query_execute_norito",
             "execute_query",

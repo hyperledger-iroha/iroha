@@ -197,12 +197,7 @@ fn terminal_ceilings_are_independent_of_ambient_layout_guards() {
     let expected_frames = largest_rows()
         .each_ref()
         .map(|row| norito::encode_canonical(row).unwrap());
-    for flags in [
-        0,
-        norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::COMPACT_LEN
-            | norito::core::header_flags::FIELD_BITSET,
-    ] {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(ExecutionOutputTerminalCeilings::derive().unwrap(), expected);
         assert_eq!(

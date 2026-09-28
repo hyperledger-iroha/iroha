@@ -91,7 +91,7 @@ mod tests {
         }
         assert!(json_wire.len() <= SNS_REGISTRATION_NOT_FOUND_MAX_BYTES);
         for invalid in [
-            r#"{}"#,
+            r"{}",
             r#"{"suffix_id":4099}"#,
             r#"{"suffix_id":4099,"label":"dpn","extra":0}"#,
             r#"{"suffix_id":4099,"label":"dpn","label":"other"}"#,

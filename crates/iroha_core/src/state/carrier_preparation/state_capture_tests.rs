@@ -500,6 +500,16 @@ fn carrier_capture_admission_panic_releases_healthy_membership_before_world_noti
 
 #[test]
 fn state_capture_late_membership_refusal_retains_completed_world_and_runtime_until_joint_drop() {
+    let handle =
+        crate::sumeragi::threads::sumeragi_thread_builder("state-capture-late-membership-refusal")
+            .spawn(state_capture_late_membership_refusal_on_consensus_stack)
+            .expect("spawn State capture test on the production consensus stack");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+fn state_capture_late_membership_refusal_on_consensus_stack() {
     let (state, proposal, _topology, _context) =
         crate::state::carrier_preparation::tests::fixture();
     let state: Arc<State> = Arc::from(state);

@@ -207,9 +207,7 @@ fn canonical_request_witness_signing_preserves_captured_frame_and_layout() {
             signature: Signature::from_bytes(&[0x11; 64]),
         },
     );
-    let flags = norito::core::header_flags::PACKED_STRUCT
-        | norito::core::header_flags::FIELD_BITSET
-        | norito::core::header_flags::COMPACT_LEN;
+    let flags = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _flags = norito::core::DecodeFlagsGuard::enter(flags);
     assert_eq!(
         canonical_request_witness_message(&witness).expect("signature vector excluded"),

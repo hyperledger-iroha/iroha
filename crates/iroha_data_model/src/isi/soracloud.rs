@@ -2238,11 +2238,6 @@ mod tests {
 
         let encoded = instruction.encode();
         let flags = norito::core::default_encode_flags();
-        assert_eq!(
-            flags & norito::core::header_flags::PACKED_STRUCT,
-            0,
-            "retired-layout fixture requires canonical AoS encoding"
-        );
         let mut offset = 0usize;
         crate::isi::read_aos_field(&encoded, &mut offset, flags).expect("apartment field");
         let request_id_start = offset;

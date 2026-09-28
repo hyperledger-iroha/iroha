@@ -32,17 +32,12 @@ EXPECTED_TEST_IDS = (
 )
 MACRO_CONSUMERS = {
     "crates/iroha_data_model_derive/src/lib.rs": "crates/iroha_data_model_derive/Cargo.toml",
-    "crates/iroha_executor_derive/src/lib.rs": "crates/iroha_executor_derive/Cargo.toml",
     "crates/iroha_schema_derive/src/lib.rs": "crates/iroha_schema_derive/Cargo.toml",
-    "crates/iroha_smart_contract_derive/src/lib.rs": (
-        "crates/iroha_smart_contract_derive/Cargo.toml"
-    ),
 }
 INTERNAL_IMPORTS = (
     "crates/iroha_data_model_derive/src/event_set.rs",
     "crates/iroha_data_model_derive/src/has_origin.rs",
     "crates/iroha_data_model_derive/src/id.rs",
-    "crates/iroha_executor_derive/src/default.rs",
 )
 DELETED_COPIES = tuple(path.replace("lib.rs", "emitter_ext.rs") for path in MACRO_CONSUMERS)
 LOCAL_COPIES = ("crates/iroha_telemetry_derive/src/emitter_ext.rs",)

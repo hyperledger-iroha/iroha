@@ -1453,6 +1453,7 @@ mod tests {
     }
     #[test]
     fn source_schema_rejects_missing_null_and_zero_ttl() {
+        let _chain_guard = address::ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         let mut missing = source_document();
         first_payload(&mut missing).remove("time_to_live_ms");
         assert!(decode_document(missing).is_err());
@@ -1519,6 +1520,7 @@ mod tests {
     }
     #[test]
     fn source_schema_requires_current_ordinary_admission_intent() {
+        let _chain_guard = address::ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         let mut missing = source_document();
         first_payload(&mut missing).remove("admission_intent");
         assert!(decode_document(missing).is_err());

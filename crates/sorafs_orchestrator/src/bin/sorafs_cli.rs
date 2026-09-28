@@ -58,6 +58,7 @@ use reqwest::{
     redirect::Policy as RedirectPolicy,
 };
 use sha3::{Digest, Sha3_256};
+use sorafs_car::set_no_follow_flag;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
     FileEntry, FilePlan, StoredChunk,
@@ -67,9 +68,7 @@ use sorafs_car::{
     gateway::{GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput},
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget},
     policy::{PolicyEvidenceValidator, run_honey_probe},
-    proof_stream::{
-        ProofKind, ProofStreamItem, ProofStreamMetrics, ProofStreamVerificationContext, ProofTier,
-    },
+    proof_stream::{ProofStreamItem, ProofStreamMetrics, ProofStreamVerificationContext},
     proof_stream_transport::ProofStreamNdjsonReader,
     scoreboard::{Eligibility, TelemetrySnapshot},
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
@@ -93,6 +92,7 @@ use sorafs_manifest::{
     governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
     validate_governance_log_node_bytes,
 };
+use sorafs_manifest::{ProofStreamKind, ProofStreamTier};
 use sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR;
 use sorafs_orchestrator::{
     OrchestratorConfig, StreamFetchSession,
@@ -927,8 +927,14 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         .get("private_key")
         .and_then(toml::Value::as_str)
         .ok_or_else(|| "client config `[account]` must define `private_key`".to_string())?;
-    let chain_discriminant = resolve_deploy_chain_discriminant(&root, account)?;
-    let chain_id = resolve_deploy_chain_id(&root, chain_discriminant)?;
+    let chain_discriminant = resolve_deploy_chain_discriminant(account)?;
+    let chain_literal = root
+        .get("chain")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| "client config must define top-level `chain`".to_string())?;
+    let chain_id = chain_literal
+        .parse()
+        .map_err(|err| format!("failed to parse client config chain `{chain_literal}`: {err}"))?;
     let network_id = root
         .get("network_id")
         .and_then(toml::Value::as_str)
@@ -948,69 +954,48 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         chain_discriminant,
     })
 }
-fn resolve_deploy_chain_id(root: &toml::Table, chain_discriminant: u16) -> Result<ChainId, String> {
-    let literal = root
-        .get("chain")
-        .and_then(toml::Value::as_str)
+/// Resolve the account discriminant exactly as the canonical client config does: an explicit
+/// `[account].chain_discriminant`, else the discriminant of `[account].profile`, else the default.
+fn resolve_deploy_chain_discriminant(account: &toml::Table) -> Result<u16, String> {
+    let explicit = account
+        .get("chain_discriminant")
+        .map(|value| {
+            let value = value.as_integer().ok_or_else(|| {
+                "client config `[account].chain_discriminant` must be an integer".to_string()
+            })?;
+            u16::try_from(value).map_err(|_| {
+                "client config `[account].chain_discriminant` must fit in u16".to_string()
+            })
+        })
+        .transpose()?;
+    let profile_name = account
+        .get("profile")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| "client config `[account].profile` must be a string".to_string())
+        })
+        .transpose()?
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .or_else(|| known_chain_id_for_discriminant(chain_discriminant).map(str::to_owned))
-        .ok_or_else(|| {
-            format!(
-                "client config must define top-level `chain` for network discriminant \
-                 {chain_discriminant}"
-            )
-        })?;
-    literal
-        .parse()
-        .map_err(|err| format!("failed to parse client config chain `{literal}`: {err}"))
-}
-fn known_chain_id_for_discriminant(chain_discriminant: u16) -> Option<&'static str> {
-    match chain_discriminant {
-        369 => Some("fc56984b-2be7-431d-840e-21514d1883f0"),
-        753 => Some("00000000-0000-0000-0000-000000000753"),
-        discriminant
-            if discriminant == iroha_config::parameters::defaults::common::chain_discriminant() =>
-        {
-            Some("00000000-0000-0000-0000-000000000000")
-        }
-        _ => None,
-    }
-}
-fn resolve_deploy_chain_discriminant(
-    root: &toml::Table,
-    account: &toml::Table,
-) -> Result<u16, String> {
-    if let Some(value) = account.get("chain_discriminant") {
-        let value = value.as_integer().ok_or_else(|| {
-            "client config `[account].chain_discriminant` must be an integer".to_string()
-        })?;
-        return u16::try_from(value).map_err(|_| {
-            "client config `[account].chain_discriminant` must fit in u16".to_string()
-        });
-    }
-    let chain = root
-        .get("chain")
-        .and_then(toml::Value::as_str)
-        .ok_or_else(|| {
-            "client config must define integer `[account].chain_discriminant` or a known top-level `chain`"
-                .to_string()
-        })?;
-    known_deploy_chain_discriminant(chain).ok_or_else(|| {
+        .filter(|name| !name.is_empty());
+    let Some(profile_name) = profile_name else {
+        return Ok(
+            explicit.unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant)
+        );
+    };
+    let profile = iroha_torii_shared::network_profile(profile_name).ok_or_else(|| {
         format!(
-            "client config top-level `chain` `{chain}` is not known; define integer `[account].chain_discriminant`"
+            "client config `[account].profile` `{profile_name}` is not supported; expected one of: {}",
+            iroha_torii_shared::network_profile_names()
         )
-    })
-}
-fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
-    match chain.trim() {
-        "fc56984b-2be7-431d-840e-21514d1883f0" => Some(369),
-        "iroha3-nexus" | "00000000-0000-0000-0000-000000000753" => Some(753),
-        "00000000-0000-0000-0000-000000000000" => {
-            Some(iroha_config::parameters::defaults::common::chain_discriminant())
-        }
-        _ => None,
+    })?;
+    match explicit {
+        Some(value) if value != profile.chain_discriminant => Err(format!(
+            "client config `[account].chain_discriminant` {value} does not match profile `{}` \
+             ({})",
+            profile.name, profile.chain_discriminant
+        )),
+        _ => Ok(profile.chain_discriminant),
     }
 }
 fn build_deploy_artifacts(
@@ -2984,47 +2969,6 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
-}
 fn format_car_error(err: CarWriteError) -> String {
     match err {
         CarWriteError::Io(io_err) => format!("streaming payload failed: {io_err}"),
@@ -3039,7 +2983,7 @@ fn usage() -> String {
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
@@ -3094,7 +3038,7 @@ fn reputation_usage() -> String {
 }
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
         .to_string()
 }
 fn taikai_usage() -> String {
@@ -3149,7 +3093,7 @@ enum FetchCacheProfile {
 impl FetchCacheProfile {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
-            "hot" | "warm" => Some(Self::Warm),
+            "warm" => Some(Self::Warm),
             "cold" => Some(Self::Cold),
             _ => None,
         }
@@ -3449,9 +3393,8 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             }
             telemetry_source_label = Some(trimmed.to_string());
         } else if let Some(rest) = arg.strip_prefix("--profile=") {
-            let normalized = rest.trim().to_ascii_lowercase().replace('-', "_");
-            let parsed = FetchCacheProfile::parse(&normalized).ok_or_else(|| {
-                "`--profile` must be one of hot|warm|cold for `sorafs_cli fetch`".to_string()
+            let parsed = FetchCacheProfile::parse(rest).ok_or_else(|| {
+                "`--profile` must be one of warm|cold for `sorafs_cli fetch`".to_string()
             })?;
             cache_profile = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--orchestrator-config=") {
@@ -16209,7 +16152,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let proof_kind = proof_kind_arg
         .as_deref()
         .map(|raw| {
-            ProofKind::parse(raw)
+            ProofStreamKind::parse(raw)
                 .map_err(|_| "unsupported proof kind; expected `por`, `pdp`, or `potr`".to_string())
         })
         .transpose()?
@@ -16233,7 +16176,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         })
         .transpose()?;
     let (challenge_id_hex, sample_count, deadline_ms) = match proof_kind {
-        ProofKind::Por => {
+        ProofStreamKind::Por => {
             if challenge_id_hex.is_some() {
                 return Err(
                     "`--challenge-id-hex` may only be used with `--proof-kind=pdp`".to_string(),
@@ -16253,7 +16196,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             }
             (None, Some(count), None)
         }
-        ProofKind::Pdp => {
+        ProofStreamKind::Pdp => {
             let challenge_id = challenge_id_hex.ok_or_else(|| {
                 "`--challenge-id-hex=HEX32` is required when `--proof-kind=pdp`".to_string()
             })?;
@@ -16274,7 +16217,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             }
             (Some(challenge_id), None, None)
         }
-        ProofKind::Potr => {
+        ProofStreamKind::Potr => {
             if challenge_id_hex.is_some() {
                 return Err(
                     "`--challenge-id-hex` may only be used with `--proof-kind=pdp`".to_string(),
@@ -16298,7 +16241,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let tier = tier_arg
         .as_deref()
         .map(|raw| {
-            ProofTier::parse(raw).map_err(|_| {
+            ProofStreamTier::parse(raw).map_err(|_| {
                 "unsupported proof tier; expected `hot`, `warm`, or `archive`".to_string()
             })
         })
@@ -16312,7 +16255,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             Ok(hex_encode(bytes))
         })
         .transpose()?;
-    if matches!(proof_kind, ProofKind::Potr) && orchestrator_job_id_hex.is_none() {
+    if matches!(proof_kind, ProofStreamKind::Potr) && orchestrator_job_id_hex.is_none() {
         return Err(
             "`--orchestrator-job-id-hex=HEX16` is required when `--proof-kind=potr`".to_string(),
         );
@@ -16322,7 +16265,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_bytes = read_file_bounded(&manifest_path, manifest_byte_limit, "manifest")?;
     let manifest = decode_manifest_v1_canonical(&manifest_bytes)
         .map_err(|err| format!("failed to decode exact canonical manifest: {err}"))?;
-    if matches!(proof_kind, ProofKind::Por) && manifest.por_root == [0; 32] {
+    if matches!(proof_kind, ProofStreamKind::Por) && manifest.por_root == [0; 32] {
         return Err(
             "PoR proof streaming requires a non-zero `por_root` in the canonical manifest"
                 .to_string(),
@@ -16345,8 +16288,8 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let validated_pin =
         validate_finalized_pin_manifest(&manifest, manifest_digest.as_bytes(), &finalized_pin)?;
     let trusted_por_root = match proof_kind {
-        ProofKind::Por => Some(validated_pin.por_root),
-        ProofKind::Pdp | ProofKind::Potr => None,
+        ProofStreamKind::Por => Some(validated_pin.por_root),
+        ProofStreamKind::Pdp | ProofStreamKind::Potr => None,
     };
     let nonce = if let Some(encoded) = nonce_b64 {
         decode_nonce_b64(&encoded)?
@@ -19495,7 +19438,7 @@ fn governance_dag_now_secs() -> u64 {
 }
 fn generate_proof_stream_nonce(
     manifest_digest: &[u8],
-    proof_kind: ProofKind,
+    proof_kind: ProofStreamKind,
     challenge_id_hex: Option<&str>,
     sample_count: Option<u32>,
     deadline_ms: Option<u32>,
@@ -20820,7 +20763,7 @@ mod tests {
         let request = ProofStreamRequestV1 {
             manifest_digest: [0x11; 32],
             provider_id: [0x22; 32],
-            proof_kind: ProofKind::Por,
+            proof_kind: ProofStreamKind::Por,
             challenge_id: None,
             sample_count: Some(1),
             deadline_ms: None,

@@ -455,7 +455,6 @@ impl HardwareCapabilities {
 }
 /// Control whether the VM prints the ASCII banner and hardware feature summary
 /// at construction time. Benches can call this to disable noisy output.
-#[allow(dead_code)]
 pub fn set_banner_enabled(enabled: bool) {
     SUPPRESS_BANNER.store(!enabled, Ordering::Relaxed);
 }
@@ -1453,10 +1452,6 @@ pub struct IVM {
     /// Aligned outer-return sentinel captured from r1 at invocation start.
     contract_outer_return_pc: Option<u64>,
     #[cfg(test)]
-    #[allow(dead_code)]
-    /// When true (tests only), prints PC and instruction words as they execute.
-    pub(crate) decode_trace: bool,
-    #[cfg(test)]
     predecoded_misses: u64,
     #[cfg(test)]
     program_parse_attempts: u64,
@@ -1531,8 +1526,6 @@ impl Clone for IVM {
             strict_return_integrity: self.strict_return_integrity,
             contract_return_stack: self.contract_return_stack.clone(),
             contract_outer_return_pc: self.contract_outer_return_pc,
-            #[cfg(test)]
-            decode_trace: false,
             #[cfg(test)]
             predecoded_misses: 0,
             #[cfg(test)]
@@ -1821,8 +1814,6 @@ impl IVM {
             strict_return_integrity: false,
             contract_return_stack: Vec::new(),
             contract_outer_return_pc: None,
-            #[cfg(test)]
-            decode_trace: false,
             #[cfg(test)]
             predecoded_misses: 0,
             #[cfg(test)]

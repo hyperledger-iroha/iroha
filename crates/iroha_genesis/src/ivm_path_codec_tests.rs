@@ -74,12 +74,7 @@ fn path_slice_preserves_prefix_consumption_and_canonical_tail_rejection() {
 
 #[test]
 fn path_containers_preserve_string_payloads_in_both_length_layouts() {
-    for flags in [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ,
-        header_flags::COMPACT_LEN | header_flags::PACKED_SEQ,
-    ] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(flags);
         let values = vec![path("one.to"), path("two/雪.to")];
         let strings = vec!["one.to".to_owned(), "two/雪.to".to_owned()];
@@ -342,12 +337,7 @@ fn genesis_parent_containers_preserve_nested_path_values_and_prefixes() {
 #[test]
 fn genesis_parent_slice_decoders_inherit_limits_and_restore_caller_state() {
     let previous = get_decode_flags();
-    for flags in [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-    ] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(flags);
         let value = trigger_fixture();
         let bytes = payload(&value, flags);

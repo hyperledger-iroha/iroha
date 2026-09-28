@@ -775,6 +775,15 @@ fn seat_parliament_seats_a_generated_network_once() {
         ),
     )
     .unwrap();
+    let prior_network_id =
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"pre-seating genesis"),
+        ));
+    fs::write(
+        localnet.join(GENESIS_EXPECTED_HASH_FILE),
+        format!("{prior_network_id}\n"),
+    )
+    .unwrap();
     let args = SeatParliament {
         localnet_dir: localnet.clone(),
         citizens: DEFAULT_GENESIS_CITIZENS,
@@ -787,8 +796,21 @@ fn seat_parliament_seats_a_generated_network_once() {
     let report: Value = json::from_slice(&output).unwrap();
     assert_eq!(report["schema"].as_str(), Some(SEAT_REPORT_SCHEMA_V1));
     assert_eq!(report["citizens"].as_u64(), Some(16));
-    assert_eq!(report["next"].as_str(), Some(RESIGN_INSTRUCTIONS));
-    assert!(RESIGN_INSTRUCTIONS.contains("--expected-hash-out genesis.expected_hash.next"));
+    assert_eq!(
+        report["next"].as_str(),
+        Some(resign_instructions(prior_network_id).as_str())
+    );
+    assert_eq!(
+        report["previous_network_id"].as_str(),
+        Some(prior_network_id.to_string().as_str())
+    );
+    assert!(
+        report["next"]
+            .as_str()
+            .unwrap()
+            .contains("--expected-hash-out genesis.expected_hash --replace-expected-hash")
+    );
+    assert!(!report["next"].as_str().unwrap().contains("mv "));
 
     let citizen_dir = localnet.join(CITIZEN_DIRECTORY);
     assert_eq!(fs::metadata(&citizen_dir).unwrap().mode() & 0o777, 0o700);
@@ -1074,4 +1096,28 @@ fn sccp_genesis_instruction_uses_taira_defaults_and_a_fresh_nonce() {
         .expect("InitializeSccpV1");
     assert_eq!(initialize.reset_nonce, first);
     assert_eq!(initialize.parameters, SccpParametersV1::taira_default());
+}
+
+#[test]
+fn resign_identity_requires_one_canonical_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(GENESIS_EXPECTED_HASH_FILE);
+    let prior = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"prior genesis"),
+    ));
+    for text in [
+        prior.to_string(),
+        format!(" {prior}\n"),
+        format!("{prior}\n\n"),
+        "stale\n".to_owned(),
+    ] {
+        fs::write(&path, text).unwrap();
+        assert!(read_prior_network_identity(&path).is_err());
+    }
+    fs::write(&path, format!("{prior}\n")).unwrap();
+    assert_eq!(read_prior_network_identity(&path).unwrap(), prior);
+    let next = resign_instructions(prior);
+    assert!(next.contains(&format!("--replace-expected-hash '{prior}'")));
+    assert!(next.contains("--expected-hash-out genesis.expected_hash"));
+    assert!(!next.contains(".next"));
 }

@@ -24,8 +24,6 @@ static constexpr uint64_t CRC64_XOR_OUT = 0xFFFFFFFFFFFFFFFFULL;
 static constexpr uint64_t CRC64_CHUNK_SIZE = 16ULL * 1024ULL;
 static constexpr auto CUDA_COMMAND_TIMEOUT = std::chrono::seconds(120);
 static constexpr uint8_t FLAG_COMPACT_LEN = 0x02U;
-static constexpr uint32_t LAYOUT_LENGTH_PREFIXED = 0U;
-static constexpr uint32_t LAYOUT_FIXED_OFFSETS = 1U;
 
 struct NoritoSequenceSpanCuda {
     size_t start;
@@ -157,31 +155,6 @@ __device__ bool read_value_len_device(const uint8_t* input,
         shift += 7U;
     }
     return false;
-}
-
-extern "C" __global__ void sequence_fixed_offsets_kernel(const uint8_t* input,
-                                                          size_t input_len,
-                                                          size_t count,
-                                                          size_t data_start,
-                                                          size_t data_len,
-                                                          NoritoSequenceSpanCuda* spans,
-                                                          uint32_t* status) {
-    size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= count || atomicAdd(status, 0U) != 0U) {
-        return;
-    }
-    uint64_t prev64 = 0;
-    uint64_t next64 = 0;
-    size_t offset_table = 8ULL;
-    if (!read_u64_le_device(input, input_len, offset_table + idx * 8ULL, &prev64)
-        || !read_u64_le_device(input, input_len, offset_table + (idx + 1ULL) * 8ULL, &next64)
-        || next64 < prev64
-        || next64 > (uint64_t)data_len) {
-        atomicCAS(status, 0U, (uint32_t)RC_INVALID);
-        return;
-    }
-    spans[idx].start = data_start + (size_t)prev64;
-    spans[idx].end = data_start + (size_t)next64;
 }
 
 extern "C" __global__ void sequence_length_prefixed_kernel(const uint8_t* input,
@@ -580,7 +553,6 @@ cleanup:
 extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
                                                size_t input_len,
                                                uint8_t flags,
-                                               uint32_t layout_kind,
                                                NoritoSequenceSpanCuda* out_spans,
                                                size_t out_capacity,
                                                size_t* out_count,
@@ -611,55 +583,17 @@ extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
         return device_rc;
     }
 
-    size_t data_start = 0;
-    size_t data_len = 0;
-    size_t fixed_used = 0;
-    if (layout_kind == LAYOUT_FIXED_OFFSETS) {
-        if (count > (SIZE_MAX / 8ULL) - 1ULL) {
-            return RC_INVALID;
-        }
-        size_t table_len = (count + 1ULL) * 8ULL;
-        if (input_len < 8ULL || table_len > input_len - 8ULL) {
-            return RC_INVALID;
-        }
-        size_t table_start = 8ULL;
-        size_t table_end = table_start + table_len;
-        uint64_t first = 0;
-        uint64_t last = 0;
-        if (!read_u64_le_host(input_ptr, input_len, table_start, &first)
-            || !read_u64_le_host(input_ptr, input_len, table_start + count * 8ULL, &last)
-            || first != 0
-            || last > (uint64_t)SIZE_MAX) {
-            return RC_INVALID;
-        }
-        data_start = table_end;
-        data_len = (size_t)last;
-        if (data_len > input_len - data_start) {
-            return RC_INVALID;
-        }
-        fixed_used = data_start + data_len;
-        if (count == 0) {
-            if (data_len != 0) {
-                return RC_INVALID;
-            }
-            *out_used = fixed_used;
-            return RC_OK;
-        }
-    } else if (layout_kind == LAYOUT_LENGTH_PREFIXED) {
-        if (count == 0) {
-            *out_used = 8ULL;
-            return RC_OK;
-        }
-        if (input_len < 8ULL) {
-            return RC_INVALID;
-        }
-        size_t payload_len = input_len - 8ULL;
-        size_t min_encoded_len = (flags & FLAG_COMPACT_LEN) == 0U ? 8ULL : 1ULL;
-        if (count > payload_len / min_encoded_len) {
-            return RC_INVALID;
-        }
-    } else {
-        return RC_GPU_UNAVAILABLE;
+    if (count == 0) {
+        *out_used = 8ULL;
+        return RC_OK;
+    }
+    if (input_len < 8ULL) {
+        return RC_INVALID;
+    }
+    size_t payload_len = input_len - 8ULL;
+    size_t min_encoded_len = (flags & FLAG_COMPACT_LEN) == 0U ? 8ULL : 1ULL;
+    if (count > payload_len / min_encoded_len) {
+        return RC_INVALID;
     }
 
     uint8_t* d_input = nullptr;
@@ -720,15 +654,8 @@ extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
         goto cleanup;
     }
 
-    if (layout_kind == LAYOUT_FIXED_OFFSETS) {
-        dim3 block(256);
-        dim3 grid(static_cast<unsigned int>((count + block.x - 1ULL) / block.x));
-        sequence_fixed_offsets_kernel<<<grid, block, 0, stream>>>(
-            d_input, input_len, count, data_start, data_len, d_spans, d_status);
-    } else {
-        sequence_length_prefixed_kernel<<<1, 1, 0, stream>>>(
-            d_input, input_len, count, flags, d_spans, d_used, d_status);
-    }
+    sequence_length_prefixed_kernel<<<1, 1, 0, stream>>>(
+        d_input, input_len, count, flags, d_spans, d_used, d_status);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         ret = RC_BACKEND_ERROR;
@@ -781,9 +708,6 @@ extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
         goto cleanup;
     }
     ret = RC_OK;
-    if (layout_kind == LAYOUT_FIXED_OFFSETS) {
-        *out_used = fixed_used;
-    }
 
 cleanup:
     if (destroy_stream_resources && event != nullptr) {

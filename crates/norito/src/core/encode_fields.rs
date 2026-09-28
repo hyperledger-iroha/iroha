@@ -87,10 +87,7 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
-    use crate::core::{
-        DecodeFlagsGuard, DeserializePayload, frame_bare_with_header_flags, from_bytes,
-        header_flags, serialize_to_buffer,
-    };
+    use crate::core::{DecodeFlagsGuard, header_flags, serialize_to_buffer};
 
     struct CountedValue<'a> {
         visits: &'a Cell<usize>,
@@ -300,58 +297,6 @@ mod tests {
                     "overrun bytes reached output"
                 );
             }
-        }
-    }
-
-    #[derive(crate::Encode, crate::Decode, Debug, PartialEq)]
-    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
-    struct Wrapped {
-        value: u16,
-    }
-
-    #[derive(crate::Encode, crate::Decode, Debug, PartialEq)]
-    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
-    #[derive(crate::NoritoSchema)]
-    #[norito_schema(name = "norito.test.core.encode_fields.WithRaw")]
-    struct WithRaw {
-        wrapped: Wrapped,
-        raw: [u8; 3],
-    }
-
-    #[test]
-    fn packed_derive_raw_arrays_keep_canonical_bytes_and_roundtrip() {
-        let value = WithRaw {
-            wrapped: Wrapped { value: 0x0102 },
-            raw: [0xa0, 0xb0, 0xc0],
-        };
-        for flags in layouts() {
-            let _guard = DecodeFlagsGuard::enter(flags);
-            let mut expected = if flags & header_flags::FIELD_BITSET != 0 {
-                let mut bytes = vec![1];
-                if flags & header_flags::COMPACT_LEN != 0 {
-                    bytes.push(3);
-                } else {
-                    bytes.extend_from_slice(&3_u64.to_le_bytes());
-                }
-                bytes.extend_from_slice(&[0, 2, 1]);
-                bytes
-            } else {
-                [0_u64, 18, 21, 0, 2]
-                    .into_iter()
-                    .flat_map(u64::to_le_bytes)
-                    .chain([2, 1])
-                    .collect()
-            };
-            expected.extend_from_slice(&value.raw);
-            let mut actual = Vec::new();
-            serialize_to_buffer(&value, &mut actual).unwrap();
-            assert_eq!(
-                actual, expected,
-                "raw array framing changed, flags {flags:#x}"
-            );
-            let frame = frame_bare_with_header_flags::<WithRaw>(&actual, flags).unwrap();
-            let archived = from_bytes::<WithRaw>(&frame).unwrap();
-            assert_eq!(WithRaw::try_deserialize(archived).unwrap(), value);
         }
     }
 }

@@ -21,12 +21,9 @@ fn vec_nested_roundtrip_sequential() {
     let bytes = to_bytes(&payload).expect("encode sequential payload");
     let flags = bytes[core::Header::SIZE - 1];
     assert_eq!(
-        flags
-            & (core::header_flags::PACKED_STRUCT
-                | core::header_flags::FIELD_BITSET
-                | core::header_flags::PACKED_SEQ),
+        flags & !core::header_flags::COMPACT_LEN,
         0,
-        "sequential layout must not set packed layout flags"
+        "only COMPACT_LEN may be advertised"
     );
     assert_eq!(
         flags & core::header_flags::COMPACT_LEN,

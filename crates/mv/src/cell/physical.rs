@@ -7,6 +7,9 @@ use concread::{
     release::DeferredRelease,
 };
 
+/// Original current and undo owners released from both writers, with cleanup.
+type DetachedCellPair<V, C, Cleanup> = (EbrCellOwned<V, C>, EbrCellOwned<Option<V>, C>, Cleanup);
+
 enum CellStage<'a, V: Value, C: Send + Sync + 'static> {
     Held(ReleaseGuard<'a, EbrCellCommitSlot<'a, V, C>>),
     Released {
@@ -173,11 +176,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
     pub(super) fn abort<I>(
         mut self,
         installation: I,
-    ) -> (
-        EbrCellOwned<V, C>,
-        EbrCellOwned<Option<V>, C>,
-        PublicationCleanup<I>,
-    ) {
+    ) -> DetachedCellPair<V, C, PublicationCleanup<I>> {
         assert!(!self.released, "terminal release grants no journal");
         let (blocks, blocks_release) = self.blocks.take().expect("original current").abort();
         let (revert, revert_release) = self.revert.take().expect("original undo").abort();

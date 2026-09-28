@@ -3,9 +3,8 @@
 use super::*;
 use norito::{NoritoSchema, NoritoSerialize};
 
-fn layouts() -> impl Iterator<Item = u8> {
-    (0..=ncore::supported_header_flags())
-        .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
+fn layouts() -> [u8; 2] {
+    [0, ncore::header_flags::COMPACT_LEN]
 }
 
 fn payload(value: &impl NoritoSerialize, flags: u8) -> Vec<u8> {
@@ -75,22 +74,13 @@ fn domain_identity_preserves_captured_frame_and_schema() {
 fn domain_identity_preserves_every_advertised_field_layout() {
     let id = DomainId::try_new("a", "b").unwrap();
     for flags in layouts() {
-        let packed = flags & ncore::header_flags::PACKED_STRUCT != 0;
-        let compact = flags & ncore::header_flags::COMPACT_LEN != 0;
-        let bitset = flags & ncore::header_flags::FIELD_BITSET != 0;
-        let golden = match (packed, compact, bitset) {
-            (false, false, false) => concat!(
+        let golden = if flags & ncore::header_flags::COMPACT_LEN != 0 {
+            "020161020162"
+        } else {
+            concat!(
                 "0900000000000000010000000000000061",
                 "0900000000000000010000000000000062"
-            ),
-            (false, true, false) => "020161020162",
-            (true, false, false) => concat!(
-                "000000000000000009000000000000001200000000000000",
-                "010000000000000061010000000000000062"
-            ),
-            (true, true, false) => "00000000000000000200000000000000040000000000000001610162",
-            (true, true, true) => "03020201610162",
-            _ => unreachable!("the layout iterator validates advertised flag combinations"),
+            )
         };
         assert_eq!(
             hex::encode(payload(&id, flags)),
@@ -167,13 +157,6 @@ fn domain_identity_rejects_incomplete_or_extra_field_bytes_in_every_layout() {
             let _flags = ncore::DecodeFlagsGuard::enter(flags);
             assert!(<DomainId as ncore::DecodeFromSlice>::decode_from_slice(invalid).is_err());
         }
-        if flags & ncore::header_flags::PACKED_STRUCT != 0 {
-            let mut wrong_header = bytes.clone();
-            wrong_header[0] ^= 1;
-            let frame =
-                ncore::frame_bare_with_header_flags::<DomainId>(&wrong_header, flags).unwrap();
-            assert!(norito::decode_from_bytes::<DomainId>(&frame).is_err());
-        }
     }
 }
 
@@ -189,16 +172,7 @@ fn domain_binary_decoder_reserves_a_label_work_before_allocating() {
     for flags in layouts() {
         let bytes = payload(&id, flags);
         let _flags = ncore::DecodeFlagsGuard::enter(flags);
-        // Only the offset-table layout allocates header scratch: its audited
-        // decoder reserves exactly three usize entries for two field ranges.
-        let header_allocation = if flags & ncore::header_flags::PACKED_STRUCT != 0
-            && flags & ncore::header_flags::FIELD_BITSET == 0
-        {
-            3 * core::mem::size_of::<usize>()
-        } else {
-            0
-        };
-        let expected = header_allocation + label_allocation;
+        let expected = label_allocation;
         let (decoded, usage) = ncore::with_decode_limits_measured(limits(expected), || {
             ncore::decode_field_canonical::<DomainId>(&bytes)
         });
@@ -218,17 +192,16 @@ fn domain_binary_decoder_reserves_a_label_work_before_allocating() {
         assert!(rejected.unwrap_err().is_decode_resource_limit());
         assert_eq!(
             usage.total_allocated_bytes(),
-            header_allocation,
+            0,
             "do not start label allocation or normalization with a short budget: {flags:#04x}"
         );
 
         let bytes = payload(&invalid, flags);
-        let (rejected, usage) =
-            ncore::with_decode_limits_measured(limits(header_allocation), || {
-                ncore::decode_field_canonical::<DomainId>(&bytes)
-            });
+        let (rejected, usage) = ncore::with_decode_limits_measured(limits(0), || {
+            ncore::decode_field_canonical::<DomainId>(&bytes)
+        });
         assert!(matches!(rejected, Err(ncore::Error::NonCanonicalEncoding)));
-        assert_eq!(usage.total_allocated_bytes(), header_allocation);
+        assert_eq!(usage.total_allocated_bytes(), 0);
     }
 }
 

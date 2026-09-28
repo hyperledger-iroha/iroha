@@ -19,23 +19,14 @@ from .errors import (
 )
 
 MAGIC = b"NRT0"
-# Norito major version is the ABI/protocol revision. Minor versions encode the
-# compile-time default layout flags so that consumers can quickly detect which
-# static features were enabled (packed sequences/structs, compact lengths).
+# Norito v1 fixes both the major and the minor version at 0. The payload layout
+# is declared in the header flags byte: 0x00 selects fixed-width length
+# prefixes and COMPACT_LEN selects varint per-value length prefixes.
 MAJOR_VERSION = 0
-
-# Header flag constants (mirroring `norito.md`)
-PACKED_SEQ = 0x01
-COMPACT_LEN = 0x02
-PACKED_STRUCT = 0x04
-# Reserved in v1; packed sequence offsets are fixed-width u64.
-VARINT_OFFSETS = 0x08
-# Reserved in v1; sequence length headers are fixed-width u64.
-COMPACT_SEQ_LEN = 0x10
-FIELD_BITSET = 0x20
-
-# V1 minor version is fixed; layout flags are declared in the header flags byte.
 MINOR_VERSION = 0
+
+# Header flag constants (mirroring `norito.md`). Every other bit is reserved.
+COMPACT_LEN = 0x02
 
 # Maximum allowed alignment padding between the header and payload.
 MAX_HEADER_PADDING = 64
@@ -43,16 +34,7 @@ MAX_HEADER_PADDING = 64
 COMPRESSION_NONE = 0
 COMPRESSION_ZSTD = 1
 
-SUPPORTED_FLAGS = {
-    PACKED_SEQ,
-    COMPACT_LEN,
-    PACKED_STRUCT,
-    FIELD_BITSET,
-}
-
-_SUPPORTED_FLAGS_MASK = 0
-for _flag in SUPPORTED_FLAGS:
-    _SUPPORTED_FLAGS_MASK |= _flag
+_SUPPORTED_FLAGS_MASK = COMPACT_LEN
 
 
 def validate_flags(flags: int) -> None:
@@ -62,10 +44,6 @@ def validate_flags(flags: int) -> None:
     unsupported = normalized & ~_SUPPORTED_FLAGS_MASK
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
-    if normalized & FIELD_BITSET:
-        required = PACKED_STRUCT | COMPACT_LEN
-        if (normalized & required) != required:
-            raise UnsupportedFeatureError(normalized)
 
 
 @dataclass
@@ -191,12 +169,7 @@ __all__ = [
     "MAJOR_VERSION",
     "MINOR_VERSION",
     "MAX_HEADER_PADDING",
-    "PACKED_SEQ",
     "COMPACT_LEN",
-    "PACKED_STRUCT",
-    "VARINT_OFFSETS",
-    "COMPACT_SEQ_LEN",
-    "FIELD_BITSET",
     "COMPRESSION_NONE",
     "COMPRESSION_ZSTD",
     "validate_flags",

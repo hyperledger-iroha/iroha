@@ -1,6 +1,10 @@
 # Changelog
 
 ## v0.1.0 (unreleased)
+- Pinned Norito v1 header layouts to `0x00` and `0x02` (`COMPACT_LEN`), matching Rust. Removed
+  `PACKED_SEQ`, `PACKED_STRUCT`, `FIELD_BITSET` and the reserved `VARINT_OFFSETS`/`COMPACT_SEQ_LEN`
+  constants together with the packed sequence, map and struct codec paths; every other flag bit is
+  now rejected by `NoritoHeader`, `NoritoCodec.encodeAdaptive` and `NoritoCodec.DecodeFlagsGuard`.
 - Removed unused structural-schema hashing, tuple/result adapter factories, identity transparent
   wrappers, and raw-string compression profiles. Struct encoding is now explicit and Map-backed
   instead of discovering object properties through reflection. `NoritoCodec.tryDecode` retains its

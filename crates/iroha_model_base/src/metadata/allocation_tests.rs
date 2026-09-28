@@ -13,10 +13,8 @@ mod allocation_tests {
     }
 
     fn layouts() -> Vec<u8> {
-        let flags: Vec<_> = (0..=u8::MAX)
-            .filter(|&flags| ncore::validate_header_flags(flags).is_ok())
-            .collect();
-        assert_eq!(flags.len(), 10);
+        let flags = vec![0, ncore::header_flags::COMPACT_LEN];
+        assert_eq!(flags.len(), 2);
         flags
     }
 

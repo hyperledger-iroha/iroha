@@ -25,7 +25,6 @@ unsafe extern "C" {
         input_ptr: *const u8,
         input_len: usize,
         flags: u8,
-        layout_kind: u32,
         out_spans: *mut NoritoSequenceSpan,
         out_capacity: usize,
         out_count: *mut usize,
@@ -41,12 +40,7 @@ const RC_NO_SPACE: i32 = 2;
 const RC_UNAVAILABLE: i32 = 3;
 #[allow(dead_code)]
 const RC_BACKEND_ERROR: i32 = 4;
-#[allow(dead_code)]
 const FLAG_COMPACT_LEN: u8 = 0x02;
-#[allow(dead_code)]
-const LAYOUT_LENGTH_PREFIXED: u32 = 0;
-#[allow(dead_code)]
-const LAYOUT_FIXED_OFFSETS: u32 = 1;
 /// Build a structural tape (offsets) for the given JSON input.
 ///
 /// This entry point reports Metal availability directly. Scalar fallback is owned by the Norito
@@ -148,7 +142,11 @@ pub unsafe extern "C" fn norito_crc64_metal(
         RC_UNAVAILABLE
     }
 }
-/// Plan Norito binary sequence element spans.
+/// Plan the element spans of a length-prefixed Norito binary sequence.
+///
+/// The input is `[u64 count][len][payload]...`, where each element length is a
+/// fixed-width `u64` or, when `flags` carries `COMPACT_LEN` (`0x02`), a
+/// canonical varint. Any other flag bit is rejected as invalid input.
 ///
 /// Returns 0 on success, 1 for invalid input, 2 when `out_capacity` is too
 /// small, 3 when no helper backend is available, and 4 for backend failure.
@@ -156,11 +154,10 @@ pub unsafe extern "C" fn norito_crc64_metal(
 /// # Safety
 /// The caller must ensure the input and output pointers are valid for the supplied lengths.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn norito_binary_sequence_plan(
+pub unsafe extern "C" fn norito_length_prefixed_sequence_plan(
     input_ptr: *const u8,
     input_len: usize,
     flags: u8,
-    layout_kind: u32,
     out_spans: *mut NoritoSequenceSpan,
     out_capacity: usize,
     out_count: *mut usize,
@@ -172,6 +169,9 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
     if out_capacity > 0 && out_spans.is_null() {
         return RC_INVALID;
     }
+    if flags & !FLAG_COMPACT_LEN != 0 {
+        return RC_INVALID;
+    }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         unsafe {
@@ -179,7 +179,6 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
                 input_ptr,
                 input_len,
                 flags,
-                layout_kind,
                 out_spans,
                 out_capacity,
                 out_count,
@@ -189,7 +188,7 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
     }
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (input_len, flags, layout_kind, out_spans, out_capacity);
+        let _ = (input_len, out_spans, out_capacity);
         unsafe {
             *out_count = 0;
             *out_used = 0;
@@ -200,8 +199,8 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
 #[cfg(test)]
 mod tests {
     use super::{
-        NoritoSequenceSpan, crc64_cpu, crc64_raw, json_stage1_build_tape,
-        norito_binary_sequence_plan, norito_crc64_metal,
+        NoritoSequenceSpan, crc64_cpu, crc64_raw, json_stage1_build_tape, norito_crc64_metal,
+        norito_length_prefixed_sequence_plan,
     };
     const CRC64_INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     const CRC64_XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -339,11 +338,10 @@ mod tests {
         let mut count = 0usize;
         let mut used = 0usize;
         let rc = unsafe {
-            norito_binary_sequence_plan(
+            norito_length_prefixed_sequence_plan(
                 std::ptr::null(),
                 sequence.len(),
                 0,
-                super::LAYOUT_LENGTH_PREFIXED,
                 spans.as_mut_ptr(),
                 spans.len(),
                 &mut count,
@@ -352,11 +350,10 @@ mod tests {
         };
         assert_eq!(rc, super::RC_INVALID);
         let rc = unsafe {
-            norito_binary_sequence_plan(
+            norito_length_prefixed_sequence_plan(
                 sequence.as_ptr(),
                 sequence.len(),
                 0,
-                super::LAYOUT_LENGTH_PREFIXED,
                 std::ptr::null_mut(),
                 spans.len(),
                 &mut count,
@@ -365,11 +362,10 @@ mod tests {
         };
         assert_eq!(rc, super::RC_INVALID);
         let rc = unsafe {
-            norito_binary_sequence_plan(
+            norito_length_prefixed_sequence_plan(
                 sequence.as_ptr(),
                 sequence.len(),
                 0,
-                super::LAYOUT_LENGTH_PREFIXED,
                 spans.as_mut_ptr(),
                 spans.len(),
                 std::ptr::null_mut(),
@@ -378,11 +374,10 @@ mod tests {
         };
         assert_eq!(rc, super::RC_INVALID);
         let rc = unsafe {
-            norito_binary_sequence_plan(
+            norito_length_prefixed_sequence_plan(
                 sequence.as_ptr(),
                 sequence.len(),
                 0,
-                super::LAYOUT_LENGTH_PREFIXED,
                 spans.as_mut_ptr(),
                 spans.len(),
                 &mut count,
@@ -440,11 +435,10 @@ mod tests {
         let mut count = 0usize;
         let mut used = 0usize;
         let rc = unsafe {
-            norito_binary_sequence_plan(
+            norito_length_prefixed_sequence_plan(
                 bytes.as_ptr(),
                 bytes.len(),
                 super::FLAG_COMPACT_LEN,
-                super::LAYOUT_LENGTH_PREFIXED,
                 spans.as_mut_ptr(),
                 spans.len(),
                 &mut count,
@@ -461,6 +455,86 @@ mod tests {
         assert_eq!(spans[1].start, 12);
         assert_eq!(spans[1].end, 142);
         assert_eq!(used, bytes.len());
+    }
+    #[test]
+    fn binary_sequence_plan_length_prefixed_fixed_width() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u64.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.push(b'a');
+        bytes.extend_from_slice(&3u64.to_le_bytes());
+        bytes.extend_from_slice(b"bcd");
+        let mut spans = vec![NoritoSequenceSpan { start: 0, end: 0 }; 2];
+        let mut count = 0usize;
+        let mut used = 0usize;
+        let rc = unsafe {
+            norito_length_prefixed_sequence_plan(
+                bytes.as_ptr(),
+                bytes.len(),
+                0,
+                spans.as_mut_ptr(),
+                spans.len(),
+                &mut count,
+                &mut used,
+            )
+        };
+        if skip_if_unavailable(rc, "jsonstage1_metal sequence planner") {
+            return;
+        }
+        assert_eq!(rc, super::RC_OK);
+        assert_eq!(count, 2);
+        assert_eq!((spans[0].start, spans[0].end), (16, 17));
+        assert_eq!((spans[1].start, spans[1].end), (25, 28));
+        assert_eq!(used, bytes.len());
+    }
+    #[test]
+    fn binary_sequence_plan_empty_sequence_uses_only_count() {
+        let bytes = 0u64.to_le_bytes();
+        for flags in [0, super::FLAG_COMPACT_LEN] {
+            let mut count = usize::MAX;
+            let mut used = usize::MAX;
+            let rc = unsafe {
+                norito_length_prefixed_sequence_plan(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    flags,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut count,
+                    &mut used,
+                )
+            };
+            if skip_if_unavailable(rc, "jsonstage1_metal sequence planner") {
+                return;
+            }
+            assert_eq!(rc, super::RC_OK);
+            assert_eq!(count, 0);
+            assert_eq!(used, bytes.len());
+        }
+    }
+    #[test]
+    fn binary_sequence_plan_rejects_non_length_prefix_flags() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&[1, b'a']);
+        for flags in (0..=u8::MAX).filter(|flags| *flags & !super::FLAG_COMPACT_LEN != 0) {
+            let mut spans = [NoritoSequenceSpan { start: 0, end: 0 }; 1];
+            let mut count = usize::MAX;
+            let mut used = usize::MAX;
+            let rc = unsafe {
+                norito_length_prefixed_sequence_plan(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    flags,
+                    spans.as_mut_ptr(),
+                    spans.len(),
+                    &mut count,
+                    &mut used,
+                )
+            };
+            assert_eq!(rc, super::RC_INVALID, "flags {flags:#04x} must be rejected");
+            assert_eq!((count, used), (usize::MAX, usize::MAX));
+        }
     }
     #[test]
     fn crc64_chunked_matches_full_crc() {

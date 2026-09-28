@@ -315,7 +315,9 @@ fn fixture_reward_claim_plan(
 fn registration_rejects_changed_signed_monetary_fields_without_custody_writes() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+        b"registration_rejects_changed_signed_monetary_fields_without_custody_writes",
+    ));
     let (validator, recipient, escrow, definition) = prepare_accounts(&mut stx);
     let lane = LaneId::new(42);
     let instruction = RegisterPublicLaneValidator::new(
@@ -406,8 +408,7 @@ fn registration_rejects_changed_signed_monetary_fields_without_custody_writes() 
 fn reward_claim_rejects_changed_record_source_and_entitlement_without_payment() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(1));
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xBA);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xBA; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, recipient, asset, definition) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();

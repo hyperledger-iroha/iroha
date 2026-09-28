@@ -662,11 +662,7 @@ where
     let decoded: T = norito::decode_canonical(&canonical).unwrap();
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), canonical);
 
-    for flags in [
-        0,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-    ] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let _ambient = DecodeFlagsGuard::enter(flags);
         assert_eq!(norito::core::effective_decode_flags(), Some(flags));
         assert_eq!(norito::encode_canonical(value).unwrap(), canonical);

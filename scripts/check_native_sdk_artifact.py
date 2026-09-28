@@ -191,6 +191,13 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (
+        *CONFIDENTIAL_PROVER_C_EXPORTS,
+        "connect_norito_confidential_note_derivation_revision_v3",
+        "connect_norito_confidential_default_diversifier_v3",
+        "connect_norito_confidential_diversifier_derive_v3",
+        "connect_norito_confidential_owner_tag_derive_v3",
+        "connect_norito_confidential_note_commitment_derive_v3",
+        "connect_norito_confidential_merkle_path_derive_v3",
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
         # Durable journal-backed testnet admission has no Windows C declaration

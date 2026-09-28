@@ -42,7 +42,7 @@ pub struct PublicLanePrepareRegistrationV1 {
     pub peer_id: PeerId,
     /// Explicit amount selected by the operator.
     pub amount: Quantity,
-    /// Include fresh-peer key activation lead for RegisterPublicLaneCandidate.
+    /// Include fresh-peer key activation lead for `RegisterPublicLaneCandidate`.
     pub candidate: bool,
 }
 

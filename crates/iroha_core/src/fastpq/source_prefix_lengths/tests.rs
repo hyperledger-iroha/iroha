@@ -266,7 +266,7 @@ fn canonical_layout_is_explicit_and_ambient_layout_is_restored() {
     let first = delta(quantity(1, 0), quantity(10, 0), Quantity::zero());
     let prefix = transcript(vec![first.clone()]);
     let expected = reference(&prefix);
-    for flags in [0, header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let _ambient = DecodeFlagsGuard::enter(flags);
         let before = norito::core::encoded_payload_len(&vec![1_u32, 2]).unwrap();
         let actual = sizer()
@@ -277,10 +277,14 @@ fn canonical_layout_is_explicit_and_ambient_layout_is_restored() {
             norito::core::encoded_payload_len(&vec![1_u32, 2]).unwrap(),
             before
         );
-        assert!(matches!(
-            canonical_flags(flags),
-            Err(PrefixLengthError::UnsupportedLayout)
-        ));
+        if flags == header_flags::COMPACT_LEN {
+            assert!(matches!(canonical_flags(flags), Ok(canonical) if canonical == flags));
+        } else {
+            assert!(matches!(
+                canonical_flags(flags),
+                Err(PrefixLengthError::UnsupportedLayout)
+            ));
+        }
     }
 }
 

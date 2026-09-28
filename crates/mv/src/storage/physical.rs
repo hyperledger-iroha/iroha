@@ -7,20 +7,22 @@ use concread::{
     release::DeferredRelease,
 };
 
+/// A refused reacquisition: the unchanged owner, its refusal, and the release
+/// notification of a writer that was acquired and then aborted.
+#[cfg(test)]
+type OwnedWriterRefusal<K, V, M> = (
+    BptreeMapOwned<K, V, M>,
+    OwnedWriteError,
+    Option<DeferredRelease>,
+);
+
 /// Join notifications only to an actually acquired original physical writer.
 #[cfg(test)]
 pub(super) fn acquire_owned_writer<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>>(
     map: &'a BptreeMap<K, V, M>,
     released: &'a ReleaseNotification,
     owned: BptreeMapOwned<K, V, M>,
-) -> Result<
-    ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>,
-    (
-        BptreeMapOwned<K, V, M>,
-        OwnedWriteError,
-        Option<DeferredRelease>,
-    ),
-> {
+) -> Result<MapWriter<'a, K, V, M>, OwnedWriterRefusal<K, V, M>> {
     let acquired = map
         .try_acquire_owned(owned)
         .map_err(|(owned, error)| (owned, error, None))?;
@@ -47,7 +49,7 @@ pub(super) struct MapReleases {
 }
 
 impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> MapStage<'a, K, V, M> {
-    fn new(writer: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>) -> Self {
+    fn new(writer: MapWriter<'a, K, V, M>) -> Self {
         Self::Held(writer.map_preserving_release(|writer| writer.commit_slot()))
     }
 
@@ -258,11 +260,7 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
     pub(super) fn abort<I>(
         mut self,
         installation: I,
-    ) -> (
-        BptreeMapOwned<K, V, M>,
-        BptreeMapOwned<K, Option<V>, M>,
-        PublicationCleanup<I>,
-    ) {
+    ) -> DetachedPair<K, V, M, PublicationCleanup<I>> {
         assert!(!self.released, "terminal release grants no journal");
         let (blocks, block_releases) = self.blocks.take().expect("original current").abort();
         let (revert, revert_releases) = self.revert.take().expect("original undo").abort();

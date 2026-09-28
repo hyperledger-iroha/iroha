@@ -2993,7 +2993,6 @@ pub mod runtime_governance {
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Draft a standalone version-one zero-knowledge referendum ballot proof instruction.
-
     pub const GOV_BALLOT_ZK_V1_PROOF: RouteDescriptor = app_post(
         "governance.ballot.zk_v1_proof",
         "/v1/gov/ballots/zk-v1/ballot-proof",
@@ -3631,7 +3630,7 @@ pub mod sorafs {
         reason: "content-addressed SoraFS gateway wildcard",
     });
     /// Complete route family registered by the public-gateway and optional
-    /// application/admin SoraFS route assemblers.
+    /// application/admin `SoraFS` route assemblers.
     pub const ROUTES: &[RouteDescriptor] = &[
         STORAGE_PEERS,
         PROVIDERS,

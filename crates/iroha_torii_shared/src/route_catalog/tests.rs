@@ -18,7 +18,7 @@ mod tests {
             diagnostic::STATUS_PEERS,
         ];
         assert_eq!(
-            routes.map(|route| route.path()),
+            routes.map(super::RouteDescriptor::path),
             ["/status", "/status/blocks", "/status/peers"]
         );
         assert!(
@@ -1466,14 +1466,13 @@ mod tests {
                 );
             }
         }
-        for route in [contracts_and_verification_keys::CONTRACTS_ALIASES_POST] {
-            assert_eq!(route.effect(), RouteEffect::Mutation);
-            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
-            assert_eq!(
-                route.authentication(),
-                AuthenticationPolicy::CanonicalAccountSignature
-            );
-        }
+        let route = contracts_and_verification_keys::CONTRACTS_ALIASES_POST;
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
         for route in [
             contracts_and_verification_keys::SORAFS_CAPACITY_DECLARE_POST,
             contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
@@ -1620,56 +1619,47 @@ mod tests {
             "/v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery",
         ]);
         for route in soracloud_routes {
-            assert_eq!(route.surface(), ApiSurface::Public, "{}", route.path());
-            assert_eq!(route.listener(), Listener::Torii, "{}", route.path());
+            let path = route.path();
+            assert_eq!(route.surface(), ApiSurface::Public, "{path}");
+            assert_eq!(route.listener(), Listener::Torii, "{path}");
             assert_eq!(
                 route.feature_gate(),
                 FeatureGate::Feature("app_api"),
-                "{}",
-                route.path()
+                "{path}"
             );
-            assert!(route.projections().openapi(), "{}", route.path());
-            assert!(route.projections().sdk(), "{}", route.path());
-            assert!(!route.projections().mcp(), "{}", route.path());
-            assert_eq!(route.route_match(), RouteMatch::Exact, "{}", route.path());
+            assert!(route.projections().openapi(), "{path}");
+            assert!(route.projections().sdk(), "{path}");
+            assert!(!route.projections().mcp(), "{path}");
+            assert_eq!(route.route_match(), RouteMatch::Exact, "{path}");
             assert_eq!(
                 route.path_normalization(),
                 PathNormalization::Strict,
-                "{}",
-                route.path()
+                "{path}"
             );
-            assert!(route.cors_options(), "{}", route.path());
-            assert_eq!(route.transport(), RouteTransport::Http, "{}", route.path());
+            assert!(route.cors_options(), "{path}");
+            assert_eq!(route.transport(), RouteTransport::Http, "{path}");
 
-            if public_reads.contains(route.path()) {
-                assert_eq!(route.method(), HttpMethod::Get, "{}", route.path());
+            if public_reads.contains(path) {
+                assert_eq!(route.method(), HttpMethod::Get, "{path}");
                 assert_eq!(
                     route.authentication(),
                     AuthenticationPolicy::ToriiDefault,
-                    "{}",
-                    route.path()
+                    "{path}"
                 );
-                assert_eq!(
-                    route.admission(),
-                    AdmissionPolicy::Public,
-                    "{}",
-                    route.path()
-                );
-                assert_eq!(route.effect(), RouteEffect::ReadOnly, "{}", route.path());
+                assert_eq!(route.admission(), AdmissionPolicy::Public, "{path}");
+                assert_eq!(route.effect(), RouteEffect::ReadOnly, "{path}");
                 continue;
             }
 
             assert_eq!(
                 route.authentication(),
                 AuthenticationPolicy::CanonicalAccountSignature,
-                "{}",
-                route.path()
+                "{path}"
             );
             assert_eq!(
                 route.admission(),
                 AdmissionPolicy::AuthenticatedAccount,
-                "{}",
-                route.path()
+                "{path}"
             );
             let expected_effect = match (route.method(), route.path()) {
                 (HttpMethod::Get, _) | (HttpMethod::Post, "/v1/soracloud/ciphertext/query") => {
@@ -1678,7 +1668,7 @@ mod tests {
                 (HttpMethod::Post, _) => RouteEffect::Mutation,
                 (method, path) => panic!("unsupported Soracloud release route {method:?} {path}"),
             };
-            assert_eq!(route.effect(), expected_effect, "{}", route.path());
+            assert_eq!(route.effect(), expected_effect, "{path}");
         }
     }
     #[test]

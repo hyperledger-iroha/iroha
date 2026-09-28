@@ -286,7 +286,7 @@ impl RelayPayoutService {
                 epoch,
             },
         )?;
-        let norito_record = self.payout_ledger.open_dispute(
+        let norito_record = RelayPayoutLedger::open_dispute(
             payout_record.instruction.clone(),
             requested_amount,
             submitted_by,

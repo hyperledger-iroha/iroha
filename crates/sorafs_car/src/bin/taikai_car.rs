@@ -22,7 +22,8 @@ use std::{
 };
 #[path = "../taikai/output_fs.rs"]
 mod output_fs;
-use output_fs::{ensure_parent_dir, set_no_follow_flag, validate_output_writable};
+use output_fs::{ensure_parent_dir, validate_output_writable};
+use sorafs_car::set_no_follow_flag;
 #[derive(Parser, Debug)]
 #[command(
     name = "taikai_car",

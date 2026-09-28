@@ -536,7 +536,7 @@ pub struct StoredManifest {
 /// filesystem path. The storage backend retains the manifest lifecycle read lock for the complete
 /// callback that receives this value, preventing eviction until the callback returns. Completed
 /// Musubi attestations must enter through
-/// [`crate::NodeHandle::verify_provider_ingest_completed_musubi_capture_bundle`], which checks the
+/// `NodeHandle::verify_provider_ingest_completed_musubi_capture_bundle`, which checks the
 /// process-local store-instance authority before this lease owns all three fresh-reader passes and
 /// never accepts verifier evidence retained outside the lease.
 pub struct AdmittedPayloadReadLeaseV1<'manifest> {

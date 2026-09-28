@@ -26,9 +26,7 @@ where
     let decoded: T = norito::decode_from_bytes(&frame).expect("decode address frame");
     assert_eq!(&decoded, value);
     let mut layouts = Vec::new();
-    for requested in (0..=norito::core::supported_header_flags())
-        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
-    {
+    for requested in [0, norito::core::header_flags::COMPACT_LEN] {
         let _guard = norito::core::DecodeFlagsGuard::enter(requested);
         let (payload, actual) = norito::codec::encode_with_header_flags(value);
         let framed = norito::core::frame_bare_with_header_flags::<T>(&payload, actual)

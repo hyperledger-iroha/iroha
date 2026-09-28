@@ -64,12 +64,7 @@ fn fixed_frame_matches_existing_writers_and_the_declared_golden_header() {
     assert_eq!(&fixed[..Header::SIZE], &golden_header);
     assert_eq!(&fixed[Header::SIZE..], &payload);
     assert_eq!(fixed, norito::encode_canonical(&Record(payload)).unwrap());
-    for flags in [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET,
-    ] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let layout = FixedFrameLayout::<Record>::new(payload.len(), flags).unwrap();
         let fixed = frame(&layout, &payload);
         let buffered = frame_bare_with_header_flags::<Record>(&payload, flags).unwrap();
@@ -108,7 +103,7 @@ fn fixed_frame_malformed_headers_and_payloads_have_fixed_allocation_free_errors(
     let layout = FixedFrameLayout::<Aligned>::new(144, 0).unwrap();
     let original = frame(&layout, &[19; 144]);
     assert_eq!(layout.frame_len(), 64 + 144);
-    for case in 0..15 {
+    for case in 0..17 {
         let mut bytes = original.clone();
         match case {
             0 => bytes[0] ^= 1,
@@ -123,9 +118,11 @@ fn fixed_frame_malformed_headers_and_payloads_have_fixed_allocation_free_errors(
             9 => bytes[31] ^= 1,
             10 => bytes[39] = header_flags::COMPACT_LEN,
             11 => bytes[39] = 0x80,
-            12 => bytes[39] = header_flags::FIELD_BITSET,
+            12 => bytes[39] = 0x20,
             13 => bytes[Header::SIZE] = 1,
             14 => *bytes.last_mut().unwrap() ^= 1,
+            15 => bytes[39] = 0x01,
+            16 => bytes[39] = 0x04,
             _ => unreachable!(),
         }
         let error = measured(|| layout.payload(&bytes)).unwrap_err();
@@ -139,7 +136,7 @@ fn fixed_frame_malformed_headers_and_payloads_have_fixed_allocation_free_errors(
                 6..=8 | 13 => matches!(error, Error::LengthMismatch),
                 9 | 14 => matches!(error, Error::ChecksumMismatch),
                 10 => matches!(error, Error::NonCanonicalEncoding),
-                11 | 12 => matches!(error, Error::UnsupportedFeature(_)),
+                11 | 12 | 15 | 16 => matches!(error, Error::UnsupportedFeature(_)),
                 _ => false,
             },
             "case {case}"
@@ -288,10 +285,12 @@ fn fixed_frame_constructor_checks_bounds_before_resolving_one_cached_identity() 
         measured(|| FixedFrameLayout::<Counted>::new(3, 0x80)),
         Err(Error::UnsupportedFeature(_))
     ));
-    assert!(matches!(
-        measured(|| FixedFrameLayout::<Counted>::new(3, header_flags::FIELD_BITSET)),
-        Err(Error::UnsupportedFeature(_))
-    ));
+    for reserved in [0x01, 0x04, 0x20] {
+        assert!(matches!(
+            measured(|| FixedFrameLayout::<Counted>::new(3, reserved)),
+            Err(Error::UnsupportedFeature(_))
+        ));
+    }
     let maximum = usize::try_from(norito::core::max_archive_len()).unwrap();
     if let Some(excess) = maximum
         .checked_add(1)

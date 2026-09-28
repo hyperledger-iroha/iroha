@@ -300,29 +300,6 @@ mod tests {
         }
     }
     #[test]
-    fn packed_serialization_rejects_a_changed_counted_payload() {
-        struct Growing(Cell<usize>);
-
-        impl SerializePayload for Growing {
-            fn serialize(
-                &self,
-                writer: &mut norito::core::Encoder<'_>,
-            ) -> Result<(), ncore::Error> {
-                let pass = self.0.get();
-                self.0.set(pass + 1);
-                writer.write_all(if pass == 0 { &[0x11] } else { &[0x11, 0x22] })?;
-                Ok(())
-            }
-        }
-        let values = ConstVec::new(vec![Growing(Cell::new(0))]);
-        let mut encoded = Vec::new();
-        let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::PACKED_SEQ);
-        let error = ncore::serialize_to_buffer(&values, &mut encoded)
-            .expect_err("a changed second pass must invalidate packed offsets");
-        assert!(matches!(error, ncore::Error::LengthMismatch));
-        assert_eq!(values[0].0.get(), 2);
-    }
-    #[test]
     fn nested_const_vec_measurement_visits_each_leaf_once_in_every_layout() {
         struct Leaf<'a>(&'a Cell<usize>);
 
@@ -333,9 +310,7 @@ mod tests {
                 Ok(())
             }
         }
-        for flags in (0..=ncore::supported_header_flags())
-            .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
-        {
+        for flags in [0, ncore::header_flags::COMPACT_LEN] {
             let _flags = ncore::DecodeFlagsGuard::enter(flags);
             let calls = Cell::new(0);
             let value = ConstVec::new(vec![ConstVec::new(vec![ConstVec::new(vec![Leaf(&calls)])])]);
@@ -371,9 +346,7 @@ mod tests {
             assert_eq!(checked_bytes, bytes);
         }
 
-        for flags in (0..=ncore::supported_header_flags())
-            .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
-        {
+        for flags in [0, ncore::header_flags::COMPACT_LEN] {
             let _flags = ncore::DecodeFlagsGuard::enter(flags);
             for values in [Vec::new(), vec![0x1020_u16, 0x3040]] {
                 let constant =
@@ -575,39 +548,6 @@ mod tests {
         assert_eq!(decoded.into_vec(), vec![3, 5, 8]);
     }
     #[test]
-    fn packed_seq_matches_vec_layout() {
-        let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
-        let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let items = vec![vec![1u8, 2, 3], vec![4u8, 5]];
-        let const_vec = ConstVec::from(items.clone());
-        let mut const_bytes = Vec::new();
-        ncore::serialize_to_buffer(&const_vec, &mut const_bytes)
-            .expect("serialize ConstVec<Vec<u8>> with packed-seq flags");
-        let mut vec_bytes = Vec::new();
-        ncore::serialize_to_buffer(&items, &mut vec_bytes).expect("serialize Vec<Vec<u8>>");
-        assert_eq!(
-            const_bytes, vec_bytes,
-            "ConstVec encoding diverges from Vec under packed-seq layout"
-        );
-    }
-    #[test]
-    fn packed_seq_payload_requires_flags() {
-        let value = ConstVec::from(vec![1_u8, 2, 3]);
-        let flags = ncore::header_flags::PACKED_SEQ;
-        let mut packed = Vec::new();
-        {
-            let _guard = ncore::DecodeFlagsGuard::enter(flags);
-            ncore::serialize_to_buffer(&value, &mut packed).expect("serialize packed const vec");
-        }
-        ncore::reset_decode_state();
-        let err = <ConstVec<u8> as ncore::DecodeFromSlice>::decode_from_slice(&packed)
-            .expect_err("packed payload should require packed-seq flags");
-        assert!(matches!(
-            err,
-            ncore::Error::LengthMismatch | ncore::Error::DecodePanic { .. }
-        ));
-    }
-    #[test]
     fn matches_vec_encoding_canonical_flags() {
         let items = vec![vec![0xAAu8; 17], vec![0xBBu8; 9], vec![0xCCu8; 23]];
         let const_bytes = ConstVec::from(items.clone()).encode();
@@ -655,31 +595,6 @@ mod tests {
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
     }
     #[test]
-    fn packed_encoded_len_exact_is_none_when_element_exact_len_is_unknown() {
-        let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
-        let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
-        let mut bytes = Vec::new();
-        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
-        assert_eq!(value.encoded_len_exact(), None);
-        assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
-    }
-    #[test]
-    fn encoded_len_exact_matches_packed_seq() {
-        let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5, 6, 7]]);
-        let mut bytes = Vec::new();
-        {
-            let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
-            let _guard = ncore::DecodeFlagsGuard::enter(flags);
-            ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
-            assert_eq!(
-                value.encoded_len_exact(),
-                Some(bytes.len()),
-                "ConstVec exact length should match packed layout payload"
-            );
-        }
-    }
-    #[test]
     fn compact_len_updates_encoded_lengths() {
         let flags = ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
@@ -689,19 +604,6 @@ mod tests {
         assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
         assert_eq!(bytes.len(), 12);
-    }
-    #[test]
-    fn packed_seq_roundtrip_alignment() {
-        let flags = ncore::header_flags::PACKED_SEQ;
-        let encode_guard = ncore::DecodeFlagsGuard::enter(flags);
-        let items = ConstVec::from(vec![1_u128, 2, 3, 4, 5]);
-        let encoded = items.encode();
-        drop(encode_guard);
-        let decode_guard = ncore::DecodeFlagsGuard::enter(flags);
-        let decoded = norito::codec::decode_adaptive::<ConstVec<u128>>(&encoded)
-            .expect("packed seq roundtrip");
-        drop(decode_guard);
-        assert_eq!(decoded.into_vec(), items.into_vec());
     }
     #[test]
     fn encoded_len_exact_matches_compat_offsets() {
@@ -738,27 +640,6 @@ mod tests {
         assert_eq!(decoded.into_vec(), expected);
     }
     #[test]
-    fn packed_seq_lengths_support_inexact_elements() {
-        let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
-        let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let value = ConstVec::from(vec![InexactByte(4), InexactByte(5)]);
-        let mut bytes = Vec::new();
-        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
-        assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
-        assert_eq!(value.encoded_len_exact(), None);
-    }
-    #[test]
-    fn direct_decoder_respects_packed_seq() {
-        let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
-        let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let expected = vec![vec![1_u8, 2], vec![3_u8, 4, 5]];
-        let value = ConstVec::from(expected.clone());
-        let mut bytes = Vec::new();
-        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
-        let decoded = decode_const_vec_exact::<Vec<u8>>(&bytes).expect("decode packed const vec");
-        assert_eq!(decoded.into_vec(), expected);
-    }
-    #[test]
     fn direct_decoder_rejects_clobbered_unpacked_length_words() {
         let _guard = ncore::DecodeFlagsGuard::enter(0);
         let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5]]);
@@ -767,19 +648,6 @@ mod tests {
         bytes[8..16].copy_from_slice(&99_u64.to_le_bytes());
         let error = decode_const_vec_exact::<Vec<u8>>(&bytes)
             .expect_err("a non-canonical element length must be rejected");
-        assert!(matches!(error, ncore::Error::LengthMismatch));
-    }
-    #[test]
-    fn corrupted_packed_header_is_rejected() {
-        let flags = ncore::header_flags::PACKED_SEQ;
-        let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5, 6]]);
-        let mut payload = Vec::new();
-        ncore::serialize_to_buffer(&value, &mut payload).expect("serialize const vec");
-        let (_, header_len) = ncore::read_seq_len_slice(&payload).expect("sequence header");
-        payload[..header_len].fill(0);
-        let error = decode_const_vec_exact::<Vec<u8>>(&payload)
-            .expect_err("a corrupt count must not be recovered");
         assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     fn manual_unpacked_payload(elements: &[&[u8]]) -> Vec<u8> {

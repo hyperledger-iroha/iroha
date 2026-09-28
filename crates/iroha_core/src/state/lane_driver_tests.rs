@@ -772,6 +772,11 @@ fn native_driver_recovery_exchange_for_test(
         .canonical_resultless_proposal()
         .encode_wire()
         .unwrap();
+    let canonical_size = u64::try_from(body.len()).unwrap();
+    assert!(
+        canonical_size <= finality.height_context.da_layout.max_payload_size_bytes,
+        "canonical signed recovery carrier ({canonical_size} bytes) must fit its certified layout",
+    );
     let (manifest, _) = v2_chunks::encode_payload(
         &finality.height_context,
         request.request().round,
@@ -780,6 +785,8 @@ fn native_driver_recovery_exchange_for_test(
     )
     .unwrap()
     .into_parts();
+    assert_eq!(manifest.payload_size_bytes, canonical_size);
+    assert_eq!(manifest.layout, finality.height_context.da_layout);
     let mut response = wire::CertifiedBodyResponse {
         request_hash: request.request_hash(),
         manifest,

@@ -1181,7 +1181,6 @@ mod tests {
         assert_eq!(signature.payload(), &[0x11u8; 64]);
     }
     #[test]
-    #[expect(clippy::too_many_lines, reason = "cohesive signature decode matrix")]
     fn canonical_unpacked_signature_decode_uses_exact_fallible_storage() {
         let payload = [0x11_u8; 64];
         let mut bytes = Vec::with_capacity(8 + payload.len() * 9);
@@ -1234,45 +1233,6 @@ mod tests {
                 limit: 63
             }
         ));
-
-        let packed_flags =
-            norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN;
-        let mut packed = Vec::new();
-        {
-            let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
-            norito::core::serialize_to_buffer(&decoded, &mut packed)
-                .expect("serialize packed signature payload");
-        }
-        {
-            let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
-            let slice_error = norito::core::with_decode_limits(sequence_limited, || {
-                <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&packed)
-            })
-            .expect_err("packed slice decode must enforce the sequence-element ceiling");
-            assert!(matches!(
-                slice_error,
-                norito::core::Error::SequenceLengthExceeded {
-                    length: 64,
-                    limit: 63
-                }
-            ));
-            let archived = norito::core::archived_from_slice::<Signature>(&packed)
-                .expect("sized packed archived signature marker");
-            let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
-            let pointer_error = norito::core::with_decode_limits(sequence_limited, || {
-                <Signature as norito::core::DeserializePayload<'_>>::try_deserialize(
-                    archived.as_ref(),
-                )
-            })
-            .expect_err("packed pointer decode must preserve the terminal sequence limit");
-            assert!(matches!(
-                pointer_error,
-                norito::core::Error::SequenceLengthExceeded {
-                    length: 64,
-                    limit: 63
-                }
-            ));
-        }
 
         let archived = norito::core::archived_from_slice::<Signature>(&bytes)
             .expect("sized canonical unpacked signature marker");

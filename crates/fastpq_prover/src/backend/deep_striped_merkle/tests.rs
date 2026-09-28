@@ -373,11 +373,8 @@ fn malformed_and_failed_streams_cannot_return_a_root() {
         .unwrap();
     stream.push(0, values[0], hash).unwrap();
     assert!(stream.push(0, values[0], hash).is_err());
-    // Rejecting an extra request leaves the already-complete valid stream intact.
-    assert_eq!(
-        stream.finish(hash).unwrap().root,
-        reference(&values[..1])[1][0]
-    );
+    // Every rejected insertion poisons the owner, including after coverage.
+    assert!(stream.finish(hash).is_err());
 }
 
 #[test]
@@ -402,6 +399,7 @@ fn actual_masked_rows_use_canonical_binding_and_match_materialized_frontiers() {
         &queries,
         tree,
         crate::DigestExecutionV1::Cpu,
+        None,
     )
     .unwrap();
     let mut all = vec![Digest::default(); leaves_count];

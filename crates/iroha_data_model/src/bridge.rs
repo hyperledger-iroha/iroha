@@ -989,10 +989,6 @@ fn verify_successor_bridge_finality_proof(
                     && context.kagemusha_mint_finality_authority
                         == parent.height_context.kagemusha_mint_finality_authority
                     && context.epoch_end_height == parent.height_context.epoch_end_height
-                    && context.kagemusha_mint_finality_authorization
-                        == parent.height_context.kagemusha_mint_finality_authorization
-                    && context.kagemusha_mint_finality_authority
-                        == parent.height_context.kagemusha_mint_finality_authority
                     && context.roster == parent.height_context.roster
                     && context.quorum == parent.height_context.quorum
                     && context.leader_seed == parent.height_context.leader_seed
@@ -1005,10 +1001,6 @@ fn verify_successor_bridge_finality_proof(
                     && context.kagemusha_mint_finality_authority
                         == snapshot.kagemusha_mint_finality_authority
                     && context.epoch_end_height == snapshot.epoch_end_height
-                    && context.kagemusha_mint_finality_authorization
-                        == snapshot.kagemusha_mint_finality_authorization
-                    && context.kagemusha_mint_finality_authority
-                        == snapshot.kagemusha_mint_finality_authority
                     && context.mode == snapshot.mode
                     && context.roster == snapshot.roster
                     && context.quorum == snapshot.quorum

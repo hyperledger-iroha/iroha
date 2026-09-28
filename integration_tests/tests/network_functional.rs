@@ -14,8 +14,10 @@ mod observer_sync;
 #[cfg(feature = "zk-stark")]
 #[path = "privacy_exact12_activation_network.rs"]
 mod privacy_exact12_activation_network;
+#[cfg(feature = "privacy-release-evidence")]
 #[path = "privacy_exact12_jindo_network.rs"]
 mod privacy_exact12_jindo_network;
+#[cfg(any(feature = "privacy-release-evidence", feature = "zk-stark"))]
 #[path = "privacy_exact12_network_support.rs"]
 mod privacy_exact12_network_support;
 #[cfg(feature = "privacy-release-evidence")]

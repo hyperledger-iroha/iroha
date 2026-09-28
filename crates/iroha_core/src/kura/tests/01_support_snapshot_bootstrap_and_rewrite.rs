@@ -112,8 +112,7 @@ fn provisional_snapshot_gate_preserves_tree_across_mutation_families() {
         .expect("write retired purge fixture");
     let before = snapshot_regular_test_tree(&store_root);
     let pending = provisional_snapshot_metadata(5);
-    *kura.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending);
+    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Pending(pending);
     let entry_hash =
         HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
     assert!(matches!(
@@ -1472,10 +1471,8 @@ fn kagemusha_borrowed_sidecar_decoder_matches_derived_v1_in_every_casting_phase(
             .expect("independent derived final decoder"),
         finalized
     );
-    // The fixed bare V1 payload is independent of a caller's framed layout.
-    let ambient = norito::core::header_flags::PACKED_SEQ
-        | norito::core::header_flags::PACKED_STRUCT
-        | norito::core::header_flags::COMPACT_LEN;
+    // The fixed bare V1 payload is independent of a caller's non-default framed layout.
+    let ambient = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _flags = norito::core::DecodeFlagsGuard::enter(ambient);
     let _payload = norito::core::PayloadCtxGuard::enter_with_flags(&[0xAA], ambient);
     let decoded_staged = kagemusha_finality_decode::decode_staged(&staged_bytes)
@@ -1546,17 +1543,13 @@ fn kagemusha_borrowed_sidecar_decoder_rejects_layout_lengths_variants_and_traili
         }
         assert_eq!(field_start, binding_bytes.len());
     }
-    for flags in [
-        0,
-        norito::core::header_flags::COMPACT_LEN | norito::core::header_flags::PACKED_SEQ,
-        norito::core::header_flags::COMPACT_LEN | norito::core::header_flags::PACKED_STRUCT,
-    ] {
-        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        let (staged_bytes, _) = norito::codec::encode_with_header_flags(&staged);
-        let (finalized_bytes, _) = norito::codec::encode_with_header_flags(&finalized);
-        assert!(kagemusha_finality_decode::decode_staged(&staged_bytes).is_err());
-        assert!(kagemusha_finality_decode::decode_finalized(&finalized_bytes).is_err());
-    }
+    // The fixed-width length layout is the only non-canonical V1 layout.
+    let _flags = norito::core::DecodeFlagsGuard::enter(0);
+    let (staged_bytes, staged_flags) = norito::codec::encode_with_header_flags(&staged);
+    let (finalized_bytes, finalized_flags) = norito::codec::encode_with_header_flags(&finalized);
+    assert_eq!((staged_flags, finalized_flags), (0, 0));
+    assert!(kagemusha_finality_decode::decode_staged(&staged_bytes).is_err());
+    assert!(kagemusha_finality_decode::decode_finalized(&finalized_bytes).is_err());
 }
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {

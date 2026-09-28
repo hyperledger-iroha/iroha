@@ -20,21 +20,6 @@ fn signature_layout_fixture_uses_checked_ed25519_keypair() {
     let key_pair = checked_ed25519_keypair();
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
-fn read_varint(bytes: &[u8]) -> (usize, usize) {
-    let mut i = 0usize;
-    let mut val: u64 = 0;
-    let mut shift = 0u32;
-    loop {
-        let b = bytes[i];
-        i += 1;
-        val |= u64::from(b & 0x7F) << shift;
-        if (b & 0x80) == 0 {
-            break;
-        }
-        shift += 7;
-    }
-    (usize::try_from(val).unwrap_or(usize::MAX), i)
-}
 fn dump_header(label: &str, bytes: &[u8]) {
     use norito::core::{Header, header_flags};
     use std::fmt::Write as _;
@@ -59,15 +44,6 @@ fn dump_header(label: &str, bytes: &[u8]) {
         }
         let _ = write!(flag_desc, "{name}");
     };
-    if (flags & header_flags::PACKED_STRUCT) != 0 {
-        push_flag("PACKED_STRUCT");
-    }
-    if (flags & header_flags::FIELD_BITSET) != 0 {
-        push_flag("FIELD_BITSET");
-    }
-    if (flags & header_flags::PACKED_SEQ) != 0 {
-        push_flag("PACKED_SEQ");
-    }
     if (flags & header_flags::COMPACT_LEN) != 0 {
         push_flag("COMPACT_LEN");
     }
@@ -83,17 +59,20 @@ fn dump_header(label: &str, bytes: &[u8]) {
     eprintln!("{label} body prefix={body_prefix:02x?}");
 }
 #[test]
-fn signature_bare_hybrid_is_bitset_plus_constvec() {
-    // Build a tiny signature payload and encode via bare codec (hybrid packed-struct enabled by default)
+fn signature_bare_default_layout_frames_each_payload_byte_compactly() {
+    // The bare codec uses the default COMPACT_LEN layout: a fixed u64 sequence
+    // count followed by one compact-length-framed byte per element.
     let sig = Signature::from_bytes(&[0xAA, 0xBB, 0xCC, 0xDD]);
     let bytes = sig.encode();
-    assert!(!bytes.is_empty());
-    let bitset = bytes[0];
-    assert_eq!(
-        bitset & 0x04,
-        0x04,
-        "packed-struct bitset should flag payload"
-    );
+    let flags = core::default_encode_flags();
+    assert_eq!(flags, core::header_flags::COMPACT_LEN);
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&(sig.payload().len() as u64).to_le_bytes());
+    for byte in sig.payload() {
+        core::write_len_to_vec_with_flags(&mut expected, 1, flags);
+        expected.push(*byte);
+    }
+    assert_eq!(bytes, expected);
     let (decoded, used) =
         Signature::decode_from_slice(&bytes).expect("decode bare signature payload");
     assert_eq!(used, bytes.len());
@@ -101,7 +80,7 @@ fn signature_bare_hybrid_is_bitset_plus_constvec() {
 }
 #[test]
 fn signature_bare_unpacked_layout_frames_each_payload_byte() {
-    // Select the advertised unpacked path by clearing the packed-sequence flag.
+    // Select the fixed-width length layout (header flags 0).
     let sig = Signature::from_bytes(&[1, 2, 3]);
     let _fg = core::DecodeFlagsGuard::enter(0);
     let mut out = Vec::new();
@@ -167,26 +146,11 @@ fn signature_of_norito_payload_diagnostics() {
         .expect("diagnostic fixture Ed25519 typed signature");
     let bytes = norito::to_bytes(&sig_of).expect("encode SignatureOf");
     dump_header("SignatureOf", &bytes);
-    let mut offset = Header::SIZE;
-    if bytes.len() > offset {
-        let bitset = bytes[offset];
-        offset += 1;
-        eprintln!("SignatureOf field bitset=0b{bitset:08b}");
-        if (bitset & 0x01) != 0 {
-            let (declared_len, used) = read_varint(&bytes[offset..]);
-            offset += used;
-            eprintln!(
-                "SignatureOf declared inner length via varint={declared_len} (bytes used={used})"
-            );
-        }
-    }
-    if bytes.len() > offset {
-        let inner = &bytes[offset..];
-        eprintln!("SignatureOf inner payload len={}", inner.len());
-        dump_header("SignatureOf::inner Signature", inner);
-        if inner.len() > Header::SIZE {
-            let sig_bitset = inner[Header::SIZE];
-            eprintln!("Signature inner field bitset=0b{sig_bitset:08b}");
-        }
-    }
+    let body = &bytes[Header::SIZE..];
+    let (count, prefix) =
+        core::inspect_seq_len_slice(body).expect("SignatureOf payload sequence count");
+    eprintln!(
+        "SignatureOf payload count={count} (prefix bytes={prefix}) body len={}",
+        body.len()
+    );
 }

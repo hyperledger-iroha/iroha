@@ -127,26 +127,18 @@ funded storage protocol. Generic decoder limits are not a substitute for funding
 
 ## Header Flags
 
-These flags are ORed into the final header byte. Unknown bits are rejected.
+The final header byte carries the layout flags. V1 defines one flag:
 
 | Flag | Hex | Meaning |
 | --- | --- | --- |
-| `PACKED_SEQ` | `0x01` | Packed sequence layout for variable-sized collections. |
 | `COMPACT_LEN` | `0x02` | Per-value length prefixes are compact varints. |
-| `PACKED_STRUCT` | `0x04` | Packed struct layout for derive-generated types. |
-| `VARINT_OFFSETS` | `0x08` | Reserved in v1; packed sequences always use `(len + 1)` u64 offsets. |
-| `COMPACT_SEQ_LEN` | `0x10` | Reserved in v1; sequence length headers are fixed u64. |
-| `FIELD_BITSET` | `0x20` | Packed-struct hybrid uses a bitset indicating which fields carry explicit sizes (requires `PACKED_STRUCT` + `COMPACT_LEN`). |
 
-Flag scoping rules:
-- `COMPACT_LEN` affects per-value length prefixes only.
-- Reserved layout bits (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) are rejected when decoding headers.
+All other bits (`0x01`, `0x04`, `0x08`, `0x10`, `0x20`, `0x40`, `0x80`) are
+reserved; decoders reject them in headers, encoders never emit them, and
+ambient layout guards mask them.
 
-Except for the declared `FIELD_BITSET` dependency, flags have no heuristic
-cross-effects. Encoders and decoders reject `FIELD_BITSET` unless both
-`PACKED_STRUCT` and `COMPACT_LEN` are present. When a hybrid packed struct emits
-a field bitset, its final header retains those two required flags even if every
-field is self-delimiting and therefore no explicit compact size prefix appears.
+`COMPACT_LEN` affects per-value length prefixes only. Sequence and map entry
+counts remain fixed 8-byte little-endian `u64` headers in both layouts.
 
 Default v1 payloads use `COMPACT_LEN` (`flags = 0x02`) while keeping the minor
 version byte fixed at `0x00`. The header flag byte is therefore the source of
@@ -174,16 +166,14 @@ encoding:
   little-endian values whose upper 16 bytes must be zero; no `u64` tally layout
   or fallback decoder is admitted.
 - `Vec<u8>` is encoded as a fixed-size sequence: `[len_u64][raw-bytes]` (no per-element
-  length prefixes), regardless of `PACKED_SEQ`. Decoders reject per-element
-  length-prefixed byte vectors.
-- Packed-sequence offsets are always `(len + 1)` u64 offsets, monotonic with the
-  first offset 0.
+  length prefixes). Decoders reject per-element length-prefixed byte vectors.
+- Every other sequence element is `[len][payload]`, with `len` encoded per
+  `COMPACT_LEN`.
 
-Encoders compute length-delimited fields and packed offset tables with a real
-counting pass, then stream payloads directly into the destination. They retain
-only the fixed-width length table required by the wire layout, not a second
-copy of the encoded payload. The write pass verifies every counted length and
-fails with a length mismatch if a stateful serializer changes between passes.
+Encoders compute length-delimited fields with a real counting pass, then stream
+payloads directly into the destination. They do not retain a second copy of the
+encoded payload. The write pass verifies every counted length and fails with a
+length mismatch if a stateful serializer changes between passes.
 Allocation failures in temporary codec buffers are returned as errors rather
 than using infallible `Vec` growth. These rules do not change the v1 bytes.
 The field writer takes only its destination and value. Generated serializers
@@ -201,7 +191,7 @@ custom serializer ignores an individual failed write.
 `core::SequencePayloadLength` retains exact generic element-sequence lengths
 incrementally. Each append counts its supplied element once under a validated,
 frozen layout; snapshots and reads use constant-size counters. It includes the
-sequence count, element prefixes or packed offset table, and rejects overflow.
+sequence count and element prefixes, and rejects overflow.
 This is an observation of the supplied elements, not a serializer or a promise
 about later bytes: callers must preserve their values and serialization behavior.
 The raw `Vec<u8>` specialization is a different layout and is excluded. Existing
@@ -212,16 +202,14 @@ codec-owned prefix writer. A size-only pass measures the concrete payload and
 adds the fixed header/alignment overhead; it does not construct a checksum writer.
 Actual frame output still computes and checks length, checksum, and finalized
 flags across its two passes. The tuple prefix runs in the enclosing layout
-context. `ConstVec` retains individually framed byte elements and its packed
-table/payload bound; `SmallVec` retains fixed-width element length prefixes.
+context. `ConstVec` retains individually framed byte elements; `SmallVec`
+retains fixed-width element length prefixes.
 
 `Metadata` projects borrowed entry views into the same element-sequence writer
 as `ConstVec`, preserving its sequence-of-tuples layout without collecting entries.
-The writer derives cardinality from a cloneable exact-size iterator and checks
-the number of elements yielded during measurement and emission. Packed Metadata
-also enforces the configured archive limit over its offset table plus payload
-(excluding the sequence count), rejecting an oversized table before allocation
-and an oversized payload total before writing offsets or payloads.
+The writer derives cardinality from an exact-size iterator, measures and writes
+each element in a single pass, and rejects an iterator whose yielded element
+count differs from its reported length.
 
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.
@@ -232,24 +220,23 @@ Norito implementations may plan binary sequence payload spans before semantic
 decode. The planner is an internal optimization and does not change the wire
 layout:
 
-- Length-prefixed sequences are planned from `[count_u64][len][payload]...`,
-  honoring the header's `COMPACT_LEN` flag for each element length.
-- Packed sequences are planned from `[count_u64][(count + 1) u64 offsets]`
-  followed by concatenated element payloads. Offsets must start at `0`, be
-  monotonic, and the final offset must fit inside the available payload bytes.
+- Sequences are planned from `[count_u64][len][payload]...`, honoring the
+  header's `COMPACT_LEN` flag for each element length.
 - The plan returns element byte ranges in original sequence order and the total
   bytes consumed from the sequence payload. Semantic decode and validation still
   happen on CPU and must report failures in original index order.
 - Each declared element span is authoritative. A zero-length span is valid only
   when that element type's canonical encoding is empty; it is never treated as
   a missing length whose payload can be recovered from following bytes.
-- Optional Metal/CUDA helpers may compute the spans for large payloads, but
-  helper results are self-tested and validated against the scalar planner before
-  use. An unavailable backend falls back to the scalar planner for that call.
-  Helper errors, malformed span output, or scalar mismatches fall back and
-  disable that helper for the process. GPU-named helper exports report
-  unavailable or backend failure instead of silently substituting CPU work; the
-  Norito caller owns deterministic scalar fallback.
+- An optional Metal/CUDA helper, `norito_length_prefixed_sequence_plan`, may
+  compute the spans of large length-prefixed sequences. The helper must pass a
+  startup self-test, and the scalar planner re-verifies every helper plan; a
+  plan is used only when it matches the scalar result exactly. An unavailable
+  backend falls back to the scalar planner for that call. Helper errors,
+  malformed span output, or scalar mismatches fall back and disable that helper
+  for the process. GPU-named helper exports report unavailable or backend
+  failure instead of silently substituting CPU work; the Norito caller owns
+  deterministic scalar fallback.
 - Helper use is performance-only: decoded values, rejection class, ordering,
   hashes, and emitted bytes must remain identical. Native helper waits are
   bounded before CPU fallback.
@@ -265,10 +252,9 @@ length oracle from exhausting the stack, forcing a payload-sized speculative
 allocation, or understating the bytes accepted by the output pass.
 
 Unit-record size hints use the same zero-field layout calculation as other
-structures. An offset-table packed unit contains one zero `u64` offset (eight
-bytes); its sequential and field-bitset layouts contain no field bytes. Both
-length diagnostics reflect those existing serialized bytes. Canonical framing
-continues to measure actual serialization rather than trust either hint.
+structures. A unit record's payload is empty in every layout; both length
+diagnostics report zero. Canonical framing continues to measure actual
+serialization rather than trust either hint.
 
 Use `canonical_frame_len` to count the exact uncompressed V1 frame emitted by
 `encode_canonical`, including for resource admission and length-prefixed hashes.
@@ -312,13 +298,13 @@ nesting guard before decoding their bounded child. The guard restores the
 previous depth on success, child error or consumed-length rejection, including
 when another decode follows inside the same active limit scope.
 
-Canonical field/frame decoding of derived packed structures validates the
-complete boundary for both offset tables and field-bitset layouts. A valid
-checksum does not make trailing bytes part of a structure. Unit records retain
-the existing canonical byte comparator for their layout metadata: zero fields
-do not imply a zero-byte payload. Their validation hook does not assert a zero
-consumed offset. Explicit prefix-field decoding reports only the bytes belonging
-to that field so the enclosing decoder can read its following fields.
+Canonical field/frame decoding of derived records validates the complete
+boundary: every length-prefixed field must consume exactly its declared span,
+and the record must end exactly at the end of its enclosing field or frame
+payload. A valid checksum does not make trailing bytes part of a structure. A
+unit record's canonical payload is empty, so any byte inside its span is
+rejected. Explicit prefix-field decoding reports only the bytes belonging to
+that field so the enclosing decoder can read its following fields.
 
 Nested decode scopes may tighten but never relax an outer budget. Binary value
 decoding is sequential in V1, so its budget counters stay in the calling decode
@@ -805,9 +791,9 @@ produce the same semantic result as the scalar path or fall back:
   decode mismatch disables the GPU backend and falls back to CPU compression.
   Consensus-critical code must not hash or sign public Norito compressed bytes
   unless that callsite fixes its own compression implementation.
-- JSON Stage-1 and binary sequence helper output is validated against scalar
-  results before use so quote/string state, element ranges, and error ordering
-  remain hardware-independent.
+- JSON Stage-1 output and length-prefixed binary sequence spans are validated
+  against scalar results before use so quote/string state, element ranges, and
+  error ordering remain hardware-independent.
 
 ## String Encoding
 
@@ -980,13 +966,8 @@ Norito record.
 Maps encode deterministically with the same active layout flags:
 
 - Entry count uses a fixed 8-byte little-endian u64 header.
-- Length-prefixed layout (`PACKED_SEQ` unset): for each entry,
-  `[key_len][key_payload][value_len][value_payload]` with key/value lengths
-  encoded via `COMPACT_LEN`.
-- Packed layout (`PACKED_SEQ` set): key sizes and value sizes precede the data,
-  followed by concatenated key payloads and concatenated value payloads. Uses
-  `(len + 1)` u64 offsets for keys, then `(len + 1)` u64 offsets for values;
-  offsets are monotonic with the first offset 0.
+- Each entry is `[key_len][key_payload][value_len][value_payload]`, with
+  key/value lengths encoded via `COMPACT_LEN`.
 - `HashMap` encodes entries in sorted key order for deterministic output;
   `BTreeMap` uses its natural ordering.
 
@@ -1048,43 +1029,36 @@ The `norito::aos` helpers used by adaptive columnar encoders follow the same
 length prefix rules and honor the active `COMPACT_LEN` flag, so embedded AoS
 payloads stay consistent with their parent Norito headers.
 
-## Packed-Struct Layout
+## Derived Record Layout
 
-When the `PACKED_STRUCT` flag is set, derive-generated structs/tuples are
-encoded as a single packed payload with one of two layouts:
+Derive-generated structs and tuple structs encode their fields in declaration
+order. The record adds no header, field count, offset table or presence bitset:
 
-- Offset-table packed-struct (no `FIELD_BITSET`): `(field_count + 1)` little-endian
-  `u64` offsets followed by concatenated field payloads. Offsets start at 0,
-  are cumulative byte lengths of each field payload in declaration order, and
-  the final offset equals the total data length and must fit inside the active
-  struct payload before any field is decoded. Offsets are fixed-width even when
-  `COMPACT_LEN` is enabled.
-- Hybrid packed-struct (`FIELD_BITSET` + `COMPACT_LEN`): a bitset of length
-  `ceil(field_count / 8)` bytes, followed by size prefixes for fields whose
-  bit is set (varint-encoded per `COMPACT_LEN`), followed by concatenated field
-  payloads in declaration order. Bit 0 of byte 0 refers to field 0, bit 1 to
-  field 1, and so on. Fields that are fixed-size or self-delimiting omit the
-  explicit size header and are decoded sequentially. The bitset is part of the
-  type's canonical layout: a decoder recomputes it from the same compile-time
-  field classification as the encoder and rejects any mismatch, including
-  non-zero padding bits. Each declared size is decoded only as the compact
-  varint advertised by `COMPACT_LEN`; zero is a canonical one-byte varint and
-  is never reinterpreted as a fixed-width `u64`.
+- Each non-flattened field is `[len][payload]`, where `len` is the field
+  payload length encoded per `COMPACT_LEN` (a compact varint when set, a fixed
+  8-byte little-endian `u64` otherwise).
+- A `[u8; N]` field is `[len = N][N raw bytes]`, with no per-byte prefixes.
+- A `#[norito(flatten)]` field is inlined with no prefix of its own, and its
+  nested fields follow the frame's layout flags. Flattening never switches a
+  frame to compact lengths: a `0x00` frame containing a flattened field carries
+  header flags `0x00`.
+- `#[norito(skip)]` fields are omitted from the payload.
+- Unit and field-less records have an empty payload.
+- An enum variant is its `u32` tag followed by the variant's fields, each
+  length-prefixed as above; a unit variant is the tag alone.
 
-Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
-`COMPACT_LEN`) when encoding nested collections or string/blob values. Every
-derive-generated typed field with a declared frame or explicit size is decoded
-canonically and must consume exactly its declared span; fixed byte arrays use
-an equivalent exact-length copy. Trailing bytes inside a declared frame are
-rejected; there is no archived-value retry that can accept another field
-encoding or consume following fields.
+Field payloads use the frame's layout flags when encoding nested collections or
+string/blob values. Every derive-generated field is decoded canonically and
+must consume exactly its declared span; fixed byte arrays use an equivalent
+exact-length copy. Trailing bytes inside a declared field are rejected; there is
+no archived-value retry that can accept another field encoding or consume
+following fields.
 
 Fields annotated with `#[norito(default)]` or a custom default remain mandatory
-ordinary binary fields and consume their declaration-order packed span. Those
+ordinary binary fields and consume their declaration-order field frame. Those
 attributes supply values only for absent JSON fields. A missing or malformed
 binary field is rejected; binary decoding never synthesizes an omitted
-positional value. Packed-struct field-count or bitset changes require a new
-advertised layout.
+positional value.
 
 Every derive-generated enum tag is a canonical little-endian `u32`. An explicit
 Rust discriminant selects the wire tag, and subsequent implicit variants follow

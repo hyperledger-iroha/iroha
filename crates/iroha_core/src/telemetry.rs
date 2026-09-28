@@ -19,7 +19,7 @@ use crate::{
 };
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::HashOf;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::da::types::DaRentQuote;
 #[cfg(feature = "telemetry")]
@@ -3147,7 +3147,7 @@ impl StateTelemetry {
     }
     #[cfg(test)]
     /// Record that a merge-ledger entry was committed.
-    pub fn record_merge_ledger_entry(&self, epoch_id: u64, global_state_root: &Hash) {
+    pub fn record_merge_ledger_entry(&self, epoch_id: u64, global_state_root: &iroha_crypto::Hash) {
         if self.is_enabled() {
             self.metrics.merge_ledger_entries_total.inc();
             self.metrics.merge_ledger_latest_epoch.set(epoch_id);
@@ -3956,7 +3956,7 @@ impl StateTelemetry {
         &self,
         feed_id: &iroha_data_model::oracle::FeedId,
         observation_count: u64,
-        evidence_hashes: &[Hash],
+        evidence_hashes: &[iroha_crypto::Hash],
         duration: Duration,
     ) {
         if self.is_enabled() {

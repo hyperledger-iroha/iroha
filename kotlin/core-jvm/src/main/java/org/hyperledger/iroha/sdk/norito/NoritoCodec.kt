@@ -73,6 +73,7 @@ object NoritoCodec {
 
     @JvmStatic
     fun <T> encodeAdaptive(value: T, adapter: TypeAdapter<T>, flags: Int): AdaptiveEncoding {
+        NoritoHeader.validateFlags(flags)
         var encoder = NoritoEncoder(flags)
         adapter.encode(encoder, value)
         var payload = encoder.toByteArray()
@@ -234,6 +235,7 @@ object NoritoCodec {
         private var active = true
 
         init {
+            NoritoHeader.validateFlags(flags)
             DECODE_FLAGS_STACK.get().addLast(flags and 0xFF)
         }
 

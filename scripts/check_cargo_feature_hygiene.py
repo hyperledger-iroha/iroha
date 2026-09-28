@@ -355,10 +355,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "model-primitives": ("dep:iroha_zkp_poseidon",),
         "parallel": ("full", "dep:rayon"),
     },
-    "iroha_executor": {
-        "default": ("bridge",),
-        "bridge": (),
-    },
 }
 
 
@@ -386,7 +382,6 @@ CONTEXTUAL_SHIPPING_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_primitives": (),
     "iroha_kagami": (),
     "iroha_zkp_halo2": (),
-    "iroha_executor": (),
 }
 
 
@@ -504,7 +499,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_primitives": ("bench", "trybuild-tests"),
     "iroha_kagami": ("dev-tools",),
     "iroha_zkp_halo2": ("bench", "schema-structural"),
-    "iroha_executor": ("debug",),
 }
 
 

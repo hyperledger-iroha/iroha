@@ -909,6 +909,10 @@ impl ParliamentTimedOvnCastingContextResponseV1 {
     /// # Errors
     /// Returns a stable message for unsupported, oversized, noncanonical,
     /// cross-bound, or phase-inconsistent public state.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "ordered fail-closed casting-context checks preserve stable error precedence"
+    )]
     pub fn validate_for_ballot(
         &self,
         expected_ballot_attempt_id: BallotAttemptId,
@@ -1976,10 +1980,12 @@ mod tests {
 
     #[test]
     fn full_state_payload_bound_is_not_smaller_than_private_corpus_bound() {
-        assert!(
-            iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1
-                >= 1_000 * (3_624 + 2_858)
-        );
+        const {
+            assert!(
+                iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1
+                    >= 1_000 * (3_624 + 2_858)
+            );
+        }
     }
 
     #[test]

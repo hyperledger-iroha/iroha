@@ -115,8 +115,6 @@ pub use error::{Error, Result};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
 pub use fastpq_cuda::{CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde};
-/// Canonical FASTPQ parameter and six-lane native-STARK digest API.
-pub use fastpq_isi as fastpq_isi_v1;
 pub use fft::Planner;
 pub use field::{GOLDILOCKS_MODULUS_V1, GoldilocksFp4V1};
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]

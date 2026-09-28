@@ -42,20 +42,8 @@ use std::{
 use tempfile::TempDir;
 use tokio::{sync::Mutex, task::JoinHandle};
 use tower::ServiceExt as _;
-fn governance_service_caller_layouts() -> [u8; 10] {
-    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-    [
-        0,
-        COMPACT_LEN,
-        PACKED_SEQ,
-        PACKED_SEQ | COMPACT_LEN,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT_LEN,
-        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        PACKED_SEQ | PACKED_STRUCT,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-    ]
+fn governance_service_caller_layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 #[test]
 fn service_default_request_bound_covers_single_entry_archive_ceiling() {

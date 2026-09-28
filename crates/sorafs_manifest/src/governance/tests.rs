@@ -43,18 +43,8 @@ fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u
         panic!("serialize explicit canonical frame with flags 0x{flags:02x}: {error}")
     })
 }
-fn supported_layouts() -> [u8; 8] {
-    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-    [
-        0,
-        COMPACT_LEN,
-        PACKED_SEQ,
-        PACKED_SEQ | COMPACT_LEN,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT_LEN,
-        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-    ]
+fn supported_layouts() -> [u8; 2] {
+    [0, norito::core::header_flags::COMPACT_LEN]
 }
 fn assert_borrowed_wire_exact<Owned, Borrowed>(label: &str, owned: &Owned, borrowed: &Borrowed)
 where

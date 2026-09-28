@@ -23,7 +23,6 @@ use iroha_crypto::{
     },
     streaming::StreamingKeyMaterial,
 };
-#[allow(unused_imports)]
 use iroha_data_model::{
     account::AccountId,
     asset::prelude::AssetDefinitionId,
@@ -48,7 +47,6 @@ use iroha_data_model::{
         LaneConfig as LaneConfigMetadata, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
         LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
-    oracle::KeyedHash,
     peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     soracloud::SoraPublishedInrouGuestImageArtifactV1,
@@ -62,15 +60,10 @@ use iroha_data_model::{
     taikai::TaikaiAvailabilityClass,
     transaction::FeePaymentIntent,
 };
-#[allow(unused_imports)]
 use iroha_model_base::chain::ChainId;
-#[allow(unused_imports)]
 use iroha_model_base::domain::DomainId;
-#[allow(unused_imports)]
 use iroha_model_base::name::Name;
-#[allow(unused_imports)]
 use iroha_model_base::peer::PeerId;
-#[allow(unused_imports)]
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 use iroha_primitives::{
     addr::SocketAddr,

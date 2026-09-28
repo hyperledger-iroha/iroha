@@ -12,37 +12,34 @@ pub fn derive_parameter(input: TokenStream) -> Result<TokenStream> {
 }
 /// Derive macro for `Permission` trait.
 ///
+/// Implements `iroha_executor_data_model::permission::Permission` and the
+/// conversions between the typed token and the data-model permission object.
+/// Core validates grants, revocations and use of every built-in token natively.
+///
 /// # Example
 ///
 /// ```ignore
-/// use iroha_executor::{permission, prelude::*};
-/// use iroha_model_base::domain::DomainId;
+/// use iroha_data_model::{asset::AssetId, permission::Permission as PermissionObject};
+/// use iroha_executor_data_model::permission::Permission;
 ///
-/// #[derive(Permission, ValidateGrantRevoke, permission::derive_conversions::asset::Owner)]
-/// #[validate(permission::asset::Owner)]
+/// #[derive(
+///     Debug,
+///     Clone,
+///     PartialEq,
+///     Eq,
+///     Permission,
+///     iroha_schema::IntoSchema,
+///     norito::derive::JsonSerialize,
+///     norito::derive::JsonDeserialize,
+/// )]
 /// struct CanDoSomethingWithAsset {
-///     some_data: String,
 ///     asset: AssetId,
 /// }
 ///
-/// #[entrypoint(params = "[authority, operation]")]
-/// fn validate(authority: AccountId, operation: NeedsValidationBox) -> Result {
-///     let NeedsValidationBox::Instruction(instruction) = operation else {
-///         pass!();
-///     };
-///
-///     validate_grant_revoke!(<CanDoSomethingWithAsset>, (authority, instruction));
-///
-///     let owner = AccountId::new(///         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-///             .parse()
-///             .unwrap(),
-///     );
-///     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components(DomainId::try_new("wonderland", "universal").unwrap(), "rose".parse().unwrap());
-///     CanDoSomethingWithAsset {
-///        some_data: "some data".to_owned(),
-///        asset: AssetId::new(asset_def, owner),
-///     }.is_owned_by(&authority)
-/// }
+/// let token = CanDoSomethingWithAsset { asset };
+/// let object = PermissionObject::from(token.clone());
+/// assert_eq!(object.name(), &CanDoSomethingWithAsset::name());
+/// assert_eq!(CanDoSomethingWithAsset::try_from(&object)?, token);
 /// ```
 #[manyhow]
 #[proc_macro_derive(Permission)]

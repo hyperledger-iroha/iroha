@@ -19,7 +19,7 @@ struct Layer<T> {
 }
 
 fn layouts() -> impl Iterator<Item = u8> {
-    (0..=supported_header_flags()).filter(|flags| validate_header_flags(*flags).is_ok())
+    [0, header_flags::COMPACT_LEN].into_iter()
 }
 
 #[test]
@@ -160,8 +160,9 @@ fn counting_nested_frames_preserves_streamed_checksums_and_layout_flags() {
         assert_eq!(header.checksum, crc64(&frame[start..]));
         assert_eq!(header.flags, expected_header.flags);
         // A complete nested frame owns its finalized layout. Unused ambient
-        // flags may be absent from its header (e.g. compact lengths in a wholly
-        // fixed-offset payload), so decode under that advertised context.
+        // flags may be absent from its header (e.g. compact lengths in a payload
+        // without per-value length prefixes), so decode under that advertised
+        // context.
         let _frame_flags = DecodeFlagsGuard::enter(header.flags);
         let archived = from_bytes::<Inner>(&frame).unwrap();
         assert_eq!(Inner::try_deserialize(archived).unwrap(), value.0);
@@ -208,45 +209,6 @@ fn count_overflow_is_sticky_even_if_a_serializer_ignores_it() {
 }
 
 #[test]
-fn element_sequence_bound_includes_offsets_and_rejects_before_the_table() {
-    let _flags = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
-    let items = [1_u16, 2, 3];
-    let limit = 4 * 8 + 3 * 2;
-    let mut bytes = Vec::new();
-    write_element_sequence::<u16, _>(&mut Encoder::for_buffer(&mut bytes), items.iter(), limit)
-        .unwrap();
-    assert_eq!(bytes.len(), 8 + usize::try_from(limit).unwrap());
-    let mut rejected = Vec::new();
-    assert!(matches!(
-        write_element_sequence::<u16, _>(&mut Encoder::for_buffer(&mut rejected), items.iter(), limit - 1),
-        Err(Error::ArchiveLengthExceeded { length, limit: bound })
-            if length == limit && bound == limit - 1
-    ));
-    assert_eq!(rejected, 3_u64.to_le_bytes());
-}
-
-#[test]
-fn element_sequence_rejects_oversized_offset_tables_before_visiting_elements() {
-    let _flags = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
-    let calls = AtomicUsize::new(0);
-    let items = [Leaf(&calls)];
-    let mut bytes = Vec::new();
-    assert!(matches!(
-        write_element_sequence::<Leaf<'_>, _>(
-            &mut Encoder::for_buffer(&mut bytes),
-            items.iter(),
-            15
-        ),
-        Err(Error::ArchiveLengthExceeded {
-            length: 16,
-            limit: 15
-        })
-    ));
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
-    assert_eq!(bytes, 1_u64.to_le_bytes());
-}
-
-#[test]
 fn element_sequence_keeps_individually_framed_bytes_in_every_layout() {
     for flags in layouts() {
         let _flags = DecodeFlagsGuard::enter(flags);
@@ -254,12 +216,7 @@ fn element_sequence_keeps_individually_framed_bytes_in_every_layout() {
         write_element_sequence::<u8, _>(&mut Encoder::for_buffer(&mut bytes), [0xAB_u8], u64::MAX)
             .unwrap();
         let mut expected = 1_u64.to_le_bytes().to_vec();
-        if use_packed_seq() {
-            expected.extend_from_slice(&0_u64.to_le_bytes());
-            expected.extend_from_slice(&1_u64.to_le_bytes());
-        } else {
-            write_len_with_flags(&mut expected, 1, flags).unwrap();
-        }
+        write_len_with_flags(&mut expected, 1, flags).unwrap();
         expected.push(0xAB);
         assert_eq!(bytes, expected, "flags {flags:#x}");
     }

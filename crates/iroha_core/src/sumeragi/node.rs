@@ -259,7 +259,9 @@ impl NodeHandle {
 
     /// The instance halted or stopped: only a restart recovers the node's consensus.
     pub fn restart_required(&self) -> bool {
-        self.halted().is_some()
+        // A clean shutdown retains diagnostics without recording a halt. Once
+        // initialized, a non-running driver cannot serve live attestations.
+        self.halted().is_some() || (self.status().is_some() && !self.ready())
     }
 
     /// The core started, has not halted, and the instance runs.

@@ -261,17 +261,7 @@ mod tests {
             .iter()
             .map(|(name, json)| (name.clone(), json.clone()))
             .collect();
-        for requested in [
-            0,
-            header_flags::COMPACT_LEN,
-            header_flags::PACKED_SEQ,
-            header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-            header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-            header_flags::PACKED_STRUCT
-                | header_flags::PACKED_SEQ
-                | header_flags::COMPACT_LEN
-                | header_flags::FIELD_BITSET,
-        ] {
+        for requested in [0, header_flags::COMPACT_LEN] {
             let _layout = DecodeFlagsGuard::enter(requested);
             let (payload, flags) = norito::codec::encode_with_header_flags(&metadata);
             assert_eq!(

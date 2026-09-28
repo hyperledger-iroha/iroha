@@ -1263,7 +1263,7 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
 Placement:
 - data model: `crates/iroha_data_model/src/isi/nexus.rs`, registered in `isi/registry/wire_ids.rs` and `generated_record_inventory.rs`;
 - execution: `crates/iroha_core/src/smartcontracts/isi/dataspace.rs`;
-- visitor: `visit_register_dataspace` in `iroha_executor/src/default/mod.rs`;
+- Initial-executor classification: `crates/iroha_core/src/executor_initial_permission_authority.rs`;
 - fee class: `validation_fee.rs`.
 
 The type is `RegisterDataspaceV1 {name, visibility, committee: DataspaceCommitteeV1}`, with `DataspaceCommitteeV1 = Network | Explicit(Vec<CommitteeMemberV1 {validator, peer, pop, torii_url: Option<Url>}>)`.
@@ -1282,10 +1282,10 @@ The `nexus_catalog_transition_v1` `SetParameter` path is deleted (`world.rs:2081
 - `CanAdministerDataspaceRegistration`: a unit token granted to the admin in genesis. Its holders may grant it on.
 - `CanRegisterDataspace`: a unit token granted and revoked only by holders of the administer token. This follows the existing `DpnAdmin` pattern (`executor_initial_permission_authority.rs:600-622`), and it makes `[[grant]]` exact-set revocation well defined.
 - `CanManageDataspace{ds}`: grantable and revocable by its holders. It authorizes grant and revoke of:
-  - `CanReadRestrictedDataspace{ds}`, which is `OnlyGenesis` today (`iroha_executor/src/permission.rs:318-326`);
+  - `CanReadRestrictedDataspace{ds}`, which is genesis-only today (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in `executor_initial_permission_authority.rs`);
   - `CanPublishSpaceDirectoryManifest{ds}` and its variants, which have no post-genesis first grant today (`executor_initial_permission_authority.rs:624-627`).
 
-`CanManagePeers` stays global and remains governance's emergency stop: unregistering a committee peer halts its lane fail-closed. **Every rule lands in both `iroha_executor/src/permission.rs` and Core's mirror `executor_initial_permission_authority.rs`, with identical positive and negative test matrices. A mismatch between them is a consensus fault.**
+`CanManagePeers` stays global and remains governance's emergency stop: unregistering a committee peer halts its lane fail-closed. **Every rule lands in Core's single native authority, `executor_initial_permission_authority.rs`, with positive and negative test matrices in `iroha_core`.**
 
 **D-3. Genesis from the profile** (consensus-affecting, size S). The genesis has:
 - Committee-role keys for every validator;

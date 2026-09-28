@@ -2,7 +2,9 @@ use crate::VMError;
 use iroha_crypto::{HashOf, MerkleProof, MerkleTree};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 /// Merkle tree over fixed-size byte chunks, implemented as a thin adaptor over
 /// the canonical `iroha_crypto::MerkleTree<[u8;32]>`.
 ///
@@ -39,7 +41,10 @@ static MERKLE_AARCH64_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(32_7
 // On x86/x86_64 with Intel SHA-NI, prefer CPU hashing for medium-size trees too.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 static MERKLE_X86_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(32_768);
+// Test-only observation counters; production exposes the same events via telemetry.
+#[cfg(test)]
 static MERKLE_REBUILDS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
 static MERKLE_INCREMENTAL_LEAF_UPDATES: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn set_merkle_gpu_min_leaves(n: usize) {
     MERKLE_GPU_MIN_LEAVES.store(n.max(1), Ordering::SeqCst);
@@ -123,7 +128,7 @@ pub(crate) fn set_prefer_cpu_sha2_max_leaves_x86(v: usize) {
     MERKLE_X86_CPU_PREFER_MAX_LEAVES.store(v, Ordering::SeqCst);
 }
 /// Return cumulative Merkle maintenance counters `(full_rebuilds, incremental_leaf_updates)`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn merkle_update_counters() -> (u64, u64) {
     (
         MERKLE_REBUILDS.load(Ordering::Relaxed),
@@ -156,6 +161,7 @@ impl ByteMerkleTree {
     fn rebuild_locked(&self, cached: &mut Option<MerkleTree<[u8; 32]>>) {
         let leaves = self.leaves.lock().clone();
         *cached = Some(MerkleTree::from_hashed_leaves_sha256(leaves));
+        #[cfg(test)]
         MERKLE_REBUILDS.fetch_add(1, Ordering::Relaxed);
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.ivm_merkle_rebuild_total.inc();
@@ -605,6 +611,7 @@ impl ByteMerkleTree {
                 tree.update_hashed_leaf_sha256(idx, digest);
             }
             let updated = indices.len() as u64;
+            #[cfg(test)]
             MERKLE_INCREMENTAL_LEAF_UPDATES.fetch_add(updated, Ordering::Relaxed);
             let metrics = iroha_telemetry::metrics::global_or_default();
             metrics

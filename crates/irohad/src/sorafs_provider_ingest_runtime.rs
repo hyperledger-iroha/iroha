@@ -1714,7 +1714,7 @@ fn verify_existing_musubi_bundle(
 /// This helper deliberately returns the verifier's closed evidence instead of a persisted
 /// pre-completion receipt. The post-completion attestation path instead enters a new admitted
 /// payload lifecycle lease and calls
-/// [`NodeHandle::verify_provider_ingest_completed_musubi_capture_bundle`] with
+/// `NodeHandle::verify_provider_ingest_completed_musubi_capture_bundle` with
 /// the independently sealed, store-instance-bound completed-row claim;
 /// possession of this earlier evidence never skips that read or authorizes
 /// signing.

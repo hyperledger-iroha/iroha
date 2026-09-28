@@ -38,7 +38,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 const PUSH_DIR: &str = "push";
 const PUSH_INITIALIZATION_DIR: &str = ".push-initialize-v1";
@@ -1593,12 +1593,7 @@ fn retry_backoff(attempts: u32) -> Duration {
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(duration_ms)
-        .unwrap_or_default()
-}
+use crate::utils::unix_now_ms as now_ms;
 fn fingerprint(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(digest.len() * 2);

@@ -365,3 +365,7 @@ fixed-seed randomized cases over `rand` instead of `proptest`, and the manifest
 drops its `sptr` dependency (the sources use std strict-provenance APIs). This
 keeps the vendored workspace member inside the reviewed dependency budget, which
 denies `proptest` in every required graph.
+
+Because the package is a workspace member, workspace Clippy lints it. The crate
+root allows `clippy::type_complexity` for its upstream generic signatures, and
+the two redundant `into_raw() as *mut Leaf` casts are removed.

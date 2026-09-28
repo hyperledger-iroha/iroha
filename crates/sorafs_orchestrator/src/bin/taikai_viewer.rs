@@ -15,6 +15,9 @@ use norito::{
     json::{Map, Value},
 };
 use rand::{rand_core::TryRngCore, rngs::OsRng};
+#[cfg(unix)]
+use sorafs_car::platform_no_follow_flag;
+use sorafs_car::set_no_follow_flag;
 use sorafs_car::taikai::{
     validate_distinct_artifact_paths, validate_track_metadata, verify_taikai_car,
 };
@@ -604,47 +607,6 @@ fn validate_output_path(path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_nonblocking_read_flag() -> i32 {

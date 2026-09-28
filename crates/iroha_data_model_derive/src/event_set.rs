@@ -1,4 +1,3 @@
-#![allow(unused)]
 use crate::{EmitterExt, utils::darling_result};
 use darling::{FromDeriveInput, FromVariant};
 use manyhow::Emitter;

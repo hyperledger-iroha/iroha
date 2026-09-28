@@ -372,11 +372,8 @@ const ERR_ALLOC: c_int = -10;
 const ERR_HASH_OUT_LEN: c_int = -11;
 const ERR_BUFFER_TOO_SMALL: c_int = -12;
 const ERR_SM2_DERIVE: c_int = -13;
-const ERR_INVALID_NOTE_COMMITMENT: c_int = -14;
 const ERR_SM2_VERIFY: c_int = -16;
 const ERR_SM2_PARSE: c_int = -17;
-const ERR_INVALID_NULLIFIERS: c_int = -19;
-const ERR_INVALID_ROOT_HINT: c_int = -20;
 const ERR_UNSUPPORTED_ALGORITHM: c_int = -21;
 const ERR_SECP_PARSE: c_int = -22;
 const ERR_SECP_SIGN: c_int = -23;
@@ -385,7 +382,6 @@ const ERR_METADATA_TARGET: c_int = -25;
 const ERR_METADATA_KEY: c_int = -26;
 const ERR_METADATA_VALUE: c_int = -27;
 const ERR_GOVERNANCE: c_int = -28;
-const ERR_HEX: c_int = -29;
 const ERR_INVALID_NONCE: c_int = -31;
 const ERR_TRANSACTION_SIGN: c_int = -32;
 const ERR_SM2_SIGN: c_int = -33;
@@ -621,7 +617,6 @@ impl KagemushaDeviceLifecycleStatusV1 {
         self as u8
     }
 }
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum BridgeError {
     NullPtr,
@@ -636,9 +631,6 @@ enum BridgeError {
     PrivateKey,
     Alloc,
     HashOutBuffer,
-    InvalidNoteCommitment,
-    InvalidNullifiers,
-    InvalidRootHint,
     AssetId,
     JsonSerialize,
     KagemushaV1,
@@ -647,13 +639,10 @@ enum BridgeError {
     MetadataKey,
     MetadataValue,
     Governance,
-    Hex,
     MultisigSpec,
     IdentifierReceipt,
     VerifyingKeyId,
-    SecpParse,
     SecpSign,
-    SecpVerify,
     TransactionSign,
     FeePayment,
     ConnectKeypair,
@@ -682,9 +671,6 @@ impl BridgeError {
             BridgeError::PrivateKey => ERR_PRIVATE_KEY_PARSE,
             BridgeError::Alloc => ERR_ALLOC,
             BridgeError::HashOutBuffer => ERR_HASH_OUT_LEN,
-            BridgeError::InvalidNoteCommitment => ERR_INVALID_NOTE_COMMITMENT,
-            BridgeError::InvalidNullifiers => ERR_INVALID_NULLIFIERS,
-            BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
             BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
             BridgeError::KagemushaV1 => ERR_KAGEMUSHA_V1,
@@ -693,13 +679,10 @@ impl BridgeError {
             BridgeError::MetadataKey => ERR_METADATA_KEY,
             BridgeError::MetadataValue => ERR_METADATA_VALUE,
             BridgeError::Governance => ERR_GOVERNANCE,
-            BridgeError::Hex => ERR_HEX,
             BridgeError::MultisigSpec => ERR_MULTISIG_SPEC,
             BridgeError::IdentifierReceipt => ERR_IDENTIFIER_RECEIPT,
             BridgeError::VerifyingKeyId => ERR_VERIFYING_KEY_ID,
-            BridgeError::SecpParse => ERR_SECP_PARSE,
             BridgeError::SecpSign => ERR_SECP_SIGN,
-            BridgeError::SecpVerify => ERR_SECP_VERIFY,
             BridgeError::TransactionSign => ERR_TRANSACTION_SIGN,
             BridgeError::FeePayment => ERR_FEE_PAYMENT,
             BridgeError::ConnectKeypair => ERR_CONNECT_KEYPAIR,

@@ -229,3 +229,22 @@ artifacts under
 `dist/zk-x509-prover-evidence/norito-native-profile-20260928T065630Z/`. Its capture
 records subsequent pre-compilation FASTPQ frontier-cleanup changes explicitly;
 it is a relevant-source manifest, not an immutable whole-workspace snapshot.
+
+Native regeneration completed: all 16 Norito codec tests and the engine's
+malformed-input preflight passed. The three deliberately stale profile/proof
+assertions failed after producing their replacement values; this was a
+17-pass/3-failure regeneration run, not a passing regression suite. Both proof
+fixtures completed independent verification and their encoding/query assertions
+before comparing hashes. The run took 253.81 seconds after compilation.
+
+The retained 29-field, 16,789-byte manifest independently reconstructs SHA-256
+`bbd1cc3fbefd0f0adba9583100a8213d0c1effc109c176914ee14c31dd4b2a67`.
+A second implementation reproduced the exact frame bytes and digest. The sole
+profile pin now contains this value. Projection and IO fixture hashes are now
+`116ac702fd4e34a929b15290bb76f8d186546b39406e2b806a11238f5de392e3`
+and `b3e728c149d3610fbc158dfde86dfb8bd75a0163084bf451bb982596a8e036b8`,
+respectively; all existing assertions remain. The public frame, fields, native
+log and independent reconstruction are retained in the regeneration directory
+above. The current focused Core regression is queued separately under
+`dist/zk-x509-prover-evidence/norito-final-core-20260928T112152Z/`; it includes
+subsequent dependency changes and the typed Rust wallet change-note helper.

@@ -72,6 +72,13 @@ public readonly record struct NoritoHeader
             throw new ArgumentException("Norito schema hash must be 16 bytes.", nameof(SchemaHash));
         }
 
+        if ((Flags & ~NoritoCodec.CanonicalLayoutFlags) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(Flags),
+                "Norito v1 header flags must be 0x00 or COMPACT_LEN (0x02).");
+        }
+
         var buffer = new byte[EncodedLength];
         Magic.CopyTo(buffer);
         buffer[4] = 0;

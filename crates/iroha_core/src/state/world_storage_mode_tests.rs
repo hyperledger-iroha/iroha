@@ -89,7 +89,7 @@ fn prepaid_world_storage_adapter_refuses_foreign_owned_scope_before_writers() {
         ));
         let journal = <Mode as WorldStorageMode<u64, u64>>::recover_original(&mut slot);
         // Real original-scope reacquisition succeeds while the refused shell is still alive.
-        budget.with_deferred_refund_notifications(|original_scope| {
+        let journal = budget.with_deferred_refund_notifications(|original_scope| {
             let prepared = journal
                 .try_prepare_admitted(original_scope, &target)
                 .unwrap_or_else(|(_, error, _)| {
@@ -98,10 +98,12 @@ fn prepaid_world_storage_adapter_refuses_foreign_owned_scope_before_writers() {
             let (journal, cleanup) = prepared.abort();
             assert_eq!(image(&journal), expected);
             drop(cleanup);
-            drop(journal);
+            journal
         });
         drop(slot);
+        // Check retained custody while the recovered original still owns its charge.
         assert_eq!(budget.reserved_bytes(), retained_bytes);
+        drop(journal);
     });
     assert_eq!(target.view().get(&7), Some(&70));
     drop(target);

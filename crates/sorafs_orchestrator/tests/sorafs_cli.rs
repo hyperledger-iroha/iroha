@@ -173,6 +173,7 @@ fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) 
         &path,
         format!(
             r#"
+chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 torii_url = "{torii_url}"
 network_id = "{TEST_NETWORK_ID_LITERAL}"
 
@@ -210,6 +211,7 @@ network_id = "{TEST_NETWORK_ID_LITERAL}"
 [account]
 public_key = "{public_key}"
 private_key = "{private_key}"
+profile = "taira"
 "#
         ),
     )
@@ -1379,7 +1381,7 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     );
 }
 #[test]
-fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant() {
+fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("known-chain.bin");
     let payload = b"sorafs deploy known chain payload".to_vec();

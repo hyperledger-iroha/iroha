@@ -36566,7 +36566,7 @@ mod advert_tests {
         }
         let item = ProofStreamItem::from_json(&value, &context)
             .expect("canonical PDP item must pass the shared closed-schema parser");
-        assert_eq!(item.proof_kind(), sorafs_car::proof_stream::ProofKind::Pdp);
+        assert_eq!(item.proof_kind(), sorafs_manifest::ProofStreamKind::Pdp);
         assert_eq!(
             item.status(),
             sorafs_car::proof_stream::VerificationStatus::Failure
@@ -37047,7 +37047,7 @@ mod advert_tests {
             .expect("canonical PDP verification context");
         let pdp = ProofStreamItem::from_ndjson(pdp_lines[0].as_bytes(), &pdp_context)
             .expect("parse finalized PDP row");
-        assert_eq!(pdp.proof_kind(), sorafs_car::proof_stream::ProofKind::Pdp);
+        assert_eq!(pdp.proof_kind(), sorafs_manifest::ProofStreamKind::Pdp);
         assert_eq!(pdp.failure_reason(), Some("deadline_expired"));
         assert_eq!(pdp.finalized_block_height(), Some(finalized_cursor.height));
         assert_eq!(
@@ -37086,7 +37086,7 @@ mod advert_tests {
             .expect("canonical PoTR verification context");
         let potr = ProofStreamItem::from_ndjson(potr_lines[0].as_bytes(), &potr_context)
             .expect("parse finalized PoTR row");
-        assert_eq!(potr.proof_kind(), sorafs_car::proof_stream::ProofKind::Potr);
+        assert_eq!(potr.proof_kind(), sorafs_manifest::ProofStreamKind::Potr);
         assert_eq!(potr.potr_receipt(), Some(&receipt));
         assert_eq!(potr.finalized_block_height(), Some(finalized_cursor.height));
     }

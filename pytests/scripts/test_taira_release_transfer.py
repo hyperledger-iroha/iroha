@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import copy
+import errno
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import platform
 import stat
 import shutil
 import subprocess
@@ -367,8 +369,238 @@ def remote_entry(e, stream):
         result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "taira_release_transfer.py"), "--help"],
                                 capture_output=True, text=True, check=True)
         self.assertIn("--plan", result.stdout)
+        self.assertIn("--native-plan", result.stdout)
         for flag in ("--activate", "--command", "--private-key", "--reset", "--service"):
             self.assertNotIn(flag, result.stdout)
+
+
+class NativeInvocationTests(unittest.TestCase):
+    """Receipt admission everywhere; actual descriptor execution on Linux only."""
+
+    def setUp(self):
+        self.fixture = TransferTests(methodName="runTest")
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.root, self.runtime = self.fixture.root, self.fixture.runtime
+        self.addCleanup(patch.stopall)
+        patch.object(transfer, "NATIVE_RUNTIME", str(self.runtime)).start()
+        release, preparation, self.build, output = self.fixture.preparation_fixture()
+        self.preparation = preparation
+        if sys.platform == "linux":
+            image = Path(sys.executable).resolve().read_bytes()
+            for row in self.build["artifacts"]:
+                path = Path(row["path"])
+                path.chmod(0o600)
+                path.write_bytes(image)
+                path.chmod(0o500)
+                row.update(size=len(image), sha256=transfer.sha(image))
+            for path in (output / "result.json", output / self.build["attempt"] / "capture.json"):
+                path.chmod(0o600)
+                path.write_bytes(release.canonical_json_bytes(self.build))
+                path.chmod(0o400)
+            preparation["preparation"]["sha256"] = transfer.sha(release.canonical_json_bytes(self.build))
+        proof_paths = (output / "result.json", output / "request.json", output / "checks.json",
+                       output / self.build["attempt"] / "capture.json")
+        self.fixture.data = [Path(row["path"]).read_bytes() for row in self.build["artifacts"]] + [
+            b"public git packet", b'{"public":"manifest"}\n', *(path.read_bytes() for path in proof_paths)]
+        self.fixture.request["rows"] = [{"name": name, "size": len(raw), "sha256": transfer.sha(raw)}
+                                       for name, raw in zip(transfer.PAYLOAD_NAMES, self.fixture.data)]
+        self.fixture.request["result_sha256"] = preparation["preparation"]["sha256"]
+        self.fixture.request["allocation"]["bytes"] = sum(map(len, self.fixture.data)) + 1024**2
+        self.request = self.fixture.request
+        self.completed = self.fixture.receive()
+        def reference(name, value, mode=0o400):
+            raw = transfer.canonical(value)
+            path = self.root / name
+            transfer.write_new(path, raw, mode=mode)
+            return {"path": str(path), "sha256": transfer.sha(raw)}
+        self.plan = {"schema": transfer.NATIVE_SCHEMA, "provider": "macstadium-dublin",
+            "invocation_id": "d" * 32, "expected_commit": "a" * 40, "expected_signer": "C" * 40,
+            "descriptor": reference("descriptor.json", {"schema": "taira.runtime-deployment.v1", "runtime_root": str(self.runtime),
+                "public_origin": "https://taira.sora.org", "guest_ssh": {"test": "pinned route"}}, 0o600),
+            "preparation": preparation["preparation"],
+            "import_request": reference("request.json", self.request),
+            "import_completed": reference("completed.json", self.completed),
+            "program": "iroha", "argv": ["--help"], "files": [], "stdout_file": None,
+            "timeout_seconds": 5}
+        self.value = {"plan": self.plan, "tree": "b" * 40, "build": self.build,
+                      "import_request": self.request, "completed": self.completed}
+
+    def test_closed_plan_rejects_shell_programs_paths_fd_aliases_and_unbounded_inputs(self):
+        self.assertIs(transfer.validate_native_plan(self.plan), self.plan)
+        changes = [dict(program="iroha3d_taira"), dict(program="/bin/sh"), dict(argv=["bad\narg"]),
+                   dict(argv=["x" * 8193]), dict(timeout_seconds=True), dict(timeout_seconds=86401),
+                   dict(invocation_id=""), dict(extra="ignored"), dict(stdout_file="/tmp/output"),
+                   dict(files=[{"fd": 0, "path": str(self.runtime / "key")}]),
+                   dict(files=[{"fd": 3, "path": "/etc/key"}]),
+                   dict(files=[{"fd": 3, "path": str(self.runtime / "key")}] * 2)]
+        for changed in changes:
+            with self.subTest(changed=changed), self.assertRaises(transfer.TransferError):
+                transfer.validate_native_plan({**self.plan, **changed})
+        result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "taira_release_transfer.py"),
+            "--plan", "a", "--native-plan", "b", "--output-dir", "c"], capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"not allowed with argument", result.stderr)
+
+    def test_receipts_bind_preparation_exact_roles_and_completed_import(self):
+        self.assertEqual(transfer.admit_native_records(self.plan, "b" * 40, self.build,
+                         self.request, self.completed), self.fixture.destination)
+        for part in ("build", "request", "completed"):
+            build, request, completed = copy.deepcopy((self.build, self.request, self.completed))
+            if part == "build":
+                build["artifacts"][1]["sha256"] = "0" * 64
+            elif part == "request":
+                request["rows"][1]["sha256"] = "0" * 64
+            else:
+                completed["binary"]["destination"] = str(self.runtime / "foreign/bin")
+            with self.subTest(part=part), self.assertRaises(transfer.TransferError):
+                transfer.admit_native_records(self.plan, "b" * 40, build, request, completed)
+
+    def test_runtime_descriptors_reject_links_permissions_and_unsafe_ancestry_without_reading(self):
+        path = self.runtime / "key"
+        transfer.write_new(path, b"fake-secret", mode=0o600)
+        with patch.object(os, "pread", side_effect=AssertionError("secret bytes read")):
+            with transfer.native_file(path) as fd:
+                self.assertEqual(os.fstat(fd).st_size, 11)
+        path.chmod(0o644)
+        with self.assertRaisesRegex(transfer.TransferError, "custody"):
+            with transfer.native_file(path):
+                pass
+        path.chmod(0o600)
+        alias = self.runtime / "alias"
+        os.link(path, alias)
+        with self.assertRaisesRegex(transfer.TransferError, "custody"):
+            with transfer.native_file(path):
+                pass
+        alias.unlink()
+        alias.symlink_to(path)
+        with self.assertRaises(OSError):
+            with transfer.native_file(alias):
+                pass
+        directory = self.runtime / "unsafe"
+        directory.mkdir(mode=0o777)
+        directory.chmod(0o777)
+        with self.assertRaisesRegex(transfer.TransferError, "ancestry"):
+            with transfer.native_file(directory / "new", output=True):
+                pass
+        self.assertFalse((directory / "new").exists())
+        with self.assertRaises(FileExistsError):
+            with transfer.native_file(path, output=True):
+                pass
+
+    def test_local_transport_loss_retains_durable_attempt_and_never_replays(self):
+        route = types.SimpleNamespace(validate_ssh=lambda value: value)
+        calls = []
+        output = self.root / "attempt"
+        def loss(*args, **kwargs):
+            self.assertTrue((output / "started.json").exists())
+            calls.append(args)
+            raise OSError("transport interrupted")
+        with patch.object(transfer, "remote_call", side_effect=loss):
+            with self.assertRaisesRegex(transfer.TransferError, "do not replay"):
+                transfer.invoke_native_admitted(self.plan, output, "b" * 40, {}, {"taira_retry": route})
+            with self.assertRaises(FileExistsError):
+                transfer.invoke_native_admitted(self.plan, output, "b" * 40, {}, {"taira_retry": route})
+        self.assertEqual(len(calls), 1)
+        result = transfer.decode((output / "result.json").read_bytes())
+        self.assertEqual((result["state"], result["exit_code"]), ("indeterminate", None))
+
+    def test_descriptor_digest_and_guest_receipt_drift_stop_before_execution(self):
+        descriptor = Path(self.plan["descriptor"]["path"])
+        descriptor.write_bytes(b"{}\n")
+        with patch.object(transfer, "remote_call") as remote:
+            with self.assertRaisesRegex(transfer.TransferError, "digest"):
+                transfer.invoke_native_admitted(self.plan, self.root / "attempt", "b" * 40, {}, {})
+            remote.assert_not_called()
+        receipt = self.fixture.destination / "artifacts/verified-manifest.json"
+        receipt.chmod(0o600)
+        receipt.write_bytes(b"{}\n")
+        receipt.chmod(0o400)
+        with patch.object(transfer, "native_child") as child:
+            with self.assertRaisesRegex(transfer.TransferError, "digest"):
+                transfer.native_guest(self.value)
+            child.assert_not_called()
+
+    def test_partial_pipe_setup_failure_closes_every_opened_descriptor(self):
+        def descriptors():
+            live = set()
+            for name in os.listdir("/dev/fd"):
+                try:
+                    os.fstat(int(name))
+                    live.add(int(name))
+                except OSError:
+                    pass
+            return live
+        path = self.fixture.destination / "artifacts/bin/iroha"
+        with path.open("rb") as executable:
+            for failure in (3, 4):
+                before = descriptors()
+                original, calls = transfer.fcntl.fcntl, []
+                def fail_protect(*args):
+                    calls.append(args)
+                    if len(calls) == failure:
+                        raise OSError(errno.EMFILE, "fixture descriptor limit")
+                    return original(*args)
+                with self.subTest(protect=failure), patch.object(transfer.fcntl, "fcntl", side_effect=fail_protect):
+                    with self.assertRaises(OSError):
+                        transfer.native_child(executable.fileno(), path, self.plan, [], None, self.runtime)
+                self.assertEqual(descriptors(), before)
+
+    @unittest.skipUnless(sys.platform == "linux" and platform.machine() in ("aarch64", "arm64")
+                         and os.execve in os.supports_fd, "AArch64 Linux descriptor exec required")
+    def test_linux_held_executable_fd_mapping_collision_and_private_stdout(self):
+        first, second = self.runtime / "first", self.runtime / "second"
+        transfer.write_new(first, b"secret-three", mode=0o600)
+        transfer.write_new(second, b"secret-198", mode=0o400)
+        self.plan["files"] = [{"fd": 3, "path": str(first)}, {"fd": 198, "path": str(second)}]
+        self.plan["stdout_file"] = str(self.runtime / "private-output")
+        # The fixture image is a copied harmless system Python ELF, authenticated
+        # by fixture receipts only. Production still permits only signed iroha/kagami.
+        self.plan["argv"] = ["-I", "-c", "import os; os.write(1,os.read(3,64)+os.read(198,64)); os.write(2,b'secret-stderr'); "
+                            "assert not any(os.path.exists('/proc/self/fd/'+str(n)) for n in (4,5,6,7,8,9))"]
+        result = transfer.native_guest(self.value)
+        self.assertEqual((result["state"], result["exit_code"]), ("process-exited", 0))
+        self.assertEqual(result["stdout_base64"], "")
+        self.assertEqual(result["stderr_base64"], "")
+        self.assertEqual(Path(self.plan["stdout_file"]).read_bytes(), b"secret-threesecret-198")
+        self.assertEqual((Path(result["guest_attempt"]) / "stderr").read_bytes(), b"secret-stderr")
+        self.assertNotIn(b"secret-three", transfer.canonical(result))
+        self.assertNotIn(b"secret-198", transfer.canonical(result))
+        with self.assertRaises(FileExistsError):
+            transfer.native_guest(self.value)
+
+    @unittest.skipUnless(sys.platform == "linux" and os.execve in os.supports_fd, "Linux descriptor exec required")
+    def test_linux_exec_uses_held_inode_and_closes_unmapped_descriptors(self):
+        program = self.runtime / "test-image"
+        transfer.write_new(program, Path(sys.executable).resolve().read_bytes(), mode=0o755)
+        fd = os.open(program, os.O_RDONLY | os.O_CLOEXEC)
+        self.addCleanup(os.close, fd)
+        os.unlink(program)
+        transfer.write_new(program, b"not the admitted executable", mode=0o755)
+        leaked = os.open(self.runtime / "leak", os.O_WRONLY | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, leaked)
+        os.set_inheritable(leaked, True)
+        self.plan["argv"] = ["-I", "-c", "import os; assert not os.path.exists('/proc/self/fd/" + str(leaked) + "'); print('held inode')"]
+        attempt = transfer.fresh_directory(self.runtime / "inode-attempt")
+        result = transfer.native_child(fd, program, self.plan, [], None, attempt)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(transfer.base64.b64decode(result["stdout_base64"]), b"held inode\n")
+
+    @unittest.skipUnless(sys.platform == "linux" and platform.machine() in ("aarch64", "arm64")
+                         and os.execve in os.supports_fd, "AArch64 Linux descriptor exec required")
+    def test_linux_public_output_is_bounded_nonzero_exit_and_timeout_stay_distinct(self):
+        for nonce, code, expected in (("1", "import os; os.write(1,b'x'*1000000); os.write(2,b'y'*1000000); raise SystemExit(7)", 7),
+                                      ("2", "import time; time.sleep(10)", -9)):
+            self.plan["invocation_id"] = nonce * 32
+            self.plan["argv"] = ["-I", "-c", code]
+            self.plan["timeout_seconds"] = 1
+            result = transfer.native_guest(self.value)
+            self.assertEqual(result["exit_code"], expected)
+            self.assertEqual(result["state"], "indeterminate" if nonce == "2" else "process-exited")
+            if nonce == "1":
+                self.assertEqual(result["output_truncated"], {"stdout": True, "stderr": True})
+                for key in ("stdout_base64", "stderr_base64"):
+                    self.assertEqual(len(transfer.base64.b64decode(result[key])), transfer.NATIVE_OUTPUT_LIMIT)
 
 
 @unittest.skipUnless(shutil.which("git") and shutil.which("gpg"), "Git/GnuPG required")

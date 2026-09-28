@@ -26,7 +26,9 @@ fn reward_distribution_requires_the_exact_treasury_authority() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+        b"reward_distribution_requires_the_exact_treasury_authority",
+    ));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     let distribution = reward_distribution(lane, 0, &asset, &validator, 25);
@@ -48,8 +50,7 @@ fn reward_epoch_zero_is_claimable_once() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xB0);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB0; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, definition) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -101,8 +102,7 @@ fn reward_dust_accumulates_until_paid() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xB1);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, definition) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::from(50_u64);
@@ -167,7 +167,9 @@ fn reward_distributions_cannot_reuse_promised_funds() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+        b"reward_distributions_cannot_reuse_promised_funds",
+    ));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 200);
     // The fee sink owns 200 independently of the validator's bonded custody.
@@ -190,8 +192,7 @@ fn reward_reserve_blocks_transfer_and_burn_but_releases_paid_rewards() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xB2);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 200);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -240,8 +241,7 @@ fn reward_failed_payment_restores_claim_and_reserve() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xB3);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB3; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -273,7 +273,9 @@ fn reward_obligation_audit_rejects_corrupt_record_keys() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+        b"reward_obligation_audit_rejects_corrupt_record_keys",
+    ));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     reward_distribution(lane, 1, &asset, &validator, 25)
@@ -310,8 +312,7 @@ fn reward_claim_uses_recorded_custody_after_fee_policy_changes() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xB4);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB4; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, definition) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
@@ -345,8 +346,7 @@ fn reward_recording_excludes_bonded_custody_from_a_shared_fee_sink() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xB5);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB5; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     // Model the default shared custody layout: 100 fees plus 100 bonded tokens.
@@ -402,8 +402,7 @@ fn reward_reserve_checks_aggregate_batch_debits() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xB6);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, definition) = configure_reward_fixture(&mut stx, lane, 200);
     reward_distribution(lane, 1, &asset, &validator, 150)
@@ -441,7 +440,9 @@ fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollbac
     let mut state_block = state.block(block.as_ref().header());
     let lane = LaneId::SINGLE;
     let (validator, assets, nexus) = {
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+            b"reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback",
+        ));
         let (sink, validator, first_asset, _) = configure_reward_fixture(&mut stx, lane, 100);
         stx.nexus.staking.reward_dust_threshold = Quantity::zero();
         reward_distribution(lane, 0, &first_asset, &validator, 25)
@@ -467,9 +468,8 @@ fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollbac
     };
     state_block.drain_transfer_transcripts();
     {
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB7; Hash::LENGTH]));
         stx.nexus = nexus;
-        seed_test_call_hash(&mut stx, 0xB7);
         // A later sorted custody asset is unavailable; the complete payout batch must roll back.
         stx.world.assets.remove(assets[1].clone());
         let error = ClaimPublicLaneRewards {

@@ -311,7 +311,7 @@ fn app_fanout_norito_plan_keeps_raw_bytes_live_and_splits_routes() {
     assert_eq!(budget.retained_bytes(), prior + route_slice);
 }
 #[test]
-fn app_fanout_norito_limits_reject_nested_and_packed_amplification() {
+fn app_fanout_norito_limits_reject_nested_and_noncanonical_layout_amplification() {
     let budget = ToriiAppFanoutMemoryBudget::new(1024 * 1024).expect("test budget");
     let nested = ToriiAppFanoutNoritoTestDto {
         nested: vec![vec![vec![1_u8]]],
@@ -327,14 +327,16 @@ fn app_fanout_norito_limits_reject_nested_and_packed_amplification() {
         error.to_string(),
         "proxied Norito response failed bounded decoding"
     );
-    let mut packed_bytes = norito::to_bytes(&nested).expect("encode test DTO");
-    packed_bytes[norito::core::Header::SIZE - 1] |= norito::core::header_flags::PACKED_SEQ;
-    let packed_plan = budget
-        .norito_decode_plan::<ToriiAppFanoutNoritoTestDto>(packed_bytes.len(), 1, 8)
-        .expect("packed raw frame fits");
-    let error =
-        decode_torii_app_fanout_norito::<ToriiAppFanoutNoritoTestDto>(&packed_bytes, packed_plan)
-            .expect_err("non-default packed layout must fail before sequential decode");
+    let mut noncanonical_bytes = norito::to_bytes(&nested).expect("encode test DTO");
+    noncanonical_bytes[norito::core::Header::SIZE - 1] ^= norito::core::header_flags::COMPACT_LEN;
+    let noncanonical_plan = budget
+        .norito_decode_plan::<ToriiAppFanoutNoritoTestDto>(noncanonical_bytes.len(), 1, 8)
+        .expect("noncanonical raw frame fits");
+    let error = decode_torii_app_fanout_norito::<ToriiAppFanoutNoritoTestDto>(
+        &noncanonical_bytes,
+        noncanonical_plan,
+    )
+    .expect_err("non-default layout must fail before sequential decode");
     assert_eq!(
         error.to_string(),
         "proxied Norito response failed bounded decoding"
