@@ -7,6 +7,9 @@
 //! anchor block's hash and creation time, and the lane record's immutable fields), so every
 //! honest member computes the same `R` whenever it executes.
 
+/// The durable block store of a lane instance.
+pub mod store;
+
 use std::collections::BTreeSet;
 
 use iroha_crypto::HashOf;
