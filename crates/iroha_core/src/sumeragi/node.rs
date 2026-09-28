@@ -1360,6 +1360,23 @@ mod tests {
         vec![Parameter::Custom(policy.into_custom_parameter())]
     }
 
+    /// Transactions every validator's stored blocks executed from merged lane blocks.
+    fn merged_everywhere(validators: &[Validator], disks: &[Disk]) -> Vec<usize> {
+        validators
+            .iter()
+            .zip(disks)
+            .map(|(validator, disk)| {
+                (1..=validator.state.view().height())
+                    .filter_map(|height| {
+                        disk.kura
+                            .get_block(core::num::NonZeroUsize::new(height).expect("non-zero"))
+                    })
+                    .map(|block| block.merged_entrypoint_count())
+                    .sum::<usize>()
+            })
+            .collect()
+    }
+
     #[test]
     fn a_fixed_lane_carries_transactions_the_global_chain_merges() {
         let lane = iroha_model_base::topology::LaneId::new(2);
@@ -1391,24 +1408,55 @@ mod tests {
             "the lane's transaction merged",
             || committed_everywhere(&validators, hash),
         );
-        for (validator, disk) in validators.iter().zip(&disks) {
-            let view = validator.state.view();
-            let record = view
-                .world()
-                .sumeragi_lanes()
-                .lane(lane)
-                .cloned()
-                .expect("the lane");
-            assert!(record.merged.height >= 1, "a lane block was merged");
-            let merged = (1..=view.height())
-                .filter_map(|height| {
-                    disk.kura
-                        .get_block(core::num::NonZeroUsize::new(height).expect("non-zero"))
+        let frontier = |validators: &[Validator]| {
+            validators
+                .iter()
+                .map(|validator| {
+                    validator
+                        .state
+                        .view()
+                        .world()
+                        .sumeragi_lanes()
+                        .lane(lane)
+                        .expect("the lane")
+                        .merged
                 })
-                .map(|block| block.merged_entrypoint_count())
-                .sum::<usize>();
-            assert_eq!(merged, 1, "the transaction came through the lane");
-        }
+                .collect::<Vec<_>>()
+        };
+        let merged = frontier(&validators);
+        assert!(merged[0].height >= 1, "a lane block was merged");
+        assert!(merged.iter().all(|frontier| *frontier == merged[0]));
+        assert_eq!(
+            merged_everywhere(&validators, &disks),
+            vec![1; 4],
+            "the transaction came through the lane"
+        );
+        shutdown(validators);
+
+        // Restart: replay re-executes the merged blocks from the lane stores on disk, the lane
+        // instances resume from their stores, and the lane keeps carrying transactions.
+        let validators = start_all(&chain, &disks, false);
+        assert!(committed_everywhere(&validators, hash));
+        assert_eq!(frontier(&validators), merged);
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "every validator runs the lane again",
+            || {
+                validators
+                    .iter()
+                    .all(|validator| validator.node.lanes.instances().len() == 1)
+            },
+        );
+        let hash = submit(&chain, &validators, "through the lane after restart");
+        wait_until(
+            &validators,
+            Duration::from_secs(60),
+            "the lane's transaction merged after restart",
+            || committed_everywhere(&validators, hash),
+        );
+        assert_eq!(merged_everywhere(&validators, &disks), vec![2; 4]);
+        assert!(frontier(&validators)[0].height > merged[0].height);
         shutdown(validators);
     }
 
