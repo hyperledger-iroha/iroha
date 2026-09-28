@@ -129,6 +129,22 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+  sumeragi:
+    name: Sumeragi core, simulator and node lanes
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+      - name: Core and simulator (default seeds)
+        run: cargo test --locked -p iroha_sumeragi --features sim
+      - name: Node driver, lanes and four-validator node tests
+        run: cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+
   norito_rpc_verify:
     runs-on: ubuntu-latest
     container:
