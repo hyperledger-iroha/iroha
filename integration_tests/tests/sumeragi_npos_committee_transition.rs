@@ -31,6 +31,7 @@ use iroha::{
         },
         parameter::system::SumeragiNposParameters,
         prelude::*,
+        sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
         transaction::FeePaymentIntent,
         validation_fee::ValidationFeePolicyRegistryV1,
     },
@@ -49,6 +50,7 @@ use iroha_core::{
     },
     zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1,
 };
+use iroha_genesis::GenesisBlock;
 use iroha_model_base::{metadata::Metadata, peer::PeerId, topology::LaneId};
 use iroha_test_network::{
     CommitteeValidatorP2pBootstrap, DisposableBeaconProviderBinding, DisposableGenesisDkgOutput,
@@ -519,10 +521,10 @@ fn read_finality_chain(
     genesis_voters: &BTreeSet<PeerId>,
     end: u64,
 ) -> Result<(BridgeFinalityProof, BridgeFinalityProof)> {
-    let anchor_height = NonZeroU64::new(1).expect("genesis height");
-    let (anchor, genesis_hash) = client
-        .client()
-        .get_bridge_finality_anchor(anchor_height, network_id)?;
+    let (anchor, genesis_hash): (
+        BridgeFinalityProof,
+        iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    ) = v2_bridge_finality_unavailable(client, 1)?;
     ensure!(
         genesis_hash == network_id.into_genesis_hash(),
         "initial finality anchor must be the independently built signed genesis"
@@ -542,10 +544,8 @@ fn read_finality_chain(
     let mut selection = None;
     let mut cutoff = None;
     for height in 1..=end {
-        let proof = client.client().get_next_bridge_finality_proof(
-            NonZeroU64::new(height).expect("positive height"),
-            &mut verifier,
-        )?;
+        let proof: BridgeFinalityProof = v2_bridge_finality_unavailable(client, height)?;
+        verifier.verify(&proof)?;
         if height == SELECTION {
             selection = Some(proof.clone());
         }
@@ -561,15 +561,60 @@ fn read_finality_chain(
 
 fn read_genesis_dkg_finality_chain(
     client: &Client,
-    network_id: NetworkId,
-    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    genesis: &GenesisBlock,
+    chain_id: &str,
     end: u64,
-) -> Result<Vec<BridgeFinalityProof>> {
+) -> Result<Vec<SumeragiFinalityProof>> {
     ensure!(
         (1..=4).contains(&end),
         "genesis DKG proof end is outside h1–h4"
     );
-    Ok(read_contiguous_finality_chain(client, network_id, signed_genesis_hash, end)?.1)
+    read_current_finality_chain(client, genesis, chain_id, end)
+}
+
+/// Read the current embedded-certificate finality chain `1..=end` from `client`, admitting each
+/// proof into a verifier anchored on the signed genesis this harness built and the committee that
+/// genesis registers, never on a genesis or committee the node supplies.
+fn read_current_finality_chain(
+    client: &Client,
+    genesis: &GenesisBlock,
+    chain_id: &str,
+    end: u64,
+) -> Result<Vec<SumeragiFinalityProof>> {
+    ensure!(
+        (1..=256).contains(&end),
+        "committee proof end exceeds its disposable bound"
+    );
+    let validators = iroha_core::sumeragi::schedule::genesis_validators(genesis)?
+        .into_iter()
+        .map(|(peer, proof_of_possession)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession,
+        })
+        .collect();
+    let mut verifier = SumeragiFinalityVerifier::new(&genesis.0, chain_id, validators)?;
+    (1..=end)
+        .map(|height| {
+            client.client().get_next_sumeragi_finality_proof(
+                NonZeroU64::new(height).expect("finality heights start at one"),
+                &mut verifier,
+            )
+        })
+        .collect()
+}
+
+/// Read a Sumeragi v2 bridge-finality proof of `height` from `client`: always an error.
+///
+/// Validator-committee selection and provisioning evidence still carry v2 finality artifacts
+/// (height contexts with the v2 roster, quorum, next-epoch snapshot and KAGEMUSHA epoch
+/// authorization). The current node never writes them, so these reads already failed at
+/// runtime; its bridge-finality route serves the embedded-certificate `SumeragiFinalityProof`.
+/// TODO(C3): port committee evidence onto the certified chain (F4) and these checks with it.
+fn v2_bridge_finality_unavailable<T>(client: &Client, height: u64) -> Result<T> {
+    Err(eyre!(
+        "{} no longer serves Sumeragi v2 bridge-finality proofs (height {height})",
+        client.client().to_builder().torii_url
+    ))
 }
 
 fn read_contiguous_finality_chain(
@@ -582,9 +627,10 @@ fn read_contiguous_finality_chain(
         (1..=256).contains(&end),
         "committee proof end exceeds its disposable bound"
     );
-    let (anchor, observed_hash) = client
-        .client()
-        .get_bridge_finality_anchor(NonZeroU64::new(1).expect("genesis height"), network_id)?;
+    let (anchor, observed_hash): (
+        BridgeFinalityProof,
+        iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    ) = v2_bridge_finality_unavailable(client, 1)?;
     ensure!(
         observed_hash == signed_genesis_hash && anchor.block_header.hash() == signed_genesis_hash,
         "h1 finality anchor differs from the retained signed genesis"
@@ -594,10 +640,9 @@ fn read_contiguous_finality_chain(
     let trusted_context = Hash::from(anchor.finality_artifact.context_id().0);
     let mut proofs = Vec::with_capacity(usize::try_from(end)?);
     for height in 1..=end {
-        proofs.push(client.client().get_next_bridge_finality_proof(
-            NonZeroU64::new(height).expect("positive DKG phase height"),
-            &mut verifier,
-        )?);
+        let proof: BridgeFinalityProof = v2_bridge_finality_unavailable(client, height)?;
+        verifier.verify(&proof)?;
+        proofs.push(proof);
     }
     Ok((trusted_context, proofs))
 }
@@ -902,6 +947,8 @@ async fn execute_rotation_preparation(
         |height| {
             let admin = admin.clone();
             let voters = current_roster.clone();
+            let genesis = network.genesis();
+            let chain_id = network.chain_id().to_string();
             async move {
                 advance_exact_rotation_phase(network, &voters, height).await?;
                 let observed = spawn_blocking({
@@ -915,8 +962,7 @@ async fn execute_rotation_preparation(
                     "rotation DKG public phase missed exact h{height} observation"
                 );
                 spawn_blocking(move || {
-                    read_contiguous_finality_chain(&admin, network_id, signed_genesis_hash, height)?
-                        .1
+                    read_current_finality_chain(&admin, &genesis, &chain_id, height)?
                         .pop()
                         .ok_or_else(|| eyre!("missing exact rotation phase finality"))
                 })
@@ -1526,18 +1572,18 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         let admin = rebind_blocking_client(&network.client(), |builder| {
             builder.transaction_status_timeout = WAIT;
         });
+        let genesis = network.genesis();
+        let chain_id = network.chain_id().to_string();
         let genesis_anchor = spawn_blocking({
             let admin = admin.clone();
-            let block_hash = genesis_bundle.block_hash;
-            let network_id = network.network_id();
-            move || read_genesis_dkg_finality_chain(&admin, network_id, block_hash, 1)
+            let genesis = genesis.clone();
+            let chain_id = chain_id.clone();
+            move || read_genesis_dkg_finality_chain(&admin, &genesis, &chain_id, 1)
         })
         .await
         .wrap_err("genesis DKG anchor worker panicked")??
         .pop()
         .ok_or_else(|| eyre!("missing genesis finality anchor"))?;
-        let network_id = network.network_id();
-        let block_hash = genesis_bundle.block_hash;
         let network_ref = &network;
         let genesis_dkg = run_disposable_genesis_dkg(
             &network,
@@ -1545,6 +1591,8 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             5,
             |height| {
                 let admin = admin.clone();
+                let genesis = genesis.clone();
+                let chain_id = chain_id.clone();
                 async move {
                     advance_exact_genesis_phase(network_ref, height).await?;
                     let observed = spawn_blocking({
@@ -1558,7 +1606,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                         "genesis DKG public phase missed exact h{height} observation"
                     );
                     spawn_blocking(move || {
-                        read_genesis_dkg_finality_chain(&admin, network_id, block_hash, height)?
+                        read_genesis_dkg_finality_chain(&admin, &genesis, &chain_id, height)?
                             .pop()
                             .ok_or_else(|| eyre!("missing exact genesis phase finality"))
                     })
@@ -1876,4 +1924,33 @@ fn exact_quorum_uses_only_three_f_plus_one_equal_vote_geometry() {
     assert_eq!(exact_quorum(7).unwrap(), 5);
     assert!(exact_quorum(6).is_err());
     assert!(exact_quorum(8).is_err());
+}
+
+#[test]
+fn v2_bridge_finality_reads_fail_explicitly() {
+    let config = iroha::config::Config {
+        chain: "committee-transition-unit".into(),
+        network_id: NetworkId::from_genesis_hash(iroha::crypto::HashOf::from_untyped_unchecked(
+            Hash::prehashed([0x5A; Hash::LENGTH]),
+        )),
+        key_pair: iroha_test_samples::ALICE_KEYPAIR.clone(),
+        account: ALICE_ID.clone(),
+        account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+        torii_api_url: "http://committee-transition.invalid/".parse().unwrap(),
+        torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+        basic_auth: None,
+        transaction_add_nonce: false,
+        transaction_ttl: Duration::from_secs(5),
+        transaction_status_timeout: Duration::from_secs(10),
+        sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
+        sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
+        sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
+    };
+    let client = Client::new(config).unwrap();
+    let error = v2_bridge_finality_unavailable::<()>(&client, 7).expect_err("never served");
+    let message = error.to_string();
+    assert!(
+        message.contains("committee-transition.invalid") && message.contains("height 7"),
+        "{message}"
+    );
 }

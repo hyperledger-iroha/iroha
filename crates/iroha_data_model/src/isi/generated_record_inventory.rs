@@ -1393,11 +1393,6 @@ record!(
     "iroha_data_model::isi::staking::BondPublicLaneStake"
 );
 record!(
-    staking_cancel_consensus_evidence_penalty,
-    crate::isi::staking::CancelConsensusEvidencePenalty,
-    "iroha_data_model::isi::staking::CancelConsensusEvidencePenalty"
-);
-record!(
     staking_claim_public_lane_rewards,
     crate::isi::staking::ClaimPublicLaneRewards,
     "iroha_data_model::isi::staking::ClaimPublicLaneRewards"

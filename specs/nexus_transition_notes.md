@@ -294,8 +294,8 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   ownership. The same reset prunes AXT replay ledger entries keyed by a retired
   handle target lane while
   preserving cross-lane replay guards whose handles target surviving lanes.
-  After every reset-owned tenure, custody balance, pending unbond, and evidence
-  lien passes retirement preflight, public-lane stake-share rows and reward
+  After every reset-owned tenure, custody balance and pending unbond passes
+  retirement preflight, public-lane stake-share rows and reward
   records keyed by or carrying the reset lane, plus reward-claim cursors keyed
   by the reset lane, are removed as live economic indices so a recreated lane
   id cannot inherit stale reward epochs or claim cursors. Operator staking

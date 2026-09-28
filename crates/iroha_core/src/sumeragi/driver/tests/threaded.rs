@@ -31,6 +31,7 @@ use super::{
     block, commit_qc,
     fakes::{
         FakeBlocks, FakeBodies, FakeClock, FakeExecutor, FakeNet, FakeRecords, RecordingObserver,
+        WorkPump,
     },
     hash,
 };
@@ -69,6 +70,11 @@ impl Instance {
 
     fn committed(&self) -> u64 {
         self.handle().status().map_or(0, |s| s.committed_height)
+    }
+
+    /// Keep work queued until the pump is dropped (blocks are work-driven, §6.10).
+    fn pump(&self) -> WorkPump {
+        self.fakes.exec.pump(self.handle())
     }
 }
 
@@ -182,9 +188,14 @@ fn single_validator_commits_through_failures() {
         node.fakes.exec.add_tx(id);
     }
     node.handle().transactions_available();
+    wait_until("the transactions applied", Duration::from_secs(20), || {
+        node.fakes.exec.state.lock().txs.is_empty()
+    });
+    let work = node.pump();
     wait_until("20 heights", Duration::from_secs(20), || {
         node.committed() >= 20
     });
+    drop(work);
     let status = node.handle().status().unwrap();
     assert!(status.halted.is_none() && node.handle().halted().is_none());
     assert!(
@@ -198,8 +209,10 @@ fn single_validator_commits_through_failures() {
         .count();
     assert!(payloads > 0, "transactions were included");
     assert!(
-        node.fakes.exec.state.lock().txs.is_empty(),
-        "applied transactions left the queue"
+        (1..=node.fakes.blocks.height())
+            .filter_map(|h| node.fakes.blocks.entry(h))
+            .all(|e| !e.block.payload.is_empty()),
+        "blocks are never empty"
     );
     assert!(node.fakes.bodies.len() <= 4, "applied bodies are pruned");
     node.running.shutdown();
@@ -247,6 +260,8 @@ fn stalled_and_flooded_instance_does_not_delay_another() {
             (start.elapsed(), longest)
         })
     };
+    let _a_work = a.pump();
+    let _b_work = b.pump();
     let start = Instant::now();
     wait_until("B commits 20 heights", Duration::from_secs(20), || {
         b.committed() >= 20
@@ -269,12 +284,13 @@ fn stalled_and_flooded_instance_does_not_delay_another() {
     b.running.shutdown();
 }
 
-/// Every timer of the driver follows its `Clock` backend: with the local clock stopped an idle
-/// chain makes no heartbeat, and once it runs heights commit.
+/// Every timer of the driver follows its `Clock` backend: with the local clock stopped a chain
+/// with pending work makes no block, and once it runs heights commit.
 #[test]
 fn timers_follow_the_clock_backend() {
     let clock = Arc::new(FakeClock::default());
     let node = spawn_instance(7, Arc::clone(&clock), |_| {});
+    let _work = node.pump();
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(node.committed(), 0, "no local time passed");
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -287,9 +303,7 @@ fn timers_follow_the_clock_backend() {
             }
         })
     };
-    wait_until("heartbeats", Duration::from_secs(30), || {
-        node.committed() >= 3
-    });
+    wait_until("heights", Duration::from_secs(30), || node.committed() >= 3);
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     runner.join().unwrap();
     assert!(clock.now() > 0);
@@ -434,6 +448,7 @@ fn panicking_backends_are_retried() {
         fakes.blocks.panic_appends(2);
         fakes.blocks.panic_reads(1);
     });
+    let work = node.pump();
     wait_until("10 heights", Duration::from_secs(20), || {
         node.committed() >= 10
     });
@@ -442,6 +457,7 @@ fn panicking_backends_are_retried() {
     assert_eq!(handle.stopped(), None);
     assert!(node.fakes.observer.stopped.lock().is_empty());
     assert!(node.fakes.blocks.height() >= 9);
+    drop(work);
     node.running.shutdown();
     assert!(!handle.ready(), "a shut-down instance is not ready");
 }
@@ -452,6 +468,7 @@ fn panicking_backends_are_retried() {
 fn a_stopped_worker_stops_the_instance() {
     let node = spawn_instance(9, Arc::new(SystemClock::new()), |_| {});
     let handle = node.handle();
+    let _work = node.pump();
     wait_until("a height", Duration::from_secs(20), || {
         node.committed() >= 1
     });
@@ -649,6 +666,7 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
 fn frame_limit_follows_committed_configurations() {
     let node = spawn_instance(10, Arc::new(SystemClock::new()), |_| {});
     let handle = node.handle();
+    let _work = node.pump();
     wait_until("a height", Duration::from_secs(20), || {
         node.committed() >= 1
     });

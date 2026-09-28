@@ -124,7 +124,7 @@ body, original custody and authenticated-operator quota across the operation.
    signed observation, including its original journal digest and terminal block.
    Startup or pre-sign evidence cannot replace either observation.
 5. Before publication, Torii checks approved, current and historical signing custody
-   anchors against the native control reader and Kura's verified finality artifacts
+   anchors against the native control reader and Kura's certified frames
    using one immutable Core State view. Completion keeps its separate finalized
    operation-block identity; it is not interpreted as custody control state. Larger
    heights alone prove no ancestry. Torii resamples time after finality reads and
@@ -242,9 +242,9 @@ approval evidence, never credentials or key material.
 TODO: complete coherent native caller/broker/producer validation and qualify the
 configured signer provider, attester, current finalized-state observer and
 authoritative durable operation source. Validate the native custody transitions and
-Torii reader together against durable certified history and four voting validators
-with mandatory signed RS16 DA/RBC. The present source contracts and signed
-simulations do not complete those qualification outcomes.
+Torii reader together against durable certified history and four voting
+validators. The present source contracts and signed simulations do not complete
+those qualification outcomes.
 
 
 Custody enrollment may reference an earlier committed approval block while unrelated

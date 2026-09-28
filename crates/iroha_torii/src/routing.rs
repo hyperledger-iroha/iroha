@@ -96,7 +96,6 @@ use iroha_core::{
         ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
         WorldReadOnly,
     },
-    sumeragi,
     telemetry::Telemetry,
     time,
     torii::zk::proofs::{
@@ -493,7 +492,6 @@ use iroha_data_model::{
             SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiNposDiagnostics,
             SumeragiPipelineExecutionStatus, SumeragiRuntimeUpgradeHook,
         },
-        consensus_v2::SumeragiV2QcResponse,
     },
     events::{
         EventBox,
@@ -541,20 +539,6 @@ pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -
         })
 }
 derived_items! {
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-struct PrfContext {
-    height: u64,
-    view: u64,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    epoch_seed: Option<String>,
-}
-(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::routing::SumeragiLeaderResponse")]
-struct SumeragiLeaderResponse {
-    leader_index: u64,
-    prf: PrfContext,
-}
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::SumeragiParamsResponse")]
@@ -5952,22 +5936,6 @@ mod proof_query_envelope_tests {
     }
 }
 }
-/// GET /v1/sumeragi/qc — authoritative PrepareQC lock and high-certificate references.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    let Some(status) = sumeragi::v2_status::v2_status() else {
-        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
-    };
-    let payload = SumeragiV2QcResponse {
-        highest_prepare_qc: status.highest_prepare_qc,
-        locked_prepare_qc: status.locked_prepare_qc,
-    };
-    Ok(crate::utils::respond_with_format(payload, format))
-}
 /// Maximum registered consensus-key records returned by the operator snapshot.
 const CONSENSUS_KEY_RESPONSE_CAP: usize = 128;
 #[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
@@ -6577,28 +6545,6 @@ mod bls_key_response_bounds_tests {
                 .all(|peer| !response.contains_key(&peer.public_key().to_string()))
         );
     }
-}
-/// GET /v1/sumeragi/leader — expected leader for the authoritative v2 round.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_leader(
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let Some(status) = sumeragi::v2_status::v2_status() else {
-        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
-    };
-    let payload = SumeragiLeaderResponse {
-        leader_index: u64::from(status.leader),
-        prf: PrfContext {
-            height: status.height,
-            view: status.view,
-            epoch_seed: None,
-        },
-    };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    Ok(crate::utils::respond_with_format(payload, format))
 }
 /// GET /v1/sumeragi/params — snapshot of on-chain Sumeragi parameters
 #[iroha_futures::telemetry_future]
@@ -43402,13 +43348,10 @@ fn sumeragi_pipeline_execution_status(
 }
 fn sumeragi_npos_diagnostics(
     params: &iroha_data_model::parameter::system::SumeragiNposParameters,
-    reducer: &iroha_data_model::block::consensus_v2::SumeragiV2Status,
 ) -> Result<SumeragiNposDiagnostics> {
     let diagnostics = SumeragiNposDiagnostics {
         epoch_length_blocks: params.epoch_length_blocks(),
         epoch_seed: params.epoch_seed(),
-        prf_height: reducer.height,
-        prf_view: reducer.view,
     };
     diagnostics.validate().map_err(|reason| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -43431,15 +43374,10 @@ pub async fn handle_v1_sumeragi_diagnostics(
     let snapshot = iroha_core::status::snapshot();
     let queue = iroha_core::status::tx_queue_backpressure();
     let world = state.world_view();
-    let npos = match world.sumeragi_npos_parameters() {
-        Some(params) => {
-            let Some(reducer) = sumeragi::v2_status::v2_status() else {
-                return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
-            };
-            Some(sumeragi_npos_diagnostics(&params, &reducer)?)
-        }
-        None => None,
-    };
+    let npos = world
+        .sumeragi_npos_parameters()
+        .map(|params| sumeragi_npos_diagnostics(&params))
+        .transpose()?;
     drop(world);
     let native_amx_participant_applications = state
         .native_amx_participant_applications_diagnostics()

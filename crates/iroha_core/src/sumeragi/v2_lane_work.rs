@@ -22272,8 +22272,12 @@ pub(super) mod tests {
                 parent_context.parent_commit_qc = durable_parent_qc.clone();
                 parent_context.epoch = {
                     let world = state.world_view();
-                    crate::sumeragi::v2_npos::epoch_for_height_from_world(&world, block_height, mode)
-                        .expect("parent epoch follows the committed schedule")
+                    crate::sumeragi::v2_npos::epoch_for_height_from_world(
+                        &world,
+                        block_height,
+                        mode,
+                    )
+                    .expect("parent epoch follows the committed schedule")
                 };
                 parent_context.epoch_end_height = npos_epoch_length.map_or(u64::MAX, |length| {
                     parent_context

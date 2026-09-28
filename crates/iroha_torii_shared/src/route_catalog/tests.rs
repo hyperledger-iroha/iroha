@@ -1733,9 +1733,7 @@ mod tests {
         for route in [
             sumeragi::STATUS,
             sumeragi::DIAGNOSTICS,
-            sumeragi::LEADER,
             sumeragi::BLS_KEYS,
-            sumeragi::QC,
             sumeragi::CONSENSUS_KEYS,
             sumeragi::PARAMETERS,
             sumeragi::EVIDENCE_COUNT,

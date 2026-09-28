@@ -181,6 +181,8 @@ fn file_stores_survive_disk_errors() {
         exec.add_tx(id);
     }
     running.handle().transactions_available();
+    // Blocks are work-driven (§6.10): keep work queued so heights keep coming.
+    let work = exec.pump(running.handle());
     let committed = || {
         running
             .handle()
@@ -189,6 +191,7 @@ fn file_stores_survive_disk_errors() {
     };
     wait_until("15 heights", Duration::from_secs(30), || committed() >= 15);
     assert!(running.handle().halted().is_none());
+    drop(work);
     running.shutdown();
     assert!(
         record_faults.injected.load(Ordering::SeqCst) >= 6,

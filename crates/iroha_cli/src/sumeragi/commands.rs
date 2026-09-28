@@ -4,16 +4,12 @@ use clap::ValueEnum;
 use eyre::Result;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Show consensus status snapshot (leader, `HighestQC`, `LockedQC`)
+    /// Show the consensus status snapshot (round, leader, proxy tail, lock view, heights)
     Status(StatusArgs),
     /// Show non-authoritative pipeline, queue, election, and lane diagnostics
     Diagnostics(DiagnosticsArgs),
-    /// Show leader index (and PRF context when available)
-    Leader(LeaderArgs),
     /// Show on-chain Sumeragi parameters snapshot
     Params(ParamsArgs),
-    /// Show HighestQC/LockedQC snapshot
-    Qc(QcArgs),
     /// Evidence audit helpers (list/count)
     #[command(subcommand)]
     Evidence(EvidenceCommand),
@@ -29,8 +25,6 @@ pub enum EvidenceCommand {
 pub struct StatusArgs {}
 #[derive(clap::Args, Debug)]
 pub struct DiagnosticsArgs {}
-#[derive(clap::Args, Debug)]
-pub struct LeaderArgs {}
 #[derive(clap::Args, Debug)]
 pub struct ParamsArgs {}
 #[derive(clap::Args, Debug)]
@@ -62,16 +56,12 @@ impl EvidenceKindArg {
         }
     }
 }
-#[derive(clap::Args, Debug)]
-pub struct QcArgs {}
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Command::Status(args) => status::status(context, args),
             Command::Diagnostics(args) => status::diagnostics(context, args),
-            Command::Leader(args) => status::leader(context, args),
             Command::Params(args) => status::params(context, args),
-            Command::Qc(args) => status::qc(context, args),
             Command::Evidence(cmd) => cmd.run(context),
         }
     }

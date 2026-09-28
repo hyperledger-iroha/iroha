@@ -2645,14 +2645,9 @@ pub mod sumeragi {
     /// Stream authoritative Sumeragi status snapshots as an authenticated operator.
     pub const STATUS_SSE: RouteDescriptor =
         telemetry_sse("sumeragi.status.stream_sse", "/v1/sumeragi/status/sse");
-    /// Read the current leader snapshot as an authenticated operator.
-    pub const LEADER: RouteDescriptor =
-        telemetry_operator_get("sumeragi.leader.read", "/v1/sumeragi/leader");
     /// Read the consensus BLS key roster as an authenticated operator.
     pub const BLS_KEYS: RouteDescriptor =
         telemetry_operator_get("sumeragi.bls_key.list", "/v1/sumeragi/bls-keys");
-    /// Read highest and locked quorum-certificate snapshots as an authenticated operator.
-    pub const QC: RouteDescriptor = telemetry_operator_get("sumeragi.qc.read", "/v1/sumeragi/qc");
     /// Read a self-contained bridge finality proof.
     pub const BRIDGE_FINALITY: RouteDescriptor =
         public_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
@@ -2686,9 +2681,7 @@ pub mod sumeragi {
         STATUS,
         DIAGNOSTICS,
         STATUS_SSE,
-        LEADER,
         BLS_KEYS,
-        QC,
         BRIDGE_FINALITY,
         BRIDGE_FINALITY_ATTESTATION,
         BRIDGE_FINALITY_ATTESTATION_LATEST,

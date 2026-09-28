@@ -21,7 +21,7 @@ fn fixture() -> (Vec<u8>, ContractAddress) {
 #[test]
 fn mutable_call_encodes_local_schema_and_omits_zero_argument_payload() {
     let (artifact, address) = fixture();
-    let value = norito::json::json!({"value": "7"});
+    let value = norito::json!({"value": "7"});
     let (intent, payload) =
         trusted_call_intent(&artifact, address.clone(), "write", value.clone()).unwrap();
     assert_eq!(payload, Some(value.clone()));
@@ -39,20 +39,20 @@ fn mutable_call_encodes_local_schema_and_omits_zero_argument_payload() {
         &Json::from_norito_value_ref(&value).unwrap()
     );
     let (_, other) =
-        trusted_call_intent(&artifact, address.clone(), "ping", norito::json::json!({})).unwrap();
+        trusted_call_intent(&artifact, address.clone(), "ping", norito::json!({})).unwrap();
     assert!(other.is_none());
     assert!(
         trusted_call_intent(
             &artifact,
             address.clone(),
             "write",
-            norito::json::json!({"wrong": "7"})
+            norito::json!({"wrong": "7"})
         )
         .is_err()
     );
     assert!(trusted_call_intent(&artifact, address.clone(), "ping", value).is_err());
     assert!(
-        trusted_call_intent(&artifact, address.clone(), "read", norito::json::json!({})).is_err()
+        trusted_call_intent(&artifact, address.clone(), "read", norito::json!({})).is_err()
     );
     let mut changed = artifact;
     changed[0] ^= 1;
@@ -61,7 +61,7 @@ fn mutable_call_encodes_local_schema_and_omits_zero_argument_payload() {
             &changed,
             address,
             "write",
-            norito::json::json!({"value": "7"})
+            norito::json!({"value": "7"})
         )
         .is_err()
     );

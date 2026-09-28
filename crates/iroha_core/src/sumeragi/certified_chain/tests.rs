@@ -338,6 +338,93 @@ fn an_unknown_historical_committee_relies_on_the_commit_time_check() {
     );
 }
 
+/// A State of the chain's network over a fresh Kura that holds the chain's frames, each passed
+/// through `edit` first (local tampering of the certificates: the iroha blocks, and so the view's
+/// block-hash journal, stay the chain's).
+fn tampered_state(
+    chain: &CertifiedTestChain,
+    edit: impl Fn(u64, Arc<SignedBlock>) -> Arc<SignedBlock>,
+) -> State {
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = State::new_with_chain_and_network_id_for_testing(
+        World::new(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        "sumeragi-certified-test-chain".parse().unwrap(),
+        chain.network_id(),
+    );
+    for height in 1..=chain.height() {
+        let block = edit(height, frame(chain, height));
+        state.push_block_hash_for_testing(block.hash());
+        kura.store_block(block).unwrap();
+    }
+    state
+}
+
+/// The committee of a height is authenticated by `R_{h-2}` through the headers its `CommitQC`
+/// certifies: a stored `R_{h-2}` preimage that names another committee is refused, and so is a
+/// header of `h - 1` rewritten to agree with it (the certified header of `h` binds the original).
+#[test]
+fn a_tampered_committee_digest_does_not_select_the_committee() {
+    let (chain, _) = chain();
+    let untouched = tampered_state(&chain, |_, frame| frame);
+    let view = untouched.view();
+    assert_eq!(
+        CertifiedChain::new(&view)
+            .expect("reader")
+            .certified(4)
+            .expect("read")
+            .verification(),
+        QcVerification::Verified
+    );
+    let tampered_preimage = |preimage: &mut Vec<u8>| {
+        let mut commitment = ExecutionResultCommitment::decode(preimage).unwrap();
+        commitment.next_committee_digest = [9; 32];
+        *preimage = commitment.preimage().unwrap();
+    };
+    let mut other_r2 = frame(&chain, 2)
+        .commit_certificate()
+        .unwrap()
+        .result_preimage
+        .clone();
+    tampered_preimage(&mut other_r2);
+    let other_r2 = result_of_preimage(&other_r2);
+    // `R_2` names another committee for height 4; the header of 3 still binds the original `R_2`.
+    let state = tampered_state(&chain, |height, frame| match height {
+        2 => with_parts(&frame, |_, _, preimage| tampered_preimage(preimage)),
+        _ => frame,
+    });
+    let view = state.view();
+    let reader = CertifiedChain::new(&view).expect("reader");
+    assert_eq!(
+        reader.certified(4).err(),
+        Some(ChainReadError::ResultMismatch { height: 2 })
+    );
+    assert!(reader.proof_committee(4).is_err());
+    // The header of 3 rewritten to bind the tampered `R_2`: the certified header of 4 does not
+    // extend it.
+    let state = tampered_state(&chain, |height, frame| match height {
+        2 => with_parts(&frame, |_, _, preimage| tampered_preimage(preimage)),
+        3 => with_parts(&frame, |header, _, _| header.parent_result = other_r2),
+        _ => frame,
+    });
+    let view = state.view();
+    let reader = CertifiedChain::new(&view).expect("reader");
+    assert_eq!(
+        reader.certified(4).err(),
+        Some(ChainReadError::Discontinuous { height: 4 })
+    );
+    assert_eq!(
+        reader.proof_committee(4).err(),
+        Some(ChainReadError::Discontinuous { height: 4 })
+    );
+    // The consensus-visible receipt of 4 does not depend on either certificate.
+    assert_eq!(
+        committed_block(&view, 4).expect("committed").id(),
+        chain.committed(4).id()
+    );
+}
+
 #[test]
 fn a_view_of_another_network_is_refused() {
     let (chain, _) = chain();

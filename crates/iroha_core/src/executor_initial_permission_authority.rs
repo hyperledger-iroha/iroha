@@ -1459,11 +1459,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Pending evidence cancellation is separately gated by CanManagePeers in
-    // the Initial executor authority check below.
-    if is_any!(iroha_data_model::isi::staking::CancelConsensusEvidencePenalty) {
-        return true;
-    }
     // Archive registration enforces the registry policy/revision, exact signed
     // publisher/network/body binding, admitted provider owner and receipt proof
     // inside Core. Replay also requires the immutable original registrant.
@@ -1718,18 +1713,6 @@ fn validate_initial_native_instruction_authority(
         && rewards.reward_asset.account() != authority
     {
         return deny("public lane rewards require the reward treasury account authority");
-    }
-    if any
-        .downcast_ref::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>()
-        .is_some()
-        && !is_genesis
-        && !initial_authority_has_exact_permission(
-            state_transaction,
-            authority,
-            executor_permission::peer::CanManagePeers.into(),
-        )?
-    {
-        return deny("consensus evidence penalty cancellation requires CanManagePeers");
     }
     if (any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()

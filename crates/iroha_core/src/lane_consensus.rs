@@ -5762,7 +5762,9 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    network_id: crate::unit_test_support::synthetic_network_id("lane-drain-genesis"),
+                    network_id: crate::unit_test_support::synthetic_network_id(
+                        "lane-drain-genesis",
+                    ),
                     lane_id: LaneId::new(7),
                     dataspace_id: DataSpaceId::new(9),
                     lane_incarnation: Hash::new(b"lane-drain-incarnation"),

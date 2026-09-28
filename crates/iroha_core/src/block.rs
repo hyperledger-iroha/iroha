@@ -7061,7 +7061,7 @@ pub(crate) mod valid {
                     )),
                 )));
             }
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 block,
                 topology,
                 genesis_account,
@@ -7093,7 +7093,7 @@ pub(crate) mod valid {
                     )),
                 )));
             }
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 block,
                 topology,
                 genesis_account,
@@ -7129,7 +7129,7 @@ pub(crate) mod valid {
                 block_cadence,
                 context: validation_context,
             };
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 block,
                 topology,
                 genesis_account,
@@ -7175,7 +7175,7 @@ pub(crate) mod valid {
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 block,
                 topology,
                 genesis_account,
@@ -7202,7 +7202,7 @@ pub(crate) mod valid {
             validation_context: SumeragiV2ValidationContext,
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 block,
                 topology,
                 genesis_account,
@@ -7352,7 +7352,7 @@ pub(crate) mod valid {
                     })();
                 return native.map_err(|error| (Box::new(executed), Box::new(error)));
             }
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 proposal,
                 topology,
                 genesis_account,
@@ -7403,7 +7403,7 @@ pub(crate) mod valid {
                 block_cadence,
                 context: validation_context,
             };
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 block,
                 topology,
                 genesis_account,
@@ -7899,7 +7899,7 @@ pub(crate) mod valid {
                 })
         }
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-        fn validate_keep_voting_block_inner<'state>(
+        fn validate_with_profile<'state>(
             mut block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
@@ -8326,7 +8326,7 @@ pub(crate) mod valid {
                 block_cadence: Duration::from_millis(1),
                 context: validation_context,
             };
-            Self::validate_keep_voting_block_inner(
+            Self::validate_with_profile(
                 block,
                 topology,
                 genesis_account,

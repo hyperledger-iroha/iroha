@@ -162,9 +162,8 @@ final-promotion custody or an absent operation journal.
 
 The [Torii finality owner](../../crates/iroha_torii/src/sorafs/token/signer_finality.rs)
 uses the same Core `State` as Torii. It checks native custody at exact heights,
-committed block hashes, durable Kura block hashes and revision-4 finality
-artifacts. Its production constructor does not accept a caller-provided history
-implementation. Exact block/hash, durable certificate and network checks now
+committed block hashes and the certified Kura frames of those blocks. Its
+production constructor does not accept a caller-provided history implementation. Exact block/hash, durable certificate and network checks now
 share the Core `query::signer_finality` owner. This demonstrates an existing local finality boundary to reuse;
 a valid block hash/QC without the corresponding native operation record cannot
 prove a reservation or completion, or current revocations under partition.

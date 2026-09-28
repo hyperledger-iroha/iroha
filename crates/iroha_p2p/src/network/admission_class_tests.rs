@@ -444,7 +444,9 @@ fn shipping_default_geometry_funds_every_admission_class() {
     )
     .unwrap();
     let maxima = caps
-        .admission_maxima(crate::frame_plaintext_cap_for::<Cipher>(d::MAX_FRAME_BYTES.get()))
+        .admission_maxima(crate::frame_plaintext_cap_for::<Cipher>(
+            d::MAX_FRAME_BYTES.get(),
+        ))
         .unwrap();
     assert_eq!(maxima[A::Safety.index()], caps.control);
     assert_eq!(maxima[A::Lane.index()], caps.consensus);

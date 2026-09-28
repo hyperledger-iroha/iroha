@@ -9,7 +9,7 @@ use std::{
     io,
     sync::{
         Arc, Condvar,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -23,7 +23,7 @@ use iroha_sumeragi::{
 use parking_lot::Mutex;
 
 use super::super::{
-    FrameLimitExceeded, Worker,
+    DriverHandle, FrameLimitExceeded, Worker,
     traits::{BlockStore, BodyStore, Clock, Executor, Frame, LogEntry, Net, Observer, RecordStore},
 };
 
@@ -376,6 +376,31 @@ impl FakeExecutor {
         self.state.lock().txs.push(encode_tx(id, false, 8));
     }
 
+    /// Keep one transaction queued for the builder of the instance behind `handle` until the
+    /// returned pump is dropped. Blocks are work-driven and never empty (`specs/sumeragi.md`
+    /// §6.10), so a test chain advances only while its builder has work.
+    pub fn pump(&self, handle: DriverHandle) -> WorkPump {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (stop, exec) = (Arc::clone(&stop), self.clone());
+            std::thread::spawn(move || {
+                let mut id = 1_u64 << 32;
+                while !stop.load(Ordering::SeqCst) {
+                    if exec.state.lock().txs.is_empty() {
+                        exec.add_tx(id);
+                        id += 1;
+                        handle.transactions_available();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            })
+        };
+        WorkPump {
+            stop,
+            thread: Some(thread),
+        }
+    }
+
     /// Executions of `block_hash` so far.
     pub fn executions(&self, block_hash: &Hash32) -> u32 {
         self.state
@@ -486,6 +511,21 @@ impl Executor for FakeExecutor {
 
     fn reject(&mut self, _height: u64, _view: u64, block_hash: &Hash32) {
         self.state.lock().rejected.push(*block_hash);
+    }
+}
+
+/// Keeps work queued for a test instance until dropped (see [`FakeExecutor::pump`]).
+pub struct WorkPump {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for WorkPump {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 

@@ -998,16 +998,6 @@ async fn telemetry_handlers_ok() {
     .await
     .expect("ok");
     assert!(!text.is_empty());
-    // QC and leader endpoints
-    let resp = super::handler_sumeragi_qc(
-        State(app.clone()),
-        headers.clone(),
-        crate::loopback_connect_info(),
-    )
-    .await
-    .expect("ok")
-    .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
     app.state.metrics().set_axt_proof_cache_state(
         iroha_model_base::topology::DataSpaceId::new(1),
         "miss",
@@ -1080,11 +1070,6 @@ async fn telemetry_handlers_ok() {
         hint.get("reason").and_then(norito::json::Value::as_str),
         Some(AxtRejectReason::HandleEra.label())
     );
-    let resp = super::handler_sumeragi_leader(State(app), headers, crate::loopback_connect_info())
-        .await
-        .expect("ok")
-        .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]

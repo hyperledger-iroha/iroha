@@ -21,7 +21,8 @@ The signed genesis transaction has the explicit Genesis domain. After the signed
 header exists, Core derives the actual network identity and the revision-one council
 policy. The journal records the exact initializer entrypoint and canonical instruction
 digest. Current reads authenticate the successful direct instruction from that exact
-State/Kura genesis, its complete execution proof and revision-4 QC, then compare the
+State/Kura genesis and its complete execution proof, anchored by the executed wire
+the genesis frame's result-only commit certificate commits, then compare the
 retained material against the original template. This avoids a genesis-hash fixed
 point. Genesis material is explicitly distinct from council-verified envelopes;
 offline material construction alone cannot authorize a provider.
@@ -61,9 +62,9 @@ Core stores immutable predecessor-linked records and the current head in native
 transactional state. Writes include the exact network, committing height/time,
 owner, revision and material. The current-head reader checks the retained record
 and its predecessor, exact policy claims and provider owner, and requires matching
-State/Kura block and durable revision-4 CommitQC authentication. A policy pause,
-owner change/removal, expired envelope, malformed state or unavailable finality
-fails closed.
+State/Kura block and certified-frame authentication (the certified-chain reader,
+`specs/sumeragi.md` §12.7). A policy pause, owner change/removal, expired
+envelope, malformed state or unavailable finality fails closed.
 Runtime expiry uses the later of local time and the authenticated current block's
 timestamp, so a lagging or rolled-back local clock cannot revive expired admission.
 Local time must still satisfy the original issuance lower bound; committed time
@@ -102,9 +103,10 @@ effects; file-based fixtures do not seed production authority.
 Focused model tests cover canonical action frames, bounded rejection, substituted
 provider identities and distinct Parliament subjects. Native tests exercise positive
 admission, exact renewal, council rotation, terminal revocation, replay refusal,
-owner removal, missing retained history and missing durable QC with a genuine
-software-signed three-of-four BLS/RS16 fixture. Genesis tests derive the network
-from the actual constructed signed Genesis-domain block and reject absent finality,
+owner removal, missing retained history and a missing or invalid commit certificate
+on a certified test chain (real signed genesis, blocks executed by the node's
+executor, BLS CommitQCs of a four-validator committee). Genesis tests derive the
+network from the actual constructed signed Genesis-domain block and reject absent finality,
 indirect execution, malformed templates and replay. These fixtures do not qualify live
 consensus, multi-gateway deployment or operational failover. Current execution
 results belong in the root status and closure ledger.
