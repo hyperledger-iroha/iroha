@@ -5,10 +5,11 @@
 //! An approval intent retains the exact finalized evidence identity while deliberately omitting the
 //! opaque approval request. After restart, callers must rederive that request from a fresh
 //! completed-row claim and lifecycle-leased bundle verification.
+#[cfg(test)]
+use crate::provider_attestation_clock::MusubiProviderAttestationClockErrorV1;
 use crate::{
     provider_attestation_clock::{
-        MusubiProviderAttestationClockErrorV1, MusubiProviderAttestationClockScopeV1,
-        MusubiProviderAttestationJournalCheckpointScopeV1,
+        MusubiProviderAttestationClockScopeV1, MusubiProviderAttestationJournalCheckpointScopeV1,
         MusubiProviderAttestationSealedUnixClockV1,
     },
     provider_ingest_outbox::ProviderIngestFinalizedCursorV1,
@@ -20,25 +21,24 @@ use iroha_config::parameters::{
     defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as provider_attestation_journal_defaults,
     is_production_runtime_handle,
 };
+#[cfg(test)]
+use iroha_data_model::musubi::MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     musubi::{
-        MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-        MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1,
-        MusubiProviderBundleAttestationDigestV1, MusubiProviderBundleAttestationKeyV1,
-        MusubiProviderBundleVerificationAttestationV1, MusubiProviderBundleVerificationBindingV1,
-        MusubiProviderBundleVerificationPayloadV1,
+        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MusubiProviderBundleAttestationDigestV1,
+        MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleVerificationAttestationV1,
+        MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
     },
     sorafs::{
         capacity::ProviderId,
         pin_registry::{ProviderIngestCompletionSignerPolicyV1, ReplicationOrderId},
     },
 };
-use norito::{
-    DecodeLimits,
-    derive::{NoritoDeserialize, NoritoSerialize},
-};
+#[cfg(test)]
+use norito::DecodeLimits;
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use std::{collections::BTreeSet, fmt, sync::Arc, time::Duration};
 use thiserror::Error;
 const APPROVAL_SIGNER_QUALIFICATION_VERSION_V1: u8 = 1;
@@ -1203,6 +1203,7 @@ pub(crate) struct MusubiProviderAttestationJournalStoreSnapshotV1 {
     revision: Option<[u8; 32]>,
     checkpoint_bytes: Option<Vec<u8>>,
 }
+#[cfg(test)]
 impl MusubiProviderAttestationJournalStoreSnapshotV1 {
     /// Construct the unique empty-store snapshot.
     #[must_use]
@@ -2204,6 +2205,7 @@ pub(crate) trait MusubiProviderAttestationJournalTimeV1: Send + Sync {
         &'a self,
     ) -> ProviderIngestFutureV1<'a, Result<u64, MusubiProviderAttestationJournalErrorV1>>;
 }
+#[cfg(test)]
 impl MusubiProviderAttestationJournalTimeV1 for MusubiProviderAttestationSealedUnixClockV1 {
     fn now_unix_ms<'a>(
         &'a self,
@@ -2221,6 +2223,13 @@ impl MusubiProviderAttestationJournalTimeV1 for MusubiProviderAttestationSealedU
 /// by a durable deployment clock. The checkpoint persists the greatest
 /// observed value and rejects rollback after process or machine restart.
 pub(crate) struct MusubiProviderAttestationJournalV1 {
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the journal store is constructed only by the test-compiled runtime until a daemon opens it"
+        )
+    )]
     store: Arc<dyn MusubiProviderAttestationJournalStoreV1>,
     policy: MusubiProviderAttestationJournalPolicyV1,
 }
@@ -2256,6 +2265,7 @@ impl MusubiProviderAttestationJournalV1 {
     /// Returns an error for invalid evidence, a retained immutable-key
     /// conflict, corrupt persistence, inventory timeout or unavailability, an
     /// unqualified runtime, or a substituted/conflicting readback.
+    #[cfg(test)]
     pub(crate) async fn probe_pre_enqueue_with_inventory<Inventory>(
         &self,
         request: &ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -2321,6 +2331,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for invalid evidence, capacity exhaustion, an immutable
     /// key conflict, corrupt persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn enqueue(
         &self,
         request: &ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -2384,6 +2395,7 @@ impl MusubiProviderAttestationJournalV1 {
     /// # Errors
     ///
     /// Returns an error for corrupt persistence or store failure.
+    #[cfg(test)]
     pub(crate) async fn status(
         &self,
         approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -2408,6 +2420,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for an invalid page bound, clock rollback, corrupt
     /// persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn ready_approval_page(
         &self,
         now_unix_ms: u64,
@@ -2446,6 +2459,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for an invalid page bound, clock rollback, corrupt
     /// persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn ready_handoff_page(
         &self,
         now_unix_ms: u64,
@@ -2483,6 +2497,7 @@ impl MusubiProviderAttestationJournalV1 {
     /// # Errors
     ///
     /// Returns an error for an invalid page bound, corrupt persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn dead_letter_page(
         &self,
         after: Option<MusubiProviderAttestationJournalScanKeyV1>,
@@ -2507,6 +2522,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error when the identity is absent, the expected generation is
     /// stale, the UNIX clock rolls back, or persistence fails.
+    #[cfg(test)]
     pub(crate) async fn requeue_dead_letter(
         &self,
         approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -2555,6 +2571,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error when the identity is absent, the expected generation is
     /// stale, the entry is not a dead letter, or persistence fails.
+    #[cfg(test)]
     pub(crate) async fn acknowledge_dead_letter(
         &self,
         approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -2586,6 +2603,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for an invalid owner, arithmetic overflow, corrupt
     /// persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn claim_approval(
         &self,
         approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -2662,6 +2680,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for a stale claim, arithmetic overflow, corrupt
     /// persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn record_approval_failure(
         &self,
         claim: &MusubiProviderAttestationApprovalClaimV1,
@@ -2716,6 +2735,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for a stale claim/request, signer failure, invalid or
     /// conflicting evidence, corrupt persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn approve_claim_with_signer<Signer, Clock>(
         &self,
         claim: &MusubiProviderAttestationApprovalClaimV1,
@@ -2791,6 +2811,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for a stale claim/request, invalid or conflicting
     /// attestation, corrupt persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn store_approved(
         &self,
         claim: &MusubiProviderAttestationApprovalClaimV1,
@@ -2860,6 +2881,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for arithmetic overflow, invalid retained evidence,
     /// corrupt persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn claim_handoff(
         &self,
         approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -2950,6 +2972,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for a stale claim, arithmetic overflow, corrupt
     /// persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn record_handoff_failure(
         &self,
         claim: &MusubiProviderAttestationHandoffClaimV1,
@@ -3015,6 +3038,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for a stale claim, timeout, inventory rejection,
     /// substituted readback, corrupt persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn handoff_claim_with_inventory<Inventory, Clock>(
         &self,
         claim: &MusubiProviderAttestationHandoffClaimV1,
@@ -3100,6 +3124,7 @@ impl MusubiProviderAttestationJournalV1 {
     ///
     /// Returns an error for a stale claim, substituted acknowledgement,
     /// corrupt persistence, or store failure.
+    #[cfg(test)]
     pub(crate) async fn mark_delivered(
         &self,
         claim: &MusubiProviderAttestationHandoffClaimV1,
@@ -3147,12 +3172,14 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
+    #[cfg(test)]
     async fn load_checkpoint(
         &self,
     ) -> Result<StoredJournalCheckpointV1, MusubiProviderAttestationJournalErrorV1> {
         let snapshot = self.store.load().await.map_err(map_store_error)?;
         decode_checkpoint(&snapshot, self.policy)
     }
+    #[cfg(test)]
     async fn preflight_approval_claim(
         &self,
         claim: &MusubiProviderAttestationApprovalClaimV1,
@@ -3180,6 +3207,7 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
+    #[cfg(test)]
     async fn preflight_handoff_claim(
         &self,
         claim: &MusubiProviderAttestationHandoffClaimV1,
@@ -3209,6 +3237,7 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
+    #[cfg(test)]
     async fn mutate_at<T, Transition>(
         &self,
         now_unix_ms: u64,
@@ -3232,6 +3261,7 @@ impl MusubiProviderAttestationJournalV1 {
         })
         .await
     }
+    #[cfg(test)]
     async fn mutate<T, Transition>(
         &self,
         mut transition: Transition,

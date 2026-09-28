@@ -157,8 +157,7 @@ mod stream_token_custody_permission_tests {
                     &transaction,
                     &ALICE_ID,
                     &other,
-                    false,
-                    None
+                    false
                 )
                 .is_err(),
                 "role ownership cannot expand provider scope"
@@ -196,8 +195,7 @@ mod stream_token_custody_permission_tests {
                     &transaction,
                     &ALICE_ID,
                     &invalid,
-                    genesis,
-                    None
+                    genesis
                 )
                 .is_err()
             );

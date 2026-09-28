@@ -713,7 +713,6 @@ fn initial_permission_delegation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
-    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
 ) -> Result<bool, ValidationFail> {
     if initial_permission_is_genesis_only(permission) {
         return Ok(false);
@@ -759,7 +758,6 @@ fn initial_permission_revocation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
-    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
 ) -> Result<bool, ValidationFail> {
     if permission.name() == "CanManageAssetDefinitionAlias" {
         let token = executor_permission::asset_definition::CanManageAssetDefinitionAlias::try_from(
@@ -780,12 +778,7 @@ fn initial_permission_revocation_allowed(
             );
         }
     }
-    initial_permission_delegation_allowed(
-        state_transaction,
-        authority,
-        permission,
-        contract_runtime_context,
-    )
+    initial_permission_delegation_allowed(state_transaction, authority, permission)
 }
 fn validate_initial_account_permission_destination(
     _state_transaction: &StateTransaction<'_, '_>,
@@ -801,7 +794,6 @@ fn validate_initial_permission_or_role_mutation(
     authority: &AccountId,
     instruction: &InstructionBox,
     is_genesis: bool,
-    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
 ) -> Result<(), ValidationFail> {
     let mutation = extract_permission_or_role_mutation(instruction);
     let Some(mutation) = mutation else {
@@ -822,19 +814,9 @@ fn validate_initial_permission_or_role_mutation(
                 is_revoke,
             )?;
             let allowed = if is_revoke {
-                initial_permission_revocation_allowed(
-                    state_transaction,
-                    authority,
-                    permission,
-                    contract_runtime_context,
-                )?
+                initial_permission_revocation_allowed(state_transaction, authority, permission)?
             } else {
-                initial_permission_delegation_allowed(
-                    state_transaction,
-                    authority,
-                    permission,
-                    contract_runtime_context,
-                )?
+                initial_permission_delegation_allowed(state_transaction, authority, permission)?
             };
             if is_genesis || allowed {
                 return Ok(());
@@ -869,14 +851,12 @@ fn validate_initial_permission_or_role_mutation(
                             state_transaction,
                             authority,
                             &normalized,
-                            contract_runtime_context,
                         )?
                     } else {
                         initial_permission_delegation_allowed(
                             state_transaction,
                             authority,
                             &normalized,
-                            contract_runtime_context,
                         )?
                     };
                     if !allowed {
@@ -905,19 +885,9 @@ fn validate_initial_permission_or_role_mutation(
                 ));
             }
             let allowed = if is_revoke {
-                initial_permission_revocation_allowed(
-                    state_transaction,
-                    authority,
-                    &normalized,
-                    contract_runtime_context,
-                )?
+                initial_permission_revocation_allowed(state_transaction, authority, &normalized)?
             } else {
-                initial_permission_delegation_allowed(
-                    state_transaction,
-                    authority,
-                    &normalized,
-                    contract_runtime_context,
-                )?
+                initial_permission_delegation_allowed(state_transaction, authority, &normalized)?
             };
             if !allowed {
                 return Err(ValidationFail::NotPermitted(format!(

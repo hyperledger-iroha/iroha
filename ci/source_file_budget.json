@@ -72,7 +72,6 @@
     "crates/iroha_core/tests/oracle.rs": 3866,
     "crates/iroha_crypto/src/fhe_bfv.rs": 38728,
     "crates/iroha_crypto/src/fhe_bfv/tests.rs": 13342,
-    "crates/iroha_executor/src/default/mod.rs": 5227,
     "crates/iroha_js_host/src/lib.rs": 14387,
     "crates/iroha_kagami/src/localnet.rs": 9109,
     "crates/iroha_p2p/src/network.rs": 25449,

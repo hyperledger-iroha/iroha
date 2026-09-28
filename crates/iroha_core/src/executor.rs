@@ -7455,7 +7455,6 @@ impl Executor {
             authority,
             instruction,
             is_genesis,
-            contract_runtime_context,
         )?;
         validate_initial_native_instruction_authority(
             state_transaction,
@@ -7494,7 +7493,6 @@ impl Executor {
                         state_transaction,
                         authority,
                         &normalized,
-                        contract_runtime_context,
                     )?
                 {
                     return Err(ValidationFail::NotPermitted(format!(
@@ -11374,8 +11372,7 @@ mod tests {
                 initial_permission_delegation_allowed(
                     &state_transaction,
                     &legitimate_root,
-                    permission,
-                    None,
+                    permission
                 )
                 .expect("legitimate delegation lookup"),
                 "legitimate authority must be able to grant {name}",
@@ -11394,8 +11391,7 @@ mod tests {
                 !initial_permission_delegation_allowed(
                     &state_transaction,
                     &adjacent_owner,
-                    permission,
-                    None,
+                    permission
                 )
                 .expect("adjacent-owner delegation lookup"),
                 "unprivileged authority must not self-grant {name}",
@@ -11427,8 +11423,7 @@ mod tests {
                 initial_permission_delegation_allowed(
                     &state_transaction,
                     &adjacent_owner,
-                    permission,
-                    None,
+                    permission
                 )
                 .expect("exact-holder delegation lookup"),
                 holder_delegable,
@@ -11665,22 +11660,12 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         assert!(
-            !initial_permission_delegation_allowed(
-                &state_transaction,
-                &issuer,
-                &issuer_permission,
-                None,
-            )
-            .expect("issuer-leaf delegation decision")
+            !initial_permission_delegation_allowed(&state_transaction, &issuer, &issuer_permission)
+                .expect("issuer-leaf delegation decision")
         );
         assert!(
-            initial_permission_delegation_allowed(
-                &state_transaction,
-                &manager,
-                &issuer_permission,
-                None,
-            )
-            .expect("issuer-manager delegation decision")
+            initial_permission_delegation_allowed(&state_transaction, &manager, &issuer_permission)
+                .expect("issuer-manager delegation decision")
         );
         super::Executor::Initial
             .execute_instruction(
@@ -11757,8 +11742,7 @@ mod tests {
                     !initial_permission_delegation_allowed(
                         &state_transaction,
                         unauthorized,
-                        permission,
-                        None,
+                        permission
                     )
                     .expect("DPN delegation decision"),
                     "only a direct DpnAdmin may manage {}",

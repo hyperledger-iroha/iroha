@@ -17,18 +17,24 @@ use crate::provider_ingest_outbox::{
 };
 use crate::store::AdmittedPayloadReadLeaseV1;
 use iroha_config::parameters::is_production_runtime_handle;
-use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
+#[cfg(test)]
+use iroha_crypto::Signature as IrohaSignature;
+use iroha_crypto::{Algorithm, PublicKey};
 #[cfg(test)]
 use iroha_data_model::musubi::MUSUBI_REGISTRY_VERSION_V1;
+#[cfg(test)]
+use iroha_data_model::musubi::MusubiArtifactDescriptorV1;
+#[cfg(test)]
+use iroha_data_model::musubi::MusubiContentDigestV1;
 #[cfg(test)]
 use iroha_data_model::musubi::MusubiProviderBundleVerificationBindingV1;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     musubi::{
-        ArchiveId, MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1, MusubiContentDigestV1,
-        MusubiProviderBundleVerificationPayloadV1, MusubiReplicationOrderArchiveBindingV1,
-        MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
+        ArchiveId, MusubiArchiveCommitmentV1, MusubiProviderBundleVerificationPayloadV1,
+        MusubiReplicationOrderArchiveBindingV1, MusubiSemanticReleaseDigestV1,
+        MusubiVerificationLockDigestV1,
     },
     sorafs::{
         capacity::ProviderId,
@@ -59,12 +65,15 @@ use sorafs_car::musubi::VerifiedMusubiBundleV1;
 use sorafs_manifest::capacity::{
     MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
 };
+#[cfg(test)]
+use std::io;
+#[cfg(test)]
+use std::io::Read;
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
     fmt,
     future::Future,
-    io::{self, Read},
     pin::Pin,
     sync::{
         Arc,
@@ -337,6 +346,13 @@ pub struct ProviderIngestFinalizedMusubiCompletionClaimV1 {
     observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     binding: MusubiReplicationOrderArchiveBindingV1,
     completion: ReplicationOrderCompletionRecord,
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "read only by the test-compiled completed-Musubi drive loop until irohad supervises it"
+        )
+    )]
     completed_musubi_store_instance: Option<CompletedMusubiStoreInstanceV1>,
 }
 impl PartialEq for ProviderIngestFinalizedMusubiCompletionClaimV1 {
@@ -485,6 +501,13 @@ pub struct ProviderIngestMusubiAttestationApprovalRequestV1 {
     completion_claim_digest: [u8; 32],
     observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "read only by the test-compiled completed-Musubi drive loop until irohad supervises it"
+        )
+    )]
     completed_musubi_store_instance: CompletedMusubiStoreInstanceV1,
 }
 impl PartialEq for ProviderIngestMusubiAttestationApprovalRequestV1 {
@@ -727,6 +750,7 @@ struct ProviderIngestObservedAdmittedPayloadReaderV1<'observation, R> {
     inner: R,
     first_error_kind: &'observation Cell<Option<io::ErrorKind>>,
 }
+#[cfg(test)]
 impl<R: Read> Read for ProviderIngestObservedAdmittedPayloadReaderV1<'_, R> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         self.inner.read(output).inspect_err(|error| {

@@ -52,7 +52,7 @@ mod cross_scope_permission_tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let state_transaction = block.transaction();
         let allowed = |authority: &AccountId, permission: Permission| {
-            initial_permission_delegation_allowed(&state_transaction, authority, &permission, None)
+            initial_permission_delegation_allowed(&state_transaction, authority, &permission)
                 .expect("delegation decision")
         };
 
@@ -159,7 +159,7 @@ mod cross_scope_permission_tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let state_transaction = block.transaction();
         let allowed = |permission: Permission| {
-            initial_permission_delegation_allowed(&state_transaction, &holder, &permission, None)
+            initial_permission_delegation_allowed(&state_transaction, &holder, &permission)
         };
 
         // A domain-scoped alias-resolution delegate grants resolution for exactly that domain

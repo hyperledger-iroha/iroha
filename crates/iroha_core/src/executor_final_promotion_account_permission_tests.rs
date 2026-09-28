@@ -182,22 +182,15 @@ mod final_promotion_account_permission_tests {
                 Grant::account_permission(permission(manage, "production-primary"), BOB_ID.clone())
                     .into();
             assert!(
-                validate_initial_permission_or_role_mutation(
-                    &transaction,
-                    &ALICE_ID,
-                    &grant,
-                    true,
-                    None
-                )
-                .is_ok()
+                validate_initial_permission_or_role_mutation(&transaction, &ALICE_ID, &grant, true)
+                    .is_ok()
             );
             assert!(
                 validate_initial_permission_or_role_mutation(
                     &transaction,
                     &ALICE_ID,
                     &grant,
-                    false,
-                    None
+                    false
                 )
                 .is_err()
             );
@@ -242,8 +235,7 @@ mod final_promotion_account_permission_tests {
                                 &transaction,
                                 &ALICE_ID,
                                 &mutation,
-                                genesis,
-                                None
+                                genesis
                             )
                             .is_err()
                         );
@@ -295,8 +287,7 @@ mod final_promotion_account_permission_tests {
                             &transaction,
                             &ALICE_ID,
                             &expansion,
-                            false,
-                            None
+                            false
                         )
                         .is_err()
                     );

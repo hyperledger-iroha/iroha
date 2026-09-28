@@ -690,12 +690,15 @@ pub(crate) struct ProviderIngestCompletedMusubiCaptureCandidateV1 {
     completed_claim: ProviderIngestFinalizedMusubiCompletionClaimV1,
     completed_musubi_store_instance: CompletedMusubiStoreInstanceV1,
 }
+#[cfg(test)]
 impl PartialEq for ProviderIngestCompletedMusubiCaptureCandidateV1 {
     fn eq(&self, other: &Self) -> bool {
         self.authorization == other.authorization && self.completed_claim == other.completed_claim
     }
 }
+#[cfg(test)]
 impl Eq for ProviderIngestCompletedMusubiCaptureCandidateV1 {}
+#[cfg(test)]
 impl ProviderIngestCompletedMusubiCaptureCandidateV1 {
     /// Borrow the exact finalized provider-ingest authorization.
     #[must_use]
@@ -733,6 +736,7 @@ pub(crate) struct ProviderIngestCompletedMusubiCapturePageV1 {
     candidates: Vec<ProviderIngestCompletedMusubiCaptureCandidateV1>,
     scan_complete: bool,
 }
+#[cfg(test)]
 impl ProviderIngestCompletedMusubiCapturePageV1 {
     /// Return the exact finalized cursor shared by every validated source row.
     #[must_use]
@@ -823,6 +827,13 @@ pub struct ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
 #[expect(clippy::large_enum_variant, reason = "by-value take-once state")]
 enum ProviderIngestCompletedMusubiCaptureCoordinatorStateV1 {
     Pending(ProviderIngestCompletedMusubiCapturePendingV1),
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "read only by the test-compiled completed-Musubi drive loop until irohad supervises it"
+        )
+    )]
     Active(
         ProviderIngestCompletedMusubiCaptureScannerV1<
             dyn ProviderIngestCompletedMusubiSignedCaptureLedgerV1,
@@ -834,6 +845,13 @@ struct ProviderIngestCompletedMusubiCapturePendingV1 {
     provider_id: [u8; 32],
     network_id: NetworkId,
     max_page_rows: usize,
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "read only by the test-compiled completed-Musubi drive loop until irohad supervises it"
+        )
+    )]
     ledger: Arc<dyn ProviderIngestCompletedMusubiSignedCaptureLedgerV1>,
 }
 impl fmt::Debug for ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
@@ -959,6 +977,13 @@ where
     provider_id: [u8; 32],
     network_id: NetworkId,
     max_page_rows: usize,
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "read only by the test-compiled completed-Musubi drive loop until irohad supervises it"
+        )
+    )]
     ledger: Arc<Ledger>,
     verifier_binding: ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
     request_generation: u64,
@@ -991,6 +1016,7 @@ where
     scanner: Option<&'a mut ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>>,
     progress: ProviderIngestCompletedMusubiCaptureProgressV1,
 }
+#[cfg(test)]
 impl<Ledger> ProviderIngestCompletedMusubiCaptureProgressRollbackV1<'_, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1001,6 +1027,7 @@ where
         self.scanner = None;
     }
 }
+#[cfg(test)]
 impl<Ledger> Drop for ProviderIngestCompletedMusubiCaptureProgressRollbackV1<'_, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1040,6 +1067,7 @@ impl<Ledger> ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
 {
+    #[cfg(test)]
     pub(crate) fn new(
         completed_musubi_store_instance: CompletedMusubiStoreInstanceV1,
         provider_id: [u8; 32],
@@ -1072,6 +1100,7 @@ where
             last_completed_cursor: None,
         })
     }
+    #[cfg(test)]
     pub(crate) const fn progress(&self) -> ProviderIngestCompletedMusubiCaptureProgressV1 {
         ProviderIngestCompletedMusubiCaptureProgressV1 {
             request_generation: self.request_generation,
@@ -1081,12 +1110,14 @@ where
             last_completed_cursor: self.last_completed_cursor,
         }
     }
+    #[cfg(test)]
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
     ) -> bool {
         self.completed_musubi_store_instance.matches(expected)
     }
+    #[cfg(test)]
     pub(crate) fn restore_progress(
         &mut self,
         progress: ProviderIngestCompletedMusubiCaptureProgressV1,
@@ -1098,6 +1129,7 @@ where
         self.last_completed_cursor = progress.last_completed_cursor;
     }
     /// Restore `progress` unless the returned guard is explicitly committed.
+    #[cfg(test)]
     pub(crate) fn restore_progress_on_drop(
         &mut self,
         progress: ProviderIngestCompletedMusubiCaptureProgressV1,
@@ -1107,6 +1139,7 @@ where
             progress,
         }
     }
+    #[cfg(test)]
     fn validate_and_seal_source_page(
         &self,
         source_page: ProviderIngestCompletedMusubiCaptureSourcePageV1,
@@ -1184,6 +1217,7 @@ where
     /// Returns an error when the finalized reader is unavailable or rejects
     /// the private capability, or when page bounds, cursor lineage, an
     /// assignment, or a sealed claim is malformed or substituted.
+    #[cfg(test)]
     pub async fn next_page(
         &mut self,
     ) -> Result<ProviderIngestCompletedMusubiCapturePageV1, ProviderIngestRuntimeErrorV1> {
@@ -1446,15 +1480,30 @@ fn map_capture_ledger_error(
         }
     }
 }
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationApprovalIdV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationDeliveryOutcomeV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationEnqueueOutcomeV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationFailureClassV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationJournalErrorV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationJournalStageV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationJournalV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationPreEnqueueProbeV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::MusubiProviderAttestationRetryOutcomeV1;
+#[cfg(test)]
+use crate::provider_attestation_journal::musubi_provider_attestation_approval_id_v1;
 use crate::provider_attestation_journal::{
-    MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1, MusubiProviderAttestationApprovalIdV1,
-    MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationDeliveryOutcomeV1,
-    MusubiProviderAttestationEnqueueOutcomeV1, MusubiProviderAttestationFailureClassV1,
-    MusubiProviderAttestationInventoryRuntimeV1, MusubiProviderAttestationJournalErrorV1,
-    MusubiProviderAttestationJournalPolicyV1, MusubiProviderAttestationJournalRuntimeV1,
-    MusubiProviderAttestationJournalStageV1, MusubiProviderAttestationJournalV1,
-    MusubiProviderAttestationPreEnqueueProbeV1, MusubiProviderAttestationRetryOutcomeV1,
-    MusubiProviderAttestationSignerV1, musubi_provider_attestation_approval_id_v1,
+    MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1, MusubiProviderAttestationClaimOwnerV1,
+    MusubiProviderAttestationInventoryRuntimeV1, MusubiProviderAttestationJournalPolicyV1,
+    MusubiProviderAttestationJournalRuntimeV1, MusubiProviderAttestationSignerV1,
 };
 #[cfg(test)]
 struct ProviderIngestCompletedMusubiPreparedApprovalV1 {
@@ -1474,6 +1523,7 @@ where
     approvals: Vec<ProviderIngestCompletedMusubiPreparedApprovalV1>,
     outcome: ProviderIngestCompletedMusubiReconcileOutcomeV1,
 }
+#[cfg(test)]
 impl<Ledger> ProviderIngestCompletedMusubiPreparedPageV1<'_, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1739,6 +1789,13 @@ impl ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
 /// drains at most one bounded handoff page before preparing one bounded capture page. Scanner
 /// progress remains rollback-armed until every fresh request has reached durable approval.
 #[doc(hidden)]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "read only by the test-compiled completed-Musubi drive loop until irohad supervises it"
+    )
+)]
 pub struct ProviderIngestCompletedMusubiAttestationDriverV1 {
     node: crate::NodeHandle,
     coordinator: ProviderIngestCompletedMusubiCaptureCoordinatorV1,

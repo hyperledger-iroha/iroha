@@ -214,7 +214,6 @@ pub fn set_thread_forced_simd(choice: Option<SimdChoice>) -> Option<SimdChoice> 
     })
 }
 /// Clear the thread-local override.
-#[allow(dead_code)]
 pub fn clear_thread_forced_simd() {
     set_thread_forced_simd(None);
 }
@@ -253,7 +252,6 @@ pub(crate) fn metal_last_error_message() -> Option<String> {
         .and_then(|guard| guard.clone())
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
 pub(crate) fn metal_last_error_message() -> Option<String> {
     None
 }
@@ -294,7 +292,6 @@ pub fn metal_disabled() -> bool {
     !metal_policy_enabled() || METAL_DISABLED.load(Ordering::SeqCst)
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
 pub fn metal_disabled() -> bool {
     false
 }
@@ -346,7 +343,6 @@ pub fn simd_backend() -> &'static str {
     }
 }
 /// Return true if Apple Metal GPU acceleration can be used.
-#[allow(unused_variables)]
 pub fn metal_available() -> bool {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
@@ -473,7 +469,6 @@ pub fn bit_pipe_compile_count() -> usize {
 }
 // Provide no-op fallbacks for Metal counters when Metal is not enabled.
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
 pub fn bit_pipe_compile_count() -> usize {
     0
 }
@@ -492,9 +487,13 @@ struct MetalState {
     keccak: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     aesenc: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     aesdec: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    #[cfg(test)]
     aesenc_batch: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    #[cfg(test)]
     aesdec_batch: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    #[cfg(test)]
     aesenc_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    #[cfg(test)]
     aesdec_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     ed25519_signature: Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
 }
@@ -1404,9 +1403,13 @@ impl MetalState {
             sha256_pairs,
             aesenc,
             aesdec,
+            #[cfg(test)]
             aesenc_batch,
+            #[cfg(test)]
             aesdec_batch,
+            #[cfg(test)]
             aesenc_rounds,
+            #[cfg(test)]
             aesdec_rounds,
             keccak,
             ed25519_signature,
@@ -1487,17 +1490,14 @@ fn finalize_command_buffer(
     }
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
 pub fn release_metal_state() {
     METAL_STATE.with(|cell| {
         let _ = cell.borrow_mut().take();
     });
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
 pub fn release_metal_state() {}
 #[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
 fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     if !metal_runtime_allowed() {
         return None;
@@ -1545,12 +1545,10 @@ fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     })
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
 fn metal_vadd64(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
     None
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
 fn metal_vadd32(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     if !metal_runtime_allowed() {
         return None;
@@ -1578,7 +1576,6 @@ fn metal_vadd32(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     })
 }
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
 fn metal_vadd32(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
     None
 }
@@ -1616,19 +1613,16 @@ fn metal_vbit_cached(
     })
 }
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_vand(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     metal_vbit_cached(a, b, |ctx| &ctx.vand)
 }
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_vxor(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     metal_vbit_cached(a, b, |ctx| &ctx.vxor)
 }
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_vor(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     metal_vbit_cached(a, b, |ctx| &ctx.vor)
@@ -2136,7 +2130,6 @@ pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     })
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
 pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     if !metal_runtime_allowed() {
         return None;
@@ -2165,7 +2158,6 @@ pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     })
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
 pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
     if !metal_runtime_allowed() {
         return false;
@@ -2184,8 +2176,7 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
     })
     .is_some()
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
+#[cfg(all(target_os = "macos", feature = "metal", test))]
 pub fn metal_aesenc_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
     if !metal_runtime_allowed() {
         return None;
@@ -2223,8 +2214,7 @@ pub fn metal_aesenc_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
+#[cfg(all(target_os = "macos", feature = "metal", test))]
 pub fn metal_aesdec_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
     if !metal_runtime_allowed() {
         return None;
@@ -2262,8 +2252,7 @@ pub fn metal_aesdec_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
+#[cfg(all(target_os = "macos", feature = "metal", test))]
 pub fn metal_aesenc_rounds_batch(
     states: &[[u8; 16]],
     round_keys: &[[u8; 16]],
@@ -2309,8 +2298,7 @@ pub fn metal_aesenc_rounds_batch(
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
-#[allow(dead_code)]
+#[cfg(all(target_os = "macos", feature = "metal", test))]
 pub fn metal_aesdec_rounds_batch(
     states: &[[u8; 16]],
     round_keys: &[[u8; 16]],
@@ -3099,42 +3087,36 @@ pub fn vadd64_slice(a: &[u32], b: &[u32], out: &mut [u32]) {
     }
 }
 /// Dynamic lane version of [`vadd32`]. Returns a new vector of equal length.
-#[allow(dead_code)]
 pub fn vadd32_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = vec![0u32; a.len()];
     vadd32_slice(a, b, &mut out);
     out
 }
 /// Dynamic lane version of [`vadd64`].
-#[allow(dead_code)]
 pub fn vadd64_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = vec![0u32; a.len()];
     vadd64_slice(a, b, &mut out);
     out
 }
 /// Dynamic lane version of [`vand`].
-#[allow(dead_code)]
 pub fn vand_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = vec![0u32; a.len()];
     vand_slice(a, b, &mut out);
     out
 }
 /// Dynamic lane version of [`vxor`].
-#[allow(dead_code)]
 pub fn vxor_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = vec![0u32; a.len()];
     vxor_slice(a, b, &mut out);
     out
 }
 /// Dynamic lane version of [`vor`].
-#[allow(dead_code)]
 pub fn vor_dyn(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = vec![0u32; a.len()];
     vor_slice(a, b, &mut out);
     out
 }
 /// Dynamic lane version of [`vrot32`].
-#[allow(dead_code)]
 pub fn vrot32_dyn(a: &[u32], k: u32) -> Vec<u32> {
     let mut out = vec![0u32; a.len()];
     vrot32_slice(a, k, &mut out);
