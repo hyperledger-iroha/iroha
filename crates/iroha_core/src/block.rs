@@ -7305,7 +7305,7 @@ pub(crate) mod valid {
                                 reason: "Native replay pre-State observation changed".to_owned(),
                             });
                         }
-                        crate::state::NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
+                        crate::state::NativeLaneBatchSourcePreparationV1::AdmissionMismatch => {
                             return Err(BlockValidationError::LocalStorageRecoveryRequired {
                                 reason: "Native replay source reservation differs from its exact batch".to_owned(),
                             });

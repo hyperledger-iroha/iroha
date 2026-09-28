@@ -540,7 +540,7 @@ fn high_limb_and_zero_or_nonzero_scale_changes_cannot_reach_quantity_relations()
             let value = units.to_quantity().unwrap();
             let scale = units.scale();
             // Zero must retain its scale domain as strictly as a nonzero value.
-            let other_scale = if scale == 0 { 1 } else { 0 };
+            let other_scale = u32::from(scale == 0);
             if let Some(changed) = FastpqQuantityUnits::from_quantity(&value, other_scale) {
                 rows[which].pre_value = encode_quantity_units_v1(&changed).unwrap();
                 assert!(

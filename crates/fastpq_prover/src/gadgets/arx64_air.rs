@@ -1,4 +1,4 @@
-//! Quadratic bit constraints for the 64-bit operations used by BLAKE2b.
+//! Quadratic bit constraints for the 64-bit operations used by `BLAKE2b`.
 //!
 //! Addition uses two 32-bit integer equations, with a Boolean carry between
 //! halves and a Boolean discarded carry. This proves wrapping modulo `2^64`,
@@ -7,14 +7,14 @@
 //!
 //! The operation schedule follows RFC 7693 section 3.1:
 //! <https://www.rfc-editor.org/rfc/rfc7693#section-3.1>.
-//! TODO: commit these operation rows and constrain the BLAKE2b schedule, register
+//! TODO: commit these operation rows and constrain the `BLAKE2b` schedule, register
 //! reads/writes, IV, message words, byte counters, final-block flag, output bytes
 //! and Iroha hash marker before using them to prove complete SMT hash relations.
 //! This module is a prerequisite and does not replace transfer witness replay.
 
 use super::transfer_integer_air::IntegerAirField;
 
-/// Bits in a BLAKE2b word, ordered least significant first.
+/// Bits in a `BLAKE2b` word, ordered least significant first.
 pub const WORD_BITS: usize = 64;
 /// Number of constraint numerators for one wrapping addition.
 pub const ADD_CONSTRAINT_COUNT: usize = 197;
@@ -101,7 +101,7 @@ impl<F: IntegerAirField> Add64Witness<F> {
     }
 }
 
-/// The four fixed right rotations in the BLAKE2b G function.
+/// The four fixed right rotations in the `BLAKE2b` G function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blake2bRotation {
     /// First rotation: 32 bits.
@@ -139,7 +139,7 @@ pub struct XorRotate64Witness<F = u64> {
 }
 
 impl XorRotate64Witness<u64> {
-    /// Generate an exact bit witness for one fixed BLAKE2b rotation.
+    /// Generate an exact bit witness for one fixed `BLAKE2b` rotation.
     #[must_use]
     pub fn from_operands(left: u64, right: u64, rotation: Blake2bRotation) -> Self {
         Self {
@@ -194,7 +194,7 @@ pub fn add_residues<F: IntegerAirField>(
         bit_residues(
             active,
             word,
-            &mut residues[1 + index * 64..1 + (index + 1) * 64],
+            &mut residues[(1 + index * 64)..=((index + 1) * 64)],
         );
     }
     residues[193] = witness.carry_32.mul(witness.carry_32.sub(active));
@@ -232,7 +232,7 @@ pub fn xor_rotate_residues<F: IntegerAirField>(
         bit_residues(
             active,
             word,
-            &mut residues[1 + index * 64..1 + (index + 1) * 64],
+            &mut residues[(1 + index * 64)..=((index + 1) * 64)],
         );
     }
     for bit in 0..64 {
@@ -267,7 +267,7 @@ mod tests {
         let edges = [
             0,
             1,
-            u32::MAX as u64,
+            u64::from(u32::MAX),
             1 << 32,
             (1 << 56) - 1,
             1 << 56,

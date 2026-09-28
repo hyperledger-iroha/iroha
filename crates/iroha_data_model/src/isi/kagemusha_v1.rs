@@ -3469,21 +3469,21 @@ mod tests {
             .expect("bootstrap circuit binding");
         assert!(message.validate().is_err());
         assert!(message.signing_digest().is_err());
-        let mut mint = message.clone();
+        let mut mint = message;
         mint.kagemusha_top_up_count = 1;
         assert!(mint.validate().is_ok());
         assert!(mint.validate_bootstrap().is_err());
         assert!(mint.bootstrap_binding_digest().is_err());
-        let mut later = message.clone();
+        let mut later = message;
         later.block_height = 2;
         assert!(later.validate_bootstrap().is_err());
-        let mut successor = message.clone();
+        let mut successor = message;
         successor.block_height = successor.epoch_authorization.last_height;
         successor.next_epoch_authorization =
             Some(retained_authorization(&successor.epoch_authorization));
         assert!(successor.validate().is_ok());
         assert!(successor.validate_bootstrap().is_err());
-        let mut non_genesis = message.clone();
+        let mut non_genesis = message;
         non_genesis.epoch_authorization = retained_authorization(&message.epoch_authorization);
         non_genesis.block_height = non_genesis.epoch_authorization.first_height;
         assert!(non_genesis.validate_bootstrap().is_err());

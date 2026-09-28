@@ -31871,6 +31871,7 @@ impl State {
 
     /// Reserve this exact signed carrier's ordinary replay identities before
     /// its pristine stage or any shared block-start effects can run.
+    #[cfg(test)]
     pub(crate) fn block_with_pristine_carrier_stage<E: std::fmt::Debug>(
         &self,
         carrier: &SignedBlock,
@@ -54809,6 +54810,7 @@ impl<'state> StateBlock<'state> {
     fn merge_execution_call_hash(entrypoint: &TransactionEntrypoint) -> Hash {
         Hash::from(entrypoint.execution_call_hash())
     }
+    #[cfg(test)]
     fn take_merge_lane_batch_transfer_outcomes(
         &mut self,
         entrypoints: &[TransactionEntrypoint],

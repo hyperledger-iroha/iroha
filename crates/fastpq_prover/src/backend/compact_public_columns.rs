@@ -34,7 +34,7 @@ pub(super) const COMMITTED_COLUMN_COUNT: usize = COLUMN_COUNT - PUBLIC_COLUMN_CO
 /// Inclusive upper bound on every reconstructed public column's degree.
 pub(super) const PUBLIC_POLYNOMIAL_DEGREE: usize =
     PHYSICAL_ROW_COUNT - PHYSICAL_ROW_COUNT / PHYSICAL_HASH_ROWS;
-/// Omitted reference indices, in ascending compact_trace_columns schema order.
+/// Omitted reference indices, in ascending `compact_trace_columns` schema order.
 ///
 /// 32..35: four complete domain u32 limbs; 53..63: eleven complete zero-padding
 /// limbs; 276..299: 24 byte-presence cells; 300: byte length; 301: prefix count.

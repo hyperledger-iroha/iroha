@@ -17,7 +17,7 @@ fn invalid(reason: impl Into<String>) -> CodecError {
 }
 
 /// Check the schema semantics that canonical Norito serialization alone cannot establish.
-pub(super) fn validate_manifest_schemas(manifest: &ContractManifest) -> CodecResult<()> {
+pub fn validate_manifest_schemas(manifest: &ContractManifest) -> CodecResult<()> {
     if manifest
         .seiyaku_name
         .as_deref()
@@ -115,13 +115,12 @@ fn validate_value_schema(
         )));
     }
     for node in &schema.nodes {
-        if let EntrypointValueTypeNodeV1::Error(descriptor) = node {
-            if catalog.get(descriptor.identity.as_str()).copied() != Some(descriptor) {
+        if let EntrypointValueTypeNodeV1::Error(descriptor) = node
+            && catalog.get(descriptor.identity.as_str()).copied() != Some(descriptor) {
                 return Err(invalid(format!(
                     "{context} boundary error schema does not match its error_types catalog"
                 )));
             }
-        }
     }
     Ok(())
 }

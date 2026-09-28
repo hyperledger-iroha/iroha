@@ -41,7 +41,7 @@ fn safe_json_numbers(value: &Value) -> CodecResult<()> {
 
 macro_rules! staking_codec {
     ($($ty:ident),+ $(,)?) => {
-        pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+        pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
             let Value::Object(fields) = value else { return None; };
             $(if let Some(payload) = fields.get(stringify!($ty)) {
                 return Some((|| {
@@ -53,7 +53,7 @@ macro_rules! staking_codec {
             })+
             None
         }
-        pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+        pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
             $(if let Some(typed) = instruction.as_any().downcast_ref::<$ty>() {
                 return Some((|| {
                     let payload = json::to_value(typed).map_err(crate::codec_error)?;
@@ -68,7 +68,7 @@ macro_rules! staking_codec {
             })+
             None
         }
-        pub(super) fn is_staking_instruction(instruction: &InstructionBox) -> bool {
+        pub fn is_staking_instruction(instruction: &InstructionBox) -> bool {
             false $(|| instruction.as_any().is::<$ty>())+
         }
     };

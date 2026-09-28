@@ -4,10 +4,10 @@
 //! Checking J=Q+rho*T+sigma*X^N*T (reduced modulo the coset vanishing polynomial)
 //! against degree < 2N batches Q's bound < 2N with T's bound < N. If T has degree
 //! >= 2N, its unshifted term has a nonzero high coefficient. If N <= deg(T) < 2N,
-//! its shifted term has degree in [2N,3N), without wrap. If only Q violates its
-//! bound, a high coefficient of Q is nonzero. In every case a high coefficient
-//! of J is a nonzero affine polynomial in independently sampled rho and sigma;
-//! exact cancellation has probability at most 1/|Fp4| for fixed oracles.
+//! > its shifted term has degree in [2N,3N), without wrap. If only Q violates its
+//! > bound, a high coefficient of Q is nonzero. In every case a high coefficient
+//! > of J is a nonzero affine polynomial in independently sampled rho and sigma;
+//! > exact cancellation has probability at most 1/|Fp4| for fixed oracles.
 //!
 //! The unshifted T term is essential: X^N alone wraps degrees >= L-N into low
 //! coefficients and would silently admit some invalid trace interpolants.
@@ -19,7 +19,7 @@ use fastpq_isi::StarkParameterSet;
 
 /// Validated degree-alignment factors and post-commitment batching challenges.
 #[derive(Clone, Debug)]
-pub(crate) struct JointFriBatch {
+pub struct JointFriBatch {
     domain_size: usize,
     shifts: Vec<u64>,
     rho: GoldilocksFp4V1,

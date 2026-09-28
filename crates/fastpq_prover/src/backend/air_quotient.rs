@@ -11,14 +11,14 @@ use fastpq_isi::StarkParameterSet;
 
 /// Inverse zerofiers at one authenticated LDE point.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AirQuotientWeights {
+pub struct AirQuotientWeights {
     pub(super) all_rows: u64,
     pub(super) transitions: u64,
 }
 
 /// Validated domain geometry and the small periodic all-row denominator table.
 #[derive(Clone, Debug)]
-pub(crate) struct AirQuotientDomain {
+pub struct AirQuotientDomain {
     domain: FriDomain,
     lde_size: usize,
     last_trace_point: u64,

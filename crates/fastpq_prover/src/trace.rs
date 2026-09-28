@@ -42,9 +42,9 @@ const METADATA_COMMITMENT_ROLE_V1: &[u8] = b"fastpq:v1:trace-metadata";
 /// Typed phase for the canonical metadata-map commitment.
 const METADATA_COMMITMENT_PHASE_V1: &[u8] = b"commitment";
 /// Number of canonical Goldilocks limbs carrying the six-lane metadata commitment.
-pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 6;
+pub const METADATA_COMMITMENT_LIMBS: usize = 6;
 /// Default maximum canonical trace columns admitted before prover allocation.
-pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize =
+pub const DEFAULT_MAX_TRACE_COLUMNS: usize =
     fastpq_isi::resource_limits::FASTPQ_MAX_TRACE_COLUMNS_V1;
 /// Domain tag for hashing DS identifiers.
 const DSID_DOMAIN: &[u8] = b"fastpq:v1:dsid";
@@ -63,7 +63,7 @@ type PoseidonPipelineObserver = dyn Fn(PoseidonPipelinePolicy, &'static str, Opt
 static POSEIDON_PIPELINE_OBSERVER: OnceLock<RwLock<Option<Arc<PoseidonPipelineObserver>>>> =
     OnceLock::new();
 #[cfg(test)]
-pub(crate) static POSEIDON_PIPELINE_OBSERVER_TEST_LOCK: std::sync::Mutex<()> =
+pub static POSEIDON_PIPELINE_OBSERVER_TEST_LOCK: std::sync::Mutex<()> =
     std::sync::Mutex::new(());
 #[cfg(test)]
 type TraceMerkleModeObserver = dyn Fn(ExecutionMode) + Send + Sync + 'static;
@@ -182,7 +182,7 @@ fn clone_observer<T: ?Sized>(
     }
 }
 // Native V1 CPU proving also reports its resolved Poseidon execution policy.
-pub(crate) fn notify_poseidon_pipeline_observer(
+pub fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
     backend: Option<backend::GpuBackend>,
@@ -216,7 +216,7 @@ pub(crate) fn notify_poseidon_pipeline_observer(
 /// This notification describes the CPU proving stage that calls it. Separate
 /// complete six-lane primitive GPU measurements do not change that stage's
 /// execution policy or qualify a complete accelerated proof.
-pub(crate) fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
+pub fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
     let actual_policy = PoseidonPipelinePolicy {
         requested: policy.requested(),
         resolved: ExecutionMode::Cpu,
@@ -225,7 +225,7 @@ pub(crate) fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
 }
 
 #[cfg(test)]
-pub(crate) fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
+pub fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
     let observer = clone_observer(trace_merkle_mode_observer_slot(), "trace_merkle_mode");
     if let Some(callback) = observer {
         callback(mode);
@@ -304,7 +304,7 @@ pub fn clear_poseidon_pipeline_observer() {
     replace_observer(poseidon_observer_slot(), None, "poseidon_pipeline");
 }
 #[cfg(test)]
-pub(crate) fn set_trace_merkle_mode_observer<F>(observer: F)
+pub fn set_trace_merkle_mode_observer<F>(observer: F)
 where
     F: Fn(ExecutionMode) + Send + Sync + 'static,
 {
@@ -316,7 +316,7 @@ where
     );
 }
 #[cfg(test)]
-pub(crate) fn clear_trace_merkle_mode_observer() {
+pub fn clear_trace_merkle_mode_observer() {
     replace_observer(trace_merkle_mode_observer_slot(), None, "trace_merkle_mode");
 }
 /// Remove the previously registered FASTPQ GPU accelerator event observer, if any.
@@ -934,7 +934,7 @@ fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWi
     Ok(widths)
 }
 /// Return the number of columns in the canonical FASTPQ layout without allocating column names.
-pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
+pub fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
     const SELECTOR_COLUMNS: usize = 8;
     const DELTA_COLUMNS: usize = 2;
     const TRAILING_COLUMNS: usize = 8;
@@ -953,7 +953,7 @@ pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
     Ok(fixed_columns + widths.key + widths.old_value + widths.new_value + widths.asset)
 }
 /// Enforce a caller-selected trace schema width before materialising columns.
-pub(crate) fn ensure_trace_schema_limit(
+pub fn ensure_trace_schema_limit(
     batch: &TransitionBatch,
     max_air_row_values: usize,
 ) -> Result<()> {
@@ -973,7 +973,7 @@ pub(crate) fn ensure_trace_schema_limit(
 ///
 /// Returns [`Error::InvalidAssetKey`] when a numeric operation does not use the canonical
 /// `FastpqBalanceKeyV1` Norito frame.
-pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
+pub fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
     let widths = trace_schema_limb_widths(batch)?;
     let mut columns = [
         "s_active",
@@ -1095,7 +1095,7 @@ fn extract_transfer_witnesses(
 ///
 /// Returns [`Error::ValueWidth`] if the typed hash domain cannot be represented
 /// by the canonical field-packing format.
-pub(crate) fn permission_hash(
+pub fn permission_hash(
     role_id: &[u8; 32],
     permission_id: &[u8; 32],
     epoch: u64,
@@ -1108,7 +1108,7 @@ pub(crate) fn permission_hash(
 }
 /// Build the exact binary permission-tree key for one role/permission tuple.
 #[must_use]
-pub(crate) fn permission_transition_key(role_id: &[u8; 32], permission_id: &[u8; 32]) -> Vec<u8> {
+pub fn permission_transition_key(role_id: &[u8; 32], permission_id: &[u8; 32]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PERMISSION_KEY_PREFIX.len() + 32 + 1 + 32);
     key.extend_from_slice(PERMISSION_KEY_PREFIX);
     key.extend_from_slice(role_id);
@@ -1705,7 +1705,7 @@ fn field_from_i128(value: i128) -> u64 {
     }
     u64::try_from(reduced).expect("canonical reduction fits u64")
 }
-pub(crate) fn trace_coefficients(
+pub fn trace_coefficients(
     trace: &Trace,
     planner: &Planner,
     mode: ExecutionMode,
@@ -1741,7 +1741,7 @@ pub(crate) fn trace_coefficients(
         }
     }
 }
-pub(crate) struct TracePolynomialData {
+pub struct TracePolynomialData {
     pub coefficients: Vec<Vec<u64>>,
     lde_columns: Vec<Vec<u64>>,
     transfer_plan: transfer::TransferGadgetPlan,
@@ -1758,7 +1758,7 @@ impl TracePolynomialData {
         &self.transfer_plan
     }
 }
-pub(crate) fn derive_polynomial_data(trace: &Trace, planner: &Planner) -> TracePolynomialData {
+pub fn derive_polynomial_data(trace: &Trace, planner: &Planner) -> TracePolynomialData {
     let coefficients = trace_coefficients(trace, planner, ExecutionMode::Cpu);
     let lde_columns = if coefficients.is_empty() {
         Vec::new()
@@ -3016,11 +3016,9 @@ mod tests {
                         .strip_prefix("value_old_limb_")
                         .or_else(|| column.name.strip_prefix("value_new_limb_"))
                         .and_then(|index| index.parse::<usize>().ok())
-                    {
-                        if index >= 2 {
+                        && index >= 2 {
                             assert_eq!(column.values[row], 0, "{} must be zero", column.name);
                         }
-                    }
                 }
             }
             if row >= trace.rows {

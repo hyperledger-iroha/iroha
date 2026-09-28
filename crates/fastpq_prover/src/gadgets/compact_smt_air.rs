@@ -570,7 +570,7 @@ pub fn local_residues<F: IntegerAirField>(
             }
         }
     }
-    if index.0 % ROWS_PER_UPDATE == 0 {
+    if index.0.is_multiple_of(ROWS_PER_UPDATE) {
         let public = statement.updates[index.update()];
         for limb in 0..8 {
             out.push(row.old_child[limb].sub(F::from_u32(public.old_leaf[limb]).mul(active)));
@@ -1532,7 +1532,7 @@ mod tests {
         assert_eq!(PHYSICAL_HASH_ROWS - compact_blake2b_air::ROW_COUNT, 104);
         assert_eq!(PHYSICAL_ROW_COUNT, 65_536);
         assert_eq!(PHYSICAL_ROW_COUNT - ROW_COUNT, 13_312);
-        assert!(COLUMN_COUNT + 1 <= 512);
+        assert!(COLUMN_COUNT < 512);
         let mut max_degree = 0;
         // Every distinct hash phase is exercised in each update; level changes
         // alter only public constant choices, not polynomial degree.

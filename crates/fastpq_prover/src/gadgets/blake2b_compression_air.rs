@@ -1,4 +1,4 @@
-//! Exact BLAKE2b compression-function AIR composition, without hash admission.
+//! Exact `BLAKE2b` compression-function AIR composition, without hash admission.
 //!
 //! RFC 7693 sections 2.6, 2.7 and 3.2 fix the IV, message permutations and
 //! twelve-round compression schedule:
@@ -26,7 +26,7 @@ use super::{
     transfer_integer_air::IntegerAirField,
 };
 
-/// Compression rounds fixed by BLAKE2b.
+/// Compression rounds fixed by `BLAKE2b`.
 pub const ROUND_COUNT: usize = 12;
 /// G invocations in each round, four columns followed by four diagonals.
 pub const GS_PER_ROUND: usize = 8;
@@ -52,7 +52,7 @@ pub const CONSTRAINT_COUNT: usize = 2
 /// Maximum degree in invocation selectors and arbitrary witness openings.
 pub const MAX_CONSTRAINT_DEGREE: usize = 2;
 
-/// Fixed BLAKE2b initialization words, before any digest parameter block.
+/// Fixed `BLAKE2b` initialization words, before any digest parameter block.
 pub const INITIALIZATION_VECTOR: [u64; 8] = [
     0x6a09_e667_f3bc_c908,
     0xbb67_ae85_84ca_a73b,
@@ -409,10 +409,10 @@ mod tests {
             for (word, [r_d, r_b]) in words.into_iter().zip([[32, 24], [16, 63]]) {
                 v[a] = ((u128::from(v[a]) + u128::from(v[b]) + u128::from(word)) & mask) as u64;
                 let xor_d = v[d] ^ v[a];
-                v[d] = (xor_d >> r_d) | (xor_d << (64 - r_d));
+                v[d] = xor_d.rotate_right(r_d);
                 v[c] = ((u128::from(v[c]) + u128::from(v[d])) & mask) as u64;
                 let xor_b = v[b] ^ v[c];
-                v[b] = (xor_b >> r_b) | (xor_b << (64 - r_b));
+                v[b] = xor_b.rotate_right(r_b);
             }
         }
         let mut v = [0; 16];

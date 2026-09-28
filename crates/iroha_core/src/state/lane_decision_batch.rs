@@ -122,7 +122,7 @@ impl<'state> RecordedNativeLaneBatchV1<'state> {
                 sources,
                 executions,
                 context: self.context,
-                admission,
+                _admission: admission,
             },
         ))
     }
@@ -147,7 +147,8 @@ pub(crate) struct NativeExecutionCustody {
     sources: Vec<VerifiedLaneDecisionGroupV1>,
     executions: Vec<Execution>,
     context: crate::sumeragi::v2::VerifiedHeightContext,
-    admission: NativeExecutionResourceAdmission,
+    /// The execution's resource reservation, held until the custody is released.
+    _admission: NativeExecutionResourceAdmission,
 }
 impl NativeExecutionCustody {
     /// Borrow the same privately authenticated sources retained by execution.

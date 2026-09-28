@@ -49,8 +49,9 @@ use iroha_data_model::{
 };
 #[cfg(test)]
 use norito::decode_from_bytes_with_limits;
+#[cfg(test)]
+use norito::codec::Encode as _;
 use norito::{
-    codec::Encode as _,
     core::DecodeLimits,
     decode_canonical_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -69,8 +70,9 @@ use sorafs_manifest::capacity::{
 use std::io;
 #[cfg(test)]
 use std::io::Read;
+#[cfg(test)]
+use std::cell::Cell;
 use std::{
-    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     fmt,
     future::Future,

@@ -2096,7 +2096,8 @@ fn bounded_kura_sidecar_decode_preserves_valid_finality_and_retained_records() {
     kura.store_block(Arc::clone(&block))
         .expect("store canonical block");
     let artifact = v2_finality_artifact_for_block(&block);
-    kura.store_v2_finality_artifact(&artifact)
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("store finality sidecars");
 
     let finality_path = kura.v2_finality_artifact_path(1);

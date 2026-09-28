@@ -3448,7 +3448,7 @@ mod tests {
         let mut block = fixture::proposal(0);
         let proposal = block.clone();
         let proposal_hash = block.canonical_proposal_wire_hash().unwrap();
-        assert_eq!(proposal_hash, Hash::new(&proposal.encode_wire().unwrap()));
+        assert_eq!(proposal_hash, Hash::new(proposal.encode_wire().unwrap()));
         assert!(!block.has_results());
         assert!(block.is_resultless_proposal());
         assert_eq!(block.executed_block_wire_hash().unwrap(), proposal_hash);

@@ -921,7 +921,7 @@ fn ordering_is_preserved_across_roundtrip() {
 include!("default_registry_tail_test.rs");
 /// SCCP v1 instruction registration (`specs/sccp.md` §4): every instruction boxes, carries its
 /// `iroha.instruction.v1::sccp::<Name>` wire id and round-trips through the default registry.
-pub(crate) mod sccp_instruction_enum {
+pub mod sccp_instruction_enum {
     use super::RegistryGuard;
     use crate::{
         NetworkId,
@@ -954,7 +954,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Deterministic populated values of the ten SCCP v1 instructions, in wire-id order.
-    pub(crate) fn initialize() -> InitializeSccpV1 {
+    pub fn initialize() -> InitializeSccpV1 {
         InitializeSccpV1 {
             parameters: SccpParametersV1::taira_default(),
             reset_nonce: [0x5a; 32],
@@ -962,7 +962,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated bridge-key registration signed by a deterministic peer key.
-    pub(crate) fn set_bridge_key() -> SetSccpBridgeKeyV1 {
+    pub fn set_bridge_key() -> SetSccpBridgeKeyV1 {
         let peer_keys = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)
             .expect("deterministic Ed25519 seed");
         let peer = PeerId::new(peer_keys.public_key().clone());
@@ -979,7 +979,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated attestation batch.
-    pub(crate) fn submit_attestations() -> SubmitSccpAttestationsV1 {
+    pub fn submit_attestations() -> SubmitSccpAttestationsV1 {
         SubmitSccpAttestationsV1 {
             entries: vec![
                 SccpAttestationSignatureV1 {
@@ -997,7 +997,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated equivocation evidence.
-    pub(crate) fn submit_fault() -> SubmitSccpAttestationFaultV1 {
+    pub fn submit_fault() -> SubmitSccpAttestationFaultV1 {
         SubmitSccpAttestationFaultV1 {
             statement: SccpAttestationStatementV1 {
                 height: 9,
@@ -1016,7 +1016,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated outbound record request.
-    pub(crate) fn record() -> RecordSccpMessage {
+    pub fn record() -> RecordSccpMessage {
         RecordSccpMessage {
             network: SccpNetworkV1::EthereumMainnet,
             expected_revision: 1,
@@ -1026,7 +1026,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated inbound proof submission.
-    pub(crate) fn submit_inbound() -> SubmitSccpInboundMessageV1 {
+    pub fn submit_inbound() -> SubmitSccpInboundMessageV1 {
         SubmitSccpInboundMessageV1 {
             network: SccpNetworkV1::TonMainnet,
             revision: 2,
@@ -1037,12 +1037,12 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated settlement retry.
-    pub(crate) fn settle() -> SettleSccpV1 {
+    pub fn settle() -> SettleSccpV1 {
         SettleSccpV1::refund(SccpNetworkV1::BscMainnet, 1, 7)
     }
 
     /// Populated void proof submission.
-    pub(crate) fn submit_void() -> SubmitSccpOutboundVoidV1 {
+    pub fn submit_void() -> SubmitSccpOutboundVoidV1 {
         SubmitSccpOutboundVoidV1 {
             network: SccpNetworkV1::TronMainnet,
             revision: 1,
@@ -1052,7 +1052,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated light-client advance.
-    pub(crate) fn advance() -> AdvanceSccpLightClientV1 {
+    pub fn advance() -> AdvanceSccpLightClientV1 {
         AdvanceSccpLightClientV1 {
             network: SccpNetworkV1::EthereumMainnet,
             expected_state_hash: Some([8; 32]),
@@ -1061,7 +1061,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Populated light-client equivocation report.
-    pub(crate) fn report_equivocation() -> ReportSccpLightClientEquivocationV1 {
+    pub fn report_equivocation() -> ReportSccpLightClientEquivocationV1 {
         ReportSccpLightClientEquivocationV1 {
             network: SccpNetworkV1::BscMainnet,
             a: SccpLcEvidenceBytesV1::new(vec![1, 2]).expect("bounded evidence"),
@@ -1070,7 +1070,7 @@ pub(crate) mod sccp_instruction_enum {
     }
 
     /// Every SCCP v1 instruction with its expected wire id.
-    pub(crate) fn boxed_samples() -> Vec<(&'static str, InstructionBox)> {
+    pub fn boxed_samples() -> Vec<(&'static str, InstructionBox)> {
         vec![
             (
                 "iroha.instruction.v1::sccp::InitializeSccpV1",

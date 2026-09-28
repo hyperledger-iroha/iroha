@@ -1438,11 +1438,6 @@ impl NativePublicationFixture {
         self.original.applying.context()
     }
 
-    /// Original authenticated applying context for the real service adapter.
-    pub(super) fn verified_context(&self) -> crate::sumeragi::v2::VerifiedHeightContext {
-        self.original.applying.clone()
-    }
-
     /// Canonical signed proposal before recorded Native execution.
     pub(super) fn carrier(&self) -> &SignedBlock {
         &self.carrier

@@ -5526,9 +5526,6 @@ pub struct IncentivesOpenDisputeArgs {
     /// Norito-encoded reward instruction (`RelayRewardInstructionV1`).
     #[arg(long = "instruction", value_name = "PATH")]
     pub instruction: PathBuf,
-    /// Treasury account initiating the dispute.
-    #[arg(long = "treasury-account", value_name = "ACCOUNT_ID")]
-    pub treasury_account: String,
     /// Account ID submitting the dispute.
     #[arg(long = "submitted-by", value_name = "ACCOUNT_ID")]
     pub submitted_by: String,
@@ -5553,12 +5550,10 @@ pub struct IncentivesOpenDisputeArgs {
 impl Run for IncentivesOpenDisputeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = read_reward_instruction(&self.instruction)?;
-        let treasury = parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
         let requested_amount = parse_quantity_str(&self.requested_amount, "--requested-amount")?;
         let submitted_at = self.submitted_at.unwrap_or_else(unix_now);
-        let ledger = RelayPayoutLedger::new(treasury);
-        let dispute = ledger.open_dispute(
+        let dispute = RelayPayoutLedger::open_dispute(
             instruction,
             requested_amount,
             submitted_by,

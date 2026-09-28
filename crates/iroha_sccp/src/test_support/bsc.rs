@@ -227,7 +227,7 @@ impl SyntheticParliaChainV1 {
         let mut extra = vec![0_u8; 32];
         let roster = self.roster_at(height);
         let members = self.members(roster);
-        if height % self.profile.epoch_length == 0 {
+        if height.is_multiple_of(self.profile.epoch_length) {
             extra.push(u8::try_from(members.len()).expect("at most 64 validators"));
             for member in members.iter() {
                 extra.extend_from_slice(&member.address);

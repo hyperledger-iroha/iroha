@@ -25,7 +25,7 @@ struct NodeKey {
 /// they never stand in for checking the supplied path against its claimed root.
 /// The fixed entry ceiling bounds retained memory, and saturation only disables
 /// further insertion. Existing entries remain usable without an eviction policy.
-pub(crate) struct MerkleNodeCache {
+pub struct MerkleNodeCache {
     nodes: BTreeMap<NodeKey, GoldilocksDigest384V1>,
     max_entries: usize,
     #[cfg(test)]

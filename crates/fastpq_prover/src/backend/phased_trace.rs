@@ -28,7 +28,7 @@ const MAX_COMPOSITION_CHALLENGES: usize = 65_536;
 /// The caller must obtain this identity and digest from its authenticated statement
 /// and bind exact public table bytes/counts, packing, selectors and constraint order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PhaseSchema {
+pub struct PhaseSchema {
     /// Identity of the complete fixed semantic and polynomial schema.
     pub(crate) schema_id: [u8; 32],
     /// Commitment to the exact caller-authenticated public statement.
@@ -45,7 +45,7 @@ pub(crate) struct PhaseSchema {
 
 /// Validated common subgroup/coset geometry and canonical schema frame.
 #[derive(Clone, Debug)]
-pub(crate) struct PhaseLayout {
+pub struct PhaseLayout {
     schema: PhaseSchema,
     trace_rows: usize,
     lde_rows: usize,
@@ -157,7 +157,7 @@ impl OracleRole {
 
 /// Independently sampled complete Fp4 pair-table challenges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PairTableChallenges {
+pub struct PairTableChallenges {
     /// Tuple-compression coefficient, fixed after both base roots.
     pub(crate) compression: GoldilocksFp4V1,
     /// Independent additive factor shift; never resampled on a zero factor.
@@ -166,7 +166,7 @@ pub(crate) struct PairTableChallenges {
 
 /// Immutable base roots fixed before any pair-table challenge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BaseRoots {
+pub struct BaseRoots {
     /// Complete execution base-field row root.
     pub(crate) execution: GoldilocksDigest384V1,
     /// Complete table row root; transcript binding alone does not authenticate it.
@@ -174,7 +174,7 @@ pub(crate) struct BaseRoots {
 }
 
 /// First state: base roots are fixed and pair-table challenges are available.
-pub(crate) struct BaseCommitted {
+pub struct BaseCommitted {
     transcript: Transcript,
     layout: PhaseLayout,
     roots: BaseRoots,
@@ -283,14 +283,14 @@ impl BaseCommitted {
 
 /// Independent coefficients in the exact base, table, auxiliary column order.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ColumnMixing {
+pub struct ColumnMixing {
     base: Vec<GoldilocksFp4V1>,
     table: Vec<GoldilocksFp4V1>,
     auxiliary: Vec<GoldilocksFp4V1>,
 }
 
 /// Second state: all column roots are fixed and their mixing is available.
-pub(crate) struct AuxiliaryCommitted {
+pub struct AuxiliaryCommitted {
     base: BaseCommitted,
     auxiliary_root: GoldilocksDigest384V1,
     mixing: ColumnMixing,
@@ -376,7 +376,7 @@ impl AuxiliaryCommitted {
 }
 
 /// Final preparation state: all oracle roots, mixes and composition alphas fixed.
-pub(crate) struct CompositionChallenges {
+pub struct CompositionChallenges {
     auxiliary: AuxiliaryCommitted,
     mixed_root: GoldilocksDigest384V1,
     alphas: Vec<GoldilocksFp4V1>,

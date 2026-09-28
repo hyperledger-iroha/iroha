@@ -2002,6 +2002,7 @@ impl FairV2IngressOwnershipEvidence {
         self.validate_exact() && &self.first.semantic_origin == origin
     }
     /// Whether this Native occurrence still names its original charged transport hop.
+    #[cfg(test)]
     pub(crate) fn matches_native_authenticated_hop(&self, via: &PeerId) -> bool {
         self.validate_exact()
             && &self.first.authenticated_via == via

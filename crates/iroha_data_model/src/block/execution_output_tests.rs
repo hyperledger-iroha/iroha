@@ -180,14 +180,10 @@ fn execution_output_roundtrips_all_owners_diagnostics_and_exact_receipts() {
         );
         assert_eq!(
             row.completions().len(),
-            if matches!(
+            usize::from(!matches!(
                 row,
                 ExecutionOutputV1::Network(NetworkExecutionOutputV1 { .. })
-            ) {
-                0
-            } else {
-                1
-            }
+            ))
         );
     }
 }

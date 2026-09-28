@@ -163,7 +163,7 @@ impl CellArenaV1 {
                 data[index / 8] |= 0x80 >> (index % 8);
             }
         }
-        if bits.len() % 8 != 0 {
+        if !bits.len().is_multiple_of(8) {
             data[full] |= 0x80 >> (bits.len() % 8);
         }
         self.insert(TonBocCell {

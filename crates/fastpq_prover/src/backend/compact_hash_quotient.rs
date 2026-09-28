@@ -572,15 +572,14 @@ impl CompiledLedger {
             maximum_local = maximum_local.max(residues.len());
             _reference_residues += residues.len();
             group_phase(&arena, phase, &residues, &mut local);
-            if let Some(index) = hash::RowIndex::new(phase) {
-                if let Some(residues) =
+            if let Some(index) = hash::RowIndex::new(phase)
+                && let Some(residues) =
                     hash::transition_residues(Expression::ONE, index, &current, &next)
                 {
                     maximum_transition = maximum_transition.max(residues.len());
                     _reference_residues += residues.len();
                     group_phase(&arena, phase, &residues, &mut transitions);
                 }
-            }
         }
         assert_eq!(
             maximum_local, LOCAL_SLOTS,
@@ -1123,7 +1122,7 @@ mod tests {
             }
             let ledger = CompactHashQuotient::new(&params, trace_rows).unwrap();
             let cycle = ledger.prepare_prover_masks().unwrap();
-            assert!(core::ptr::eq(cycle.ledger, &ledger));
+            assert!(core::ptr::eq(cycle.ledger, &raw const ledger));
             let mut base_scratch = ledger.evaluation_scratch::<u64>();
             let mut extension_scratch = ledger.evaluation_scratch::<GoldilocksFp4V1>();
             let base_pointer = base_scratch.values.as_ptr();
@@ -1286,7 +1285,7 @@ mod tests {
         let preparation_start = std::time::Instant::now();
         let cycle = ledger.prepare_prover_masks().unwrap();
         let preparation_elapsed = preparation_start.elapsed();
-        assert!(core::ptr::eq(cycle.ledger, &ledger));
+        assert!(core::ptr::eq(cycle.ledger, &raw const ledger));
         assert_eq!(ledger.mask_cycle_rows, 4096);
         assert_eq!(cycle.values.len(), 4096 * ledger.compiled.masks.len());
         let current = seeded_row(31);

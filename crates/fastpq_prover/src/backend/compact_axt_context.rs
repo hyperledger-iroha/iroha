@@ -58,7 +58,7 @@ struct BoundContext {
 /// surrounding caller. Values copied from an untrusted proof do not authorize a
 /// source root or spend. The prepared table must select AXT transfer semantics
 /// and contain exactly one delta; its original public claims and all seven
-/// PublicIO fields are bound by `PublicTransferAir` before this wrapper is built.
+/// `PublicIO` fields are bound by `PublicTransferAir` before this wrapper is built.
 #[cfg(test)]
 pub(super) fn encode_context<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
@@ -101,15 +101,14 @@ pub(super) fn preflight_context<V: CompactTransferValue>(
     let limits = PublicTransferLimits::default();
     let max_bytes = VerifyLimits::default().max_batch_bytes;
     check_limit(prepared.work().public_bytes, limits.max_public_bytes)?;
-    if let Some(claims) = remote_spend_claims {
-        if claims.len() > limits.max_deltas {
+    if let Some(claims) = remote_spend_claims
+        && claims.len() > limits.max_deltas {
             return Err(Error::VerifierLimitExceeded {
                 limit: "max_compact_axt_remote_claims",
                 actual: claims.len(),
                 max: limits.max_deltas,
             });
         }
-    }
     // Bound variable-count containers in O(1) before the counting serializer
     // walks their elements. These are conservative raw payload lower bounds;
     // the exact canonical framed count remains mandatory below.
@@ -435,7 +434,7 @@ pub(super) mod tests {
             prepare_public_transfers(
                 &self.rows,
                 &self.claims,
-                self.inputs.clone(),
+                self.inputs,
                 semantics,
                 PublicTransferLimits::default(),
             )

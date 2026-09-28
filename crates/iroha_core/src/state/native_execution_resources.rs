@@ -125,7 +125,7 @@ impl NativeExecutionResourceAdmission {
 
     /// Reserve from even a deliberately malformed fixture's advertised count.
     /// The canonical source constructor still checks that carrier afterward.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn for_test_carrier(carrier: &SignedBlock) -> Self {
         let group_count = carrier
             .execution_context()

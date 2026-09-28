@@ -1215,7 +1215,7 @@ fn require_remote_spend_claim_presence(binding: &AxtFastpqBinding, supplied: boo
     Ok(true)
 }
 /// Borrowed public transfer identity; no private SMT data can be represented.
-pub(crate) struct AxtTransferFact<'a> {
+pub struct AxtTransferFact<'a> {
     /// Complete canonical asset identity.
     pub(crate) asset: &'a AssetDefinitionId,
     /// Complete canonical sender identity.
@@ -1315,7 +1315,7 @@ fn canonical_remote_account(value: &str, field: &str) -> Result<AccountId> {
 ///
 /// The type cannot carry the legacy batch seal or private transcript metadata.
 #[derive(Clone, Copy)]
-pub(crate) struct AxtPublicMetadataBytes<'a> {
+pub struct AxtPublicMetadataBytes<'a> {
     /// Concrete execution parameter, exact-compared to the canonical binding.
     pub(crate) parameter: &'a str,
     /// Original execution entrypoint commitment.
@@ -1336,7 +1336,7 @@ pub(crate) struct AxtPublicMetadataBytes<'a> {
     name = "fastpq_prover::axt_binding::AxtProofContextMirrors",
     frame = "fastpq_prover::compact_v1::AxtProofContextMirrorsV1"
 )]
-pub(crate) struct AxtProofContextMirrors {
+pub struct AxtProofContextMirrors {
     /// Exact outer envelope dataspace.
     pub(crate) dsid: DataSpaceId,
     /// Exact outer envelope manifest.
@@ -1353,7 +1353,7 @@ pub(crate) struct AxtProofContextMirrors {
 ///
 /// The caller must first apply its public resource bounds. This validates the
 /// public relation, not source finality, permissions, or handle signatures.
-pub(crate) fn validate_axt_public_transfer_facts<V>(
+pub fn validate_axt_public_transfer_facts<V>(
     binding: &AxtFastpqBinding,
     metadata: AxtPublicMetadataBytes<'_>,
     prepared: &crate::gadgets::public_transfer_statement::PreparedPublicTransfers<'_, V>,
@@ -1402,7 +1402,7 @@ pub(crate) fn validate_axt_public_transfer_facts<V>(
 }
 
 /// Parse the exact legacy public encodings and compare their outer mirrors.
-pub(crate) fn validate_axt_public_metadata(
+pub fn validate_axt_public_metadata(
     binding: &AxtFastpqBinding,
     metadata: AxtPublicMetadataBytes<'_>,
     outer: AxtProofContextMirrors,

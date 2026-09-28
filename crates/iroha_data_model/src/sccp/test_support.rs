@@ -8,7 +8,7 @@ use norito::{
 };
 
 /// Assert that `value` survives the bare Norito codec and JSON unchanged.
-pub(crate) fn roundtrip<T>(value: &T)
+pub fn roundtrip<T>(value: &T)
 where
     T: Encode + DecodeAll + JsonSerialize + JsonDeserialize + PartialEq + Debug,
 {
@@ -23,7 +23,7 @@ where
 /// Assert that the JSON decoder of `T` rejects an unknown field added to the object reached from
 /// the JSON form of `value` by `path` (object keys, or decimal indices into arrays; `&[]` is the
 /// top-level object), while the unmodified JSON still decodes.
-pub(crate) fn assert_rejects_unknown_field<T>(value: &T, path: &[&str])
+pub fn assert_rejects_unknown_field<T>(value: &T, path: &[&str])
 where
     T: JsonSerialize + JsonDeserialize + PartialEq + Debug,
 {

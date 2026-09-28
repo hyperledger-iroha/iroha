@@ -18,7 +18,7 @@ fn original_commitment_v1(values: &[u16], rho: &Scalar) -> SecretPoint<Point> {
 
 #[test]
 fn u15_canonical_kernel_matches_original_full_width_commitments_and_fixed_work() {
-    assert!(!Suite::ALLOW_PARALLEL_PROVER_WORKSPACE_V1);
+    const { assert!(!Suite::ALLOW_PARALLEL_PROVER_WORKSPACE_V1) };
     let mut budget = RnsNativeProofResourceBudgetV1::default();
     let mut table = RnsNativeU15MsmTableV1::new_v1(&mut budget).unwrap();
     let mut high = [0u8; 32];

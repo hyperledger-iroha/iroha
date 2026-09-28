@@ -259,7 +259,7 @@ impl CompactHashWitness<u64> {
                 }
                 7..391 => {
                     let (sum_reg, add_reg, xor_reg, msg, rotation) = fused_schedule(index);
-                    let extra = msg.map(|i| message[i]).unwrap_or(0);
+                    let extra = msg.map_or(0, |i| message[i]);
                     let wide = u128::from(v[sum_reg]) + u128::from(v[add_reg]) + u128::from(extra);
                     let low = (v[sum_reg] & u64::from(u32::MAX))
                         + (v[add_reg] & u64::from(u32::MAX))
@@ -408,8 +408,7 @@ pub fn local_residues<F: IntegerAirField>(
             }
             for half in 0..2 {
                 let extra = msg
-                    .map(|word| row.message[2 * word + half])
-                    .unwrap_or(F::ZERO);
+                    .map_or(F::ZERO, |word| row.message[2 * word + half]);
                 let mut value = row.working[2 * sum_reg + half]
                     .add(row.working[2 * add_reg + half])
                     .add(extra)
@@ -427,7 +426,7 @@ pub fn local_residues<F: IntegerAirField>(
         391..407 => {
             let feed = i - 391;
             let word = feed / 2;
-            let right = word + if feed % 2 == 0 { 0 } else { 8 };
+            let right = word + if feed.is_multiple_of(2) { 0 } else { 8 };
             for half in 0..2 {
                 out.push(packed_half(&row.bits[0], half).sub(row.chaining[2 * word + half]));
                 out.push(packed_half(&row.bits[1], half).sub(row.working[2 * right + half]));

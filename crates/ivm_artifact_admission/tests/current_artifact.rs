@@ -333,11 +333,11 @@ fn every_public_entrypoint_requires_an_explicit_unit_return_descriptor() {
 
 #[test]
 fn cntr_return_type_schema_mismatch_is_rejected() {
-    let source = r#"
+    let source = r"
         seiyaku SchemaBound {
             view fn inspect() -> int { return 1; }
         }
-    "#;
+    ";
     let (artifact, _) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)
         .expect("compile schema-bound contract");

@@ -553,11 +553,11 @@ mod tests {
             let occurrence = binding.occurrence();
             assert!(std::ptr::eq(
                 binding.input(),
-                &inputs[occurrence.transcript_ordinal as usize]
+                &raw const inputs[occurrence.transcript_ordinal as usize]
             ));
             assert!(std::ptr::eq(
                 binding.delta(),
-                &binding.input().deltas[occurrence.delta_ordinal as usize]
+                &raw const binding.input().deltas[occurrence.delta_ordinal as usize]
             ));
             let expected = if binding.role() == TransferRowRole::Debit {
                 &binding.delta().smt_proof.from
@@ -651,7 +651,7 @@ mod tests {
             assert_eq!(binding.occurrence().pair_ordinal, pair as u32);
             assert!(std::ptr::eq(
                 binding.proof(),
-                &inputs[0].deltas[pair].smt_proof.from
+                &raw const inputs[0].deltas[pair].smt_proof.from
             ));
             assert_integer(binding);
         }

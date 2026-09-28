@@ -2720,7 +2720,7 @@ mod tests {
             assert!(error.to_string().contains("runtime_catalog_hash"));
             for malformed in [
                 norito::json::Value::Bool(false),
-                norito::json::Value::String("".into()),
+                norito::json::Value::String(String::new()),
             ] {
                 value
                     .as_object_mut()

@@ -2,7 +2,7 @@
 //!
 //! This module projects existing ledger types; it grants no execution authority
 //! and does not verify stored contract artifacts or replication-order payloads.
-//! SoraFS number-only u64 operands must fit the JavaScript safe-integer range
+//! `SoraFS` number-only u64 operands must fit the JavaScript safe-integer range
 //! in both directions; NFT and deployment decimal-string operands retain u64.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -275,13 +275,13 @@ record_contract!(parse_anchor, render_anchor, ProviderIngestFinalizedAnchorV1 {
 
 macro_rules! instruction_contracts {
     ($($ty:ident { $($field:ident: $read:ident => $write:ident),+ $(,)? }),+ $(,)?) => {
-        pub(super) fn is_lifecycle_instruction(instruction: &InstructionBox) -> bool {
+        pub fn is_lifecycle_instruction(instruction: &InstructionBox) -> bool {
             let instruction: &dyn Instruction = &**instruction;
             let value = instruction.as_any();
             $(value.is::<$ty>())||+
         }
 
-        pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+        pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
             let Value::Object(envelope) = value else { return None; };
             $(if let Some(payload) = envelope.get(stringify!($ty)) {
                 return Some((|| {
@@ -297,7 +297,7 @@ macro_rules! instruction_contracts {
             None
         }
 
-        pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+        pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
             let instruction: &dyn Instruction = &**instruction;
             let value = instruction.as_any();
             $(if let Some(value) = value.downcast_ref::<$ty>() {

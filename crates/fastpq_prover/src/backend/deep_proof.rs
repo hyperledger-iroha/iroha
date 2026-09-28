@@ -184,9 +184,7 @@ impl OpeningPlans {
             .enumerate()
             .map(|(round, indices)| plan(GROUP_LEAVES[round], indices))
             .collect::<Result<Vec<_>>>()?
-            .try_into()
-            .ok()
-            .expect("five fixed rounds");
+            .try_into().expect("five fixed rounds");
         Ok(Self {
             initial,
             round_indices,

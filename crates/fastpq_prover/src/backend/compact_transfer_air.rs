@@ -875,7 +875,7 @@ mod tests {
         let start = std::time::Instant::now();
         let prepared = air.prepare().unwrap();
         let preparation = start.elapsed();
-        assert!(core::ptr::eq(prepared.air, &air));
+        assert!(core::ptr::eq(prepared.air, &raw const air));
         assert_eq!(
             prepared
                 .fixed_lde

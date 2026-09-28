@@ -1928,7 +1928,7 @@ fn transcript_initialisation_separates_the_quotient_integer_and_terminal_schema(
     let public_io = PublicIO::default();
     let transcript =
         Transcript::initialise(&public_io, params.name, 1, TRANSCRIPT_TAG_INIT).unwrap();
-    let old_payload = norito::core::to_bytes(&(1_u16, params.name, public_io.clone())).unwrap();
+    let old_payload = norito::core::to_bytes(&(1_u16, params.name, public_io)).unwrap();
     let old_state = hash_bytes_v1(
         TRANSCRIPT_ROLE_V1,
         b"initialise",

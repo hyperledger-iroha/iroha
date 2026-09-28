@@ -35,7 +35,7 @@ pub(super) fn with_prepared_statement<T>(
     with_prepared_statement_as::<u64, T>(statement, expected, semantics, limits, use_prepared)
 }
 
-/// Prepare QuantityValueV1 rows through the fixed full-domain public constructor.
+/// Prepare `QuantityValueV1` rows through the fixed full-domain public constructor.
 ///
 /// This typed route never infers a value format from statement bytes or metadata.
 /// It grants no authority and leaves the legacy narrow bridge's decoder unchanged.

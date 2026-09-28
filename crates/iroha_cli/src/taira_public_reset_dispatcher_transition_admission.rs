@@ -1,4 +1,7 @@
 //! Closed candidate/predecessor admission and read-only runtime custody.
+// The root transaction runs on Linux only; other platforms compile these items solely for their
+// unit tests, which do not reach every Linux entry point.
+#![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 use super::super::super::FileSnapshot;
 use super::*;
 use std::io::Seek as _;

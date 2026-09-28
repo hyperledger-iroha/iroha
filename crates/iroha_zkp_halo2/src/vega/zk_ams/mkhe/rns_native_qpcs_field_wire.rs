@@ -36,7 +36,7 @@ fn modulus_v1(limb: usize) -> Result<u64, RnsNativeQpcsFieldWireErrorV1> {
     let modulus = *ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1
         .get(limb)
         .ok_or(RnsNativeQpcsFieldWireErrorV1::InvalidLimb)?;
-    if modulus < 2 || modulus >= COEFFICIENT_LIMIT_V1 {
+    if !(2..COEFFICIENT_LIMIT_V1).contains(&modulus) {
         return Err(RnsNativeQpcsFieldWireErrorV1::InvalidProfile);
     }
     Ok(modulus)

@@ -460,5 +460,5 @@ fn prepared_relation_identity_is_explicit_bounded_and_separate_from_raw_fixtures
         )
         .is_ok()
     );
-    assert!(core::ptr::eq(&relation, relation.deep_relation()));
+    assert!(core::ptr::eq(&raw const relation, relation.deep_relation()));
 }

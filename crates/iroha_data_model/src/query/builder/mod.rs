@@ -437,7 +437,7 @@ mod tests {
             })
             .select_with(|_| SelectorTuple::<Domain>::default());
         let (bound_executor, request) = builder.clone().into_request();
-        assert!(std::ptr::eq(bound_executor, &executor));
+        assert!(std::ptr::eq(bound_executor, &raw const executor));
         builder.execute().expect("synchronous execution");
         let recorded = executor.query.borrow();
         let recorded = recorded.as_ref().expect("exact executor request");

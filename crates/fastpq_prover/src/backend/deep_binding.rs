@@ -1,7 +1,7 @@
 //! Fixed DEEP context, typed commitments and atomic whole-tape transcript.
 //!
 //! Canonical PrefixFrame/BodyV1 serialization and six-lane hashing are owned by
-//! compact_v1. This private candidate supplies only a closed geometry and message
+//! `compact_v1`. This private candidate supplies only a closed geometry and message
 //! schedule. Context construction authenticates no public statement; the caller
 //! must perform the OOD AIR identity and all opening/degree checks separately.
 //! The bounded engine and producer use this schedule through the offline facade.

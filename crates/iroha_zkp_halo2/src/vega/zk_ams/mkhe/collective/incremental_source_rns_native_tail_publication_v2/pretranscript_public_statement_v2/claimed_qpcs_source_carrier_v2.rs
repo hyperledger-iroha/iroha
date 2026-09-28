@@ -1293,9 +1293,9 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
     /// Consume the complete retained-publication/direct/membership/
     /// same-opening lineage directly through the atomic composite verifier.
     /// No detached all-stage input or partial-stage result escapes this seam.
-    pub(in crate::vega::zk_ams::mkhe) fn verify_composite_v2<'envelope>(
+    pub(in crate::vega::zk_ams::mkhe) fn verify_composite_v2(
         self,
-        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+        envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
     ) -> Result<
         ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
         RnsNativeClaimedQpcsCompositeVerificationErrorV2,

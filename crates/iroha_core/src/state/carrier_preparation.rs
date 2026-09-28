@@ -108,11 +108,6 @@ impl<'state> PreparedCarrier<'state> {
         journals::CarrierJournalShellReservation::for_test()
     }
 
-    /// Exact inline allocation for the deferred effects owner captured by journals.
-    /// Nested payloads use their existing standard allocations and are excluded.
-    pub(crate) fn retained_effects_layout() -> std::alloc::Layout {
-        std::alloc::Layout::new::<journals::RetainedCarrierEffects>()
-    }
 
     /// Inspect the exact retained Native custody without source reconstruction.
     #[cfg(test)]

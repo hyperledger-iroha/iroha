@@ -52,7 +52,7 @@ pub(super) fn sign_qc(qc: &mut Qc, keys: &[KeyPair], chosen: &[u32]) {
         .collect();
     let bytes: Vec<_> = signatures
         .iter()
-        .map(|signature| signature.payload())
+        .map(iroha_crypto::Signature::payload)
         .collect();
     qc.agg_sig = AggregateSignature(
         bls_normal_aggregate_signatures(&bytes)

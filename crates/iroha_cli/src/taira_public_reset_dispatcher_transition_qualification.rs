@@ -1,4 +1,7 @@
 //! Join the completed preparation and maintained transfer producer records.
+// The root transaction runs on Linux only; other platforms compile these items solely for their
+// unit tests, which do not reach every Linux entry point.
+#![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 use super::*;
 const NAMES: [&str; 4] = ["iroha3d_taira", "iroha", "sorafs-node", "kagami"];
 const PACKAGES: [&str; 4] = ["irohad", "iroha_cli", "sorafs_node", "iroha_kagami"];

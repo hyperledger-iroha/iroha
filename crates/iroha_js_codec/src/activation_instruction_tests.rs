@@ -244,7 +244,7 @@ fn every_revision_rejects_numeric_aliases_null_overflow_and_noncanonical_text() 
             Value::Number(json::Number::F64(1.0)),
             Value::Number(json::Number::F64(1.5)),
             Value::Array(vec![]),
-            Value::String("".into()),
+            Value::String(String::new()),
             Value::String("01".into()),
             Value::String("+1".into()),
             Value::String("-1".into()),

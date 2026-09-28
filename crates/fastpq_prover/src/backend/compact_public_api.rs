@@ -1,7 +1,7 @@
 //! Internal typed public-input dispatch for canonical masked compact verification.
 //!
 //! Ordinary transfers and AXT transfers have separate entry points. The caller
-//! supplies validated public transfer facts and independently expected PublicIO;
+//! supplies validated public transfer facts and independently expected `PublicIO`;
 //! neither a proof nor an arbitrary AIR/schema/semantic selector can replace
 //! these inputs. The AXT route additionally requires the complete typed context.
 //!
@@ -140,7 +140,7 @@ pub(super) struct VerifiedPublicTransfer {
 
 #[cfg(test)]
 impl VerifiedPublicTransfer {
-    /// Return the caller-expected PublicIO checked by the selected relation.
+    /// Return the caller-expected `PublicIO` checked by the selected relation.
     pub(super) const fn public_io(&self) -> PublicIO {
         self.public_io
     }

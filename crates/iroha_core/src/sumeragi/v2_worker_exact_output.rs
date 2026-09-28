@@ -88,6 +88,7 @@ pub(crate) fn durable_exact_output_service_owner() -> DurableExactOutputServiceO
     }))
 }
 /// Mint the unique service/transport owner pair for one height-local stack.
+#[cfg(test)]
 pub(crate) fn durable_exact_output_handoff_owner_pair() -> (
     DurableExactOutputServiceOwner,
     DurableExactOutputTransportOwner,

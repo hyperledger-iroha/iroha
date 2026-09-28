@@ -852,15 +852,14 @@ fn function_body_has_no_context_mint_v1(
             cursor = end;
             continue;
         }
-        if tokens.get(cursor) == Some(&Punct(b'!')) {
-            if let Some(group) = macro_group_v1(tokens, cursor) {
+        if tokens.get(cursor) == Some(&Punct(b'!'))
+            && let Some(group) = macro_group_v1(tokens, cursor) {
                 if has_dangerous_context_word_v1(&tokens[group.clone()], context, self_is_context) {
                     return false;
                 }
                 cursor = group.end + 1;
                 continue;
             }
-        }
         if tokens.get(cursor) == Some(&Word("fn"))
             && matches!(tokens.get(cursor + 1), Some(Word(_)))
         {
@@ -932,9 +931,7 @@ fn context_impl_has_no_production_mint_v1(
         return false;
     };
     let self_is_context = tokens[header.clone()] == [Word(context)];
-    if tokens[header.clone()]
-        .iter()
-        .any(|token| *token == Word(context))
+    if tokens[header.clone()].contains(&Word(context))
         && !self_is_context
     {
         return false;
@@ -995,7 +992,7 @@ fn whole_module_context_mint_inventory_v1(source: &str) -> bool {
     let mut context_struct = false;
     for item in items {
         let item = &tokens[item];
-        if !item.iter().any(|token| *token == Word(CONTEXT)) {
+        if !item.contains(&Word(CONTEXT)) {
             continue;
         }
         if item_is_exact_cfg_test_v1(item) {
@@ -1135,10 +1132,10 @@ fn exact_production_child_modules_v1(source: &str, expected: &[(&str, &str)]) ->
         let Some((attributes, attributes_end)) = leading_outer_attributes_v1(item) else {
             return false;
         };
-        let default_would_mint_context = item.iter().any(|token| *token == Word(CONTEXT))
+        let default_would_mint_context = item.contains(&Word(CONTEXT))
             && attributes.iter().any(|attribute| {
                 attribute.first() == Some(&Word("derive"))
-                    && attribute.iter().any(|token| *token == Word("Default"))
+                    && attribute.contains(&Word("Default"))
             });
         if !production_outer_attributes_are_inert_v1(&attributes)
             || default_would_mint_context
@@ -1190,7 +1187,7 @@ fn descendant_module_has_no_context_mint_v1(source: &str) -> bool {
     };
     for item in items {
         let item = &tokens[item];
-        if item_is_exact_cfg_test_v1(item) || !item.iter().any(|token| *token == Word(CONTEXT)) {
+        if item_is_exact_cfg_test_v1(item) || !item.contains(&Word(CONTEXT)) {
             continue;
         }
         if exact_current_context_import_v1(item) {
@@ -1259,9 +1256,7 @@ fn exact_test_only_context_constructor_v1(source: &str) -> bool {
                 }
                 cursor += 1;
             };
-            if tokens[index + 1..open]
-                .iter()
-                .any(|token| *token == Word(CONTEXT))
+            if tokens[index + 1..open].contains(&Word(CONTEXT))
             {
                 if impl_body.is_some() || tokens[index..open] != [Word("impl"), Word(CONTEXT)] {
                     return false;
@@ -1606,8 +1601,8 @@ fn hostile_schedule_coordinates_fail_before_the_encryption_core() {
 #[test]
 fn named_peak_includes_the_preallocated_secret_chunk_pool() {
     assert_eq!(PHASE23_SECRET_CHUNK_POOL_PAYLOAD_BYTES_V1, 7_340_064);
-    assert!(PHASE23_SECRET_CHUNK_POOL_METADATA_BYTES_V1 > 0);
-    assert!(PHASE23_NAMED_HEAP_PEAK_BYTES_V1 < 160 * 1_048_576);
+    const { assert!(PHASE23_SECRET_CHUNK_POOL_METADATA_BYTES_V1 > 0) };
+    const { assert!(PHASE23_NAMED_HEAP_PEAK_BYTES_V1 < 160 * 1_048_576) };
     assert_eq!(PHASE23_ONE_PACKED_CHUNK_BYTES_V1, 4 * 1_048_576);
     assert_eq!(PHASE23_DECODER_WORKSPACE_BYTES_V1, 8 * 1_048_576);
     assert_eq!(PHASE23_COMPACT_MANIFEST_OWNER_BYTES_V1, 4_718_592);

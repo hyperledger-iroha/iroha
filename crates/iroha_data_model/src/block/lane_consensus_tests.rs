@@ -75,7 +75,7 @@ fn decision() -> (FrozenLaneConsensusContextV1, LaneDecisionV1) {
             voting_view: 2,
         },
         phase: LanePhaseV1::Commit,
-        value: value.clone(),
+        value: value,
     };
     let bytes = statement.signature_preimage().unwrap();
     let shares = (0..3)
@@ -137,7 +137,7 @@ fn value_origin_requires_a_published_view_and_frozen_committee_member() {
     let (frozen, decision) = decision();
     let round = decision.commit_qc.statement.round;
     let committee_len = frozen.committee.len();
-    let mut value = decision.value().clone();
+    let mut value = *decision.value();
     value_shape(&value, round, committee_len).expect("original origin is in range");
     value.origin_view = round.voting_view + 1;
     assert!(value_shape(&value, round, committee_len).is_err());
@@ -186,7 +186,7 @@ fn native_decision_roundtrips_and_binds_exact_commit_value_and_rs16() {
     assert!(changed.validate_shape(&frozen).is_err());
     let mut changed = decision.clone();
     changed.manifest.value.admitted_binding_hash = Hash::new(b"another group");
-    changed.commit_qc.statement.value = changed.manifest.value.clone();
+    changed.commit_qc.statement.value = changed.manifest.value;
     assert!(changed.validate_shape(&frozen).is_err());
     for count in [0, 1, 2, 4] {
         let mut changed = decision.clone();
@@ -242,7 +242,7 @@ fn canonical_domains_bind_value_origin_but_separate_voting_round_and_phase() {
     let mut value_preimage = b"iroha:lane-reducer:value:v1\0".to_vec();
     value_preimage.extend(norito::encode_canonical(value).unwrap());
     assert_eq!(value.subject_hash().unwrap(), Hash::new(&value_preimage));
-    let mut vote = decision.commit_qc.statement.clone();
+    let mut vote = decision.commit_qc.statement;
     let initial = vote.signature_preimage().unwrap();
     let mut expected = b"iroha:lane-reducer:vote:v1\0".to_vec();
     expected.extend(norito::encode_canonical(&vote).unwrap());
@@ -255,13 +255,13 @@ fn canonical_domains_bind_value_origin_but_separate_voting_round_and_phase() {
     );
     vote.phase = LanePhaseV1::Prepare;
     assert_ne!(vote.signature_preimage().unwrap(), initial);
-    let mut changed = value.clone();
+    let mut changed = *value;
     changed.origin_view += 1;
     assert_ne!(
         changed.subject_hash().unwrap(),
         value.subject_hash().unwrap()
     );
-    let mut changed = value.clone();
+    let mut changed = *value;
     changed.kind = LaneValueKindV1::AtomicGroup;
     assert_ne!(
         changed.subject_hash().unwrap(),
@@ -413,13 +413,13 @@ fn every_message_roundtrips_canonical_norito_and_json_with_bounded_decode() {
     let body = LaneProposalBodyV1 {
         round,
         proposer: 0,
-        manifest: decision.manifest.clone(),
+        manifest: decision.manifest,
         justification: LaneJustificationV1::Timeout(tc.clone()),
     };
     let proposal_bytes = body.signature_preimage().unwrap();
     assert!(proposal_bytes.starts_with(b"iroha:lane-reducer:proposal:v1\0"));
     let vote = LaneVoteV1 {
-        statement: decision.commit_qc.statement.clone(),
+        statement: decision.commit_qc.statement,
         share: decision.commit_qc.shares[0].clone(),
     };
     let messages = vec![

@@ -218,9 +218,9 @@ fn ordered_plan_fits_without_changing_the_exact_single_file_cap_deficit() {
     assert_eq!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1, 4_904_064);
     assert_eq!(SNAPSHOT_FILE_BYTES_V1, 5_026_665_600);
     assert_eq!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1, 1_197_141_120);
-    assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
-    assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
-    assert!(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1);
+    const { assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1) };
+    const { assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1) };
+    const { assert!(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1) };
     let context = plane_context_digest_v1(source_axes_v1()).unwrap();
     assert_eq!(
         ConfidentialSpoolLayoutV1::new_v1(
@@ -270,7 +270,7 @@ fn ordered_plan_fits_without_changing_the_exact_single_file_cap_deficit() {
             .windows(b"shard".len())
             .any(|window| window == b"shard")
     );
-    assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && !CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    const { assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && !CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1) };
 }
 
 #[test]
@@ -388,7 +388,7 @@ fn every_permit_is_one_shot_and_full_consumption_releases_no_authority() {
     let consumed = owner.finish_v1().unwrap();
     assert_ne!(consumed.binding_digest, [0; 32]);
     assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) > before);
-    assert!(!AUTHORITY_MINTED_V1 && !RELEASE_READY_V1);
+    const { assert!(!AUTHORITY_MINTED_V1 && !RELEASE_READY_V1) };
 }
 
 #[test]
@@ -513,5 +513,5 @@ fn production_source_and_release_guards_are_static() {
     ] {
         assert!(!gate);
     }
-    assert!(!CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    const { assert!(!CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1) };
 }

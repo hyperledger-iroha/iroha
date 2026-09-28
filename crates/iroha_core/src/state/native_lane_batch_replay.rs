@@ -208,7 +208,7 @@ pub(crate) enum NativeLaneBatchSourcePreparationV1<'state> {
     ObservationChanged { pending: PendingNativeLaneSource },
     /// The caller supplied another source count's finite reservation.
     /// This is a local scheduling refusal, never an invalid-body verdict.
-    AdmissionMismatch { pending: PendingNativeLaneSource },
+    AdmissionMismatch,
     /// Finalized State has passed this proposed carrier before execution began.
     /// The proposal lost authority without becoming a deterministic rejection.
     Superseded,
@@ -228,7 +228,7 @@ impl<'state> NativeLaneBatchSourcePreparationV1<'state> {
                 source,
             }),
             Self::ObservationChanged { .. } => Ok(NativeLaneBatchReplayV1::ObservationChanged),
-            Self::AdmissionMismatch { .. } => {
+            Self::AdmissionMismatch => {
                 Err(MergeLedgerCommitError::ExecutionRecorderConflict(
                     "Native source admission differs from the exact batch count".into(),
                 ))
@@ -308,11 +308,6 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     #[cfg(test)]
     pub(super) fn groups_for_test(&self) -> &[VerifiedLaneDecisionGroupV1] {
         &self.groups
-    }
-
-    /// Attach later output demand to this original source before writers.
-    pub(crate) fn execution_admission_mut(&mut self) -> &mut NativeExecutionResourceAdmission {
-        &mut self.admission
     }
 
     fn is_current(&self) -> bool {
@@ -653,7 +648,7 @@ impl State {
                 Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged { pending })
             }
             Ok(SourceAuthentication::AdmissionMismatch) => {
-                Ok(NativeLaneBatchSourcePreparationV1::AdmissionMismatch { pending })
+                Ok(NativeLaneBatchSourcePreparationV1::AdmissionMismatch)
             }
             Ok(SourceAuthentication::Superseded) => {
                 Ok(NativeLaneBatchSourcePreparationV1::Superseded)

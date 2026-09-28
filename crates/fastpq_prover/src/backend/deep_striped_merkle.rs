@@ -329,11 +329,10 @@ impl StripedMerkle {
     }
 
     fn capture(&mut self, level: usize, index: usize, value: Digest) -> Result<()> {
-        if level > 0 {
-            if let Some(cache) = &mut self.cache {
+        if level > 0
+            && let Some(cache) = &mut self.cache {
                 cache.record(level, index, value)?;
             }
-        }
         let Some(plan) = &self.plan.openings else {
             return Ok(());
         };

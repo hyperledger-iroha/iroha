@@ -373,15 +373,15 @@ fn hostile_order_top_zero_formula_equation_and_centering_mutations_fail() {
 #[test]
 fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     let _proof = RadixHyraxProofSealV2::TestOnly;
-    assert!(!SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V2);
-    assert!(!SOURCE_ALGEBRA_VERIFIED_V2);
-    assert!(!RADIX_PACKING_VERIFIED_V2);
-    assert!(!RADIX_CARRY_VERIFIED_V2);
-    assert!(!NEGACYCLIC_QUOTIENT_VERIFIED_V2);
-    assert!(!PRIVATE_HYRAX_VERIFIED_V2);
-    assert!(!Q_PCS_HANDOFF_COMPLETE_V2);
-    assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
-    assert!(!RELEASE_COMPLETE_V2);
+    const { assert!(!SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V2) };
+    const { assert!(!SOURCE_ALGEBRA_VERIFIED_V2) };
+    const { assert!(!RADIX_PACKING_VERIFIED_V2) };
+    const { assert!(!RADIX_CARRY_VERIFIED_V2) };
+    const { assert!(!NEGACYCLIC_QUOTIENT_VERIFIED_V2) };
+    const { assert!(!PRIVATE_HYRAX_VERIFIED_V2) };
+    const { assert!(!Q_PCS_HANDOFF_COMPLETE_V2) };
+    const { assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2) };
+    const { assert!(!RELEASE_COMPLETE_V2) };
     for impossible_field in [
         "packing: Infallible",
         "radix_carry: Infallible",

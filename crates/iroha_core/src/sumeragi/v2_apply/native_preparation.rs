@@ -34,19 +34,6 @@ impl<'state> PreparedNativeServiceCandidate<'state> {
 }
 
 impl V2ApplyService {
-    /// Execute authenticated Native sources once under the original finite admission.
-    /// A stale source returns no owner and never becomes an invalid-body marker.
-    /// The exact State, Kura and proposal are checked before execution;
-    /// callers cannot pair a foreign source with an otherwise identical service.
-    pub(crate) fn prepare_native_source<'state>(
-        &'state self,
-        body: &SignedBlock,
-        source: PreparedNativeLaneBatchSourceV1<'state>,
-        context: VerifiedHeightContext,
-    ) -> Result<Option<PreparedNativeServiceCandidate<'state>>, V2ApplyError> {
-        let mut shell_admission = Some(self.reserve_carrier_shells()?);
-        self.prepare_native_source_admitted(body, source, context, &mut shell_admission)
-    }
 
     pub(super) fn prepare_native_source_admitted<'state>(
         &'state self,

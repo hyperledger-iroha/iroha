@@ -3561,7 +3561,7 @@ pub(crate) mod carrier_queue_retirement;
 mod native_preparation;
 
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "iroha-core-tests")),
     expect(
         dead_code,
         reason = "TODO: connect retained Apply only with complete consuming recovery"

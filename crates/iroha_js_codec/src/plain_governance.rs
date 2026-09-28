@@ -11,12 +11,12 @@ use crate::{CodecError, CodecErrorKind, CodecResult};
 const CAST: &str = "CastPlainBallot";
 const UPDATE: &str = "UpdatePlainConviction";
 
-pub(super) fn is_plain_instruction(instruction: &InstructionBox) -> bool {
+pub fn is_plain_instruction(instruction: &InstructionBox) -> bool {
     instruction.as_any().is::<CastPlainBallot>()
         || instruction.as_any().is::<UpdatePlainConviction>()
 }
 
-pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
     let Value::Object(envelope) = value else {
         return None;
     };
@@ -85,7 +85,7 @@ fn invalid(reason: &str) -> CodecError {
     CodecError::new(CodecErrorKind::InvalidArgument, reason)
 }
 
-pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
     let (name, referendum_id, owner, amount, duration, direction) =
         if let Some(value) = instruction.as_any().downcast_ref::<CastPlainBallot>() {
             (

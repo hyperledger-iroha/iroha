@@ -83,7 +83,7 @@ mod tests {
         let decoded: SumeragiEvidenceCountResponse =
             norito::json::from_str(r#"{"count":7}"#).expect("decode exact count response");
         assert_eq!(decoded.count, 7);
-        for invalid in [r#"{}"#, r#"{"count":"7"}"#, r#"{"count":7,"extra":0}"#] {
+        for invalid in [r"{}", r#"{"count":"7"}"#, r#"{"count":7,"extra":0}"#] {
             assert!(
                 norito::json::from_str::<SumeragiEvidenceCountResponse>(invalid).is_err(),
                 "invalid count response must be rejected: {invalid}"

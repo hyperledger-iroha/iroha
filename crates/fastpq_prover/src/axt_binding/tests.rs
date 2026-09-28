@@ -614,7 +614,7 @@ fn public_remote_facts_and_private_metadata_have_identical_acceptance() {
     let prepared = prepare_quantity_public_transfers(
         &batch.transitions,
         &public,
-        batch.public_inputs.clone(),
+        batch.public_inputs,
         ProofSemantics::AxtTransferClaim,
         PublicTransferLimits::default(),
     )

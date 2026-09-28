@@ -37,11 +37,6 @@ std::thread_local! {
     static FAIL_POST_PUBLICATION_QUEUE_TAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Refuse one completion step after actual publication, on this test thread only.
-#[cfg(test)]
-pub(crate) fn fail_next_post_publication_queue_tail_for_test() {
-    FAIL_POST_PUBLICATION_QUEUE_TAIL.set(true);
-}
 
 /// Prepaid journal shells travel with the candidate before execution. Journal
 /// capture consumes them once; the empty marker then travels with the retained
@@ -343,22 +338,6 @@ impl NativeValidationCandidate {
         Ok(published)
     }
 
-    /// Inspect the original phase allocation and completed tail steps after refusal.
-    #[cfg(test)]
-    pub(crate) fn published_progress_for_test(&self) -> Option<(usize, bool, bool)> {
-        match self.phase.as_ref().as_ref()? {
-            NativeValidationPhase::Published {
-                outbox_published,
-                queue_cleaned,
-                ..
-            } => Some((
-                std::ptr::from_ref(self.phase.as_ref()) as usize,
-                *outbox_published,
-                *queue_cleaned,
-            )),
-            _ => None,
-        }
-    }
 
     /// Inspect the original phase allocation before publication.
     #[cfg(test)]
@@ -366,16 +345,6 @@ impl NativeValidationCandidate {
         std::ptr::from_ref(self.phase.as_ref()) as usize
     }
 
-    /// Borrow the original journals for allocation-identity checks.
-    #[cfg(test)]
-    pub(crate) fn carrier_for_test(&self) -> Option<&RetainedCarrier<CarrierShellAdmission>> {
-        match self.phase.as_ref().as_ref()? {
-            NativeValidationPhase::Executed { carrier, .. } => Some(carrier),
-            NativeValidationPhase::AwaitingSource(_)
-            | NativeValidationPhase::Stopped { .. }
-            | NativeValidationPhase::Published { .. } => None,
-        }
-    }
 }
 
 impl V2ApplyService {
@@ -424,13 +393,6 @@ impl V2ApplyService {
         )
     }
 
-    /// Subscribe before publication to count actual completion notifications.
-    #[cfg(test)]
-    pub(crate) fn events_for_test(
-        &self,
-    ) -> tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox> {
-        self.events_sender.subscribe()
-    }
 
     /// Original pool handle for focused tests; clones retain the same pool identity.
     #[cfg(test)]
@@ -752,7 +714,7 @@ impl OwnedNativeCarrierValidator {
                 });
                 return Ok(NativeValidationPhase::AwaitingSource(waiting));
             }
-            NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
+            NativeLaneBatchSourcePreparationV1::AdmissionMismatch => {
                 return Err(LocalValidationRefusal::RecoveryRequired(
                     "Native source admission differs from its original group count".into(),
                 )

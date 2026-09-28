@@ -1306,8 +1306,8 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                 || map.contains_key("SetAssetTransferControl")
                 || map.contains_key("ProposeValidationFeePolicy")
     );
-    if !requires_explicit_parser {
-        if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
+    if !requires_explicit_parser
+        && let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
             if plain_governance::is_plain_instruction(&instruction)
                 || activation_instructions::is_activation_instruction(&instruction)
                 || retail_daily_limit_instructions::is_retail_instruction(&instruction)
@@ -1328,7 +1328,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
             }
             return Ok(instruction);
         }
-    }
     match value {
         json::Value::Object(mut map) => {
             if let Some(payload) = map.remove("SetAssetTransferAvailability") {
@@ -3340,7 +3339,7 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
             "params": {
                 "account_id": (account_id_to_canonical_i105(&limit.account_id)?),
                 "asset_definition_id": (limit.asset_definition_id.to_string()),
-                "holding_limit": (limit.holding_limit.as_ref().map(|value| value.to_string())),
+                "holding_limit": (limit.holding_limit.as_ref().map(std::string::ToString::to_string)),
             },
         }));
     }
@@ -3785,8 +3784,8 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
             return Ok(json::Value::Object(outer));
         }
     }
-    if let Some(grant_box) = instruction_ref.as_any().downcast_ref::<GrantBox>() {
-        if let GrantBox::Permission(grant) = grant_box {
+    if let Some(grant_box) = instruction_ref.as_any().downcast_ref::<GrantBox>()
+        && let GrantBox::Permission(grant) = grant_box {
             let mut fields = json::Map::new();
             fields.insert(
                 "object".to_owned(),
@@ -3802,7 +3801,6 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
             outer.insert("Grant".to_owned(), json::Value::Object(grant_map));
             return Ok(json::Value::Object(outer));
         }
-    }
     if let Some(set_key_value) = instruction_ref.as_any().downcast_ref::<SetKeyValueBox>() {
         if let SetKeyValueBox::Account(set) = set_key_value {
             let mut fields = json::Map::new();

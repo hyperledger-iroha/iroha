@@ -1,7 +1,7 @@
 //! Bounded whole-batch context and ordered one-delta segment relations.
 //!
 //! Every segment binds the complete original public claims and execution rows,
-//! caller-expected seven-field PublicIO, exact ordered intermediate roots, count
+//! caller-expected seven-field `PublicIO`, exact ordered intermediate roots, count
 //! and ordinal before the compact engine's first challenge. Its SMT ports come
 //! only from the original immutable preparation, preserving whole-batch scales,
 //! allocation and chronological occurrences. Intermediate roots remain public
@@ -99,7 +99,7 @@ impl PublicTransferBatch {
     ///
     /// Fixed public limits cannot be raised with this diagnostic policy. The
     /// intermediate list contains exactly m-1 claimed roots in chronological
-    /// order; endpoints always come from the independently expected PublicIO.
+    /// order; endpoints always come from the independently expected `PublicIO`.
     /// All counts/known bytes are bounded before cloning, serialization or AIR
     /// construction. Exact canonical payload counts precede encoded allocation.
     pub(super) fn new<V: CompactTransferValue>(

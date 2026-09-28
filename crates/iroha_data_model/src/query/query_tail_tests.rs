@@ -220,7 +220,7 @@ mod canonical_output_inclusion_tests {
             crate::block::decode_framed_signed_block(&block.encode_wire().unwrap()).unwrap();
         assert!(committed.verify_inclusion_in_authenticated_execution(&decoded, &expected));
         for mutation in 0..3 {
-            let mut wrong = expected.clone();
+            let mut wrong = expected;
             match mutation {
                 0 => wrong.executed_block_wire_len += 1,
                 1 => wrong.executed_block_wire_hash = Hash::new(b"foreign"),

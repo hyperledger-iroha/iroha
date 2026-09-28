@@ -65,7 +65,7 @@ pub fn execute_digest384_frames_v1(
 }
 
 #[cfg(any(test, feature = "fastpq-gpu"))]
-pub(crate) fn execute_bounded_digest384_frames_v1(
+pub fn execute_bounded_digest384_frames_v1(
     frames: &[GoldilocksDigest384FrameV1<'_>],
     frame_limit: usize,
     word_limit: usize,
@@ -194,6 +194,50 @@ fn hash_digest384_pairs_with_preparation_limit_v1<'a>(
     Ok(output)
 }
 
+/// Maximum ordered indices submitted in one canonical nonce-search batch.
+#[cfg(test)]
+pub const MAX_DIGEST384_INDEXED_BATCH_V1: usize = 4096;
+
+/// Execute exact first-coordinate values with a bounded nonwrapping index range.
+/// This is a nonce predicate primitive, never a shortened commitment hash.
+///
+/// TODO: export this nonce-search primitive once a production grinding caller
+/// consumes it; until then the CPU and Metal paths are compiled only for tests.
+///
+/// # Errors
+/// Rejects invalid geometry and any explicitly selected device failure without substitution.
+#[cfg(test)]
+pub fn execute_digest384_indexed_coordinates_v1(
+    predicate: &fastpq_isi::poseidon_digest384::GoldilocksDigest384IndexedPredicateV1<'_>,
+    start: u64,
+    count: usize,
+    execution: DigestExecutionV1,
+) -> Result<Vec<u64>> {
+    if count == 0
+        || count > MAX_DIGEST384_INDEXED_BATCH_V1
+        || start.checked_add((count - 1) as u64).is_none()
+    {
+        return Err(Error::NativeDigestExecution {
+            details: "invalid bounded indexed digest range".into(),
+        });
+    }
+    match execution {
+        DigestExecutionV1::Cpu => Ok((0..count)
+            .into_par_iter()
+            .map(|offset| predicate.first_coordinate_v1(start + offset as u64))
+            .collect()),
+        #[cfg(feature = "fastpq-gpu")]
+        DigestExecutionV1::Device(backend) => {
+            crate::digest384_indexed_gpu::try_indexed_coordinates_v1(
+                backend, predicate, start, count,
+            )
+            .map_err(|error| Error::NativeDigestExecution {
+                details: error.to_string(),
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,7 +307,7 @@ mod tests {
         assert_eq!(sizes, [2, 2, 2, 1]);
         assert_eq!(
             actual,
-            frames.iter().map(|frame| frame.hash()).collect::<Vec<_>>()
+            frames.iter().map(fastpq_isi::GoldilocksDigest384FrameV1::hash).collect::<Vec<_>>()
         );
         assert!(
             execute_bounded_digest384_frames_v1(
@@ -435,49 +479,5 @@ mod tests {
             ))
             .is_err()
         );
-    }
-}
-
-/// Maximum ordered indices submitted in one canonical nonce-search batch.
-#[cfg(test)]
-pub(crate) const MAX_DIGEST384_INDEXED_BATCH_V1: usize = 4096;
-
-/// Execute exact first-coordinate values with a bounded nonwrapping index range.
-/// This is a nonce predicate primitive, never a shortened commitment hash.
-///
-/// TODO: export this nonce-search primitive once a production grinding caller
-/// consumes it; until then the CPU and Metal paths are compiled only for tests.
-///
-/// # Errors
-/// Rejects invalid geometry and any explicitly selected device failure without substitution.
-#[cfg(test)]
-pub(crate) fn execute_digest384_indexed_coordinates_v1(
-    predicate: &fastpq_isi::poseidon_digest384::GoldilocksDigest384IndexedPredicateV1<'_>,
-    start: u64,
-    count: usize,
-    execution: DigestExecutionV1,
-) -> Result<Vec<u64>> {
-    if count == 0
-        || count > MAX_DIGEST384_INDEXED_BATCH_V1
-        || start.checked_add((count - 1) as u64).is_none()
-    {
-        return Err(Error::NativeDigestExecution {
-            details: "invalid bounded indexed digest range".into(),
-        });
-    }
-    match execution {
-        DigestExecutionV1::Cpu => Ok((0..count)
-            .into_par_iter()
-            .map(|offset| predicate.first_coordinate_v1(start + offset as u64))
-            .collect()),
-        #[cfg(feature = "fastpq-gpu")]
-        DigestExecutionV1::Device(backend) => {
-            crate::digest384_indexed_gpu::try_indexed_coordinates_v1(
-                backend, predicate, start, count,
-            )
-            .map_err(|error| Error::NativeDigestExecution {
-                details: error.to_string(),
-            })
-        }
     }
 }

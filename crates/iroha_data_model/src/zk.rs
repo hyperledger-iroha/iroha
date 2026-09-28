@@ -1441,9 +1441,7 @@ mod tests {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let guarded = ZkAceIdentityPreimageGuard(&mut scratch);
                 guarded.0.fill(0xa5);
-                if unwind {
-                    panic!("exercise private preimage cleanup");
-                }
+                assert!(!unwind, "exercise private preimage cleanup")
             }));
             assert_eq!(result.is_err(), unwind);
             assert_eq!(scratch, [0; 64]);

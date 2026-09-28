@@ -127,7 +127,7 @@ fn validate_trace_shape(trace: &Trace, params: &StarkParameterSet) -> Result<()>
     }
     Ok(())
 }
-pub(crate) fn trace_commitment_from_trace(
+pub fn trace_commitment_from_trace(
     params: &StarkParameterSet,
     trace: &Trace,
 ) -> Result<GoldilocksDigest384V1> {
@@ -198,7 +198,7 @@ fn trace_column_root_v1(params: &StarkParameterSet, trace: &Trace) -> Result<Nat
 // column frames. No prefix seed or scalar digest projection participates.
 const TRACE_COLUMN_PREPARATION_BYTES_V1: usize = 8 * 1024 * 1024;
 
-pub(crate) fn hash_trace_columns_v1(
+pub fn hash_trace_columns_v1(
     params: &StarkParameterSet,
     columns: &[TraceColumn],
     rows: usize,
@@ -271,7 +271,7 @@ pub(crate) fn hash_trace_columns_v1(
     Ok(output)
 }
 
-pub(crate) fn hash_trace_pairs_v1(
+pub fn hash_trace_pairs_v1(
     params: &StarkParameterSet,
     children: &[NativeDigest384V1],
     level: usize,

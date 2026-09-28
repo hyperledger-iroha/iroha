@@ -1,10 +1,10 @@
 //! Typed public-transfer boundary for the private one-delta compact protocol.
 //!
 //! The constructor accepts only the public constructor's validated table and
-//! exact caller-expected PublicIO. It derives all SMT ports from that table and
+//! exact caller-expected `PublicIO`. It derives all SMT ports from that table and
 //! binds the complete original public claims, transitions and selected semantics
 //! in a canonical Norito envelope before any proof challenge. It reads no private
-//! sibling, witness or trace. A caller must authenticate the expected PublicIO
+//! sibling, witness or trace. A caller must authenticate the expected `PublicIO`
 //! and authority separately; these touched-balance roots are not consensus roots.
 //!
 //! TODO: Qualify the protocol and resource profile, and integrate an authenticated
@@ -85,7 +85,7 @@ struct BoundContext {
     transcripts: Vec<BoundTranscript>,
 }
 
-/// Nominal full-domain envelope; its identity requires QuantityValueV1 rows.
+/// Nominal full-domain envelope; its identity requires `QuantityValueV1` rows.
 #[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::compact_public_transfer::BoundQuantityContext",
@@ -138,7 +138,7 @@ impl PublicTransferAir {
 /// Serialize the complete immutable public table in its type-selected envelope.
 ///
 /// Narrow tables retain the existing schema and field ordering. Full-domain tables
-/// require a distinct nominal envelope for QuantityValueV1; metadata cannot select it.
+/// require a distinct nominal envelope for `QuantityValueV1`; metadata cannot select it.
 /// Capacity and ordinary/AXT route selection remain the enclosing relation's
 /// responsibility; the fixed public bounds and all seven caller inputs are
 /// checked before cloning the original public fields.

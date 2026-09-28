@@ -1276,7 +1276,7 @@ struct TriggerCallV1 {
 /// Decode a full `protocol.Transaction`: exactly one `raw_data`, any signatures, exactly one
 /// result with `contractRet = SUCCESS` and no failed `ret`; the raw data carries exactly one
 /// `TriggerSmartContract` contract with no TRX or token value. Every field that cannot change
-/// the executed call (memo, permission id, fee limit, TAPoS, expiration, timestamp, other
+/// the executed call (memo, permission id, fee limit, `TAPoS`, expiration, timestamp, other
 /// result fields) is accepted.
 fn decode_trigger_call(transaction: &[u8]) -> Result<TriggerCallV1, TronLcError> {
     let malformed = || TronLcError::MalformedTransaction;

@@ -69,7 +69,7 @@ where
 }
 
 /// Capture the populated staking records whose required monetary plans changed.
-pub(crate) fn staking_monetary_fixture_rows() -> Vec<Value> {
+pub fn staking_monetary_fixture_rows() -> Vec<Value> {
     values::values()
         .into_iter()
         .filter(|row| {
