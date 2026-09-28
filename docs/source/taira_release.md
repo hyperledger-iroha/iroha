@@ -475,11 +475,12 @@ See the [maintained retry caller](taira_retry.md) for the current path records
 and preparation order.
 
 The signed genesis must leave room for onboarding, funding, the canary's real
-QueuePlan admission and execution carriers, real DKG completion, and the
+Ordinary transactions, real DKG completion, and the
 certificate installation before the first mandatory beacon pulse. Finalization
 uses the authenticated observed height. The sole threshold-key certificate uses
 signed Ordinary admission with exact next-height and current-roster quorum
-checks; other public transactions continue to use QueuePlanSynced admission.
+checks. Supported public prepared transactions use signed Ordinary single-route
+admission; unsupported multi-route intents fail before durable acceptance.
 The certificate must be committed on all four validators, followed by all four
 `BeaconActivate` provider installations before restart proof. Epoch retention
 observes complete authenticated Retain transitions on finalized workload

@@ -1510,23 +1510,18 @@ async fn global_asset_balance_route_requires_exact_holder_scope_and_known_policy
         [Domain::new(private_home.clone()).build(&ALICE_ID)],
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [
-            AssetDefinition::numeric(
-                global.clone(),
-                "global".into(),
-                AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&ALICE_ID),
+            AssetDefinition::numeric(global.clone(), "global", AssetBalancePolicy::Global, None)
+                .build(&ALICE_ID),
             AssetDefinition::numeric(
                 private_global.clone(),
-                "private-global".into(),
+                "private-global",
                 AssetBalancePolicy::Global,
                 Some(private_home.clone()),
             )
             .build(&ALICE_ID),
             AssetDefinition::numeric(
                 restricted.clone(),
-                "restricted".into(),
+                "restricted",
                 AssetBalancePolicy::DataspaceRestricted,
                 Some(private_home.clone()),
             )
