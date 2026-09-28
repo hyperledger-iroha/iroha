@@ -53317,7 +53317,7 @@ impl<'state> StateBlock<'state> {
     }
     /// Explicit bounded E owner for direct component fixtures, before borrowing State.
     /// This does not authenticate an actual Network input or grant publication authority.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn admit_fastpq_source_for_testing(&mut self, hash: Hash) {
         assert!(
             self.execution_output_plan.is_none(),
@@ -53328,11 +53328,8 @@ impl<'state> StateBlock<'state> {
     }
     /// Explicit bounded invocation owner for direct source component fixtures.
     /// Production execution must obtain its owner from the canonical producer.
-    #[cfg(test)]
-    pub(crate) fn transaction_for_fastpq_testing(
-        &mut self,
-        hash: Hash,
-    ) -> StateTransaction<'_, 'state> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn transaction_for_fastpq_testing(&mut self, hash: Hash) -> StateTransaction<'_, 'state> {
         self.admit_fastpq_source_for_testing(hash);
         let mut transaction = self.transaction();
         transaction.tx_call_hash = Some(hash);

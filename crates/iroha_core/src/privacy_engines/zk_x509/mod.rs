@@ -47,6 +47,7 @@ pub(crate) mod p256_scalar_bit_bus;
 pub(crate) mod p256_trace;
 pub(crate) mod p256_value_bus;
 pub(crate) mod p256_window_air;
+mod private_table;
 pub(crate) mod profile;
 pub(crate) mod projection_air;
 #[cfg(any(test, feature = "privacy-release-evidence"))]

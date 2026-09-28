@@ -80,7 +80,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             limits,
         )?;
         let hashing =
-            super::deep_leaf_batch::payload_bytes(binding, oracle, mul(fields, F::BYTES)?)?;
+            super::deep_leaf_batch::payload_bytes(binding, oracle, mul(fields, F::BYTES)?.max(96))?;
         let payload_bytes = add(
             replay.payload_bytes,
             add(
@@ -134,6 +134,17 @@ impl<'a> CoefficientCommitmentPlan<'a> {
                 .hash_parent(self.oracle, level as u32, index as u32, left, right)
                 .map_err(binding_error)
         };
+        let batch_parent = |level, indices: &[usize], left: &[[u64; 6]], right: &mut [[u64; 6]]| {
+            super::deep_parent_batch::hash_in_place(
+                binding,
+                self.oracle,
+                level,
+                indices,
+                left,
+                right,
+                self.digest_execution,
+            )
+        };
         if self.oracle == Oracle::Terminal {
             replay.visit_all(|stripe| {
                 for row in 0..stripe.rows() {
@@ -151,11 +162,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
                 &mut leaves,
                 self.digest_execution,
             )?;
-            tree.push(
-                0,
-                Digest::new(leaves[0]).expect("canonical terminal hash"),
-                parent,
-            )?;
+            tree.push_batch(&[0], &mut leaves, batch_parent, parent)?;
         } else {
             replay.visit_all(|stripe| {
                 let rows = if self.oracle == Oracle::QuotientAndMask {
@@ -195,13 +202,12 @@ impl<'a> CoefficientCommitmentPlan<'a> {
                         &mut leaves[..count],
                         self.digest_execution,
                     )?;
-                    for (&index, &words) in indices[..count].iter().zip(leaves[..count].iter()) {
-                        tree.push(
-                            index,
-                            Digest::new(words).expect("canonical leaf hash"),
-                            parent,
-                        )?;
-                    }
+                    tree.push_batch(
+                        &indices[..count],
+                        &mut leaves[..count],
+                        batch_parent,
+                        parent,
+                    )?;
                 }
                 Ok(())
             })?;

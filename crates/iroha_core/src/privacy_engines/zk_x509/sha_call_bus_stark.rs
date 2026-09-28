@@ -22,6 +22,7 @@ use super::sha256_word_air::{ZkX509WordMemoryChallengesV1, ZkX509WordMemoryLaneC
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     credential_pre_aux::ZkX509CredentialPreAuxBindingV1,
+    private_table::{PrivateTableV1, zeroize_field_rows_v1},
     sha_word_stark::{
         ZkX509ShaWordCapacityBaseSourceV1, ZkX509ShaWordCapacityTraceV1,
         build_sha_word_capacity_base_source_v1, validate_zk_x509_sha_word_stark_challenges_v1,
@@ -2818,7 +2819,7 @@ fn finish_zk_x509_sha_batch_call_binding_v1(
     rfc_challenges: ZkX509Rfc5280StarkChallengesV1,
     initial_products: ZkX509ShaSegmentProductStateV1,
 ) -> Result<ZkX509ShaBatchCallTraceV1, ZkX509ShaCallBusStarkErrorV1> {
-    let mut product_rows = Vec::new();
+    let mut product_rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     product_rows
         .try_reserve_exact(word.logical_rows())
         .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Resource)?;
@@ -2910,7 +2911,7 @@ fn finish_zk_x509_sha_batch_call_binding_v1(
     Ok(ZkX509ShaBatchCallTraceV1 {
         manifest,
         word,
-        product_rows,
+        product_rows: product_rows.into_vec(),
         #[cfg(test)]
         rfc_consumer,
         terminal,

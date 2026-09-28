@@ -862,16 +862,14 @@ mod tests {
             &[&encoded],
         )
         .expect("challenge KAT frame");
-        println!(
-            "joined_pre_aux_challenge_digest={}",
-            hex::encode(challenge_digest.to_bytes())
+        assert_eq!(
+            hex::encode(challenge_digest.to_bytes()),
+            "b9acbf680bf64d7d095d635681d280663243227b1a11ee9a07b5cd7d01523b23ba62f72d735996bea9f69305a799c77d"
         );
-        println!(
-            "joined_pre_aux_transcript_state={}",
-            hex::encode(binding.transcript_state().to_bytes())
+        assert_eq!(
+            hex::encode(binding.transcript_state().to_bytes()),
+            "3665defe71f57f7282c26c8031ffbe4fa6fc6726016cd3586f3cadd471fd4b26b8b50dff16aded7ea6cb455863b36bd8"
         );
-        assert_ne!(challenge_digest, PrivacyOuterDigestV1::default());
-        assert_ne!(binding.transcript_state(), PrivacyOuterDigestV1::default());
     }
     #[test]
     fn all_eleven_family_positions_are_order_bound() {

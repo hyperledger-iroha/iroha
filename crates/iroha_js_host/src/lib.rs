@@ -13272,7 +13272,13 @@ seiyaku Privacy {
             authority: authority_i105.clone(),
         });
         let error = result.err().expect("genesis domain must fail");
-        assert!(error.reason.contains("genesis-domain"));
+        assert!(
+            error.reason.contains(
+                "genesis transaction domain is restricted to explicit genesis construction"
+            ),
+            "ordinary payload decoding must reject the genesis domain: {}",
+            error.reason
+        );
         assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
     #[test]

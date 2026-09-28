@@ -24,9 +24,12 @@ unmasked. Checked payload, work and hash budgets cover the complete construction
 with cumulative decode accounting and authenticated row-root results.
 The default segment limits remain 2 GiB of charged payload, 2^42 structural
 work units and 524,288 child bytes. They have not been raised to accommodate
-the construction. The September 28 normal-library check and 128 focused native
-tests pass; two separately selected actual Metal checks and the complete 8M-point
-FFT/inverse oracle also pass. The latter takes 69.00s wall time and reports
+the construction. The September 28 normal-library check and latest 134 focused
+native tests pass; 11 external API tests, one public usage doctest, and three
+separately selected required-Metal leaf/parent/preflight checks pass. Bounded
+1024-job hashing and parallel job preparation preserve serial commitment/frontier
+parity. The earlier complete 8M-point FFT/inverse oracle also passes and takes
+69.00s wall time, reporting
 553,549,824 bytes maximum RSS on the unoptimized binary under concurrent build
 load. These scoped results do not measure complete proof generation. Exact
 commands, source scope and receipt hashes are in the

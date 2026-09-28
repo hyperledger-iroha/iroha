@@ -339,6 +339,7 @@ fn current_revocation_rejects_an_otherwise_valid_advert_still_retained_in_cache(
     ))
     .unwrap();
     revocation.envelope_digest = changed.pins.admission_envelope_digest;
+    revocation.expected_current_event_digest = changed.pins.admission_envelope_digest;
     revocation.council_signatures = vec![fixture_council_signature(&revocation.digest().unwrap())];
     changed.registry.revoke(&revocation).unwrap();
     assert!(

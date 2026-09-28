@@ -16,13 +16,19 @@ fn certified_capture_replays_exactly_and_recovers_one_crash_successor() {
     let root = archive_root(&directory);
     let mut chain = chain();
     let archive = ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).unwrap();
-    archive
-        .capture_certified_view(&chain.state().view(), chain.kura())
-        .unwrap();
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
     let generation = archive.health_generation().unwrap();
-    archive
-        .capture_certified_view(&chain.state().view(), chain.kura())
-        .unwrap();
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
+    );
     assert_eq!(archive.health_generation().unwrap(), generation);
     chain.commit_at(2_000, Vec::new());
     drop(archive);
@@ -30,13 +36,28 @@ fn certified_capture_replays_exactly_and_recovers_one_crash_successor() {
     let result = archive
         .reconcile_certified_state_tip(&chain.state().view(), chain.kura())
         .unwrap();
-    assert_eq!(result.qualification().archive_tip().height, 2);
+    assert_eq!(
+        result.insertion(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    assert!(!result.activation_floor_created());
+    assert_eq!(
+        result.qualification().archive_tip(),
+        &authenticate_capture_view(&chain.state().view(), chain.kura()).unwrap()
+    );
+    assert_eq!(result.qualification().kura_tip_height(), 2);
     assert_eq!(result.qualification().lag_blocks(), 0);
     assert_eq!(archive.health_generation().unwrap(), generation + 1);
     let before = archive.health_generation().unwrap();
-    archive
+    let replay = archive
         .reconcile_certified_state_tip(&chain.state().view(), chain.kura())
         .unwrap();
+    assert_eq!(
+        replay.insertion(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
+    );
+    assert!(!replay.activation_floor_created());
+    assert_eq!(replay.qualification(), result.qualification());
     assert_eq!(archive.health_generation().unwrap(), before);
 }
 
@@ -235,6 +256,11 @@ fn certified_retention_waits_for_actual_index_owner_before_authority_or_file_mut
     let proposal = archive
         .prepare_certified_compaction(&fence, &view, chain.kura())
         .unwrap();
+    let checkpoint_digest = proposal.checkpoint_digest();
+    let record_bytes: u64 = archive_namespace_snapshot(&archive.records)
+        .values()
+        .map(|bytes| u64::try_from(bytes.len()).unwrap())
+        .sum();
     drop(view);
     let authority = Arc::new(TestRetentionAuthority::new());
     let worker_authority = Arc::clone(&authority);
@@ -251,20 +277,30 @@ fn certified_retention_waits_for_actual_index_owner_before_authority_or_file_mut
                 &worker_authority.binding(),
                 worker_authority.as_ref(),
             )
-            .unwrap();
+            .unwrap()
     });
     started.recv().unwrap();
     assert!(authority.latest.lock().unwrap().is_none());
     assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 2);
     assert_eq!(fs::read_dir(&archive.checkpoints).unwrap().count(), 0);
     drop(reader);
-    worker.join().unwrap();
+    let compacted = worker.join().unwrap();
+    assert_eq!(compacted.retention_floor(), &key);
+    assert_eq!(compacted.checkpoint_digest(), checkpoint_digest);
+    assert_eq!(compacted.pruned_entries(), 2);
+    assert_eq!(compacted.pruned_bytes(), record_bytes);
+    assert_eq!(compacted.generation(), fence.expected_archive_generation());
     assert!(authority.latest.lock().unwrap().is_some());
     assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
     assert_eq!(fs::read_dir(&archive.checkpoints).unwrap().count(), 1);
-    archive
+    let qualification = archive
         .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
         .unwrap();
+    assert_eq!(qualification.activation_floor(), &key);
+    assert_eq!(qualification.archive_tip(), &key);
+    assert_eq!(qualification.kura_tip_height(), key.height);
+    assert_eq!(qualification.lag_blocks(), 0);
+    assert_eq!(qualification.generation(), compacted.generation());
 }
 
 #[test]
@@ -324,7 +360,7 @@ fn certified_retention_requires_exact_result_identity_and_survives_reopen() {
         .unwrap();
     let authority = TestRetentionAuthority::new();
     let binding = authority.binding();
-    archive
+    let compacted = archive
         .approve_and_install_certified_compaction(
             &proposal,
             &view,
@@ -333,6 +369,11 @@ fn certified_retention_requires_exact_result_identity_and_survives_reopen() {
             &authority,
         )
         .unwrap();
+    assert_eq!(compacted.retention_floor(), &key);
+    assert_eq!(compacted.checkpoint_digest(), proposal.checkpoint_digest());
+    assert_eq!(compacted.pruned_entries(), 2);
+    assert!(compacted.pruned_bytes() > 0);
+    assert_eq!(compacted.generation(), fence.expected_archive_generation());
     drop(archive);
     let reopened = ProviderIngestFinalizedArchiveV1::try_open_with_retention_authority(
         &root,
@@ -349,4 +390,7 @@ fn certified_retention_requires_exact_result_identity_and_survives_reopen() {
         .unwrap();
     assert_eq!(qualification.activation_floor(), &key);
     assert_eq!(qualification.archive_tip(), &key);
+    assert_eq!(qualification.kura_tip_height(), key.height);
+    assert_eq!(qualification.lag_blocks(), 0);
+    assert_eq!(qualification.generation(), compacted.generation());
 }

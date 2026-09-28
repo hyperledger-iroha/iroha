@@ -4168,10 +4168,12 @@ fn native_amx_live_custody_wrappers_unlock_together_before_callbacks() {
         .kura
         .store_block(Arc::clone(&fixture.block))
         .unwrap();
-    fixture
+    let receipt = fixture
         .kura
         .store_v2_finality_artifact(&fixture.finality)
         .unwrap();
+    assert_eq!(receipt.height(), fixture.block.header().height().get());
+    assert_eq!(receipt.block_hash(), fixture.block.hash());
     let token = fixture
         .kura
         .prepublish_native_amx_participant_application_evidence(&fixture.block, None)

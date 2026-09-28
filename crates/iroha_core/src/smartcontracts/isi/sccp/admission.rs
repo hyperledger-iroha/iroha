@@ -228,6 +228,7 @@ pub fn exempt_shape_of_entrypoint(entrypoint: &TransactionEntrypoint) -> Option<
 /// Returns [`SccpAdmissionRejectV1`] when an exempt-shaped transaction fails pre-verification.
 pub fn classify(
     world: &(impl WorldReadOnly + ?Sized),
+    digests: &(impl super::subjects::SccpStatementDigests + ?Sized),
     next_block_height: u64,
     transaction: &SignedTransaction,
 ) -> Result<Option<SccpAdmissionKeysV1>, SccpAdmissionRejectV1> {
@@ -241,11 +242,57 @@ pub fn classify(
     if let Some(keys) = test_override::classify(transaction) {
         return keys.map(|keys| keys.filter(|keys| keys.class == class));
     }
-    let _ = (next_block_height, class);
-    // TODO(ws31): pre-verify the shape `class` (§4.2.3, §4.8, §4.11, §4.12.4, §4.13.4) through
-    // `attestations::preverify`, `faults::preverify`, `light_clients::preverify_keeper_advance`
-    // and `self_claim::preverify`, returning keys whose class is `class`.
-    Ok(None)
+    let payload = transaction.payload();
+    let single = match &payload.instructions {
+        Executable::Instructions(instructions) => match instructions.as_ref() {
+            [only] => Some(only),
+            _ => None,
+        },
+        _ => None,
+    };
+    match class {
+        SccpExemptClassV1::Attestation => {
+            let instruction = single
+                .and_then(downcast::<SubmitSccpAttestationsV1>)
+                .ok_or_else(|| SccpAdmissionRejectV1::new("malformed attestation shape"))?;
+            super::attestations::preverify(
+                world,
+                digests,
+                next_block_height,
+                instruction,
+                &payload.authority,
+            )
+            .map(Some)
+        }
+        SccpExemptClassV1::KeyBinding => {
+            let instruction = single
+                .and_then(downcast::<SetSccpBridgeKeyV1>)
+                .ok_or_else(|| SccpAdmissionRejectV1::new("malformed key-binding shape"))?;
+            super::bridge_keys::check_binding(
+                world,
+                &digests.taira_network_id(),
+                next_block_height,
+                false,
+                instruction,
+                &payload.authority,
+            )
+            .map_err(SccpAdmissionRejectV1::new)?;
+            if !super::bridge_keys::binding_exempt(world, instruction, &payload.authority) {
+                // Not exempt this epoch: an ordinary, fee-paying registration.
+                return Ok(None);
+            }
+            Ok(Some(
+                SccpAdmissionKeysV1::new(SccpExemptClassV1::KeyBinding)
+                    .with_exclusive(&instruction.peer),
+            ))
+        }
+        // TODO(ws31): pre-verify faults (§4.11); TODO(ws41): keeper advances (§4.13.4) and
+        // self-claims (§4.12.4). Until then these shapes are admitted as ordinary fee-paying
+        // transactions.
+        SccpExemptClassV1::Fault
+        | SccpExemptClassV1::KeeperAdvance { .. }
+        | SccpExemptClassV1::SelfClaim => Ok(None),
+    }
 }
 
 /// Test-only replacement of the pre-verification step of [`classify`], per thread, standing in
@@ -292,10 +339,16 @@ pub(crate) mod test_override {
 /// rule: a bridge-key registration from the new key's own account (§4.2.3).
 #[must_use]
 pub fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
-    let _ = (executable, authority);
-    // TODO(ws31): admit exactly one `SetSccpBridgeKeyV1` registration whose authority is
-    // `account_of(public_key)`.
-    false
+    let Executable::Instructions(instructions) = executable else {
+        return false;
+    };
+    let [only] = instructions.as_ref() else {
+        return false;
+    };
+    downcast::<SetSccpBridgeKeyV1>(only)
+        .and_then(|set| set.public_key)
+        .and_then(|public_key| super::bridge_keys::account_of(&public_key).ok())
+        .is_some_and(|account| &account == authority)
 }
 
 /// Return the per-block cap on fee-exempt SCCP transactions, or `None` when SCCP does not
@@ -790,23 +843,23 @@ mod tests {
             ))
         });
         assert_eq!(
-            classify(&*stx.world, 3, &attestation),
+            classify(&*stx.world, &stx, 3, &attestation),
             Ok(None),
             "nothing is exempt without SCCP"
         );
         store::parameters::set(&mut stx, Some(SccpParametersV1::taira_default()));
         assert_eq!(
-            classify(&*stx.world, 3, &attestation).map(|keys| keys.map(|keys| keys.class)),
+            classify(&*stx.world, &stx, 3, &attestation).map(|keys| keys.map(|keys| keys.class)),
             Ok(Some(SccpExemptClassV1::Attestation))
         );
         assert_eq!(
-            classify(&*stx.world, 3, &ordinary),
+            classify(&*stx.world, &stx, 3, &ordinary),
             Ok(None),
             "an unshaped transaction is never pre-verified"
         );
         let fault = signed(0x64, vec![I::fault().into()]);
         assert_eq!(
-            classify(&*stx.world, 3, &fault),
+            classify(&*stx.world, &stx, 3, &fault),
             Ok(None),
             "keys of another class never apply"
         );
@@ -817,7 +870,7 @@ mod tests {
         let state = blank_state();
         let view = state.world_view();
         let transaction = sample_signed_transaction();
-        assert_eq!(classify(&view, 1, &transaction), Ok(None));
+        assert_eq!(classify(&view, &state.view(), 1, &transaction), Ok(None));
         assert!(!allows_unregistered_authority(
             transaction.instructions(),
             transaction.authority()

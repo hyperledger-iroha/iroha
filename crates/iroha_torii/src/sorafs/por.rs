@@ -2833,12 +2833,9 @@ mod tests {
             PorCoordinatorError::InvalidAuthoritativeProjection(_)
         ));
         assert!(matches!(
-            coordinator.query_status_page(
-                &PorStatusFilter::default(),
-                PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
-                    .expect("page limits"),
-                PorStatusPageCursor::First,
-            ),
+            // Paging has a local-record path only in unit tests. The production
+            // authority guard must remain closed until the checkpoint is rebuilt.
+            coordinator.require_authoritative_projection(),
             Err(PorCoordinatorError::AuthoritativeProjectionUnavailable)
         ));
         coordinator
@@ -3484,6 +3481,12 @@ mod tests {
         let coordinator = PorCoordinator::new();
         let mut first = sample_challenge(false);
         first.epoch_id = 41;
+        first.seed = derive_challenge_seed(
+            &first.drand_randomness,
+            first.vrf_output.as_ref(),
+            &first.manifest_digest,
+            first.epoch_id,
+        );
         first.challenge_id = derive_challenge_id(
             &first.seed,
             &first.manifest_digest,
@@ -3499,6 +3502,12 @@ mod tests {
         second.epoch_id = 42;
         second.issued_at += 1;
         second.deadline_at += 1;
+        second.seed = derive_challenge_seed(
+            &second.drand_randomness,
+            second.vrf_output.as_ref(),
+            &second.manifest_digest,
+            second.epoch_id,
+        );
         second.challenge_id = derive_challenge_id(
             &second.seed,
             &second.manifest_digest,
@@ -4054,7 +4063,7 @@ mod tests {
             coordinator.record_challenge(&challenge).expect("challenge");
         };
         for index in 0..2_048 {
-            record_at(index, 1_600_000_000 + index);
+            record_at(index + 1, 1_600_000_000 + index);
             record_at(10_000 + index, 1_800_000_000 + index);
         }
         for index in 0..3 {

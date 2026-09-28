@@ -29139,7 +29139,7 @@ fn alias_proof_b64(alias: &str) -> String {
     };
     let binding = AliasBindingV1 {
         alias: alias.to_string(),
-        manifest_cid: vec![0x42; 32],
+        manifest_cid: sorafs_manifest::canonical_manifest_root_cid([0x42; 32]),
         bound_at: 1,
         expiry_epoch: 10,
     };
@@ -29182,6 +29182,10 @@ fn alias_proof_header_fixture_decodes() {
     let bundle = crate::sorafs::decode_alias_proof_untrusted_signers(&bytes)
         .expect("verify alias proof header integrity");
     assert_eq!(bundle.binding.alias, "alias@capability.dataspace");
+    assert_eq!(
+        bundle.binding.manifest_cid,
+        sorafs_manifest::canonical_manifest_root_cid([0x42; 32])
+    );
 }
 fn decode_hex_32(value: &str) -> Result<[u8; 32], String> {
     let trimmed = value.trim();
@@ -29548,7 +29552,8 @@ mod app_api_tests {
     #[test]
     fn pin_list_query_is_finalized_keyset_and_strictly_bounded() {
         let block_hash = "11".repeat(32);
-        let after_digest = "22".repeat(32);
+        let after_digest = "ab".repeat(32);
+        assert_ne!(after_digest.to_ascii_uppercase(), after_digest);
         let raw = format!(
             "expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&limit=25&max_bytes=16384&after_digest_hex={after_digest}&status=approved"
         );
@@ -29556,7 +29561,7 @@ mod app_api_tests {
         assert_eq!(query.limit, Some(25));
         assert_eq!(query.max_bytes, Some(16 * 1024));
         assert_eq!(query.status, Some(PinStatusKindV1::Approved));
-        assert_eq!(query.after_digest(), Some(ManifestDigest::new([0x22; 32])));
+        assert_eq!(query.after_digest(), Some(ManifestDigest::new([0xAB; 32])));
         assert_eq!(
             query.expected_finalized_cursor().expect("build cursor"),
             Some(PinManifestFinalizedCursorV1 {
@@ -29943,10 +29948,14 @@ mod app_api_tests {
     #[test]
     fn ensure_chunk_alignment_accepts_aligned_range() {
         let temp_dir = tempdir().expect("temp dir");
+        let physical_parent = temp_dir
+            .path()
+            .canonicalize()
+            .expect("physical temp parent");
         let backend = StorageBackend::new(
             StorageConfig::builder()
                 .enabled(true)
-                .data_dir(temp_dir.path().join("storage"))
+                .data_dir(physical_parent.join("storage"))
                 .build(),
         )
         .expect("backend init");
@@ -29986,10 +29995,14 @@ mod app_api_tests {
     #[test]
     fn ensure_chunk_alignment_rejects_misaligned_range() {
         let temp_dir = tempdir().expect("temp dir");
+        let physical_parent = temp_dir
+            .path()
+            .canonicalize()
+            .expect("physical temp parent");
         let backend = StorageBackend::new(
             StorageConfig::builder()
                 .enabled(true)
-                .data_dir(temp_dir.path().join("storage"))
+                .data_dir(physical_parent.join("storage"))
                 .build(),
         )
         .expect("backend init");
@@ -32100,6 +32113,19 @@ mod advert_tests {
         Arc<ApiTestGovernanceDagSigner>,
         Arc<ApiTestGovernanceDagCheckpointStore>,
     ) {
+        // Resolve the OS temporary-directory alias (for example macOS `/var`) before
+        // constructing storage, while retaining every child-path symlink check.
+        let physical_child = |path: &StdPath| {
+            path.parent()
+                .expect("fixture directory has a parent")
+                .canonicalize()
+                .expect("physical fixture parent")
+                .join(path.file_name().expect("fixture directory has a name"))
+        };
+        let paths = builder.clone().build();
+        let builder = builder
+            .data_dir(physical_child(paths.data_dir()))
+            .governance_dir(paths.governance_dir().map(|path| physical_child(path)));
         let signer = Arc::new(ApiTestGovernanceDagSigner::new());
         let checkpoint_store = Arc::new(ApiTestGovernanceDagCheckpointStore::default());
         let config = builder
@@ -35820,10 +35846,40 @@ mod advert_tests {
         }
         let mount_source = include_str!("../lib.rs");
         assert_eq!(
-            mount_source.matches("capacity_authenticated_get!(").count(),
+            mount_source
+                .matches("=> limited_hardened_canonical_signature_get(")
+                .count(),
             5,
             "all five finite reputation GET mounts must use the hardened authenticated macro"
         );
+        for (route, handler) in [
+            ("REPUTATION_LATEST_GET", "latest"),
+            ("REPUTATION_SNAPSHOT", "snapshot"),
+            ("REPUTATION_PROVIDER", "provider"),
+            ("REPUTATION_WEIGHTS", "weights"),
+            ("REPUTATION_EVENTS", "events"),
+        ] {
+            assert_eq!(
+                mount_source
+                    .matches(&format!(
+                        "{route} => limited_hardened_canonical_signature_get(sorafs::api::handle_get_sorafs_reputation_{handler}, sorafs_body_limit);"
+                    ))
+                    .count(),
+                1,
+                "finite reputation route `{route}` must retain its exact authenticated bounded handler"
+            );
+        }
+        let macro_body = mount_source
+            .split("(limited_hardened_canonical_signature_get($handler:path, $limit:expr)) => {")
+            .nth(1)
+            .and_then(|tail| tail.split("\n    };").next())
+            .expect("hardened canonical-signature GET macro");
+        assert!(macro_body.contains("catalog_get($handler)"));
+        assert!(macro_body.contains("DefaultBodyLimit::max($limit)"));
+        assert!(macro_body.contains("sorafs::api::harden_reputation_route_responses"));
+        assert!(macro_body.contains(
+            ".authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)"
+        ));
         assert_eq!(
             mount_source
                 .matches("sorafs::api::harden_reputation_route_responses")
@@ -36681,7 +36737,7 @@ mod advert_tests {
         );
         let finalized_cursor = ProofOutcomeFinalizedCursorV1 {
             height: 1,
-            block_hash: *HashOf::new(&header).as_ref(),
+            block_hash: *header.hash().as_ref(),
         };
         let app_inner = Arc::get_mut(&mut app).expect("unique proof-outcome app state");
         let core_state =
@@ -37660,13 +37716,31 @@ mod advert_tests {
             retention_epoch: manifest.pin_policy.retention_epoch,
         }
     }
-    fn test_governance_proofs() -> sorafs_manifest::GovernanceProofs {
-        sorafs_manifest::GovernanceProofs {
-            council_signatures: vec![CouncilSignature {
-                signer: [0x11; 32],
-                signature: vec![0x22; 64],
-            }],
-        }
+    fn sign_test_manifest(mut manifest: ManifestV1) -> ManifestV1 {
+        manifest.governance.council_signatures.clear();
+        let signing_key = SigningKey::from_bytes(&[0x11; 32]);
+        let unsigned_digest = manifest
+            .digest()
+            .expect("canonical unsigned manifest digest");
+        manifest
+            .governance
+            .council_signatures
+            .push(CouncilSignature {
+                signer: signing_key.verifying_key().to_bytes(),
+                signature: signing_key
+                    .sign(unsigned_digest.as_bytes())
+                    .to_bytes()
+                    .to_vec(),
+            });
+        sorafs_manifest::validate_manifest(
+            &manifest,
+            &sorafs_manifest::PinPolicyConstraints {
+                require_council_signatures: true,
+                ..Default::default()
+            },
+        )
+        .expect("canonical signed fixture manifest must satisfy gateway validation");
+        manifest
     }
     fn plan_for_pin_payload(manifest: &ManifestV1, payload: &[u8]) -> CarBuildPlan {
         let profile = chunk_profile_for_manifest(manifest).expect("registered chunk profile");
@@ -38215,7 +38289,6 @@ mod advert_tests {
             .car_digest(car_stats.car_archive_digest.into())
             .car_size(car_stats.car_size)
             .pin_policy(pin_policy)
-            .governance(test_governance_proofs())
             .push_alias(AliasClaim {
                 name: "test".into(),
                 namespace: "alias".into(),
@@ -38224,7 +38297,7 @@ mod advert_tests {
             .add_metadata("test.fixture_seed", format!("{seed:02x}"))
             .build()
             .expect("manifest");
-        manifest
+        sign_test_manifest(manifest)
     }
     #[test]
     fn canonical_manifest_fixture_separates_digest_domains() {
@@ -38240,6 +38313,17 @@ mod advert_tests {
             *car_stats.car_archive_digest.as_bytes()
         );
         assert_eq!(manifest.car_size, car_stats.car_size);
+        let mut substituted = manifest.clone();
+        substituted.content_length += 1;
+        assert!(matches!(
+            sorafs_manifest::validate_manifest(
+                &substituted,
+                &sorafs_manifest::PinPolicyConstraints::default(),
+            ),
+            Err(
+                sorafs_manifest::ManifestValidationError::CouncilSignatureVerificationFailed { .. }
+            )
+        ));
     }
     fn seed_capacity_declaration(
         node: &sorafs_node::NodeHandle,
@@ -38808,10 +38892,13 @@ mod advert_tests {
             .content_length(plan.content_length)
             .car_digest(car_stats.car_archive_digest.into())
             .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .governance(test_governance_proofs())
+            .pin_policy(PinPolicy {
+                retention_epoch: 10,
+                ..PinPolicy::default()
+            })
             .build()
             .expect("manifest");
+        let manifest = sign_test_manifest(manifest);
         let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
         let mut reader = payload.as_slice();
         let manifest_id = node
@@ -39374,6 +39461,20 @@ mod advert_tests {
         let app = mk_app_state_for_tests_with_world(world);
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _storage_dir) = sorafs_node_with_temp_storage();
+        // Admit genuine local content so the CID path reaches authoritative discovery validation.
+        // An uncached CID correctly stops earlier at the remote-capability requirement.
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.json".to_owned()],
+                data: br#"{"untrusted":"must-not-be-served"}"#.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("local public discovery fixture plan");
+        let manifest = manifest_for_plan(0xA8, &payload, &plan);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        node.ingest_manifest(&manifest, &plan, &mut payload.as_slice())
+            .expect("admit local discovery fixture");
         inner.sorafs_node = node;
         inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
         inner
@@ -39384,8 +39485,6 @@ mod advert_tests {
         let state = Arc::new(inner);
         assert!(state.sorafs_node.is_enabled());
 
-        let content_cid =
-            encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid([0xA8; 32]));
         let path_response = api_test_route!(get_cid_path;
             State(Arc::clone(&state));
             HeaderMap::new();
@@ -39513,11 +39612,7 @@ mod advert_tests {
         )
         .await;
         let value = api_test_response_json_with_status(response, StatusCode::NOT_FOUND).await;
-        assert!(
-            value
-                .json_str(&["message"])
-                .is_some_and(|message| message.contains("storage API is not enabled"))
-        );
+        assert_json_fields!(value; json_str ["error"] => Some("sorafs storage API is not enabled on this node"));
     }
 
     #[tokio::test]
@@ -39740,31 +39835,40 @@ mod advert_tests {
         assert_eq!(passive_body, &png_bytes[..]);
     }
     #[tokio::test]
-    async fn cid_gateway_prefers_site_manifest_when_same_cid_has_blob_and_site_variants() {
+    async fn cid_gateway_serves_site_when_same_cid_has_distinct_signed_manifest_variants() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         let index_bytes = b"<!doctype html><title>Preferred site</title>";
-        let payload = index_bytes.to_vec();
+        let (site_plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("canonical site plan");
+        let first_manifest = manifest_for_plan(0xD6, &payload, &site_plan);
+        let site_manifest = manifest_for_plan(0xE6, &payload, &site_plan);
+        assert_eq!(first_manifest.root_cid, site_manifest.root_cid);
+        assert_ne!(
+            first_manifest.digest().unwrap(),
+            site_manifest.digest().unwrap()
+        );
         let blob_plan = CarBuildPlan::single_file(&payload).expect("single-file blob plan");
-        let mut site_plan = blob_plan.clone();
-        site_plan.files[0].path = vec!["index.html".to_owned()];
-        let blob_manifest = manifest_for_plan(0xD6, &payload, &blob_plan);
-        let site_manifest = manifest_for_plan(0xE6, &payload, &blob_plan);
-        assert_eq!(blob_manifest.root_cid, site_manifest.root_cid);
+        assert_ne!(
+            canonical_fixture_car_stats(&blob_plan, &payload).root_cids[0],
+            site_manifest.root_cid,
+            "changing the admitted file layout changes the content root"
+        );
         let content_cid = encode_content_cid(&site_manifest.root_cid);
 
-        let mut blob_reader = payload.as_slice();
-        node.ingest_manifest(&blob_manifest, &blob_plan, &mut blob_reader)
-            .expect("ingest blob manifest");
+        let mut first_reader = payload.as_slice();
+        node.ingest_manifest(&first_manifest, &site_plan, &mut first_reader)
+            .expect("ingest first signed manifest variant");
         let mut site_reader = payload.as_slice();
-        let site_manifest_id = node
-            .ingest_manifest(&site_manifest, &blob_plan, &mut site_reader)
-            .expect("provider-internal site fixture ingest");
-        node.storage()
-            .expect("storage backend")
-            .attach_plan_metadata(&site_manifest_id, &site_plan, None, None)
-            .expect("attach site file metadata");
+        node.ingest_manifest(&site_manifest, &site_plan, &mut site_reader)
+            .expect("ingest second signed manifest variant");
         let variants = node
             .stored_manifests()
             .expect("same-CID manifest variants")
@@ -39782,7 +39886,7 @@ mod advert_tests {
                         .any(|file| file.path.len() == 1 && file.path[0] == "index.html")
                 })
                 .count(),
-            1
+            2
         );
 
         inner.sorafs_node = node;
@@ -39861,7 +39965,7 @@ mod advert_tests {
         );
     }
     #[tokio::test]
-    async fn app_api_cid_manifest_rejects_insecure_remote_provider_without_caching() {
+    async fn app_api_cid_manifest_requires_capability_before_remote_work() {
         let app_api_manifest_bytes = br#"{
   "schema_version": 1,
   "app_id": "soraswap.trader",
@@ -39959,14 +40063,16 @@ mod advert_tests {
             Path(content_cid.clone()),
         )
         .await;
-        assert_eq!(manifest_response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(manifest_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let refusal = api_test_response_json(manifest_response).await;
+        assert_json_fields!(refusal; json_str ["error"] => Some(REMOTE_HYDRATION_CAPABILITY_REQUIRED));
         assert_eq!(manifest_requests.load(Ordering::SeqCst), 0);
         assert!(
             state
                 .sorafs_node
                 .manifest_metadata_by_digest(&manifest_digest)
                 .is_err(),
-            "an insecure provider must not populate the app API cache",
+            "a capability-required miss must not populate the app API cache",
         );
         remote_server.abort();
     }
@@ -40007,10 +40113,13 @@ mod advert_tests {
             .content_length(plan.content_length)
             .car_digest(car_stats.car_archive_digest.into())
             .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .governance(test_governance_proofs())
+            .pin_policy(PinPolicy {
+                retention_epoch: 10,
+                ..PinPolicy::default()
+            })
             .build()
             .expect("manifest");
+        let manifest = sign_test_manifest(manifest);
         assert!(
             plan.chunks.len() > 2,
             "fixture should cover nonzero-offset chunk truncation"
@@ -40991,6 +41100,19 @@ mod advert_tests {
             error_str.contains("car verification failed"),
             "unexpected error message: {error_str}"
         );
+        assert!(
+            !manifest.payload_available(),
+            "the failed verified read must quarantine retained manifest handles"
+        );
+        assert!(matches!(
+            context
+                .app
+                .sorafs_node
+                .read_payload_range(&context.manifest_id_hex, 0, 1),
+            Err(NodeStorageError::Storage(
+                StorageBackendError::PayloadUnavailable { .. }
+            ))
+        ));
     }
     #[tokio::test]
     async fn car_range_enforces_rate_limit_bytes() {

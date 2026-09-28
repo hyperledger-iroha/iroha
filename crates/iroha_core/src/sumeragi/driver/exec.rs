@@ -14,7 +14,8 @@
 //!   failures are retried with backoff, never skipped;
 //! - once prepared, and while a failed step backs off, a commit runs alone: no other executor
 //!   call comes between its prepare and its commit (the executor may hold a single live
-//!   overlay); a failed commit is retried after a fresh prepare, without a second append;
+//!   overlay); a failed commit is retried after a fresh prepare, without a second append or
+//!   resetting its failure backoff;
 //! - `BuildPayload` for height `h` runs only after `h − 1` is applied (the builder filters the
 //!   applied transactions), and `PayloadReady{req}` follows at most once an `EMPTY` answer;
 //! - the queues other than the `Execute`s are bounded: discards of one height merge (keeping
@@ -420,7 +421,12 @@ impl ExecSched {
                 let commit = self.commits.front().cloned()?;
                 match result {
                     Ok(Some(local)) if local == commit.qc.result => {
-                        self.failures = 0;
+                        // Re-prepare after append is part of the same failed commit attempt.
+                        // In particular, archive capture may still be pending after State
+                        // publication: obtaining that retained result is not recovery.
+                        if !self.appended {
+                            self.failures = 0;
+                        }
                         self.retry_at = None;
                         self.stage = if self.appended {
                             Stage::Appended

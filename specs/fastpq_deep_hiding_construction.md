@@ -187,11 +187,13 @@ overflow and exact resource limits. Additional native tests check nonzero R in
 coefficient composition, the highest permitted coefficient through all five
 folds and all 128 terminal values, authenticated R mutation, and rejection of
 the old two-value leaf. The September 28 normal-library check passes; the fresh
-feature-enabled focused suite passes 128 tests, including masked replay,
+feature-enabled focused suite passes 134 tests, including masked replay,
 full-numerator arithmetic, typed coefficient commitments, all five coefficient
 folds, streamed frontier parity, private frame storage, returned device-digest
-erasure and whole-attempt resource rejection. Two separately selected actual
-Metal tests pass leaf parity and required-device readiness. The current Python
+erasure and whole-attempt resource rejection. Three separately selected actual
+Metal tests pass leaf/parent parity and required-device readiness, including
+1024-job batches. Eleven external API tests and one public usage doctest also
+pass. The current Python
 geometry, hiding and source-budget selection passes 37 tests. See the
 [source-scoped validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md).
 
@@ -204,7 +206,7 @@ streamed tree stacks; no complete LDE or digest tree is retained. A failed attem
 does not retry with reused entropy. This normal-library module serves the offline
 quantity facade. Its full-size roundtrip diagnostic is explicitly selected
 separately because one attempt hashes over 69 million typed leaves/parents; it
-has not been executed in the September 28 validation. No full-size runtime,
+has not yet completed in the September 28 validation. No full-size runtime,
 peak-RSS or complete hiding result is claimed.
 
 Next execute full-size valid/invalid relation witnesses and qualify complete

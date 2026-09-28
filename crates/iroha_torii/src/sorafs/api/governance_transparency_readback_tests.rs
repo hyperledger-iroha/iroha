@@ -271,12 +271,28 @@ fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
         .find("async fn governance_dag_blocking_response")
         .expect("governance DAG blocking helper");
     let helper_end = source[helper_start..]
-        .find("\nfn governance_car_queue_response")
+        .find("\nasync fn sorafs_heavy_blocking_task")
         .map(|offset| helper_start + offset)
         .expect("end of governance DAG blocking helper");
     let helper = &source[helper_start..helper_end];
     assert!(helper.contains("acquire_query_admission(state.as_ref(), true)"));
-    assert!(helper.contains("tokio::task::spawn_blocking"));
+    assert!(helper.contains("crate::panic_recovery::join_recoverable("));
+    let worker_start = helper
+        .find("crate::panic_recovery::spawn_blocking_recoverable(move || {")
+        .expect("file reads must run on the recoverable blocking worker");
+    let worker = &helper[worker_start..];
+    assert!(worker.contains("let _permit = permit;\n            operation(&state)"));
+    let recovery_source = include_str!("../../panic_recovery.rs");
+    let blocking_wrapper = recovery_source
+        .split("pub(crate) fn spawn_blocking_recoverable")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(crate) async fn catch_async_recoverable")
+                .next()
+        })
+        .expect("blocking panic-recovery implementation");
+    assert!(blocking_wrapper.contains("tokio::task::spawn_blocking(move ||"));
+    assert!(blocking_wrapper.contains("catch_unwind_suppressed(operation)"));
 }
 #[test]
 fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {

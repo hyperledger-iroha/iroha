@@ -130,18 +130,23 @@ structural work units; an oversized plan fails before private computation.
 
 The September 28 fixed-SMT preflight fixture reports 1,065,090,768 payload bytes,
 3,468,335,009,584 structural work units and 69,362,447 hash calls. These are
-checked plan charges for that public context, not measurements of a complete
+checked plan charges for that public context, unchanged with 1024-job buffers
+because another phase determines the peak. They are not measurements of a complete
 proof attempt. The [native validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md)
 separates the passing library, kernel and actual Metal tests from the outstanding
 full-size producer execution.
 
 Fresh entropy comes from an explicit `TryCryptoRng`; the normal offline wrapper
 uses `OsRng`. Failed attempts do not reuse masks. CPU and required-device policies
-select bulk leaf hashing only; streamed parents and transcript hashing use CPU.
+select bulk leaf and independent lower-tree parent hashing. The ordered upper
+tree stack and transcript hashing use CPU. Parent batching preserves every
+natural level/index and reuses caller-owned clearing digest slots.
 Required-device availability is checked with public input before private-tree
 work, entropy and transforms, and actual dispatch checks quarantine again.
 There is no implicit CPU fallback for required-device failures. Leaves are
-prepared in fixed batches of at most 32, independent of worker count. No hardware
+prepared in fixed batches of at most 1024, independent of worker count; the
+shared plan charges canonical bodies, frames, ordered parallel job results and
+executor buffers before allocation. No hardware
 or whole-prover performance qualification follows from this dispatch wiring.
 
 ## Bounded wire verification

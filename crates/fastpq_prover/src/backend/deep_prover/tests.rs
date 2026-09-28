@@ -324,10 +324,12 @@ fn measured_required_metal_leaf_and_cpu_parent_costs() {
         Oracle::Fri(4),
     ] {
         let (_, _, leaves, width) = oracle.shape().unwrap();
-        let payload = (0..deep_leaf_batch::CAPACITY * width / 8)
+        let count = leaves.min(deep_leaf_batch::CAPACITY);
+        let batches = 4096 / count;
+        let payload = (0..count * width / 8)
             .flat_map(|value| (value as u64 + 7).to_le_bytes())
             .collect::<Vec<_>>();
-        let indices = (0..deep_leaf_batch::CAPACITY).collect::<Vec<_>>();
+        let indices = (0..count).collect::<Vec<_>>();
         let mut output = SecretPolynomial::<[u64; 6]>::zeroed(indices.len()).unwrap();
         // Warm this oracle's public prefix cache before measuring its fixed batch.
         deep_leaf_batch::hash(
@@ -341,7 +343,7 @@ fn measured_required_metal_leaf_and_cpu_parent_costs() {
         )
         .unwrap();
         let started = Instant::now();
-        for _ in 0..32 {
+        for _ in 0..batches {
             deep_leaf_batch::hash(
                 &binding,
                 oracle,
@@ -379,12 +381,12 @@ fn measured_required_metal_leaf_and_cpu_parent_costs() {
         std::hint::black_box(left);
         let parent_seconds = started.elapsed().as_secs_f64();
         let estimate = 2.0
-            * (leaf_seconds * leaves as f64 / (32 * deep_leaf_batch::CAPACITY) as f64
+            * (leaf_seconds * leaves as f64 / (batches * count) as f64
                 + parent_seconds * (leaves - 1) as f64 / 4096.0);
         estimated_hash_seconds += estimate;
         eprintln!(
             "oracle={oracle:?}; leaf_samples={}; leaf_seconds={leaf_seconds:.6}; parent_samples=4096; parent_seconds={parent_seconds:.6}; two_tree_hash_seconds_estimate={estimate:.3}",
-            32 * deep_leaf_batch::CAPACITY
+            batches * count
         );
     }
     eprintln!(
@@ -394,8 +396,20 @@ fn measured_required_metal_leaf_and_cpu_parent_costs() {
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 #[test]
-#[ignore = "bounded batch-size comparison of real Metal continuations; no live batch-size change"]
+#[ignore = "bounded batch-size comparison of real Metal continuations"]
 fn measured_required_metal_batch_sizes_separate_preparation_and_dispatch() {
+    measure_required_metal_batch_sizes(&[32, 256, 1024], 4096);
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[test]
+#[ignore = "bounded larger typed Metal dispatch measurement; production remains at its fixed capacity"]
+fn measured_required_metal_larger_typed_batches_without_changing_production_capacity() {
+    measure_required_metal_batch_sizes(&[4096, 8192], 8192);
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
     use std::time::Instant;
 
     use rayon::prelude::*;
@@ -416,7 +430,8 @@ fn measured_required_metal_batch_sizes_separate_preparation_and_dispatch() {
         (Oracle::Row, true),
     ] {
         let (_, _, _, width) = oracle.shape().unwrap();
-        for count in [32, 256, 1024] {
+        for &count in counts {
+            assert!(count > 0 && count <= 8192 && samples % count == 0);
             let payloads = (0..count * width / 8)
                 .flat_map(|value| (value as u64 + 7).to_le_bytes())
                 .collect::<Vec<_>>();
@@ -424,8 +439,8 @@ fn measured_required_metal_batch_sizes_separate_preparation_and_dispatch() {
             let mut dispatch = 0.0;
             let mut owner_cleanup = 0.0;
             let mut charged = 0;
-            // One warm iteration, then exactly 4096 samples at each batch size.
-            for iteration in 0..=4096 / count {
+            // One warm iteration, then the same sample count at each batch size.
+            for iteration in 0..=samples / count {
                 let started = Instant::now();
                 let frames = (0..count)
                     .into_par_iter()
@@ -443,11 +458,20 @@ fn measured_required_metal_batch_sizes_separate_preparation_and_dispatch() {
                     .collect::<std::result::Result<Vec<_>, _>>()
                     .unwrap();
                 let bytes = frames.iter().map(|frame| frame.payload_len()).sum();
-                let jobs = frames
-                    .iter()
-                    .map(|frame| frame.job())
-                    .collect::<Result<Vec<_>>>()
-                    .unwrap();
+                // The larger diagnostic does not enter or change the production
+                // batch helper. Its exact actual frame bytes must independently
+                // fit the same typed executor limit before dispatch.
+                let jobs = if count <= super::super::deep_leaf_batch::CAPACITY {
+                    super::super::deep_leaf_batch::prepare_jobs(&frames).unwrap()
+                } else {
+                    frames
+                        .par_iter()
+                        .map(|frame| frame.job())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()
+                        .unwrap()
+                };
                 let preparation_seconds = started.elapsed().as_secs_f64();
                 charged = crate::digest384_batch::last_fields_payload_charge(count, bytes).unwrap();
                 let started = Instant::now();
@@ -477,7 +501,7 @@ fn measured_required_metal_batch_sizes_separate_preparation_and_dispatch() {
                 }
             }
             eprintln!(
-                "oracle={oracle:?}; parent={parent}; batch={count}; samples=4096; frame_and_job_preparation_seconds={preparation:.6}; executor_seconds={dispatch:.6}; returned_owner_cleanup_seconds={owner_cleanup:.6}; executor_payload_charge={charged}; executor includes host packing, GPU execution, readback and internal clearing, not isolated kernel time"
+                "oracle={oracle:?}; parent={parent}; batch={count}; samples={samples}; frame_and_job_preparation_seconds={preparation:.6}; executor_seconds={dispatch:.6}; returned_owner_cleanup_seconds={owner_cleanup:.6}; executor_payload_charge={charged}; executor includes host packing, GPU execution, readback and internal clearing, not isolated kernel time"
             );
         }
     }

@@ -79,8 +79,13 @@ is charged. These allowances are admission policy, not measured allocator or RSS
 bounds. Source construction/replay peaks and maximum-profile time/memory still
 require native qualification. Packing buffers, replay coefficients, incomplete
 private opening scratch and retained DER/SHA source cells use guaranteed clearing.
+Fallible DER/SHA builders guard populated field, word-event and call-product tables
+before transferring them into retained owners, including late binding failures.
 Private word-event allocations move between clearing owners; public fixed schedules
-retain their original values. This does not claim erasure of every transient
+retain their original values. Joined commitment hashing absorbs each resident batch
+of at most eight columns in row order, parallelizing independent 1,024-row hash-state
+chunks with one clearing 64-byte buffer per active chunk. It preserves the exact
+framed bytes, and failures poison the builder before it can publish a root. This does not claim erasure of every transient
 compiler-generated scalar or stack copy.
 The conservative early reservation currently leaves about 600 MB for the borrowed
 assembly. A complete maximum-profile assembly has not yet been admitted or measured;
@@ -113,3 +118,13 @@ TODO: complete fresh native validation and independent whole-construction
 soundness/privacy review, produce the deterministic full-profile X5S1 KAT and
 adversarial corpus, and measure the maximum prover on supported hardware before
 populating qualification pins or enabling the profile.
+
+The ignored release-only `maximum_profile_assembly_payload_and_source_admission_diagnostic`
+constructs the complete deterministic maximum structural fixture, records actual
+assembly capacities and construction time, and checks unchanged source admission.
+`maximum_profile_streaming_hash_cost_diagnostic` measures the actual joined row
+hashing with the full column widths and a smaller public row sample, comparing
+one-column and eight-column batches under fixed worker counts. Its linear timing
+estimate excludes source replay, FFTs, quotient/DEEP/FRI and CA work, and differs in
+cache residency from a full proof. Neither diagnostic establishes release readiness;
+run the assembly test in its own process with `/usr/bin/time -l` for measured RSS.

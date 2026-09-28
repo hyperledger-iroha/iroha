@@ -7,9 +7,15 @@
 //! creditable recipient is registered with the effect and fee classification of
 //! `Register<Account>`.
 
-use super::{Error, not_wired};
-use crate::state::{StateTransaction, WorldReadOnly};
-use iroha_data_model::account::AccountId;
+use super::Error;
+use crate::{
+    smartcontracts::Execute,
+    state::{StateTransaction, WorldReadOnly},
+};
+use iroha_data_model::{
+    account::{Account, AccountId},
+    isi::Register,
+};
 
 /// Classification of an inbound recipient (§4.12.3 steps 1–3).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,15 +52,24 @@ pub fn classify_recipient(
 
 /// Register `account` if it does not exist, returning whether it was registered now.
 ///
+/// The registration executes `Register<Account>(Account::new(account))` as the account itself,
+/// so it has exactly the effects, controller checks and events of an ordinary registration
+/// (§4.12.3, §4.19); core applies it without an executor permission check because the SCCP
+/// rule, not a user, authorizes it.
+///
 /// # Errors
 ///
-/// Fails closed until ws32 implements implicit registration.
+/// Propagates the rejection of the `Register<Account>` execution (for example a controller
+/// algorithm that account admission refuses).
 pub fn ensure_registered(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-    _account: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    account: &AccountId,
 ) -> Result<bool, Error> {
-    // TODO(ws32): `Account::new(account)` with `Register<Account>` effects and fee class.
-    Err(not_wired("implicit recipient registration", "ws32"))
+    if state_transaction.world.account(account).is_ok() {
+        return Ok(false);
+    }
+    Register::account(Account::new(account.clone())).execute(account, state_transaction)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -63,7 +78,7 @@ mod tests {
     use crate::smartcontracts::isi::sccp::test_support::{authority, blank_state, header};
 
     #[test]
-    fn skeleton_classification_bounces_and_registration_fails_closed() {
+    fn skeleton_classification_bounces_and_registration_is_idempotent() {
         let state = blank_state();
         assert_eq!(
             classify_recipient(&state.world_view(), &[1, 2, 3]),
@@ -71,7 +86,8 @@ mod tests {
         );
         let mut block = state.block(header(2));
         let mut stx = block.transaction();
-        let error = ensure_registered(&mut stx, &authority(1)).expect_err("skeleton");
-        assert!(error.to_string().contains("TODO(ws32)"), "{error}");
+        assert_eq!(ensure_registered(&mut stx, &authority(1)), Ok(true));
+        assert!(stx.world.account(&authority(1)).is_ok());
+        assert_eq!(ensure_registered(&mut stx, &authority(1)), Ok(false));
     }
 }

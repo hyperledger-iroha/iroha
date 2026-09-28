@@ -3,29 +3,99 @@ use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
 
 fn certified_reputation_chain() -> CertifiedTestChain {
     use iroha_data_model::{
-        isi::sorafs::SetSorafsReputationJournalAuthorityPolicy, permission::Permissions,
+        account::Account,
+        asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
+        isi::{
+            Grant, Register,
+            sorafs::{
+                SetSorafsOrderbookPolicy, SetSorafsReputationJournalAuthorityPolicy,
+                SetSorafsReservePolicy,
+            },
+        },
+        sorafs::{
+            orderbook::{ORDERBOOK_ADMISSION_POLICY_VERSION_V1, OrderbookAdmissionPolicyV1},
+            reserve::{
+                RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyV1, ReservePolicyV1,
+            },
+        },
     };
-    use iroha_executor_data_model::permission::sorafs::CanManageSorafsReputationJournalPolicy;
+    use iroha_executor_data_model::permission::sorafs::{
+        CanManageSorafsReputationJournalPolicy, CanSetSorafsPricing, CanSetSorafsReservePolicy,
+    };
     let mut config = TestChainConfig::new(crate::state::World::default(), 1_750_000_000_000);
     let authority = AccountId::new(config.genesis_key.public_key().clone());
-    let mut permissions = Permissions::new();
-    permissions.insert(CanManageSorafsReputationJournalPolicy.into());
-    config
-        .world
-        .account_permissions
-        .insert(authority.clone(), permissions);
     let policy = ReputationJournalAuthorityPolicyV1 {
         version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
         revision: 1,
         predecessor_policy_digest: None,
         por_recorder_authority: authority.clone(),
         dispute_recorder_authority: authority.clone(),
-        token_recorder_authority: authority,
+        token_recorder_authority: authority.clone(),
         max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
     };
-    config
-        .genesis_instructions
-        .push(SetSorafsReputationJournalAuthorityPolicy::new(policy).into());
+    config.genesis_instructions.extend([
+        Grant::account_permission(CanManageSorafsReputationJournalPolicy, authority.clone()).into(),
+        SetSorafsReputationJournalAuthorityPolicy::new(policy).into(),
+        Grant::account_permission(CanSetSorafsPricing, authority.clone()).into(),
+    ]);
+    // Capture reads all governed feeds, including empty ones. Activate their real policies
+    // through signed genesis so these tests exercise authoritative query validation.
+    config.genesis_instructions.push(
+        SetSorafsOrderbookPolicy::new(OrderbookAdmissionPolicyV1 {
+            version: ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            market_id: [0xA5; 32],
+            matcher_authority: authority.clone(),
+            settlement_authority: authority.clone(),
+            paused: false,
+            min_order_gib: 1,
+            max_order_gib: 1024,
+            price_tick_micro_xor: 10,
+            max_maker_fee_bps: 100,
+            max_taker_fee_bps: 200,
+            max_order_lifetime_secs: 3600,
+            max_receipt_age_secs: 300,
+            max_clock_skew_secs: 5,
+            max_receipt_bytes: 1024,
+            max_receipts_per_channel: 2,
+        })
+        .into(),
+    );
+    let custody = iroha_test_samples::ALICE_ID.clone();
+    let asset_id = AssetDefinitionId::derive_from_components(
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+        "reserve".parse().unwrap(),
+    );
+    config.genesis_instructions.extend([
+        Register::account(Account::new(custody.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_id.clone(),
+            "Reserve".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+        Grant::account_permission(CanSetSorafsReservePolicy, authority.clone()).into(),
+        SetSorafsReservePolicy::new(ReserveAuthorityPolicyV1 {
+            version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: ReservePolicyV1::default(),
+            asset_definition: asset_id,
+            custody_account: custody,
+            treasury_account: authority.clone(),
+            operations_authority: authority.clone(),
+            decision_authority: authority,
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: sorafs_manifest::deal::XorQuantity::try_from_micro(1_000_000_000)
+                .unwrap(),
+            max_pending_movements_per_provider: 4,
+            max_open_appeals_per_provider: 2,
+        })
+        .into(),
+    ]);
     CertifiedTestChain::start(config).expect("current certified reputation chain")
 }
 
@@ -98,7 +168,7 @@ fn certified_retention_ambiguous_cas_restart_and_successor_capture_preserve_exac
     let authority = TestRetentionAuthority::new();
     authority.set_behavior(TestRetentionCasBehavior::ApplyAmbiguous);
     let binding = authority.binding();
-    archive
+    let installed = archive
         .approve_and_install_certified_compaction(
             &proposal,
             &chain.state().query_view(),
@@ -107,6 +177,10 @@ fn certified_retention_ambiguous_cas_restart_and_successor_capture_preserve_exac
             &authority,
         )
         .unwrap();
+    assert_eq!(installed.retention_floor(), &floor);
+    assert_eq!(installed.checkpoint_digest(), proposal.checkpoint_digest());
+    assert_eq!(installed.pruned_anchors(), 1);
+    assert_eq!(installed.generation(), archive.health_generation().unwrap());
     assert_eq!(
         archive.retention_floor(&chain.network_id()).unwrap(),
         Some(floor.clone())

@@ -191,3 +191,16 @@ goals have implementation and regression evidence.
   replacement tests use the actual current index writer, certified chain and
   insertion implementation, including release notification and partial-I/O retry.
   A fresh native compile and execution remain required after these corrections.
+- The first executable Core query pass runs 704 tests: 691 pass and 13 fail.
+  Six failures are new fixture setup errors (foreign-network Kura rebinding and
+  five missing orderbook/reserve policy setups); their fixtures are corrected
+  while preserving the refusal checks and using signed genesis policy grants.
+  Seven broader asset-query fixtures fail with `FASTPQ source has no retained
+  producer invocation`; those are outside the SoraFS changes. Three current
+  executor archive tests reach the same missing-policy setup error, also fixed.
+  All corrected cases require rebuilt execution; these results do not close SR8.
+- Independent review finds that commit retries reset backoff during re-prepare.
+  The driver now retains failure counts after durable append until commit succeeds,
+  with regressions for exponential delay/cap, failed re-prepare and reset on the
+  next block. The restart fixture now joins its executor and releases all archive
+  owners before reopening, and tests partial startup capture followed by exact retry.

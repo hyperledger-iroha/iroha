@@ -27,6 +27,7 @@ use super::{
         ZkX509DerNodeRowV1, build_strict_der_document_trace_v1,
     },
     der_limits::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
+    private_table::{PrivateTableV1, zeroize_field_rows_v1},
 };
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1,
@@ -487,9 +488,7 @@ impl ZkX509DerStarkBaseV1 {
         }
         zeroize::Zeroize::zeroize(&mut self.private_shape.parser_rows);
         zeroize::Zeroize::zeroize(&mut self.private_shape.comparator_rows);
-        for value in self.rows.iter_mut().flatten() {
-            value.zeroize_v1();
-        }
+        zeroize_field_rows_v1(&mut self.rows);
     }
     /// Recursively overwrite all private geometry and committed field rows.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -503,6 +502,12 @@ impl ZkX509DerStarkBaseV1 {
             && self.private_shape.parser_rows == 0
             && self.private_shape.comparator_rows == 0
             && self.rows.is_empty()
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerStarkBaseV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_cells_v1();
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -564,6 +569,13 @@ pub(crate) struct ZkX509DerStarkNodeEventV1<A = F> {
 pub(crate) struct ZkX509DerStarkTraceV1 {
     pub(crate) base: ZkX509DerStarkBaseV1,
     pub(crate) aux_rows: Vec<[F; ZK_X509_DER_STARK_AUX_WIDTH_V1]>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509DerStarkTraceV1 {
+    fn drop(&mut self) {
+        zeroize_field_rows_v1(&mut self.aux_rows);
+        // The base owner clears itself after this destructor returns.
+    }
 }
 /// Final bus values exported by the adapter.
 ///
@@ -1240,7 +1252,7 @@ pub(crate) fn build_zk_x509_der_stark_base_v1(
         .iter()
         .map(|length| vec![usize::MAX; usize::from(*length)])
         .collect();
-    let mut rows = Vec::new();
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     for (document, ((encoded, trace), length)) in documents
         .iter()
         .zip(&traces)
@@ -1333,7 +1345,7 @@ pub(crate) fn build_zk_x509_der_stark_base_v1(
         .ok_or(ZkX509DerStarkErrorV1::Shape)?;
     let final_document_u64 =
         u64::try_from(final_document).map_err(|_| ZkX509DerStarkErrorV1::Resource)?;
-    for row in &mut rows {
+    for row in rows.iter_mut() {
         row[BASE_ROW_ACTIVE] = F::ONE;
         row[BASE_FINAL_DOCUMENT] = F(final_document_u64);
         write_bits_v1(row, BASE_FINAL_DOCUMENT_BITS, 5, final_document_u64);
@@ -1347,7 +1359,7 @@ pub(crate) fn build_zk_x509_der_stark_base_v1(
     }
     Ok(ZkX509DerStarkBaseV1 {
         private_shape,
-        rows,
+        rows: rows.into_vec(),
     })
 }
 fn pack_bits_v1<A: PolynomialAirFieldV1>(bits: &[A]) -> A {
@@ -1885,7 +1897,8 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
     let mut byte_table_zero_count = [F::ZERO; ZK_X509_DER_STARK_BUS_LANES_V1];
     let mut byte_query_zero_count = [F::ZERO; ZK_X509_DER_STARK_BUS_LANES_V1];
     let mut input_byte = [F::ONE; ZK_X509_DER_STARK_BUS_LANES_V1];
-    let mut aux_rows = Vec::with_capacity(base.rows.len());
+    let mut aux_rows =
+        PrivateTableV1::new(Vec::with_capacity(base.rows.len()), zeroize_field_rows_v1);
     for (index, current) in base.rows.iter().enumerate() {
         let parser = index < base.private_shape.parser_rows;
         let comparator = !parser;
@@ -2066,7 +2079,10 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
         write_aux_lanes_v1(&mut aux, AUX_INPUT_BYTE_AFTER, input_byte);
         aux_rows.push(aux);
     }
-    let trace = ZkX509DerStarkTraceV1 { base, aux_rows };
+    let trace = ZkX509DerStarkTraceV1 {
+        base,
+        aux_rows: aux_rows.into_vec(),
+    };
     let terminals = zk_x509_der_stark_terminals_v1(&trace)?;
     let private_document_product = derive_zk_x509_der_stark_private_document_product_v1(
         &trace.base.private_shape,

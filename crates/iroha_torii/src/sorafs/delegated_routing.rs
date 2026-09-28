@@ -22,7 +22,9 @@ use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_logger::{debug, warn};
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};
-use sorafs_manifest::{AdvertEndpoint, EndpointKind, ProviderAdvertV1, TransportProtocol};
+use sorafs_manifest::{
+    AdvertEndpoint, AdvertValidationError, EndpointKind, ProviderAdvertV1, TransportProtocol,
+};
 pub(crate) use sorafs_orchestrator::routing_authority::RoutingAuthorityCache;
 use sorafs_orchestrator::routing_authority::{
     FinalizedStateIdentityV1, RoutingAuthorityError, RoutingAuthoritySource,
@@ -40,7 +42,6 @@ const MAX_FILTER_TERMS: usize = 32;
 const MAX_FILTER_TERM_BYTES: usize = 63;
 const MAX_ACCEPT_BYTES: usize = 1_024;
 const MAX_ACCEPT_RANGES: usize = 32;
-const MAX_ADVERT_ENDPOINTS: usize = 32;
 const MAX_ENDPOINT_BYTES: usize = 512;
 const POSITIVE_CACHE_TTL_SECS: u64 = 300;
 const NEGATIVE_CACHE_TTL_SECS: u64 = 15;
@@ -447,10 +448,12 @@ impl RoutingPeer {
         }
         advert
             .validate_with_body(now)
-            .map_err(|_| RoutingError::AdvertCorrupt)?;
-        if advert.body.endpoints.len() > MAX_ADVERT_ENDPOINTS {
-            return Err(RoutingError::AdvertCapacityExceeded);
-        }
+            .map_err(|error| match error {
+                AdvertValidationError::TooManyEndpoints { .. } => {
+                    RoutingError::AdvertCapacityExceeded
+                }
+                _ => RoutingError::AdvertCorrupt,
+            })?;
         let public_key: [u8; 32] = advert
             .signature
             .public_key
@@ -1823,18 +1826,36 @@ mod tests {
         assert_eq!(http_date(784_111_777), "Sun, 06 Nov 1994 08:49:37 GMT");
     }
     #[test]
-    fn advert_endpoint_and_response_bounds_fail_closed() {
+    fn advert_endpoint_bound_preserves_canonical_validation() {
+        use sorafs_manifest::provider_advert::PROVIDER_ADVERT_ENDPOINTS_MAX_V1;
+
         let mut advert = sample_advert([0xA1; 32], 1, false);
-        advert.body.endpoints = (0..=MAX_ADVERT_ENDPOINTS)
+        advert.body.endpoints = (0..PROVIDER_ADVERT_ENDPOINTS_MAX_V1)
             .map(|index| AdvertEndpoint {
                 kind: EndpointKind::Torii,
                 host_pattern: format!("provider-{index}.example"),
                 metadata: Vec::new(),
             })
             .collect();
+        let peer = RoutingPeer::from_advert(&advert, NOW)
+            .expect("advert at the canonical endpoint limit validates")
+            .expect("unexpired advert");
+        assert_eq!(peer.addrs.len(), PROVIDER_ADVERT_ENDPOINTS_MAX_V1);
+        advert.body.endpoints.push(AdvertEndpoint {
+            kind: EndpointKind::Torii,
+            host_pattern: "one-too-many.example".to_owned(),
+            metadata: Vec::new(),
+        });
         assert_eq!(
             RoutingPeer::from_advert(&advert, NOW),
             Err(RoutingError::AdvertCapacityExceeded)
+        );
+        advert.body.endpoints.pop();
+        advert.body.endpoints[0].host_pattern.clear();
+        assert_eq!(
+            RoutingPeer::from_advert(&advert, NOW),
+            Err(RoutingError::AdvertCorrupt),
+            "an in-budget advert must still pass canonical body validation"
         );
     }
     #[test]

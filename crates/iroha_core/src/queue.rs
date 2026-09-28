@@ -5517,6 +5517,9 @@ struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
     nexus: &'view Nexus,
     pipeline: &'view Pipeline,
+    /// Committed SCCP attestation statement digests (block hashes and the live `NetworkId`),
+    /// which SCCP exempt pre-verification checks signatures against.
+    sccp_digests: &'view dyn crate::smartcontracts::isi::sccp::subjects::SccpStatementDigests,
     next_block_height: u64,
     ledger_time_ms: u64,
 }
@@ -5525,6 +5528,7 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
         world: &'view W,
         nexus: &'view Nexus,
         pipeline: &'view Pipeline,
+        sccp_digests: &'view dyn crate::smartcontracts::isi::sccp::subjects::SccpStatementDigests,
         next_block_height: u64,
         ledger_time_ms: u64,
     ) -> EagerAdmissionStateAccess<'view, W> {
@@ -5532,6 +5536,7 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
             world,
             nexus,
             pipeline,
+            sccp_digests,
             next_block_height,
             ledger_time_ms,
         }
@@ -5547,6 +5552,7 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
     ) -> Result<Option<SccpAdmissionKeysV1>, SccpAdmissionRejectV1> {
         crate::smartcontracts::isi::sccp::admission::classify(
             self.world,
+            self.sccp_digests,
             self.next_block_height,
             transaction,
         )
@@ -12458,6 +12464,7 @@ impl Queue {
                     state_view.world(),
                     &state_view.nexus,
                     &state_view.pipeline,
+                    state_view,
                     next_block_height,
                     state_view.latest_block().map_or(0, |block| {
                         u64::try_from(block.header().creation_time().as_millis())
@@ -17085,6 +17092,7 @@ impl Queue {
             state_view.world(),
             &state_view.nexus,
             &state_view.pipeline,
+            state_view,
             next_block_height,
             state_view.latest_block().map_or(0, |block| {
                 u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
@@ -17710,6 +17718,7 @@ impl Queue {
             state_view.world(),
             &state_view.nexus,
             &state_view.pipeline,
+            &state_view,
             next_block_height,
             state_view.latest_block().map_or(0, |block| {
                 u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
@@ -17831,6 +17840,7 @@ impl Queue {
                         state_view.world(),
                         &state_view.nexus,
                         &state_view.pipeline,
+                        state_view,
                         height,
                         ledger_time_ms,
                     );
@@ -19096,6 +19106,7 @@ impl Queue {
             state_view.world(),
             &state_view.nexus,
             &state_view.pipeline,
+            &state_view,
             next_block_height,
             state_view.latest_block().map_or(0, |block| {
                 u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
@@ -26118,6 +26129,7 @@ pub mod tests {
             state_view.world(),
             &state_view.nexus,
             &state_view.pipeline,
+            &state_view,
             1,
             0,
         );

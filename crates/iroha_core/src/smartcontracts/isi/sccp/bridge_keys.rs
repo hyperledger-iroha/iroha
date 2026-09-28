@@ -5,23 +5,217 @@
 //! is the key's compressed secp256k1 public key. An account is a bridge key's account iff its
 //! single secp256k1 controller derives (§3.8) an address present in `sccp_bridge_key_owners`.
 
-use super::{Error, not_wired};
-use crate::state::StateTransaction;
+use super::{Error, store};
+use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly};
 use iroha_crypto::{Algorithm, PublicKey};
-use iroha_data_model::{account::AccountId, isi::sccp::SetSccpBridgeKeyV1};
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    isi::sccp::SetSccpBridgeKeyV1,
+    sccp::{
+        events::{SccpBridgeKeySetV1, SccpEvent},
+        keys::SccpBridgeKeyV1,
+    },
+};
+use iroha_sccp::v1::{
+    eip712::{BridgeKeyPopFieldsV1, peer_key_hash},
+    signature::{address_of, verify_signature},
+};
 
-/// Execute `SetSccpBridgeKeyV1` (§4.2.2).
+/// Return the current epoch of `height` from the Sumeragi core's schedule, whose epochs are
+/// fixed-length runs after the genesis height (`specs/sumeragi.md` §11.7).
+#[must_use]
+pub fn current_epoch(world: &(impl WorldReadOnly + ?Sized), height: u64) -> Option<u64> {
+    let config = world.consensus_schedule().get(height)?;
+    super::height::sumeragi_epoch(height, 1, config.params.epoch_length_blocks)
+        .ok()
+        .map(|(epoch, _)| epoch)
+}
+
+/// Return the epoch of the first height of the Sumeragi core's committed schedule window, the
+/// deterministic "current epoch" of fee decisions made without a block height.
+#[must_use]
+pub fn schedule_epoch(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64> {
+    let first = world.consensus_schedule().entries().first()?;
+    super::height::sumeragi_epoch(first.height, 1, first.params.epoch_length_blocks)
+        .ok()
+        .map(|(epoch, _)| epoch)
+}
+
+/// Return whether a key registration is fee-exempt (§4.2.3): it comes from the new key's own
+/// account and the peer has not used its exempt registration in the current epoch.
+#[must_use]
+pub fn binding_exempt(
+    world: &(impl WorldReadOnly + ?Sized),
+    instruction: &SetSccpBridgeKeyV1,
+    authority: &AccountId,
+) -> bool {
+    let Some(public_key) = instruction.public_key else {
+        return false;
+    };
+    if account_of(&public_key).ok().as_ref() != Some(authority) {
+        return false;
+    }
+    let last = store::bridge_keys::get(world, &instruction.peer)
+        .and_then(|state| state.last_exempt_binding_epoch);
+    last.is_none() || last != schedule_epoch(world)
+}
+
+/// Check `instruction` against `world` at `height` (§4.2.2 validation 1–6) and return the
+/// validated key, if one is registered (a revocation returns `None`).
 ///
 /// # Errors
 ///
-/// Fails closed until ws31 implements the instruction.
+/// Returns the first violated rule as text.
+pub fn check_binding(
+    world: &(impl WorldReadOnly + ?Sized),
+    network_id: &NetworkId,
+    height: u64,
+    genesis: bool,
+    instruction: &SetSccpBridgeKeyV1,
+    authority: &AccountId,
+) -> Result<Option<SccpBridgeKeyV1>, String> {
+    if store::parameters::get(world).is_none() {
+        return Err("SCCP does not exist on this network".into());
+    }
+    // 1. The peer is registered and not barred.
+    if !world.peers().iter().any(|peer| peer == &instruction.peer) {
+        return Err("the peer is not registered".into());
+    }
+    let state = store::bridge_keys::get(world, &instruction.peer)
+        .cloned()
+        .unwrap_or_default();
+    if state.is_barred() {
+        return Err("the peer is barred by a recorded fault".into());
+    }
+    // 2. The binding nonce is the next one.
+    if instruction.binding_nonce != state.next_binding_nonce {
+        return Err(format!(
+            "binding nonce {} differs from the expected {}",
+            instruction.binding_nonce, state.next_binding_nonce
+        ));
+    }
+    // 3. The peer's consensus key consents to the exact binding.
+    let binding = instruction.binding(*network_id);
+    instruction
+        .peer_signature
+        .verify(instruction.peer.public_key(), &binding)
+        .map_err(|_| "the peer signature does not verify over the binding".to_owned())?;
+    // 6. Activation: epoch 0 inside genesis, otherwise a future epoch.
+    if genesis {
+        if instruction.activation_epoch != 0 {
+            return Err("genesis bindings activate at epoch 0".into());
+        }
+    } else {
+        let epoch = current_epoch(world, height)
+            .ok_or_else(|| "the current epoch is unknown".to_owned())?;
+        if instruction.activation_epoch <= epoch {
+            return Err(format!(
+                "activation epoch {} is not after the current epoch {epoch}",
+                instruction.activation_epoch
+            ));
+        }
+    }
+    let Some(public_key) = instruction.public_key else {
+        // A revocation: any authority, ordinary fee.
+        return Ok(None);
+    };
+    // 4. The key is a valid point whose proof of possession recovers its address.
+    let address = address_of(&public_key)
+        .map_err(|_| "the bridge key is not a valid compressed secp256k1 point".to_owned())?;
+    let pop = instruction
+        .key_pop
+        .ok_or_else(|| "a key registration needs its proof of possession".to_owned())?;
+    let (_, peer_key_bytes) = instruction.peer.public_key().to_bytes();
+    let pop_digest = BridgeKeyPopFieldsV1 {
+        peer_key_hash: peer_key_hash(&peer_key_bytes),
+        bridge_address: address,
+        activation_epoch: instruction.activation_epoch,
+    }
+    .digest(network_id.as_bytes());
+    verify_signature(&pop_digest, &pop, &address)
+        .map_err(|error| format!("the key proof of possession does not verify: {error}"))?;
+    if store::bridge_key_owners::contains(world, &address) {
+        return Err("the bridge key address was used before".into());
+    }
+    // 5. Outside genesis the key's own account submits the registration.
+    if !genesis && authority != &account_of(&public_key).map_err(|error| error.to_string())? {
+        return Err("a key registration must come from the key's own account".into());
+    }
+    Ok(Some(SccpBridgeKeyV1 {
+        public_key,
+        address,
+        activation_epoch: instruction.activation_epoch,
+        registered_at_height: height,
+        faulted: false,
+    }))
+}
+
+/// Execute `SetSccpBridgeKeyV1` (§4.2.2).
+///
+/// A registration stages the key as pending (genesis promotes it at once), burns its address
+/// in the permanent owner index and registers the key's own account when it does not exist; a
+/// revocation stages the retirement of the active key from its activation epoch. Emits
+/// `SccpBridgeKeySet`.
+///
+/// # Errors
+///
+/// Fails when any §4.2.2 rule is violated, or when the key's account cannot be registered.
 pub fn execute_set_bridge_key(
-    _instruction: SetSccpBridgeKeyV1,
-    _authority: &AccountId,
-    _state_transaction: &mut StateTransaction<'_, '_>,
+    instruction: SetSccpBridgeKeyV1,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    // TODO(ws31): consent, PoP, binding nonce, pending key and implicit account (§4.2.2).
-    Err(not_wired("SetSccpBridgeKeyV1 execution", "ws31"))
+    let height = state_transaction._curr_block.height().get();
+    let genesis = state_transaction._curr_block.is_genesis();
+    let network_id = *state_transaction.network_id();
+    let key = check_binding(
+        &*state_transaction.world,
+        &network_id,
+        height,
+        genesis,
+        &instruction,
+        authority,
+    )
+    .map_err(|reason| Error::InvariantViolation(format!("SCCP bridge key: {reason}").into()))?;
+    let exempt = !genesis && binding_exempt(&*state_transaction.world, &instruction, authority);
+    let mut state = store::bridge_keys::get(&*state_transaction.world, &instruction.peer)
+        .cloned()
+        .unwrap_or_default();
+    state.next_binding_nonce = state.next_binding_nonce.saturating_add(1);
+    if exempt {
+        state.last_exempt_binding_epoch = schedule_epoch(&*state_transaction.world);
+    }
+    let account = match key {
+        Some(key) => {
+            store::bridge_key_owners::insert(
+                state_transaction,
+                key.address,
+                instruction.peer.clone(),
+            )?;
+            state.stage_key(key);
+            if genesis {
+                state.promote_for_epoch(0);
+            }
+            let account = account_of(&key.public_key)?;
+            super::recipients::ensure_registered(state_transaction, &account)?;
+            Some(account)
+        }
+        None => {
+            state.stage_revocation(instruction.activation_epoch);
+            None
+        }
+    };
+    store::bridge_keys::insert(state_transaction, instruction.peer.clone(), state)?;
+    state_transaction
+        .world
+        .emit_events(Some(SccpEvent::BridgeKeySet(SccpBridgeKeySetV1 {
+            peer: instruction.peer,
+            address: key.map(|key| key.address),
+            account,
+            activation_epoch: instruction.activation_epoch,
+        })));
+    Ok(())
 }
 
 /// Return the attestor account of the bridge key `public_key` (§4.2.1).

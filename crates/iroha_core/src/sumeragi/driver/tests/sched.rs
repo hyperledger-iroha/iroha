@@ -318,14 +318,24 @@ fn arrival_during_a_build_follows_an_empty_answer() {
         ]
     );
     rig.sched.transactions_available();
-    assert!(rig.sched.take_events().is_empty(), "at most once per request");
+    assert!(
+        rig.sched.take_events().is_empty(),
+        "at most once per request"
+    );
     // Without an arrival the answer waits for one, as before.
     rig.events.clear();
     rig.sched.build(8, 2, 1, 1024, 100);
     rig.drain();
-    assert!(!rig.events.iter().any(|e| matches!(e, Event::PayloadReady { .. })));
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, Event::PayloadReady { .. }))
+    );
     rig.sched.transactions_available();
-    assert_eq!(rig.sched.take_events(), vec![Event::PayloadReady { req: 8 }]);
+    assert_eq!(
+        rig.sched.take_events(),
+        vec![Event::PayloadReady { req: 8 }]
+    );
 }
 
 /// Requests of heights applied meanwhile are answered on the apply (never left waiting), and
@@ -661,6 +671,105 @@ fn failed_commit_prepares_again_without_a_second_append() {
         .filter(|e| matches!(e, Event::BlockApplied { .. }))
         .count();
     assert_eq!(applied, 1);
+}
+
+/// Successful re-preparation does not recover a failing commit or its pending archive
+/// capture. Keep increasing the delay through the cap, then reset it for the next block.
+#[test]
+fn repeated_commit_failures_preserve_backoff_and_reset_after_success() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut exec = Overlay::new();
+    exec.fail_commits = 9;
+    let blocks = FakeBlocks::default();
+    let (b1, bh1, r1) = child(1, (G, RG), 1);
+    sched.commit(b1.clone(), commit_qc(&b1, r1));
+
+    let mut now = 0;
+    for (attempt, delay) in [10, 20, 40, 80, 160, 320, 640, 1_000, 1_000]
+        .into_iter()
+        .enumerate()
+    {
+        assert!(drive(&mut sched, &mut exec, &blocks, now).is_empty());
+        assert_eq!(sched.applied(), 0, "commit has not completed");
+        assert_eq!(blocks.height(), 1, "the same block remains durable");
+        assert_eq!(exec.calls.len(), 2 * (attempt + 1));
+        assert!(
+            exec.calls
+                .chunks_exact(2)
+                .all(|calls| calls == ["prepare", "commit"])
+        );
+        assert_eq!(sched.wakeup(), now + delay);
+        assert!(sched.next(now + delay - 1).is_none(), "no early retry");
+        now += delay;
+    }
+    let events = drive(&mut sched, &mut exec, &blocks, now);
+    assert_eq!(sched.applied(), 1);
+    assert_eq!(sched.wakeup(), Millis::MAX);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockApplied { height: 1, .. }))
+            .count(),
+        1,
+        "one completion after recovery"
+    );
+
+    let (b2, _, r2) = child(2, (bh1, r1), 2);
+    exec.fail_commits = 1;
+    sched.commit(b2.clone(), commit_qc(&b2, r2));
+    assert!(drive(&mut sched, &mut exec, &blocks, now).is_empty());
+    assert_eq!(sched.applied(), 1);
+    assert_eq!(
+        sched.wakeup(),
+        now + 10,
+        "new block starts at the initial delay"
+    );
+    let events = drive(&mut sched, &mut exec, &blocks, now + 10);
+    assert_eq!(sched.applied(), 2);
+    assert_eq!(sched.wakeup(), Millis::MAX);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockApplied { height: 2, .. }))
+            .count(),
+        1
+    );
+}
+
+/// A failed re-prepare is still part of completing the already durable block. Its next
+/// successful prepare must not discard either the commit or prepare failure history.
+#[test]
+fn commit_backoff_survives_a_failed_reprepare() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut exec = Overlay::new();
+    exec.fail_commits = 2;
+    let blocks = FakeBlocks::default();
+    let (b1, _, r1) = child(1, (G, RG), 1);
+    sched.commit(b1.clone(), commit_qc(&b1, r1));
+    assert!(drive(&mut sched, &mut exec, &blocks, 0).is_empty());
+    assert_eq!(sched.wakeup(), 10);
+
+    exec.inner.state.lock().fail_apply = 1;
+    assert!(drive(&mut sched, &mut exec, &blocks, 10).is_empty());
+    assert_eq!(exec.calls, ["prepare", "commit", "prepare"]);
+    assert_eq!(sched.wakeup(), 30);
+    assert!(sched.next(29).is_none());
+    assert!(drive(&mut sched, &mut exec, &blocks, 30).is_empty());
+    assert_eq!(sched.wakeup(), 70);
+    assert!(sched.next(69).is_none());
+    assert_eq!(blocks.height(), 1);
+    assert_eq!(sched.applied(), 0);
+
+    let events = drive(&mut sched, &mut exec, &blocks, 70);
+    assert_eq!(sched.applied(), 1);
+    assert_eq!(sched.wakeup(), Millis::MAX);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockApplied { height: 1, .. }))
+            .count(),
+        1
+    );
 }
 
 /// Discards of one height merge while they wait (keeping what both keep), and rejections are

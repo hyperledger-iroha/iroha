@@ -136,9 +136,7 @@ impl JoinedTraceCommitmentPlanV1 {
                         .map_err(map_transparent_error_v1)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                for evaluation in &evaluations {
-                    commitment.absorb_column(evaluation)?;
-                }
+                commitment.absorb_columns_v1(&evaluations)?;
             }
         }
         commitment.finish()
@@ -190,9 +188,7 @@ impl JoinedTraceCommitmentPlanV1 {
                         .map_err(map_transparent_error_v1)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                for evaluation in &evaluations {
-                    commitment.absorb_column(evaluation)?;
-                }
+                commitment.absorb_columns_v1(&evaluations)?;
             }
         }
         commitment.finish()

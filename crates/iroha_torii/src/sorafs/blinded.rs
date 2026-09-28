@@ -1157,10 +1157,14 @@ mod tests {
     const SALT_BETA: &str = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff00112233445566778899aabbccddeeff";
 
     fn storage_backend(temp_dir: &tempfile::TempDir) -> StorageBackend {
+        let physical_parent = temp_dir
+            .path()
+            .canonicalize()
+            .expect("physical temp parent");
         StorageBackend::new(
             StorageConfig::builder()
                 .enabled(true)
-                .data_dir(temp_dir.path().join("storage"))
+                .data_dir(physical_parent.join("storage"))
                 .build(),
         )
         .expect("open canonical test storage")

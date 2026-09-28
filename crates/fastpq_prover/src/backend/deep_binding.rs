@@ -328,7 +328,7 @@ impl Context {
     }
 
     /// Prepare a complete parent; use the same strict shape checks as verification.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fastpq-gpu"))]
     pub(super) fn prepare_parent(
         &self,
         oracle: Oracle,

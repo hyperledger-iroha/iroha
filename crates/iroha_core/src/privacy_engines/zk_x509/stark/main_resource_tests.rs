@@ -204,3 +204,185 @@ fn whole_main_retaining_every_masked_coefficient_exceeds_the_release_memory_ceil
     // quotient matrices, public fixed polynomials, FFT scratch and allocator overhead.
     assert_eq!(((1_u64 << 19) + masks as u64) * 3712 * 8, 15_623_184_384);
 }
+
+/// Run in a separate optimized process with `/usr/bin/time -l` on macOS.
+/// This constructs real maximum-structural-shape private inputs and the complete
+/// assembly, but deliberately stops before mask sampling or proof construction.
+#[test]
+#[ignore = "native maximum-shape MAIN assembly allocation/time diagnostic; run --release"]
+fn maximum_profile_assembly_payload_and_source_admission_diagnostic() {
+    use super::super::super::{
+        allocation_payload::{p256_material_v1, sum_v1, vector_v1},
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        profile::ZK_X509_PROVER_TARGET_SECONDS_V1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+    use std::time::Instant;
+
+    assert!(
+        !cfg!(debug_assertions),
+        "run this diagnostic with --release"
+    );
+    let fixture_start = Instant::now();
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
+        .expect("maximum structural release fixture");
+    fixture.resource_shape.validate_v1().unwrap();
+    assert_eq!(fixture.resource_shape.certificate_chain_depth, 3);
+    assert_eq!(fixture.statement.disclosed_attributes.len(), 4);
+    assert_eq!(fixture.crl_entry_count, 64);
+    assert_eq!(fixture.resource_shape.maximum_serial_bytes, 20);
+    eprintln!(
+        "X509 assembly diagnostic fixture: seconds={:.6}, shape={:?}",
+        fixture_start.elapsed().as_secs_f64(),
+        fixture.resource_shape,
+    );
+    let trust_anchor = fixture.authoritative_state.trust_anchor();
+    let crl = fixture.authoritative_state.crl_record();
+    let start = Instant::now();
+    let assembly = build_zk_x509_main_trace_assembly_v1(
+        &fixture.statement,
+        ZkX509GovernanceV1 {
+            trust_anchor: &trust_anchor,
+            certificate_policy: fixture.authoritative_state.certificate_policy(),
+            crl: &crl,
+        },
+        &fixture.witness,
+    )
+    .expect("complete maximum structural MAIN assembly");
+    let construction = start.elapsed();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let payload = assembly.allocated_payload_bytes_v1();
+    let p256_materials = sum_v1(assembly.p256_materials.iter().map(p256_material_v1));
+    let der_rows = vector_v1(&assembly.der_base.rows);
+    let io_rows = vector_v1(&assembly.io.execution) + vector_v1(&assembly.io.sorted);
+    let projection_rows = vector_v1(&assembly.projection_trace.base.rows);
+    let remaining_owners = payload
+        .checked_sub(p256_materials + der_rows + io_rows + projection_rows)
+        .expect("component allocation charges are disjoint");
+    let assembly_allowance = plan
+        .remaining_source_and_runtime_envelope
+        .checked_sub(
+            main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
+                + main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
+                + main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+        )
+        .unwrap();
+    let total_columns = layout
+        .trace_groups
+        .iter()
+        .map(|group| group.base_width + group.aux_width)
+        .sum::<usize>();
+    let common_rows = 1_usize << layout.common_lde_log2;
+    let commitment_field_bytes = 2_u64 * total_columns as u64 * common_rows as u64 * 8;
+    eprintln!(
+        "X509 assembly diagnostic payload: actual={payload}, allowance={assembly_allowance}, p256_materials={p256_materials}, der_rows={der_rows}, io_rows={io_rows}, projection_rows={projection_rows}, other_owned={remaining_owners}, construction_seconds={:.6}, total_prover_target_seconds={ZK_X509_PROVER_TARGET_SECONDS_V1}",
+        construction.as_secs_f64(),
+    );
+    eprintln!(
+        "X509 remaining work floor: trace_columns={total_columns}, common_rows={common_rows}, original_plus_opening_commitment_field_bytes={commitment_field_bytes}; excludes source replay, interpolation, quotient stripes, Fp4 constraints/DEEP, FRI, CA, framing and Merkle parents",
+    );
+    // Print measured data before rejecting the fixture. Do not relax the
+    // production allowance merely to turn this diagnostic into a passing test.
+    plan.check_source_shapes_v1(&layout, &assembly)
+        .expect("maximum structural assembly fits unchanged preconstruction admission");
+    let before_drop = Instant::now();
+    drop(assembly);
+    eprintln!(
+        "X509 assembly diagnostic cleanup: seconds={:.6}; payload is not process RSS, construction-only timing is not full-proof qualification",
+        before_drop.elapsed().as_secs_f64(),
+    );
+    assert!(
+        construction.as_secs() < ZK_X509_PROVER_TARGET_SECONDS_V1,
+        "assembly alone exhausts the unchanged total proving target"
+    );
+}
+
+/// Synthetic public values isolate the real exact-width streaming hash work.
+/// The small row sample fits caches differently from a full commitment, so its
+/// linear extrapolation is diagnostic only and never qualifies the time limit.
+#[test]
+#[ignore = "optimized exact-width X509 streaming hash cost diagnostic; run --release"]
+fn maximum_profile_streaming_hash_cost_diagnostic() {
+    use std::time::Instant;
+
+    assert!(
+        !cfg!(debug_assertions),
+        "run this diagnostic with --release"
+    );
+    const SAMPLE_ROWS: usize = 4096;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let widths = [
+        layout
+            .trace_groups
+            .iter()
+            .map(|group| group.base_width)
+            .sum::<usize>(),
+        layout
+            .trace_groups
+            .iter()
+            .map(|group| group.aux_width)
+            .sum::<usize>(),
+    ];
+    let full_rows = 1_usize << layout.common_lde_log2;
+    let available = std::thread::available_parallelism().unwrap().get();
+    let mut workers = vec![1, available];
+    workers.dedup();
+    let mut expected_roots = None;
+    for workers in workers {
+        for batch_width in [1, aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] {
+            let (roots, seconds) = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let start = Instant::now();
+                    let mut roots = Vec::new();
+                    for (width, (leaf, node)) in widths.into_iter().zip([
+                        (
+                            AGGREGATE_DOMAINS_V1.base_leaf,
+                            AGGREGATE_DOMAINS_V1.base_node,
+                        ),
+                        (AGGREGATE_DOMAINS_V1.aux_leaf, AGGREGATE_DOMAINS_V1.aux_node),
+                    ]) {
+                        let mut commitment = aggregate::StreamingRowCommitmentV1::new(
+                            AGGREGATE_DOMAINS_V1.digest_context,
+                            leaf,
+                            node,
+                            usize::from(u16::MAX),
+                            SAMPLE_ROWS,
+                            width,
+                            &[],
+                        )
+                        .unwrap();
+                        for first in (0..width).step_by(batch_width) {
+                            let columns = (first..(first + batch_width).min(width))
+                                .map(|column| {
+                                    (0..SAMPLE_ROWS)
+                                        .map(|row| F((row * 31 + column * 17) as u64))
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>();
+                            commitment.absorb_columns_v1(&columns).unwrap();
+                        }
+                        roots.push(commitment.finish().unwrap().commitment.root);
+                    }
+                    (roots, start.elapsed().as_secs_f64())
+                });
+            if let Some(expected) = &expected_roots {
+                assert_eq!(&roots, expected);
+            } else {
+                expected_roots = Some(roots);
+            }
+            eprintln!(
+                "X509 exact-width streaming hash diagnostic: workers={workers}, batch_columns={batch_width}, sample_rows={SAMPLE_ROWS}, base_width={}, aux_width={}, seconds={seconds:.6}, linear_two_full_pass_seconds={:.3}; excludes FFT/source replay/constraints/FRI/CA, differs in cache residency, concurrent host load must be recorded",
+                widths[0],
+                widths[1],
+                seconds * 2.0 * (full_rows / SAMPLE_ROWS) as f64,
+            );
+        }
+    }
+}

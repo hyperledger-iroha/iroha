@@ -113,18 +113,30 @@ mod tests {
         use iroha_crypto::{Hash, HashOf};
         use iroha_data_model::NetworkId;
         let chain = chain();
+        let foreign_kura = Kura::blank_kura_for_testing();
         let mut foreign = State::new_with_chain_and_network_id_for_testing(
             World::new(),
-            Arc::clone(chain.kura()),
+            Arc::clone(&foreign_kura),
             LiveQueryStore::start_test(),
             "sumeragi-certified-test-chain".parse().unwrap(),
             NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
                 b"another network",
             ))),
         );
+        foreign_kura.store_block(chain.genesis().clone()).unwrap();
         foreign.push_block_hash_for_testing(chain.genesis().hash());
+        assert_eq!(
+            foreign_kura
+                .canonical_block_wire_bytes_for_testing(std::num::NonZeroUsize::MIN)
+                .unwrap(),
+            chain
+                .kura()
+                .canonical_block_wire_bytes_for_testing(std::num::NonZeroUsize::MIN)
+                .unwrap(),
+            "foreign State sees byte-identical durable genesis"
+        );
         assert!(matches!(
-            CertifiedArchiveView::new(&foreign.view(), chain.kura()),
+            CertifiedArchiveView::new(&foreign.view(), &foreign_kura),
             Err(ArchiveFinalityError::Chain(ChainReadError::ForeignGenesis))
         ));
     }

@@ -59,7 +59,6 @@ mod tests;
 
 use std::{
     collections::BTreeMap,
-    num::NonZeroU64,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -87,15 +86,12 @@ use iroha_core::{
         ValidatedParliamentTimedOvnCastingContextArchiveV1,
     },
 };
-use iroha_crypto::HashOf;
 use iroha_crypto::timed_ovn::{
     TimedOvnChoiceV1, TimedOvnCommittedRegistrationCacheV1, TimedOvnMaskedBallotV1,
     TimedOvnRegistrationSecretV1,
 };
 use iroha_data_model::{
     NetworkId,
-    block::BlockHeader,
-    bridge::BridgeFinalityProof,
     governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
     isi::governance::{
         ParliamentFreezeTimedOvnCorpusV1, ParliamentLifecycleTransitionV1,

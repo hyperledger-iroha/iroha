@@ -39,7 +39,7 @@ pub fn write_subject(
 }
 
 /// Return the committed hash of Taira block `height`, if it is committed.
-fn block_hash(view: &impl StateReadOnly, height: u64) -> Option<[u8; 32]> {
+fn block_hash(view: &(impl StateReadOnly + ?Sized), height: u64) -> Option<[u8; 32]> {
     let index = usize::try_from(height.checked_sub(1)?).ok()?;
     view.block_hashes()
         .hash_at(index)
@@ -49,7 +49,10 @@ fn block_hash(view: &impl StateReadOnly, height: u64) -> Option<[u8; 32]> {
 /// Return the canonical statement of `height`, or `None` when no subject exists there or the
 /// block is not yet committed.
 #[must_use]
-pub fn statement(view: &impl StateReadOnly, height: u64) -> Option<SccpAttestationStatementV1> {
+pub fn statement(
+    view: &(impl StateReadOnly + ?Sized),
+    height: u64,
+) -> Option<SccpAttestationStatementV1> {
     let subject = store::attestation_subjects::get(view.world(), &height)?;
     Some(subject.statement(block_hash(view, height)?))
 }
@@ -71,9 +74,30 @@ pub fn fields(statement: &SccpAttestationStatementV1) -> AttestationFieldsV1 {
     }
 }
 
+/// A source of committed attestation statement digests (§3.6).
+///
+/// Implemented for every committed state view: the digest needs the block hash of `height` and
+/// the live `NetworkId`, which World state alone does not hold. Admission pre-verification and
+/// instruction execution verify attestation and fault signatures against it.
+pub trait SccpStatementDigests {
+    /// Return the §3.6 attestation digest of `height`'s statement, if it exists.
+    fn statement_digest(&self, height: u64) -> Option<[u8; 32]>;
+    /// Return the live Taira `NetworkId` (the EIP-712 domain salt and binding network).
+    fn taira_network_id(&self) -> iroha_data_model::NetworkId;
+}
+
+impl<T: StateReadOnly + ?Sized> SccpStatementDigests for T {
+    fn statement_digest(&self, height: u64) -> Option<[u8; 32]> {
+        statement_digest_of(self, height)
+    }
+    fn taira_network_id(&self) -> iroha_data_model::NetworkId {
+        *self.network_id()
+    }
+}
+
 /// Return the §3.6 attestation digest of `height`'s statement under the live `NetworkId`.
 #[must_use]
-pub fn statement_digest(view: &impl StateReadOnly, height: u64) -> Option<[u8; 32]> {
+pub fn statement_digest_of(view: &(impl StateReadOnly + ?Sized), height: u64) -> Option<[u8; 32]> {
     let statement = statement(view, height)?;
     Some(fields(&statement).digest(view.network_id().as_bytes()))
 }
@@ -150,7 +174,8 @@ mod tests {
         let state = blank_state();
         let view = state.view();
         assert_eq!(statement(&view, 1), None);
-        assert_eq!(statement_digest(&view, 1), None);
+        assert_eq!(statement_digest_of(&view, 1), None);
+        assert_eq!(view.statement_digest(1), None);
     }
 
     #[test]

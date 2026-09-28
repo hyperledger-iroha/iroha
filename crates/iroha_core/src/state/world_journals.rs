@@ -529,6 +529,18 @@ fn fill_world_capture(fill: impl FnOnce()) {
     fill()
 }
 
+// Keep each field's conversion temporaries out of the complete World handoff
+// frame. The slot receives the same original owner, without allocating or
+// releasing it; expanding every conversion inline exhausts ordinary debug stacks.
+#[inline(never)]
+fn fill_world_capture_field<Field: CaptureWorldField>(
+    pending: &mut Option<(Field::Capture, fn(&World) -> &Field::Target)>,
+    field: Field,
+    target: fn(&World) -> &Field::Target,
+) {
+    *pending = Some((field.into_capture(), target));
+}
+
 // Wrapper construction does not overlap native capture work. Each field also
 // needs its own frame: debug builds otherwise reserve the temporaries of every
 // expanded field in this large World inventory at once.
@@ -576,9 +588,9 @@ macro_rules! capture_world_fields {
                 external_event_buf,
                 operation_index_scope: _scope,
             } = *$original.fields.take().expect("original World block fields");
-            $(pending.$prefix = Some(($prefix.into_capture(), |target: &World| &target.$prefix));)*
-            $(pending.$privacy = Some(($privacy.into_capture(), |target: &World| &target.$privacy));)*
-            $(pending.$suffix = Some(($suffix.into_capture(), |target: &World| &target.$suffix));)*
+            $(fill_world_capture_field(&mut pending.$prefix, $prefix, |target: &World| &target.$prefix);)*
+            $(fill_world_capture_field(&mut pending.$privacy, $privacy, |target: &World| &target.$privacy);)*
+            $(fill_world_capture_field(&mut pending.$suffix, $suffix, |target: &World| &target.$suffix);)*
             pending.extras = Some((dataspace_catalog, external_event_buf));
         });
         pending

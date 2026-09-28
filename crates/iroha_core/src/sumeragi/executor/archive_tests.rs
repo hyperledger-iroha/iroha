@@ -16,7 +16,6 @@ use crate::{
 use iroha_data_model::{
     events::time::{TimeEvent, TimeInterval},
     isi::sorafs::SetSorafsReputationJournalAuthorityPolicy,
-    permission::Permissions,
     sorafs::reputation::{
         REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
         ReputationJournalAuthorityPolicyV1,
@@ -25,26 +24,92 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanManageSorafsReputationJournalPolicy;
 
 fn chain() -> CertifiedTestChain {
+    use iroha_data_model::{
+        account::Account,
+        asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
+        isi::{
+            Grant, Register,
+            sorafs::{SetSorafsOrderbookPolicy, SetSorafsReservePolicy},
+        },
+        sorafs::{
+            orderbook::{ORDERBOOK_ADMISSION_POLICY_VERSION_V1, OrderbookAdmissionPolicyV1},
+            reserve::{
+                RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyV1, ReservePolicyV1,
+            },
+        },
+    };
+    use iroha_executor_data_model::permission::sorafs::{
+        CanSetSorafsPricing, CanSetSorafsReservePolicy,
+    };
     let mut config = TestChainConfig::new(World::new(), 1_750_000_000_000);
     let authority = AccountId::new(config.genesis_key.public_key().clone());
-    let mut permissions = Permissions::new();
-    permissions.insert(CanManageSorafsReputationJournalPolicy.into());
-    config
-        .world
-        .account_permissions
-        .insert(authority.clone(), permissions);
-    config.genesis_instructions.push(
+    let custody = iroha_test_samples::ALICE_ID.clone();
+    let asset_id = AssetDefinitionId::derive_from_components(
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+        "reserve".parse().unwrap(),
+    );
+    // Every feed capture queries has its actual governed policy, enacted by signed genesis.
+    config.genesis_instructions.extend([
+        Grant::account_permission(CanManageSorafsReputationJournalPolicy, authority.clone()).into(),
         SetSorafsReputationJournalAuthorityPolicy::new(ReputationJournalAuthorityPolicyV1 {
             version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
             por_recorder_authority: authority.clone(),
             dispute_recorder_authority: authority.clone(),
-            token_recorder_authority: authority,
+            token_recorder_authority: authority.clone(),
             max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
         })
         .into(),
-    );
+        Grant::account_permission(CanSetSorafsPricing, authority.clone()).into(),
+        SetSorafsOrderbookPolicy::new(OrderbookAdmissionPolicyV1 {
+            version: ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            market_id: [0xA5; 32],
+            matcher_authority: authority.clone(),
+            settlement_authority: authority.clone(),
+            paused: false,
+            min_order_gib: 1,
+            max_order_gib: 1024,
+            price_tick_micro_xor: 10,
+            max_maker_fee_bps: 100,
+            max_taker_fee_bps: 200,
+            max_order_lifetime_secs: 3600,
+            max_receipt_age_secs: 300,
+            max_clock_skew_secs: 5,
+            max_receipt_bytes: 1024,
+            max_receipts_per_channel: 2,
+        })
+        .into(),
+        Register::account(Account::new(custody.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_id.clone(),
+            "Reserve".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+        Grant::account_permission(CanSetSorafsReservePolicy, authority.clone()).into(),
+        SetSorafsReservePolicy::new(ReserveAuthorityPolicyV1 {
+            version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: ReservePolicyV1::default(),
+            asset_definition: asset_id,
+            custody_account: custody,
+            treasury_account: authority.clone(),
+            operations_authority: authority.clone(),
+            decision_authority: authority,
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: sorafs_manifest::deal::XorQuantity::try_from_micro(1_000_000_000)
+                .unwrap(),
+            max_pending_movements_per_provider: 4,
+            max_open_appeals_per_provider: 2,
+        })
+        .into(),
+    ]);
     CertifiedTestChain::start(config).unwrap()
 }
 
@@ -339,9 +404,23 @@ fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_
     let reputation = archives.reputation.as_ref().unwrap();
     let (context, _events) = context(&chain);
     let executor = StateExecutor::spawn(context).unwrap();
+    let reputation_root = reputation.root().to_owned();
+    let reputation_bounds = reputation.bounds();
+    let hidden_root = reputation_root.with_extension("temporarily-unavailable");
+    std::fs::rename(&reputation_root, &hidden_root).unwrap();
+    assert!(
+        executor
+            .attach_finalized_archives(archives.clone())
+            .is_err()
+    );
+    let provider_generation = provider.health_generation().unwrap();
+    assert_eq!(provider_generation, 1);
+    assert_eq!(chain.state().view().height(), 1);
+    std::fs::rename(&hidden_root, &reputation_root).unwrap();
     executor
         .attach_finalized_archives(archives.clone())
         .unwrap();
+    assert_eq!(provider.health_generation().unwrap(), provider_generation);
     let generation = (
         provider.health_generation().unwrap(),
         reputation.health_generation().unwrap(),
@@ -358,20 +437,32 @@ fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_
             reputation.health_generation().unwrap()
         )
     );
+    // A restart releases the actual filesystem writers; merely dropping a join handle
+    // would detach the worker and race its asynchronous release of the archive Arcs.
+    let StateExecutor { requests, _thread } = executor;
+    drop(requests);
+    _thread.join().unwrap();
+    drop(archives);
     let provider_reopened = ProviderIngestFinalizedArchiveV1::try_open(
         directory.path().join("provider"),
         provider_bounds(),
     )
     .unwrap();
     let reputation_reopened =
-        ReputationFinalizedArchive::try_open(reputation.root(), reputation.bounds()).unwrap();
+        ReputationFinalizedArchive::try_open(&reputation_root, reputation_bounds).unwrap();
     let view = chain.state().view();
-    provider_reopened
+    let provider_qualification = provider_reopened
         .qualify_against_certified_tip(&view, chain.kura(), 0)
         .unwrap();
-    reputation_reopened
+    let reputation_qualification = reputation_reopened
         .qualify_against_certified_tip(&view, chain.kura(), 0)
         .unwrap();
+    assert_eq!(provider_qualification.kura_tip_height(), 1);
+    assert_eq!(provider_qualification.lag_blocks(), 0);
+    assert_eq!(provider_qualification.generation(), generation.0);
+    assert_eq!(reputation_qualification.kura_tip_height(), 1);
+    assert_eq!(reputation_qualification.lag_blocks(), 0);
+    assert_eq!(reputation_qualification.generation(), generation.1);
     assert_eq!(provider_reopened.health_generation().unwrap(), generation.0);
     assert_eq!(
         reputation_reopened.health_generation().unwrap(),
