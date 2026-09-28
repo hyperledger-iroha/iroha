@@ -188,6 +188,8 @@ pub mod subscription;
 pub mod sumeragi;
 /// Portable finality proofs for the current embedded consensus certificate.
 pub mod sumeragi_finality;
+/// Lanes of the global chain: lifecycle records and merge references.
+pub mod sumeragi_lanes;
 /// Taikai broadcast metadata and segment envelope types.
 pub mod taikai;
 /// Test fixtures exposed for SDK/guardrail consumers.
