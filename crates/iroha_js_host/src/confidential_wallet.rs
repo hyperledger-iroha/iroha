@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_core::zk::confidential::{ConfidentialProof, ConfidentialProver, ConfidentialTree};
+use napi::bindgen_prelude::AsyncTask;
 use zeroize::{Zeroize, Zeroizing};
 
 fn prover(network: &[u8], asset: &str, spend_key: &[u8]) -> napi::Result<ConfidentialProver> {
@@ -75,7 +76,64 @@ fn envelope(result: ConfidentialProof) -> JsConfidentialTransferProofEnvelopeV2 
     }
 }
 
-/// Prove a local transfer using the canonical circuit and internally selected key.
+enum ConfidentialOperation {
+    Transfer {
+        inputs: Vec<ConfidentialTransferInputV2>,
+        outputs: Vec<ConfidentialTransferOutputV2>,
+    },
+    Redemption {
+        inputs: Vec<ConfidentialUnshieldInputV2>,
+        amount: u128,
+        change: Option<ConfidentialUnshieldOutputV3>,
+    },
+}
+
+struct ConfidentialJob {
+    prover: ConfidentialProver,
+    leaves: Vec<[u8; 32]>,
+    root: [u8; 32],
+    operation: ConfidentialOperation,
+}
+
+/// Owned local proving job; all private inputs clear when consumed or abandoned.
+pub struct ConfidentialProvingTask {
+    job: Option<ConfidentialJob>,
+}
+
+impl napi::Task for ConfidentialProvingTask {
+    type Output = ConfidentialProof;
+    type JsValue = JsConfidentialTransferProofEnvelopeV2;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        let job = self.job.take().ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "confidential proving job was consumed",
+            )
+        })?;
+        let tree = ConfidentialTree::Commitments {
+            root: job.root,
+            leaves: &job.leaves,
+        };
+        match job.operation {
+            ConfidentialOperation::Transfer { inputs, outputs } => {
+                job.prover.prove_transfer(tree, inputs, outputs)
+            }
+            ConfidentialOperation::Redemption {
+                inputs,
+                amount,
+                change,
+            } => job.prover.prove_unshield(tree, inputs, amount, change),
+        }
+        .map_err(norito_to_napi)
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(envelope(output))
+    }
+}
+
+/// Prove off the JavaScript thread using the canonical circuit and selected key.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn prove_confidential_transfer(
@@ -86,7 +144,7 @@ pub fn prove_confidential_transfer(
     inputs: Vec<JsConfidentialTransferInputV2>,
     outputs: Vec<JsConfidentialTransferOutputV2>,
     root_hex: String,
-) -> napi::Result<JsConfidentialTransferProofEnvelopeV2> {
+) -> napi::Result<AsyncTask<ConfidentialProvingTask>> {
     let mut inputs = Zeroizing::new(inputs);
     let mut outputs = Zeroizing::new(outputs);
     let prover = prover(
@@ -99,20 +157,17 @@ pub fn prove_confidential_transfer(
     let inputs = parse_confidential_transfer_inputs_v2(core::mem::take(&mut *inputs))?;
     let outputs = parse_confidential_transfer_outputs_v2(core::mem::take(&mut *outputs))?;
     let root = parse_fixed_32_hex("root", &root_hex)?;
-    prover
-        .prove_transfer(
-            ConfidentialTree::Commitments {
-                root,
-                leaves: &leaves,
-            },
-            inputs,
-            outputs,
-        )
-        .map(envelope)
-        .map_err(norito_to_napi)
+    Ok(AsyncTask::new(ConfidentialProvingTask {
+        job: Some(ConfidentialJob {
+            prover,
+            leaves,
+            root,
+            operation: ConfidentialOperation::Transfer { inputs, outputs },
+        }),
+    }))
 }
 
-/// Prove a local redemption, selecting full redemption or private change internally.
+/// Prove redemption off the JavaScript thread, selecting full or change internally.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn prove_confidential_redemption(
@@ -124,7 +179,7 @@ pub fn prove_confidential_redemption(
     public_amount: String,
     root_hex: String,
     change: Option<JsConfidentialUnshieldOutputV3>,
-) -> napi::Result<JsConfidentialTransferProofEnvelopeV2> {
+) -> napi::Result<AsyncTask<ConfidentialProvingTask>> {
     let mut inputs = Zeroizing::new(inputs);
     let mut change = Zeroizing::new(change);
     let prover = prover(
@@ -140,23 +195,117 @@ pub fn prove_confidential_redemption(
         core::mem::take(&mut *change).into_iter().collect(),
     )?;
     let root = parse_fixed_32_hex("root", &root_hex)?;
-    prover
-        .prove_unshield(
-            ConfidentialTree::Commitments {
-                root,
-                leaves: &leaves,
+    Ok(AsyncTask::new(ConfidentialProvingTask {
+        job: Some(ConfidentialJob {
+            prover,
+            leaves,
+            root,
+            operation: ConfidentialOperation::Redemption {
+                inputs,
+                amount,
+                change: outputs.pop(),
             },
-            inputs,
-            amount,
-            outputs.pop(),
-        )
-        .map(envelope)
-        .map_err(norito_to_napi)
+        }),
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use napi::Task;
+
+    #[test]
+    fn owned_worker_produces_a_self_verified_full_redemption() {
+        let asset = AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .unwrap()
+        .to_string();
+        let input = ConfidentialUnshieldInputV2 {
+            amount: 7,
+            rho: [92; 32],
+            diversifier: confidential_v2::default_confidential_diversifier_v2(),
+            leaf_index: 0,
+        };
+        let owner = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+            &[91; 32],
+            input.diversifier,
+        )
+        .unwrap();
+        let leaf =
+            confidential_v2::derive_confidential_note_v2(&asset, 7, input.rho, owner).unwrap();
+        let root = confidential_v2::compute_confidential_merkle_path_v2(&[leaf], 0)
+            .unwrap()
+            .root;
+        let mut task = ConfidentialProvingTask {
+            job: Some(ConfidentialJob {
+                prover: prover(&[1; 32], &asset, &[91; 32]).unwrap(),
+                leaves: vec![leaf],
+                root,
+                operation: ConfidentialOperation::Redemption {
+                    inputs: vec![input],
+                    amount: 7,
+                    change: None,
+                },
+            }),
+        };
+        let result = std::thread::spawn(move || {
+            let proof = task.compute().unwrap();
+            assert!(task.job.is_none());
+            assert!(task.compute().is_err());
+            proof
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            result.relation,
+            iroha_core::zk::ProofRelation::ConfidentialFullUnshield
+        );
+        assert_eq!(result.root, root);
+        assert_eq!(result.nullifiers.len(), 1);
+        assert!(result.output_commitments.is_empty());
+        assert!(!result.proof.bytes.is_empty());
+    }
+
+    #[test]
+    fn owned_worker_jobs_cross_threads_and_are_consumed_on_preflight_failure() {
+        let asset = AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .unwrap()
+        .to_string();
+        for operation in [
+            ConfidentialOperation::Transfer {
+                inputs: vec![],
+                outputs: vec![],
+            },
+            ConfidentialOperation::Redemption {
+                inputs: vec![],
+                amount: 7,
+                change: None,
+            },
+        ] {
+            let mut task = ConfidentialProvingTask {
+                job: Some(ConfidentialJob {
+                    prover: prover(&[1; 32], &asset, &[7; 32]).unwrap(),
+                    leaves: vec![],
+                    root: [0; 32],
+                    operation,
+                }),
+            };
+            std::thread::spawn(move || {
+                assert!(task.compute().is_err());
+                assert!(
+                    task.job.is_none(),
+                    "failed computation must release its input owner"
+                );
+                let retry = task.compute().unwrap_err();
+                assert_eq!(retry.reason, "confidential proving job was consumed");
+            })
+            .join()
+            .unwrap();
+        }
+    }
 
     #[test]
     fn wallet_rejects_network_key_and_empty_spend_before_proof_work() {

@@ -660,8 +660,7 @@ mod carrier_checkpoint;
 mod publication_lease;
 pub(crate) use carrier_checkpoint::KuraWsvCheckpointReceipt;
 pub(crate) use publication_lease::{
-    KuraArchiveCaptureAuthenticationError, KuraPublicationCleanup, KuraPublicationLease,
-    KuraPublicationPreparationError,
+    KuraPublicationCleanup, KuraPublicationLease, KuraPublicationPreparationError,
 };
 
 /// The interface of Kura subsystem.

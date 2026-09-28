@@ -104,12 +104,6 @@ impl AuthenticatedRecoveredAdapterStartup {
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
         kura: Arc<Kura>,
-        provider_ingest_finalized_archive: Option<
-            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
-        >,
-        reputation_finalized_archive: Option<
-            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
-        >,
         events_sender: crate::EventsSender,
     ) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1>
     {
@@ -128,8 +122,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             state,
             queue,
             kura,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
             block_cadence,
             events_sender,
             local_signer,
@@ -197,8 +189,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             state,
             queue,
             kura,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
             block_cadence,
             events_sender,
             local_signer,
@@ -234,8 +224,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             Arc::clone(&state),
             queue,
             Arc::clone(&kura),
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
             block_cadence,
             storage.genesis_account.clone(),
             events_sender,

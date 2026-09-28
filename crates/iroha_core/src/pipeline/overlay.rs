@@ -1511,7 +1511,6 @@ impl TxOverlay {
             byte_size: OnceLock::new(),
         }
     }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn from_queued_execution(
         queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
         ivm_gas_used: u64,

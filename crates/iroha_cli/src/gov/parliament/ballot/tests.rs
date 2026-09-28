@@ -376,10 +376,10 @@ fn ballot_commands_parse_their_flags() {
             ..
         }))
     ));
-    assert!(matches!(
-        parse(&["anchor", "--height", "12"]),
-        Ok(BallotCommand::Anchor(AnchorArgs { height })) if height.get() == 12
-    ));
+    assert!(
+        parse(&["anchor", "--height", "12"]).is_err(),
+        "the v2 finality-anchor lookup is retired"
+    );
 
     let nested = ParliamentFixture::try_parse_from([
         "parliament",
@@ -2404,7 +2404,6 @@ struct ScriptedSource {
     public_requests: std::cell::RefCell<Vec<BallotAttemptId>>,
     attempts: std::cell::RefCell<std::collections::VecDeque<AttemptSnapshot>>,
     attempt_requests: std::cell::RefCell<Vec<GovernanceAttemptId>>,
-    anchor: Option<(BridgeFinalityProof, HashOf<BlockHeader>)>,
 }
 
 impl ScriptedSource {
@@ -2468,17 +2467,6 @@ impl BallotSource for ScriptedSource {
             .borrow_mut()
             .pop_front()
             .ok_or_else(|| eyre!("no scripted attempt"))
-    }
-
-    fn finality_anchor(
-        &self,
-        _height: NonZeroU64,
-        network_id: NetworkId,
-    ) -> Result<(BridgeFinalityProof, HashOf<BlockHeader>)> {
-        assert_eq!(network_id, fixture_network_id());
-        self.anchor
-            .clone()
-            .ok_or_else(|| eyre!("no scripted finality anchor"))
     }
 }
 
@@ -3022,43 +3010,6 @@ fn status_reports_custody_and_resolves_the_attempt_from_the_ballot() {
     assert!(!absent_key.exists(), "status never creates a key file");
 }
 
-#[test]
-fn anchor_prints_the_served_finality_anchor() {
-    let chain = finality_chain(fixture_network_id(), 3, Hash::new(b"anchor tip"));
-    let proof = chain[1].clone();
-    let block_hash = proof.block_header.hash();
-    let source = ScriptedSource {
-        anchor: Some((proof.clone(), block_hash)),
-        ..ScriptedSource::default()
-    };
-    let height = NonZeroU64::new(2).expect("height");
-    let mut context = capture(0x51);
-    AnchorArgs { height }
-        .execute(&mut context, &source)
-        .expect("anchor");
-    let context_id = hex::encode(proof.finality_artifact.context_id().0.as_ref());
-    assert_eq!(context.printed[0]["height"].as_u64(), Some(2));
-    assert_eq!(
-        context.printed[0]["context_id"].as_str(),
-        Some(context_id.as_str())
-    );
-    assert_eq!(
-        context.printed[0]["block_hash"].as_str(),
-        Some(hex::encode(block_hash.as_ref()).as_str())
-    );
-    let mut context = capture(0x51).text();
-    AnchorArgs { height }
-        .execute(&mut context, &source)
-        .expect("text anchor");
-    assert!(context.lines[0].starts_with(&format!("height=2 context_id={context_id}")));
-    let (summary, _) = anchor_document(height, &proof, &block_hash).expect("document");
-    assert!(summary.contains("independent source"));
-    assert!(
-        anchor_document(NonZeroU64::new(3).expect("height"), &proof, &block_hash).is_err(),
-        "an anchor served for another height is refused"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // The Client-backed source and the `run` entry points
 // ---------------------------------------------------------------------------
@@ -3337,12 +3288,6 @@ fn run_entry_points_reach_the_configured_torii() {
             state_file: None,
         }))
         .contains("failed to read the Parliament attempt")
-    );
-    assert!(
-        unreachable(BallotCommand::Anchor(AnchorArgs {
-            height: NonZeroU64::new(2).expect("height"),
-        }))
-        .contains("failed to fetch the finality anchor")
     );
     assert!(
         unreachable(BallotCommand::Dropout(DropoutArgs {

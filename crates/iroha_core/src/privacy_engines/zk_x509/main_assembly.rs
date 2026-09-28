@@ -858,6 +858,13 @@ mod tests {
             &fixture.witness,
         )
         .expect("canonical MAIN assembly");
+        let retained_before = assembly.allocated_payload_bytes_v1();
+        let old_capacity = assembly.sha_witnesses[0].message.capacity();
+        assembly.sha_witnesses[0].message.reserve_exact(19);
+        assert_eq!(
+            assembly.allocated_payload_bytes_v1(),
+            retained_before - old_capacity + assembly.sha_witnesses[0].message.capacity(),
+        );
         assert!(!assembly.rfc_trace.private_is_zeroized_v1());
         assert!(!assembly.der_base.private_is_zeroized_v1());
         assert!(!assembly.rfc_base.private_is_zeroized_v1());

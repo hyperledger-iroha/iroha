@@ -102,7 +102,7 @@ enum NativeValidationPhase {
     },
 }
 
-/// A preallocated phase box stays identical across source, archive and marker waits.
+/// A preallocated phase box stays identical across source and marker waits.
 /// The temporary vacant phase exists only inside a synchronous consuming retry;
 /// panic is fail-stop and cannot recreate execution authority.
 pub(crate) struct NativeValidationCandidate {
@@ -677,7 +677,7 @@ impl OwnedNativeCarrierValidator {
             )?;
             return Self::detach_prepared(prepared);
         }
-        // A stable source may become stale while the service acquires archives or
+        // A stable source may become stale while the service reserves shells or
         // executes its scratch candidate. That consumed source releases its charge;
         // retry the same retained proposal with a fresh finite admission.
         if waiting.source_pending.is_none() && waiting.source_admission.is_none() {
@@ -794,66 +794,22 @@ impl OwnedNativeCarrierValidator {
     fn detach_prepared(
         prepared: super::native_preparation::PreparedNativeServiceCandidate<'_>,
     ) -> Result<NativeValidationPhase, V2ApplyError> {
-        let (carrier, provider, reputation, mut admission) = prepared.into_parts();
+        let (carrier, mut admission) = prepared.into_parts();
         let journal_shells = admission
             .journal_shells
             .take()
             .expect("original Native journal shells are consumed exactly once");
-        let carrier = match carrier.prepare_journals(journal_shells, provider, reputation, |_| {
-            Ok::<_, Infallible>(admission)
-        }) {
-            Ok(journals) => RetainedCarrier::Validated(journals),
-            Err(crate::state::CarrierJournalPreparationError::ArchivePreparation {
-                carrier,
-                ..
-            }) => RetainedCarrier::Capturing(carrier),
-            Err(error) => {
-                return Err(LocalValidationRefusal::RecoveryRequired(error.to_string()).into());
-            }
-        };
+        let carrier =
+            match carrier.prepare_journals(journal_shells, |_| Ok::<_, Infallible>(admission)) {
+                Ok(journals) => RetainedCarrier::Validated(journals),
+                Err(error) => {
+                    return Err(LocalValidationRefusal::RecoveryRequired(error.to_string()).into());
+                }
+            };
         Ok(NativeValidationPhase::Executed {
             carrier,
             evidence_ready: false,
         })
-    }
-
-    fn archive_refusal(
-        &self,
-        error: crate::state::CarrierArchivePreparationError,
-    ) -> LocalValidationRefusal {
-        use crate::query::{
-            provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1 as Provider,
-            reputation_finalized::ReputationFinalizedArchiveError as Reputation,
-        };
-        let busy = |name, wait| {
-            LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(
-                name,
-                wait,
-                self.service.queue.sumeragi_waker(),
-            ))
-        };
-        match &error {
-            crate::state::CarrierArchivePreparationError::Provider(error) => match error.as_ref() {
-                Provider::IndexBusy { wait } => {
-                    return busy("provider_archive_index", wait.clone());
-                }
-                Provider::CaptureReserved { wait } => {
-                    return busy("provider_archive_capture", wait.release_wait().clone());
-                }
-                _ => {}
-            },
-            crate::state::CarrierArchivePreparationError::Reputation(error) => match error.as_ref()
-            {
-                Reputation::IndexBusy { wait } => {
-                    return busy("reputation_archive_index", wait.clone());
-                }
-                Reputation::CaptureReserved { wait } => {
-                    return busy("reputation_archive_capture", wait.release_wait().clone());
-                }
-                _ => {}
-            },
-        }
-        LocalValidationRefusal::RecoveryRequired(error.to_string())
     }
 }
 
@@ -928,7 +884,7 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
         );
         let phase = match result {
             Ok(phase) => phase,
-            // Before execution, original archive or shell occupancy can retry normally.
+            // Before execution, original shell occupancy can retry normally.
             Err(error)
                 if matches!(
                     error.local_refusal(),
@@ -1064,16 +1020,6 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 Err((owner, refusal))
             }
             NativeValidationPhase::Executed { carrier, .. } => {
-                let carrier = match carrier.resume_capture() {
-                    Ok(carrier) => carrier,
-                    Err((carrier, error)) => {
-                        *owner.phase = Some(NativeValidationPhase::Executed {
-                            carrier,
-                            evidence_ready: false,
-                        });
-                        return Err((owner, self.archive_refusal(error)));
-                    }
-                };
                 let evidence = self
                     .service
                     .kura

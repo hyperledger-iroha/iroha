@@ -397,8 +397,6 @@ impl<A> PhysicallyPreparedCarrier<'_, A> {
             components,
             world_effects,
             geometry: _geometry,
-            provider_capture: _provider_capture,
-            reputation_capture: _reputation_capture,
             mut publication_events,
             tiered_snapshot,
             mut effects,

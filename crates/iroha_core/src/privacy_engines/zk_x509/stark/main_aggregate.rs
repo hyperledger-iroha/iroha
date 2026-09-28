@@ -21,6 +21,9 @@ mod main_quotient_stripes;
 #[cfg(test)]
 #[path = "main_resource_tests.rs"]
 mod main_resource_tests;
+#[cfg(test)]
+#[path = "main_secret_ownership_tests.rs"]
+mod main_secret_ownership_tests;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
 #[derive(Clone, Copy)]
@@ -30,12 +33,15 @@ pub(super) enum MainTraceColumnKindV1 {
     Aux,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_resources.rs"]
+mod main_resources;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_trace_replay.rs"]
 mod main_trace_replay;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(super) use main_trace_replay::{MainTraceMaskGroupV1, MainTracePolynomialSetV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use main_trace_replay::MainTraceReplaySourcesV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(super) use main_trace_replay::{MainTraceMaskGroupV1, MainTracePolynomialSetV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn registered_main_group_column_v1(
     layout: &AggregateProofLayoutV1,
@@ -101,13 +107,20 @@ fn sample_main_trace_group_v1<R: TryRngCore>(
         MainTraceColumnKindV1::Aux => group.aux_width,
     };
     MainTraceMaskGroupV1::sample_v1(
-        group.native_trace_log2, layout.common_lde_log2, width, rng,
+        group.native_trace_log2,
+        layout.common_lde_log2,
+        width,
+        rng,
         |column_index| {
             let (registration, local_column) =
                 registered_main_group_column_v1(layout, group_index, kind, column_index)?;
             match kind {
-                MainTraceColumnKindV1::Base => source.native_base_column_v1(registration, local_column),
-                MainTraceColumnKindV1::Aux => source.native_aux_column_v1(registration, local_column),
+                MainTraceColumnKindV1::Base => {
+                    source.native_base_column_v1(registration, local_column)
+                }
+                MainTraceColumnKindV1::Aux => {
+                    source.native_aux_column_v1(registration, local_column)
+                }
             }
         },
     )
@@ -167,6 +180,15 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
         validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
+        main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?.check_native_sources_v1(
+            self.assembly.allocated_payload_bytes_v1(),
+            &[
+                self.p256.allocated_payload_bytes_v1(),
+                core::mem::size_of_val(&self.sha),
+                self.projection.allocated_payload_bytes_v1(),
+                self.io.allocated_payload_bytes_v1(),
+            ],
+        )?;
         self.base_polynomials
             .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
         if self.public.consensus_context_digest == [0_u8; 32]
@@ -215,6 +237,14 @@ impl ZkX509MainCompositionPhaseV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
         validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
+        main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?.check_native_sources_v1(
+            self.assembly.allocated_payload_bytes_v1(),
+            &[
+                self.log19.allocated_payload_bytes_v1(),
+                self.projection.allocated_payload_bytes_v1(),
+                self.io.allocated_payload_bytes_v1(),
+            ],
+        )?;
         self.base_polynomials
             .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
         self.aux_polynomials
@@ -300,7 +330,11 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             &self.base_polynomials,
             &self.aux_polynomials,
-            &MainTraceReplaySourcesV1::Bound { log19: &self.log19, projection: &self.projection, io: &self.io },
+            &MainTraceReplaySourcesV1::Bound {
+                log19: &self.log19,
+                projection: &self.projection,
+                io: &self.io,
+            },
             &providers,
             &self.alphas,
         )
@@ -326,6 +360,9 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     ZkX509StarkErrorV1,
 > {
     validate_zk_x509_main_proof_budget_v1()?;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+    let buffer_plan = main_resources::MainProverBufferPlanV1::new_v1(&layout)?;
+    buffer_plan.check_before_sources_v1(assembly.allocated_payload_bytes_v1())?;
     validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
     if public.consensus_context_digest == [0_u8; 32] {
         return Err(ZkX509StarkErrorV1::InvalidStatement);
@@ -335,7 +372,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     {
         return Err(ZkX509StarkErrorV1::WitnessStatementMismatch);
     }
-    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+    buffer_plan.check_source_shapes_v1(&layout, assembly)?;
     let p256 = P256MainBaseSourceV1::new_v1(assembly)?;
     let sha = main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
@@ -344,6 +381,15 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         &assembly.projection_trace,
     )?;
     let mut io = MainIoTraceGroupSourceV1::for_main_v1(&layout, statement, &assembly.io)?;
+    buffer_plan.check_native_sources_v1(
+        assembly.allocated_payload_bytes_v1(),
+        &[
+            p256.allocated_payload_bytes_v1(),
+            core::mem::size_of_val(&sha),
+            projection.allocated_payload_bytes_v1(),
+            io.allocated_payload_bytes_v1(),
+        ],
+    )?;
     let mut session = ZkX509MainBaseCommitmentSessionV1::new_v1(
         &layout,
         public.consensus_context_digest,
@@ -392,6 +438,16 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     {
         let mut source =
             MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
+        buffer_plan.check_native_sources_v1(
+            assembly.allocated_payload_bytes_v1(),
+            &[
+                p256.allocated_payload_bytes_v1(),
+                core::mem::size_of_val(&sha),
+                projection.allocated_payload_bytes_v1(),
+                io.allocated_payload_bytes_v1(),
+                source.allocated_payload_bytes_v1(),
+            ],
+        )?;
         let polynomials =
             sample_main_trace_group_v1(&layout, 5, MainTraceColumnKindV1::Base, &mut source, rng)?;
         base_polynomials.push(polynomials);
@@ -401,9 +457,18 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         MainTraceColumnKindV1::Base,
         base_polynomials,
     )?;
-    let commitment =
-        base_polynomials.commit_joined_v1(&layout, MainTraceColumnKindV1::Base, &[],
-            &MainTraceReplaySourcesV1::Base { assembly, sha: &sha, p256: &p256, projection: &projection, io: &io })?;
+    let commitment = base_polynomials.commit_joined_v1(
+        &layout,
+        MainTraceColumnKindV1::Base,
+        &[],
+        &MainTraceReplaySourcesV1::Base {
+            assembly,
+            sha: &sha,
+            p256: &p256,
+            projection: &projection,
+            io: &io,
+        },
+    )?;
     session.accept_streaming_base_commitment_v1(&commitment)?;
     let trace_groups = vec![main_trace_group_root_v1(
         MainTraceColumnKindV1::Base,
@@ -447,6 +512,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             // challenge-dependent child transition.
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
+        let buffer_plan = main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?;
+        buffer_plan.check_before_sources_v1(self.assembly.allocated_payload_bytes_v1())?;
         let ZkX509MainAwaitingCredentialBindingV1 {
             layout,
             statement,
@@ -469,6 +536,14 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         io.bind_challenges_v1(post_base)?;
         let mut log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
             &layout, assembly, sha, p256, binding,
+        )?;
+        buffer_plan.check_native_sources_v1(
+            assembly.allocated_payload_bytes_v1(),
+            &[
+                log19.allocated_payload_bytes_v1(),
+                projection.allocated_payload_bytes_v1(),
+                io.allocated_payload_bytes_v1(),
+            ],
         )?;
         let mut aux_polynomials = Vec::new();
         aux_polynomials
@@ -537,9 +612,16 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             MainTraceColumnKindV1::Aux,
             aux_polynomials,
         )?;
-        let commitment =
-            aux_polynomials.commit_joined_v1(&layout, MainTraceColumnKindV1::Aux, &[],
-            &MainTraceReplaySourcesV1::Bound { log19: &log19, projection: &projection, io: &io })?;
+        let commitment = aux_polynomials.commit_joined_v1(
+            &layout,
+            MainTraceColumnKindV1::Aux,
+            &[],
+            &MainTraceReplaySourcesV1::Bound {
+                log19: &log19,
+                projection: &projection,
+                io: &io,
+            },
+        )?;
         trace_groups[0].aux_root = commitment.commitment.root;
         aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
             .map_err(map_aggregate_error_v1)?;
@@ -572,8 +654,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
 impl ZkX509MainCompositionPhaseV1<'_> {
     /// Consume the X5B1-bound phase and construct the canonical X5M1 proof.
     ///
-    /// Every trace opening and DEEP value is replayed only from the retained
-    /// masked polynomial coefficients committed by the two earlier phases.
+    /// Every trace opening and DEEP value uses the original explicit masks
+    /// and immutable bound native sources committed by the two earlier phases.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn finish_v1_with_rng<R: TryRngCore>(
         mut self,
@@ -581,7 +663,11 @@ impl ZkX509MainCompositionPhaseV1<'_> {
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
         self.validate_v1()?;
         let composition_material = self.composition_material_v1()?;
-        let sources = MainTraceReplaySourcesV1::Bound { log19: &self.log19, projection: &self.projection, io: &self.io };
+        let sources = MainTraceReplaySourcesV1::Bound {
+            log19: &self.log19,
+            projection: &self.projection,
+            io: &self.io,
+        };
         let compositions = &composition_material.evaluations;
         let shared_layout = self.layout.as_shared()?;
         let mut composition_roots = Vec::new();
@@ -637,10 +723,18 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         for group_index in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
             let (base_current, base_next) = self.base_polynomials.deep_group_v1(
-                &self.layout, MainTraceColumnKindV1::Base, group_index, deep_point, &sources,
+                &self.layout,
+                MainTraceColumnKindV1::Base,
+                group_index,
+                deep_point,
+                &sources,
             )?;
             let (aux_current, aux_next) = self.aux_polynomials.deep_group_v1(
-                &self.layout, MainTraceColumnKindV1::Aux, group_index, deep_point, &sources,
+                &self.layout,
+                MainTraceColumnKindV1::Aux,
+                group_index,
+                deep_point,
+                &sources,
             )?;
             deep_trace_groups.push(aggregate::AggregateDeepTraceGroupOpeningV1 {
                 base_current: fp4_values_to_wire_v1(base_current),
@@ -1116,7 +1210,9 @@ struct ZeroizingMainFixedPolynomialSetV1 {
 impl Drop for ZeroizingMainFixedPolynomialSetV1 {
     fn drop(&mut self) {
         for column in &mut self.columns {
-            column.fill(F::ZERO);
+            for value in column {
+                value.zeroize_v1();
+            }
         }
     }
 }
@@ -1220,20 +1316,29 @@ fn main_registration_trace_columns_on_coset_v1(
         ),
     };
     let mut columns = ZeroizingBaseColumnsV1(Vec::new());
-    columns.0.try_reserve_exact(width)
+    columns
+        .0
+        .try_reserve_exact(width)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     // Native replay stays serial. Only this fixed eight-column batch may own
     // replayed coefficients or parallel FFT scratch at the same time.
     for first in (start..end).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
         let batch_end = end.min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
-        let replayed = (first..batch_end).map(|column| {
-            polynomials.replay_column_coefficients_v1(
-                layout, kind, registration.trace_group, column, sources,
-            )
-        }).collect::<Result<Vec<_>, _>>()?;
-        let evaluated = replayed.par_iter().map(|coefficients| {
-            stripe.evaluate_v1(coefficients)
-        }).collect::<Result<Vec<_>, _>>()?;
+        let replayed = (first..batch_end)
+            .map(|column| {
+                polynomials.replay_column_coefficients_v1(
+                    layout,
+                    kind,
+                    registration.trace_group,
+                    column,
+                    sources,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let evaluated = replayed
+            .par_iter()
+            .map(|coefficients| stripe.evaluate_v1(coefficients))
+            .collect::<Result<Vec<_>, _>>()?;
         for column in evaluated {
             columns.0.push(column.into_vec_v1());
         }
@@ -1250,15 +1355,25 @@ fn main_fixed_columns_on_coset_v1(
 ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
     let registration = fixed.registration;
     if fixed.columns.len() != registration.segment.fixed_width
-        || fixed.columns.iter().any(|column| column.len() != registration.segment.trace_size())
+        || fixed
+            .columns
+            .iter()
+            .any(|column| column.len() != registration.segment.trace_size())
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     let mut columns = ZeroizingBaseColumnsV1(Vec::new());
-    columns.0.try_reserve_exact(fixed.columns.len())
+    columns
+        .0
+        .try_reserve_exact(fixed.columns.len())
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    for batch in fixed.columns.chunks(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
-        let evaluated = batch.par_iter().map(|coefficients| stripe.evaluate_v1(coefficients))
+    for batch in fixed
+        .columns
+        .chunks(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+    {
+        let evaluated = batch
+            .par_iter()
+            .map(|coefficients| stripe.evaluate_v1(coefficients))
             .collect::<Result<Vec<_>, _>>()?;
         for column in evaluated {
             columns.0.push(column.into_vec_v1());
@@ -1355,68 +1470,105 @@ fn main_registration_composition_coefficient_chunks_v1(
     let plan = registered_retained_prover_plan_v1(registration.segment, layout.common_lde_log2)?;
     if provider.native_trace_log2_v1() != registration.segment.trace_log2
         || alphas.len() != SECURITY_LANES
-        || alphas.iter().any(|lane| lane.len() != registration.segment.constraint_count)
+        || alphas
+            .iter()
+            .any(|lane| lane.len() != registration.segment.constraint_count)
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     let first_stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
-        registration.segment.trace_log2, plan.quotient_coset_log2, 0,
+        registration.segment.trace_log2,
+        plan.quotient_coset_log2,
+        0,
     )?;
     if first_stripe.rows.checked_mul(first_stripe.count) != Some(plan.quotient_coset_rows)
-        || first_stripe.next_stride.checked_mul(first_stripe.count) != Some(plan.quotient_next_stride)
+        || first_stripe.next_stride.checked_mul(first_stripe.count)
+            != Some(plan.quotient_next_stride)
     {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
-    let mut quotients = (0..SECURITY_LANES).map(|_| {
-        let mut quotient = ZeroizingExtensionColumnV1(Vec::new());
-        quotient.0.try_reserve_exact(plan.quotient_coset_rows)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        quotient.0.resize(plan.quotient_coset_rows, E::ZERO);
-        Ok::<_, ZkX509StarkErrorV1>(quotient)
-    }).collect::<Result<Vec<_>, _>>()?;
+    let mut quotients = (0..SECURITY_LANES)
+        .map(|_| {
+            let mut quotient = ZeroizingExtensionColumnV1(Vec::new());
+            quotient
+                .0
+                .try_reserve_exact(plan.quotient_coset_rows)
+                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+            quotient.0.resize(plan.quotient_coset_rows, E::ZERO);
+            Ok::<_, ZkX509StarkErrorV1>(quotient)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     for ordinal in 0..first_stripe.count {
         let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(
-            registration.segment.trace_log2, plan.quotient_coset_log2, ordinal,
+            registration.segment.trace_log2,
+            plan.quotient_coset_log2,
+            ordinal,
         )?;
         let base = main_registration_trace_columns_on_coset_v1(
-            layout, base_polynomials, MainTraceColumnKindV1::Base,
-            registration, sources, stripe,
+            layout,
+            base_polynomials,
+            MainTraceColumnKindV1::Base,
+            registration,
+            sources,
+            stripe,
         )?;
         let aux = main_registration_trace_columns_on_coset_v1(
-            layout, aux_polynomials, MainTraceColumnKindV1::Aux,
-            registration, sources, stripe,
+            layout,
+            aux_polynomials,
+            MainTraceColumnKindV1::Aux,
+            registration,
+            sources,
+            stripe,
         )?;
         let fixed_columns = main_fixed_columns_on_coset_v1(fixed, stripe)?;
         // Each task owns disjoint windows of the canonical full quotient. Only
         // this stripe's interleaved entries are written, so the original IFFT
         // sees exactly its original domain ordering after every stripe.
         const QUOTIENT_ROWS_PER_TASK_V1: usize = 1 << 12;
-        let task_entries = stripe.count.checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
+        let task_entries = stripe
+            .count
+            .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
             .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-        quotients.par_iter_mut().enumerate().try_for_each(|(lane, quotient)| {
-            quotient.0.par_chunks_mut(task_entries).enumerate().try_for_each_init(
-                || MainQuotientRowScratchV1::new_v1(registration),
-                |scratch, (chunk_index, output)| {
-                    let first_row = chunk_index.checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-                    let mut x = stripe.shift.mul(stripe.root.pow(first_row as u128));
-                    for (offset, target) in output.iter_mut().skip(stripe.ordinal)
-                        .step_by(stripe.count).enumerate()
-                    {
-                        let row = first_row.checked_add(offset)
-                            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-                        let next = (row + stripe.next_stride) % stripe.rows;
-                        scratch.fill_v1(row, next, &base, &aux, &fixed_columns);
-                        *target = provider.composition_value_v1(
-                            registration, x, scratch.opening_v1(),
-                            &scratch.fixed_current, &scratch.fixed_next, &alphas[lane],
-                        )?;
-                        x = x.mul(stripe.root);
-                    }
-                    Ok::<_, ZkX509StarkErrorV1>(())
-                },
-            )
-        })?;
+        quotients
+            .par_iter_mut()
+            .enumerate()
+            .try_for_each(|(lane, quotient)| {
+                quotient
+                    .0
+                    .par_chunks_mut(task_entries)
+                    .enumerate()
+                    .try_for_each_init(
+                        || MainQuotientRowScratchV1::new_v1(registration),
+                        |scratch, (chunk_index, output)| {
+                            let first_row = chunk_index
+                                .checked_mul(QUOTIENT_ROWS_PER_TASK_V1)
+                                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+                            let mut x = stripe.shift.mul(stripe.root.pow(first_row as u128));
+                            for (offset, target) in output
+                                .iter_mut()
+                                .skip(stripe.ordinal)
+                                .step_by(stripe.count)
+                                .enumerate()
+                            {
+                                let row = first_row
+                                    .checked_add(offset)
+                                    .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+                                let next = (row + stripe.next_stride) % stripe.rows;
+                                scratch.fill_v1(row, next, &base, &aux, &fixed_columns);
+                                *target = provider.composition_value_v1(
+                                    registration,
+                                    x,
+                                    scratch.opening_v1(),
+                                    &scratch.fixed_current,
+                                    &scratch.fixed_next,
+                                    &alphas[lane],
+                                )?;
+                                x = x.mul(stripe.root);
+                            }
+                            Ok::<_, ZkX509StarkErrorV1>(())
+                        },
+                    )
+            })?;
     }
     let mut coefficient_chunks = Vec::new();
     coefficient_chunks
@@ -1694,7 +1846,11 @@ fn main_fri_bases_from_polynomials_v1(
         let deep_next_point = deep_point.mul_base(native_root);
         for column in 0..group_layout.base_width {
             let coefficients = base_polynomials.replay_column_coefficients_v1(
-                layout, MainTraceColumnKindV1::Base, group_index, column, sources,
+                layout,
+                MainTraceColumnKindV1::Base,
+                group_index,
+                column,
+                sources,
             )?;
             for lane in 0..SECURITY_LANES {
                 accumulate_base_deep_quotient_v1(
@@ -1715,7 +1871,11 @@ fn main_fri_bases_from_polynomials_v1(
         }
         for column in 0..group_layout.aux_width {
             let coefficients = aux_polynomials.replay_column_coefficients_v1(
-                layout, MainTraceColumnKindV1::Aux, group_index, column, sources,
+                layout,
+                MainTraceColumnKindV1::Aux,
+                group_index,
+                column,
+                sources,
             )?;
             for lane in 0..SECURITY_LANES {
                 accumulate_base_deep_quotient_v1(

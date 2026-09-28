@@ -35,9 +35,6 @@ struct ActualPhaseValidator {
     topology: Topology,
     calls: Arc<AtomicUsize>,
     releases: Arc<AtomicUsize>,
-    provider: Option<crate::query::provider_ingest_finalized::ProviderCandidateCapture>,
-    reputation: Option<crate::query::reputation_finalized::ReputationCandidateCapture>,
-    wake: Waker,
 }
 
 fn phase_queue() -> Arc<Queue> {
@@ -52,30 +49,6 @@ impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualP
     type Owner = RetainedPhase;
     type Error = String;
 
-    fn prepare(
-        &mut self,
-        context: &HeightContext,
-        body: &SignedBlock,
-    ) -> Result<Self::Owner, Self::Error> {
-        let journal_shells = crate::state::PreparedCarrier::reserve_journal_shells_for_test();
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let prepared = prepare(&self.state, body.clone(), &self.topology, context)
-            .map_err(|(_, error)| error.to_string())?;
-        match prepared.prepare_journals(
-            journal_shells,
-            self.provider.take(),
-            self.reputation.take(),
-            |_| Ok::<_, Infallible>(PhaseReservation(Arc::clone(&self.releases))),
-        ) {
-            Ok(journals) => Ok(RetainedPhase::Validated(journals)),
-            Err(super::super::super::CarrierJournalPreparationError::ArchivePreparation {
-                carrier,
-                ..
-            }) => Ok(RetainedPhase::Capturing(carrier)),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
     fn resume(
         &mut self,
         owner: Self::Owner,
@@ -87,38 +60,24 @@ impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualP
             crate::sumeragi::v2_body_store::LocalValidationRefusal,
         ),
     > {
-        use crate::query::{
-            provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1,
-            reputation_finalized::ReputationFinalizedArchiveError,
-        };
-        use crate::sumeragi::v2_body_store::{BodyValidationBusy, LocalValidationRefusal};
-        owner.resume_capture().map_err(|(owner, error)| {
-            let dependency = match &error {
-                super::super::super::CarrierArchivePreparationError::Provider(error) => {
-                    match error.as_ref() {
-                        ProviderIngestFinalizedArchiveErrorV1::IndexBusy { wait } => {
-                            Some(("provider archive index", wait))
-                        }
-                        _ => None,
-                    }
-                }
-                super::super::super::CarrierArchivePreparationError::Reputation(error) => {
-                    match error.as_ref() {
-                        ReputationFinalizedArchiveError::IndexBusy { wait } => {
-                            Some(("reputation archive index", wait))
-                        }
-                        _ => None,
-                    }
-                }
-            };
-            let refusal = match dependency {
-                Some((resource, wait)) => LocalValidationRefusal::PhysicalBusy(
-                    BodyValidationBusy::new(resource, wait.clone(), self.wake.clone()),
-                ),
-                None => LocalValidationRefusal::RecoveryRequired(error.to_string()),
-            };
-            (owner, refusal)
-        })
+        Ok(owner)
+    }
+
+    fn prepare(
+        &mut self,
+        context: &HeightContext,
+        body: &SignedBlock,
+    ) -> Result<Self::Owner, Self::Error> {
+        let journal_shells = crate::state::PreparedCarrier::reserve_journal_shells_for_test();
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let prepared = prepare(&self.state, body.clone(), &self.topology, context)
+            .map_err(|(_, error)| error.to_string())?;
+        match prepared.prepare_journals(journal_shells, |_| {
+            Ok::<_, Infallible>(PhaseReservation(Arc::clone(&self.releases)))
+        }) {
+            Ok(journals) => Ok(RetainedPhase::Validated(journals)),
+            Err(error) => Err(error.to_string()),
+        }
     }
 }
 
@@ -155,7 +114,6 @@ fn phase_allocations<A>(phase: &crate::state::RetainedCarrier<A>) -> [*const ();
         ]
     }
     match phase {
-        crate::state::RetainedCarrier::Capturing(capture) => allocations(&capture.journals),
         crate::state::RetainedCarrier::Validated(journals) => allocations(journals),
         crate::state::RetainedCarrier::Decided(decision) => allocations(&decision.journals),
         crate::state::RetainedCarrier::Checkpointed(decision) => allocations(&decision.journals),
@@ -289,9 +247,6 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
                 topology,
                 calls: Arc::clone(&calls),
                 releases: Arc::clone(&releases),
-                provider: None,
-                reputation: None,
-                wake: Waker::noop().clone(),
             },
             &descriptor_budget,
         )
@@ -520,302 +475,24 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
 }
 
 #[test]
-fn retained_capture_refusal_resumes_original_archives_before_any_validation_marker() {
-    use crate::query::{
-        provider_ingest_finalized::{
-            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveKeyV1,
-        },
-        reputation_finalized::{ReputationFinalizedArchiveBounds, ReputationFinalizedArchiveKeyV1},
-    };
-    use crate::sumeragi::{
-        v2_apply::validation_custody::{CarrierCustodyError, RetainedValidationOwner},
-        v2_body_store::{
-            BlockSignaturePolicy, LocalValidationRefusal, V2BodyStore, V2BodyStoreError,
-            fail_next_marker_file_sync,
-        },
-        v2_chunks::encode_payload,
-    };
-    use iroha_data_model::block::consensus_v2 as wire;
-
-    let (state, proposal, topology, context) = super::super::super::tests::archive_fixture();
-    let state: Arc<State> = state.into();
-    let generation = state.state_view_generation();
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().canonicalize().unwrap();
-    let provider = Arc::new(
-        ProviderArchive::try_open(
-            root.join("provider"),
-            ProviderIngestFinalizedArchiveBoundsV1::try_new(1 << 20, 16, 16 << 20, 16, 16, 256, 16)
-                .unwrap(),
-        )
-        .unwrap(),
-    );
-    let reputation = Arc::new(
-        ReputationArchive::try_open(
-            root.join("reputation"),
-            ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20).unwrap(),
-        )
-        .unwrap(),
-    );
-    // Reserve the original archive predecessors before execution. The index
-    // reader below blocks only insertion preparation after State detachment.
-    let provider_owner = provider
-        .try_reserve_candidate(
-            ProviderIngestFinalizedArchiveKeyV1::try_new(
-                context.network_id,
-                context.height,
-                *proposal.hash().as_ref(),
-                proposal.header().creation_time_ms,
-            )
-            .unwrap(),
-            &state.kura,
-        )
-        .unwrap();
-    let reputation_owner = reputation
-        .try_reserve_candidate(
-            ReputationFinalizedArchiveKeyV1::try_new(
-                context.network_id,
-                context.height,
-                *proposal.hash().as_ref(),
-            )
-            .unwrap(),
-            proposal.header().creation_time_ms,
-            &state.kura,
-        )
-        .unwrap();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let releases = Arc::new(AtomicUsize::new(0));
-    let wakes = Arc::new(WakeCount::default());
-    let wake = Waker::from(Arc::clone(&wakes));
-    let mut store = V2BodyStore::open_with_policy(
-        root.join("bodies"),
-        context.clone(),
-        BlockSignaturePolicy::GenesisAuthority(
-            iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
-                .public_key()
-                .clone(),
-        ),
-    )
-    .unwrap();
-    let bytes = proposal
-        .canonical_resultless_proposal()
-        .encode_wire()
-        .unwrap();
-    let round = wire::ConsensusRound {
-        context_id: context.id(),
-        height: context.height,
-        view: 0,
-    };
-    let first = store
-        .store(
-            encode_payload(&context, round, subject(&proposal), &bytes)
-                .unwrap()
-                .manifest()
-                .clone(),
-            bytes.clone(),
-        )
-        .unwrap();
-    let later = store
-        .store(
-            encode_payload(
-                &context,
-                wire::ConsensusRound { view: 7, ..round },
-                subject(&proposal),
-                &bytes,
-            )
-            .unwrap()
-            .manifest()
-            .clone(),
-            bytes,
-        )
-        .unwrap();
-    let descriptor_budget = mv::allocation::AllocationBudget::new(
-        store
-            .retained_validation_descriptor_bytes::<ActualPhaseValidator>()
-            .unwrap(),
-    );
-    let mut service = store
-        .retained_validation_service(
-            ActualPhaseValidator {
-                state: Arc::clone(&state),
-                queue: phase_queue(),
-                topology,
-                calls: Arc::clone(&calls),
-                releases: Arc::clone(&releases),
-                provider: Some(provider_owner),
-                reputation: Some(reputation_owner),
-                wake: wake.clone(),
-            },
-            &descriptor_budget,
-        )
-        .unwrap();
-    let mut allocations = None;
-    let mut capture_allocation = None;
-    let mut provider_plan = None;
-    for durable in [&first, &later] {
-        let wake_count = wakes.0.load(Ordering::SeqCst);
-        let mut wait = reputation.with_index_reader_for_test(|| {
-            let error = store
-                .execute_retained_durable_validation(
-                    durable.clone(),
-                    durable.manifest_hash(),
-                    &mut service,
-                )
-                .unwrap_err();
-            let V2BodyStoreError::LocalValidation(LocalValidationRefusal::PhysicalBusy(busy)) =
-                error
-            else {
-                panic!("actual archive contention must retain a local dependency: {error:?}");
-            };
-            assert_eq!(busy.resource, "reputation archive index");
-            assert!(busy.waker().will_wake(&wake));
-            let mut wait = busy.wait.wait_for_release();
-            assert!(poll(&mut wait, &wakes).is_pending());
-            let owner = service.owner_for_test(first.subject()).unwrap();
-            let RetainedPhase::Capturing(capture) = owner else {
-                panic!("the original execution remains in the candidate slot before validation");
-            };
-            let original_capture = std::ptr::from_ref(capture.as_ref());
-            assert_eq!(
-                *capture_allocation.get_or_insert(original_capture),
-                original_capture
-            );
-            let actual = phase_allocations(owner);
-            assert_eq!(*allocations.get_or_insert(actual), actual);
-            let actual_plan = capture
-                .provider
-                .as_ref()
-                .unwrap()
-                .prepared_bytes_identity_for_test()
-                .unwrap();
-            assert_eq!(*provider_plan.get_or_insert(actual_plan), actual_plan);
-            assert!(owner.matches_candidate(&context, &proposal));
-            assert_eq!(owner.ready_commitment(), None);
-            assert_eq!(service.marker_counts_for_test(), (0, 0));
-            assert!(store.validated_recovery_catalog().is_empty());
-            assert!(store.rejected_recovery_catalog().is_empty());
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
-            assert_eq!(releases.load(Ordering::SeqCst), 0);
-            assert!(state.block_hashes.writer_available());
-            drop(state.world.accounts.block());
-            drop(state.transactions.block());
-            assert_fences_free_except(&state, "");
-            wait
-        });
-        assert!(poll(&mut wait, &wakes).is_ready());
-        assert_eq!(wakes.0.load(Ordering::SeqCst), wake_count + 1);
-    }
-    assert!(provider.is_empty().unwrap());
-    assert!(reputation.is_empty().unwrap());
-    assert_eq!(state.state_view_generation(), generation);
-    assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
-        before
-    );
-
-    // Archive completion advances the same owner before marker durability.
-    fail_next_marker_file_sync();
-    assert!(matches!(
-        store.execute_retained_durable_validation(
-            later.clone(),
-            later.manifest_hash(),
-            &mut service
-        ),
-        Err(V2BodyStoreError::Io { .. })
-    ));
-    let original = service.owner_for_test(first.subject()).unwrap();
-    assert!(matches!(original, RetainedPhase::Validated(_)));
-    assert_eq!(phase_allocations(original), allocations.unwrap());
-    assert!(original.ready_commitment().is_some());
-    assert_eq!(service.marker_counts_for_test(), (1, 0));
-    assert!(store.rejected_recovery_catalog().is_empty());
-    let receipt = store
-        .execute_retained_durable_validation(later.clone(), later.manifest_hash(), &mut service)
-        .unwrap()
-        .into_validated_receipt()
-        .unwrap();
-    let published = service
-        .select(&receipt)
-        .unwrap()
-        .try_consume(|producer, owner| {
-            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
-            let RetainedPhase::Validated(journals) = owner else {
-                panic!("only completed capture may receive a success marker");
-            };
-            let decision = bind_and_persist(&producer.state, &context, journals);
-            acquire(decision, &producer.state)
-                .publish()
-                .map_err(|(owner, error)| (RetainedPhase::Checkpointed(owner), error))
-        })
-        .unwrap();
-    assert_eq!(published.block().hash(), proposal.hash());
-    assert_eq!(state.committed_height(), 1);
-    assert_eq!(state.state_view_generation(), generation + 2);
-    assert!(!provider.is_empty().unwrap());
-    assert!(!reputation.is_empty().unwrap());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(releases.load(Ordering::SeqCst), 0);
-    assert_eq!(service.marker_counts_for_test(), (0, 0));
-    assert!(matches!(
-        store.execute_retained_durable_validation(
-            first.clone(),
-            first.manifest_hash(),
-            &mut service
-        ),
-        Err(V2BodyStoreError::CarrierCustody(
-            CarrierCustodyError::MissingOwner
-        ))
-    ));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    drop(published);
-    assert_eq!(releases.load(Ordering::SeqCst), 1);
-}
-
-#[test]
 fn physical_preparation_diagnostics_retain_storage_cause_and_busy_owner() {
-    use crate::{
-        query::{
-            provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1,
-            reputation_finalized::ReputationFinalizedArchiveError,
-        },
-        state::carrier_preparation::execution_prefix::CarrierSourceAuthenticationError,
-    };
+    use crate::state::carrier_preparation::execution_prefix::CarrierSourceAuthenticationError;
 
     for error in [
         CarrierPhysicalPreparationError::Checkpoint(crate::kura::Error::CanonicalStoragePoisoned),
         CarrierPhysicalPreparationError::ExecutionWitness(
             crate::kura::Error::CanonicalStoragePoisoned,
         ),
-        CarrierPhysicalPreparationError::Archive(
-            super::super::archive_publication::CarrierArchivePublicationError::Checkpoint(
-                crate::kura::Error::CanonicalStoragePoisoned,
-            ),
-        ),
     ] {
         assert!(format!("{error:?}").contains("CanonicalStoragePoisoned"));
     }
 
-    for (error, expected) in [
-        (
-            CarrierPhysicalPreparationError::Source(CarrierSourceAuthenticationError::Storage(
-                crate::kura::Error::CanonicalStoragePoisoned,
-            )),
-            "Source(Storage(CanonicalStoragePoisoned))",
-        ),
-        (
-            CarrierPhysicalPreparationError::Provider(
-                ProviderIngestFinalizedArchiveErrorV1::CaptureOwnerMismatch,
-            ),
-            "Provider(CaptureOwnerMismatch)",
-        ),
-        (
-            CarrierPhysicalPreparationError::Reputation(
-                ReputationFinalizedArchiveError::CaptureOwnerMismatch,
-            ),
-            "Reputation(CaptureOwnerMismatch)",
-        ),
-    ] {
+    for (error, expected) in [(
+        CarrierPhysicalPreparationError::Source(CarrierSourceAuthenticationError::Storage(
+            crate::kura::Error::CanonicalStoragePoisoned,
+        )),
+        "Source(Storage(CanonicalStoragePoisoned))",
+    )] {
         assert_eq!(format!("{error:?}"), expected);
     }
 
@@ -846,8 +523,6 @@ fn decided<A>(
         .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(admission),
         )
         .unwrap();
@@ -883,7 +558,7 @@ fn bind_and_persist<A>(
 type ProviderArchive = crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1;
 type ReputationArchive = crate::query::reputation_finalized::ReputationFinalizedArchive;
 
-fn fixture_archive_decision() -> (
+fn fixture_decision_with_unrelated_archives() -> (
     tempfile::TempDir,
     Box<State>,
     CheckpointDecision<()>,
@@ -891,10 +566,8 @@ fn fixture_archive_decision() -> (
     Arc<ReputationArchive>,
 ) {
     use crate::query::{
-        provider_ingest_finalized::{
-            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveKeyV1,
-        },
-        reputation_finalized::{ReputationFinalizedArchiveBounds, ReputationFinalizedArchiveKeyV1},
+        provider_ingest_finalized::ProviderIngestFinalizedArchiveBoundsV1,
+        reputation_finalized::ReputationFinalizedArchiveBounds,
     };
     let (state, proposal, topology, context) = super::super::super::tests::archive_fixture();
     let directory = tempfile::tempdir().unwrap();
@@ -914,36 +587,10 @@ fn fixture_archive_decision() -> (
         )
         .unwrap(),
     );
-    let provider_candidate = provider
-        .try_reserve_candidate(
-            ProviderIngestFinalizedArchiveKeyV1::try_new(
-                context.network_id,
-                proposal.header().height().get(),
-                *proposal.hash().as_ref(),
-                proposal.header().creation_time_ms,
-            )
-            .unwrap(),
-            &state.kura,
-        )
-        .unwrap();
-    let reputation_candidate = reputation
-        .try_reserve_candidate(
-            ReputationFinalizedArchiveKeyV1::try_new(
-                context.network_id,
-                proposal.header().height().get(),
-                *proposal.hash().as_ref(),
-            )
-            .unwrap(),
-            proposal.header().creation_time_ms,
-            &state.kura,
-        )
-        .unwrap();
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("real archive execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            Some(provider_candidate),
-            Some(reputation_candidate),
             |_| Ok::<_, Infallible>(()),
         )
         .unwrap();
@@ -952,9 +599,10 @@ fn fixture_archive_decision() -> (
 }
 
 #[test]
-fn original_state_and_header_are_required_before_witness_or_archive_writes() {
+fn original_state_and_header_are_required_before_witness_writes() {
     for wrong_header in [false, true] {
-        let (directory, state, mut decision, provider, reputation) = fixture_archive_decision();
+        let (directory, state, mut decision, provider, reputation) =
+            fixture_decision_with_unrelated_archives();
         let (mut foreign, _, _, _) = fixture();
         foreign.kura = Arc::clone(&state.kura);
         let original_geometry = if wrong_header {
@@ -1064,134 +712,16 @@ fn original_state_and_header_are_required_before_witness_or_archive_writes() {
                     panic!("publish the same owner through its original target: {error:?}")
                 }),
         );
-        assert!(!provider.is_empty().unwrap());
-        assert!(!reputation.is_empty().unwrap());
+        // The retired carrier pipeline cannot create current SoraFS authority.
+        // Only the current executor's certified commit capture owns these archives.
+        assert!(provider.is_empty().unwrap());
+        assert!(reputation.is_empty().unwrap());
         assert_eq!(state.state_view_generation(), generation + 2);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
             checkpoint
         );
     }
-}
-
-#[test]
-fn joint_publication_persists_both_original_archives_without_state_effects_or_relocking() {
-    let (_directory, state, mut decision, provider, reputation) = fixture_archive_decision();
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let generation = state.state_view_generation();
-    let wire = decision.block().encode_wire().unwrap();
-    let hashes = decision
-        .journals
-        .components
-        .block_hashes
-        .get(0)
-        .map_or(std::ptr::null(), std::ptr::from_ref);
-    for _ in 0..2 {
-        let physical = acquire(decision, &state);
-        assert!(!provider.is_empty().unwrap());
-        assert!(!reputation.is_empty().unwrap());
-        decision = physical.abort();
-        assert_eq!(decision.block().encode_wire().unwrap(), wire);
-        assert_eq!(
-            decision
-                .journals
-                .components
-                .block_hashes
-                .get(0)
-                .map_or(std::ptr::null(), std::ptr::from_ref),
-            hashes
-        );
-        assert!(decision.journals.provider_capture.is_some());
-        assert!(decision.journals.reputation_capture.is_some());
-        assert_fences_free_except(&state, "");
-        drop(state.kura.try_publication_lease().unwrap());
-    }
-    assert_eq!(state.committed_height(), 0);
-    assert_eq!(state.state_view_generation(), generation);
-    assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
-        before
-    );
-}
-
-#[test]
-fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry() {
-    let (_directory, state, mut decision, provider, reputation) = fixture_archive_decision();
-    let (_foreign_directory, _foreign_state, mut foreign, foreign_provider, foreign_reputation) =
-        fixture_archive_decision();
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-    let wire = decision.block().encode_wire().unwrap();
-    let hashes = decision
-        .journals
-        .components
-        .block_hashes
-        .get(0)
-        .map_or(std::ptr::null(), std::ptr::from_ref);
-    for provider_case in [true, false] {
-        let provider_was_empty = provider.is_empty().unwrap();
-        let reputation_was_empty = reputation.is_empty().unwrap();
-        // Only adversarial tests can exchange private capture fields. The
-        // actual original Kura seal must still reject equal projection bytes.
-        if provider_case {
-            std::mem::swap(
-                &mut decision.journals.provider_capture,
-                &mut foreign.journals.provider_capture,
-            );
-        } else {
-            std::mem::swap(
-                &mut decision.journals.reputation_capture,
-                &mut foreign.journals.reputation_capture,
-            );
-        }
-        let held = state.state_commit_lock.lock();
-        let (mut retry, error) = match decision.try_prepare_physical(&state, None) {
-            Ok(_) => panic!("foreign archive may not substitute for the captured original"),
-            Err(refusal) => refusal,
-        };
-        if provider_case {
-            assert!(matches!(
-                error,
-                CarrierPhysicalPreparationError::Provider(_)
-            ));
-            std::mem::swap(
-                &mut retry.journals.provider_capture,
-                &mut foreign.journals.provider_capture,
-            );
-        } else {
-            assert!(matches!(
-                error,
-                CarrierPhysicalPreparationError::Reputation(_)
-            ));
-            std::mem::swap(
-                &mut retry.journals.reputation_capture,
-                &mut foreign.journals.reputation_capture,
-            );
-        }
-        assert_fences_free_except(&state, "state_commit_lock");
-        drop(state.kura.try_publication_lease().unwrap());
-        assert!(state.block_hashes.writer_available());
-        assert_eq!(retry.block().encode_wire().unwrap(), wire);
-        assert_eq!(
-            retry
-                .journals
-                .components
-                .block_hashes
-                .get(0)
-                .map_or(std::ptr::null(), std::ptr::from_ref),
-            hashes
-        );
-        assert_eq!(provider.is_empty().unwrap(), provider_was_empty);
-        assert_eq!(reputation.is_empty().unwrap(), reputation_was_empty);
-        assert!(foreign_provider.is_empty().unwrap());
-        assert!(foreign_reputation.is_empty().unwrap());
-        drop(held);
-        decision = acquire(retry, &state).abort();
-    }
-    assert_eq!(state.committed_height(), 0);
-    assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
-        before
-    );
 }
 
 pub(super) fn fixture_decision() -> (Box<State>, CheckpointDecision<()>) {
@@ -1439,8 +969,6 @@ fn source_substitution_refuses_before_state_acquisition_and_retains_original_ret
         .unwrap_or_else(|(_, error)| panic!("foreign real execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(()),
         )
         .unwrap();
@@ -2053,10 +1581,11 @@ fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_rel
 
 #[test]
 fn lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry() {
-    let handle =
-        crate::sumeragi::threads::sumeragi_thread_builder("lifecycle-effect-refusal-preserves-retry")
-            .spawn(lifecycle_effect_refusal_on_consensus_stack)
-            .expect("spawn physical-publication test on the production consensus stack");
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder(
+        "lifecycle-effect-refusal-preserves-retry",
+    )
+    .spawn(lifecycle_effect_refusal_on_consensus_stack)
+    .expect("spawn physical-publication test on the production consensus stack");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
@@ -2111,8 +1640,6 @@ fn original_capture_reservation_survives_physical_refusal_and_exact_retry() {
         .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
-            None,
-            None,
             |inputs| {
                 let bytes = inputs
                     .world_journal_shell_bytes()?
@@ -2311,8 +1838,6 @@ fn original_reservation_outlives_component_writers_and_state_fences_on_drop_and_
             .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
             .prepare_journals(
                 crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
-                None,
-                None,
                 |inputs| {
                     let bytes = inputs
                         .world_journal_shell_bytes()?
@@ -2966,8 +2491,6 @@ fn retained_publication_facade_refuses_foreign_authority_before_io_and_retries_o
         Arc::clone(&state),
         queue,
         Arc::clone(&state.kura),
-        None,
-        None,
         state.sumeragi_block_cadence(),
         iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         events,
@@ -2979,8 +2502,6 @@ fn retained_publication_facade_refuses_foreign_authority_before_io_and_retries_o
         .unwrap_or_else(|(_, error)| panic!("actual original execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
-            None,
-            None,
             |inputs| {
                 let bytes = inputs
                     .world_journal_shell_bytes()?
@@ -3113,8 +2634,6 @@ fn retained_publication_orders_replay_metadata_before_finality_at_each_durable_c
         Arc::clone(&state),
         phase_queue(),
         Arc::clone(&state.kura),
-        None,
-        None,
         state.sumeragi_block_cadence(),
         iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         events,
@@ -3126,8 +2645,6 @@ fn retained_publication_orders_replay_metadata_before_finality_at_each_durable_c
         .unwrap_or_else(|(_, error)| panic!("original execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(PhaseReservation(Arc::clone(&releases))),
         )
         .unwrap();

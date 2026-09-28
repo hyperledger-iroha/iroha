@@ -506,8 +506,6 @@ fn try_lifecycle_factory_inputs_for_test(
         state,
         queue,
         kura,
-        None,
-        None,
         events_sender,
     )
 }

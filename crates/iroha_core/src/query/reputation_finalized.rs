@@ -1,7 +1,7 @@
 //! Durable exact-anchor archive for finalized SoraFS reputation projections.
 //!
 //! The archive is deliberately a projection store, not finality authority. A commit-owned caller
-//! supplies one immutable finalized state view and its non-forgeable Kura receipt; capture
+//! supplies one immutable finalized state view bound to current embedded commit certificates; capture
 //! authenticates and constructs the exact record before publication. This module never falls back
 //! to a current-head view. Durable records store no credentials, signing material,
 //! or process-local authority.
@@ -31,10 +31,8 @@ use super::finalized_archive_fs::{
     create_unix_staged_file, unix_staged_file_has_canonical_target, unix_stat_matches_metadata,
 };
 use crate::{
-    kura::{
-        Kura, KuraArchiveCaptureAuthenticationError, KuraPublicationLease, KuraV2CommitReceipt,
-    },
-    query::archive_capture::{ArchiveCaptureGate, ArchiveCaptureReservation},
+    kura::Kura,
+    query::archive_finality::{ArchiveFinalityError, CertifiedArchiveView},
     secure_file_metadata::{self, SecureMetadata},
     smartcontracts::ValidSingularQuery,
     state::StateReadOnly,
@@ -84,7 +82,6 @@ use std::{
     io::{self, Read},
     num::NonZeroUsize,
     path::{Component, Path, PathBuf},
-    sync::Arc,
 };
 use thiserror::Error;
 const ARCHIVE_VERSION_V1: u16 = 1;
@@ -118,8 +115,6 @@ const RESERVE_PREFIX_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.reputation.finalized-reserve-prefix.v1\0";
 const CHECKPOINT_VALIDATION_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.reputation.finalized-checkpoint-validation.v1\0";
-const KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha.sorafs.reputation.finalized-kura-finality-artifact.v1\0";
 const POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.reputation.finalized-policy-record.v1\0";
 const POLICY_HISTORY_DIGEST_DOMAIN_V1: &[u8] =
@@ -1294,7 +1289,7 @@ struct ReputationFinalizedVirtualBaseCheckpointV1 {
     retention_floor: ReputationFinalizedArchiveKeyV1,
     retention_floor_finalized_at_unix_ms: u64,
     retention_floor_anchor_digest: [u8; 32],
-    kura_finality_artifact_digest: [u8; 32],
+    certified_block_id: [u8; 32],
     prior_checkpoint_digest: Option<[u8; 32]>,
     checkpoint_generation: u64,
     cumulative_pruned_anchor_count: u64,
@@ -1369,7 +1364,7 @@ impl PersistedReputationFinalizedVirtualBaseCheckpointV1 {
             || checkpoint.retention_floor_finalized_at_unix_ms == 0
             || checkpoint.retention_floor_finalized_at_unix_ms == u64::MAX
             || checkpoint.retention_floor_anchor_digest == [0; 32]
-            || checkpoint.kura_finality_artifact_digest == [0; 32]
+            || checkpoint.certified_block_id == [0; 32]
             || checkpoint.checkpoint_generation == 0
             || checkpoint.checkpoint_generation > checkpoint.cumulative_pruned_anchor_count
             || checkpoint.cumulative_pruned_anchor_count == 0
@@ -1859,46 +1854,6 @@ struct ArchiveIndex {
     generation: u64,
     requires_reopen: bool,
 }
-/// An admitted candidate retaining exact archive/Kura owners without an index lock.
-///
-/// The logical reservation protects its original predecessor, capacity and
-/// compaction anchors. Readers remain available; competing writers receive the
-/// particular reservation's release event before any mutation.
-pub(crate) struct PreparedReputationCapture {
-    insertion: OwnedReputationInsertion,
-    kura: Arc<Kura>,
-}
-impl PreparedReputationCapture {
-    /// Rejoin the original capture to durable evidence without reacquiring Kura fences.
-    /// The immutable insertion and its reservation remain owned on every refusal.
-    pub(crate) fn reauthenticate_under_publication_lease(
-        &self,
-        lease: &KuraPublicationLease<'_>,
-        receipt: &KuraV2CommitReceipt,
-    ) -> Result<(), ReputationFinalizedArchiveError> {
-        let key = &self.insertion.key;
-        lease
-            .authenticate_archive_capture(
-                &self.kura,
-                key.network_id,
-                key.height,
-                key.block_hash,
-                self.insertion.finalized_at_unix_ms,
-                receipt,
-            )
-            .map_err(capture_authentication_error)
-    }
-
-    /// Persist the original admitted insertion while the exact Kura lease remains held.
-    pub(crate) fn publish_under_publication_lease(
-        &mut self,
-        lease: &KuraPublicationLease<'_>,
-        receipt: &KuraV2CommitReceipt,
-    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
-        self.reauthenticate_under_publication_lease(lease, receipt)?;
-        self.insertion.try_persist()
-    }
-}
 struct PreparedReputationPolicy {
     persisted: PersistedReputationAuthorityPolicyV1,
     bytes: Vec<u8>,
@@ -1918,68 +1873,18 @@ struct PreparedReputationState {
     anchor_count: usize,
     generation: u64,
 }
-include!("reputation_finalized/candidate_preparation.rs");
+include!("reputation_finalized/capture_material.rs");
 struct PreparedReputationInsertion<'archive> {
     archive: &'archive ReputationFinalizedArchive,
     index: ArchiveIndexWriteGuard<'archive, ArchiveIndex>,
     key: ReputationFinalizedArchiveKeyV1,
-    #[cfg(test)]
-    finalized_at_unix_ms: u64,
     state: Option<PreparedReputationState>,
-}
-/// Exact admitted insertion after its original physical writer is released.
-struct OwnedReputationInsertion {
-    archive: Arc<ReputationFinalizedArchive>,
-    key: ReputationFinalizedArchiveKeyV1,
-    finalized_at_unix_ms: u64,
-    state: Option<PreparedReputationState>,
-    // Release predecessor/capacity custody after every retained payload.
-    reservation: ArchiveCaptureReservation,
-}
-impl OwnedReputationInsertion {
-    fn try_persist(
-        &mut self,
-    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
-        let mut index = self.archive.try_write_reserved_index(&self.reservation)?;
-        persist_admitted_reputation(&self.archive, &mut index, &self.key, &mut self.state)
-    }
 }
 impl PreparedReputationInsertion<'_> {
     fn persist(
         &mut self,
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         persist_admitted_reputation(self.archive, &mut self.index, &self.key, &mut self.state)
-    }
-
-    #[cfg(test)]
-    fn detach(
-        self,
-        archive: Arc<ReputationFinalizedArchive>,
-    ) -> Result<OwnedReputationInsertion, ReputationFinalizedArchiveError> {
-        if !std::ptr::eq(self.archive, archive.as_ref()) {
-            return Err(ReputationFinalizedArchiveError::CaptureOwnerMismatch);
-        }
-        // The same original writer still protects all completed transition and
-        // capacity checks until this reservation is installed.
-        let reservation = archive
-            .capture_gate
-            .try_reserve()
-            .map_err(|wait| ReputationFinalizedArchiveError::CaptureReserved { wait })?;
-        let Self {
-            archive: _,
-            index,
-            key,
-            finalized_at_unix_ms,
-            state,
-        } = self;
-        drop(index);
-        Ok(OwnedReputationInsertion {
-            archive,
-            key,
-            finalized_at_unix_ms,
-            state,
-            reservation,
-        })
     }
 }
 fn persist_admitted_reputation(
@@ -2841,7 +2746,6 @@ pub struct ReputationFinalizedArchive {
     writer_lock_identity: ArchiveFileIdentity,
     writer_lock: fs::File,
     index: ArchiveIndexLock<ArchiveIndex>,
-    capture_gate: ArchiveCaptureGate,
 }
 impl ReputationFinalizedArchive {
     /// Open or create a direct, bounded archive and validate every durable row.
@@ -2881,6 +2785,7 @@ impl ReputationFinalizedArchive {
         root: impl Into<PathBuf>,
         bounds: ReputationFinalizedArchiveBounds,
         network_id: &NetworkId,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
@@ -2890,9 +2795,14 @@ impl ReputationFinalizedArchive {
                 reason: "chain id must be non-empty",
             });
         }
+        if state_ro.network_id() != network_id || !std::ptr::eq(state_ro.kura(), kura) {
+            return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
+                reason: "retention open State has a substituted network or Kura binding",
+            });
+        }
         assert_retention_authority_identity(binding, authority)?;
         let archive = Self::open_unreconciled(root, bounds)?;
-        archive.recover_approved_retention(network_id, kura, binding, authority)?;
+        archive.recover_approved_retention(network_id, state_ro, kura, binding, authority)?;
         archive.verify_storage_boundaries()?;
         Ok(archive)
     }
@@ -2984,7 +2894,6 @@ impl ReputationFinalizedArchive {
             writer_lock_identity,
             writer_lock,
             index: ArchiveIndexLock::new(ArchiveIndex::default()),
-            capture_gate: ArchiveCaptureGate::default(),
         };
         archive.verify_storage_boundaries()?;
         archive.recover_staged_files()?;
@@ -2995,6 +2904,7 @@ impl ReputationFinalizedArchive {
     fn recover_approved_retention(
         &self,
         network_id: &NetworkId,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
@@ -3042,8 +2952,12 @@ impl ReputationFinalizedArchive {
             // Approval freezes the compaction, not subsequent committed captures.
             // Accept later generations only with this exact approved checkpoint
             // and a contiguous, Kura-authenticated retained successor chain.
-            let coverage =
-                authenticate_approval_checkpoint_against_kura(&candidate.persisted, &index, kura)?;
+            let coverage = authenticate_approval_checkpoint_against_certified(
+                &candidate.persisted,
+                &index,
+                state_ro,
+                kura,
+            )?;
             require_exact_retention_readback(binding, authority, network_id, &approval)?;
             if coverage == ApprovedCheckpointCoverage::AwaitingCapture {
                 // A crash after Kura commits but before archive capture and a
@@ -3065,7 +2979,8 @@ impl ReputationFinalizedArchive {
         {
             return Err(ReputationFinalizedArchiveError::RetentionAuthorityRollback);
         }
-        let prepared = self.prepare_compaction_locked(&index, approval.proposal().fence(), kura)?;
+        let prepared =
+            self.prepare_compaction_locked(&index, approval.proposal().fence(), state_ro, kura)?;
         if compaction_proposal(&prepared, approval.proposal().fence())? != *approval.proposal() {
             return Err(ReputationFinalizedArchiveError::RetentionProposalMismatch);
         }
@@ -3164,10 +3079,9 @@ impl ReputationFinalizedArchive {
     }
     /// Capture one exact immutable state view authenticated by Kura finality.
     ///
-    /// The caller must invoke this while the supplied view is frozen. Fresh Sumeragi application
-    /// uses the result-bearing [`crate::state::StateBlock`] after Kura finality and the staged WSV
-    /// checkpoint are durable, but before WSV publication. Every native query page is pinned to the
-    /// exact receipt height and hash; no current-head or broadcast-event fallback is available.
+    /// The caller must invoke this while the supplied committed view is frozen and its canonical
+    /// Kura block and embedded commit certificate are durable. Every native query page is pinned to the
+    /// exact certified height and hash; no current-head or broadcast-event fallback is available.
     ///
     /// If this is the first anchor for a non-genesis height, that height is the archive's explicit
     /// activation floor. The archive does not claim to contain earlier provider-state projections
@@ -3176,17 +3090,21 @@ impl ReputationFinalizedArchive {
     /// # Errors
     ///
     /// Fails closed when Kura, the immutable view, any typed query page, or the deterministic block
-    /// timestamp disagrees with the supplied durable receipt. Query collection is bounded by the
+    /// timestamp disagrees with the current certified block. Query collection is bounded by the
     /// configured aggregate archive byte ceiling before immutable insertion is attempted.
-    pub fn capture_kura_authenticated_view(
+    pub fn capture_certified_view(
         &self,
         state_ro: &impl StateReadOnly,
         kura: &Kura,
-        receipt: &KuraV2CommitReceipt,
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         let (key, finalized_at_unix_ms) = candidate_capture_key(state_ro, kura)?;
-        authenticate_capture_key(&key, finalized_at_unix_ms, kura, receipt)?;
+        let certified =
+            CertifiedArchiveView::new(state_ro, kura).map_err(certified_finality_error)?;
+        authenticate_archive_anchor_against_certified(&key, finalized_at_unix_ms, &certified)?;
         let mut insertion = self.prepare_capture_at_key(state_ro, key, finalized_at_unix_ms)?;
+        certified
+            .verify_unchanged()
+            .map_err(certified_finality_error)?;
         insertion.persist()
     }
     fn prepare_capture_at_key(
@@ -3195,12 +3113,28 @@ impl ReputationFinalizedArchive {
         key: ReputationFinalizedArchiveKeyV1,
         finalized_at_unix_ms: u64,
     ) -> Result<PreparedReputationInsertion<'_>, ReputationFinalizedArchiveError> {
-        self.require_contiguous_capture_key(&key)?;
+        // Never wait for an archive reader while retaining a committed State view. The executor
+        // retains this exact capture boundary and retries after the returned owner-release event.
+        let index = self
+            .index
+            .try_write()
+            .map_err(|error| self.index_lock_error(error))?;
+        if index.requires_reopen {
+            return Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
+                reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
+            });
+        }
+        self.verify_storage_boundaries()?;
+        require_contiguous_capture_key_in_index(&index, &key)?;
         let previous = key
             .height
             .checked_sub(1)
             .map(|maximum_height| {
-                self.latest_reconstruction_state_at_or_before(&key.network_id, maximum_height)
+                self.latest_reconstruction_state_at_or_before_in_index(
+                    &index,
+                    &key.network_id,
+                    maximum_height,
+                )
             })
             .transpose()?
             .flatten();
@@ -3210,7 +3144,17 @@ impl ReputationFinalizedArchive {
             finalized_at_unix_ms,
             previous.as_ref(),
         )?;
-        self.prepare_captured_state(captured.next_state, captured.authority_policy_history)
+        let material = self.prepare_captured_material(
+            &index,
+            &captured.next_state,
+            &captured.authority_policy_history,
+        )?;
+        Ok(PreparedReputationInsertion {
+            archive: self,
+            index,
+            key: captured.next_state.key.clone(),
+            state: material.map(|material| material.finish(captured.next_state)),
+        })
     }
 
     fn capture_original_successor(
@@ -3502,67 +3446,27 @@ impl ReputationFinalizedArchive {
     ///
     /// Returns the same fail-closed authentication, query, storage, coverage,
     /// or Kura-lag errors as capture and qualification.
-    pub fn reconcile_kura_authenticated_view(
+    pub fn reconcile_certified_state_tip(
         &self,
         state_ro: &impl StateReadOnly,
         kura: &Kura,
-        receipt: &KuraV2CommitReceipt,
     ) -> Result<ReputationFinalizedArchiveReconcileOutcomeV1, ReputationFinalizedArchiveError> {
         let activation_floor_before = self.activation_floor(state_ro.network_id())?;
-        let insertion = self.capture_kura_authenticated_view(state_ro, kura, receipt)?;
+        let insertion = self.capture_certified_view(state_ro, kura)?;
         // Startup/recovery reconciliation is exact. The configured suffix-lag
         // allowance is solely a live health window and must never qualify an
         // incomplete startup image.
-        let qualification = self.qualify_against_kura_tip(state_ro.network_id(), kura, 0)?;
+        let qualification = self.qualify_against_certified_tip(state_ro, kura, 0)?;
         Ok(ReputationFinalizedArchiveReconcileOutcomeV1 {
             insertion,
             qualification,
             activation_floor_created: activation_floor_before.is_none(),
         })
     }
-    /// Reconcile a startup state tip using Kura's recovered durable receipt.
-    ///
-    /// This convenience path is intended for launcher startup after State replay has produced one
-    /// frozen committed view. It never manufactures a receipt from State metadata: Kura must
-    /// recover and authenticate the exact V2 finality artifact at the view height before normal
-    /// reconciliation runs.
-    ///
-    /// # Errors
-    ///
-    /// Fails closed for an empty view, an unavailable or invalid durable finality artifact, any
-    /// capture mismatch, incomplete coverage, or excess configured tip lag.
-    pub fn reconcile_kura_authenticated_state_tip(
-        &self,
-        state_ro: &impl StateReadOnly,
-        kura: &Kura,
-    ) -> Result<ReputationFinalizedArchiveReconcileOutcomeV1, ReputationFinalizedArchiveError> {
-        let height = u64::try_from(state_ro.height()).map_err(|_| {
-            ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "startup state height exceeds the supported range",
-            }
-        })?;
-        if height == 0 {
-            return Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
-                reason: "startup state has no committed block to reconcile",
-            });
-        }
-        let (_, receipt) = kura
-            .v2_finality_artifact_with_receipt(height)
-            .map_err(
-                |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                    operation: "recover startup v2 finality receipt",
-                    detail: error.to_string(),
-                },
-            )?
-            .ok_or(ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "startup state tip has no authenticated V2 finality artifact",
-            })?;
-        self.reconcile_kura_authenticated_view(state_ro, kura, &receipt)
-    }
     /// Qualify exact contiguous archive coverage against one Kura boundary.
     ///
     /// Every archive anchor from the explicit activation floor through the archive tip must be
-    /// present at every height, match Kura's authenticated hash journal and V2 finality artifact,
+    /// present at every height, match Kura's authenticated hash journal and embedded commit certificate,
     /// and retain the exact canonical block timestamp. Only a suffix no larger than
     /// `maximum_kura_tip_lag_blocks` may remain between the archive and Kura tips. Kura, the
     /// archive generation, and the active checkpoint content address are re-read before success so
@@ -3571,14 +3475,15 @@ impl ReputationFinalizedArchive {
     /// # Errors
     ///
     /// Fails closed for an empty archive, a coverage hole, a missing block body
-    /// or finality artifact, a timestamp/hash/chain mismatch, excess lag, or a
+    /// or commit certificate, a timestamp/hash/chain mismatch, excess lag, or a
     /// concurrent Kura/archive boundary change.
-    pub fn qualify_against_kura_tip(
+    pub fn qualify_against_certified_tip(
         &self,
-        network_id: &NetworkId,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         maximum_kura_tip_lag_blocks: u64,
     ) -> Result<ReputationFinalizedArchiveQualificationV1, ReputationFinalizedArchiveError> {
+        let network_id = state_ro.network_id();
         if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
@@ -3618,12 +3523,10 @@ impl ReputationFinalizedArchive {
                     },
                 )?
             };
-            let checkpoint_finality_digest = index.checkpoints.get(network_id).map(|checkpoint| {
-                checkpoint
-                    .persisted
-                    .checkpoint
-                    .kura_finality_artifact_digest
-            });
+            let checkpoint_finality_digest = index
+                .checkpoints
+                .get(network_id)
+                .map(|checkpoint| checkpoint.persisted.checkpoint.certified_block_id);
             (
                 anchors,
                 activation_floor,
@@ -3636,29 +3539,25 @@ impl ReputationFinalizedArchive {
             .last()
             .map(|(key, _)| key.clone())
             .expect("non-empty archive coverage has a tip");
-        let boundary = kura.exact_replay_boundary().map_err(|error| {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "bind exact Kura qualification boundary",
-                detail: error.to_string(),
-            }
-        })?;
-        if archive_tip.height > boundary.count {
+        let certified =
+            CertifiedArchiveView::new(state_ro, kura).map_err(certified_finality_error)?;
+        if archive_tip.height > certified.tip_height() {
             return Err(ReputationFinalizedArchiveError::ArchiveAheadOfKura {
                 archive_height: archive_tip.height,
-                kura_height: boundary.count,
+                kura_height: certified.tip_height(),
             });
         }
-        let lag_blocks = boundary.count - archive_tip.height;
+        let lag_blocks = certified.tip_height() - archive_tip.height;
         if lag_blocks > maximum_kura_tip_lag_blocks {
             return Err(ReputationFinalizedArchiveError::ArchiveKuraTipLagExceeded {
                 archive_height: archive_tip.height,
-                kura_height: boundary.count,
+                kura_height: certified.tip_height(),
                 lag: lag_blocks,
                 maximum: maximum_kura_tip_lag_blocks,
             });
         }
         for (key, finalized_at_unix_ms) in &anchors {
-            authenticate_archive_anchor_against_kura(key, *finalized_at_unix_ms, kura, &boundary)?;
+            authenticate_archive_anchor_against_certified(key, *finalized_at_unix_ms, &certified)?;
         }
         if let Some(expected_digest) = checkpoint_finality_digest {
             let checkpoint_height = anchors
@@ -3666,40 +3565,24 @@ impl ReputationFinalizedArchive {
                 .expect("checkpoint qualification has a virtual-base anchor")
                 .0
                 .height;
-            let (artifact, _) = kura
-                .v2_finality_artifact_with_receipt(checkpoint_height)
-                .map_err(
-                    |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                        operation: "re-read virtual-base finality artifact",
-                        detail: error.to_string(),
-                    },
-                )?
-                .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    network_id: network_id.clone(),
-                    height: checkpoint_height,
-                    reason: "virtual base has no canonical V2 finality artifact",
-                })?;
-            if canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?
+            if *certified
+                .block(checkpoint_height)
+                .map_err(certified_finality_error)?
+                .id()
+                .0
+                .as_ref()
                 != expected_digest
             {
                 return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
                     network_id: network_id.clone(),
                     height: checkpoint_height,
-                    reason: "virtual-base finality artifact digest changed",
+                    reason: "virtual-base certified block identity changed",
                 });
             }
         }
-        if kura.exact_replay_boundary().map_err(|error| {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "re-read exact Kura qualification boundary",
-                detail: error.to_string(),
-            }
-        })? != boundary
-        {
-            return Err(
-                ReputationFinalizedArchiveError::QualificationBoundaryChanged { boundary: "Kura" },
-            );
-        }
+        certified
+            .verify_unchanged()
+            .map_err(certified_finality_error)?;
         let index = self.read_index()?;
         self.verify_synchronized_index(&index)?;
         validate_qualification_archive_boundary(&index, network_id, generation, checkpoint_digest)?;
@@ -3707,7 +3590,7 @@ impl ReputationFinalizedArchive {
             activation_floor,
             archive_tip,
             checkpoint_digest,
-            kura_tip_height: boundary.count,
+            kura_tip_height: certified.tip_height(),
             lag_blocks,
             generation,
         };
@@ -3773,6 +3656,7 @@ impl ReputationFinalizedArchive {
             .get(network_id)
             .map(|checkpoint| checkpoint.persisted.checkpoint.retention_floor.clone()))
     }
+    #[cfg(test)]
     fn latest_reconstruction_state_at_or_before(
         &self,
         network_id: &NetworkId,
@@ -3814,6 +3698,7 @@ impl ReputationFinalizedArchive {
         }
         Ok(None)
     }
+    #[cfg(test)]
     fn require_contiguous_capture_key(
         &self,
         key: &ReputationFinalizedArchiveKeyV1,
@@ -3863,8 +3748,6 @@ impl ReputationFinalizedArchive {
                     archive: self,
                     index,
                     key: projection.key,
-                    #[cfg(test)]
-                    finalized_at_unix_ms: projection.finalized_at_unix_ms,
                     state: None,
                 });
             }
@@ -3917,6 +3800,7 @@ impl ReputationFinalizedArchive {
         self.prepare_captured_state(next_state, authority_policy_history)?
             .persist()
     }
+    #[cfg(test)]
     fn prepare_captured_state(
         &self,
         next_state: ReputationReconstructionStateV1,
@@ -3929,8 +3813,6 @@ impl ReputationFinalizedArchive {
             archive: self,
             index,
             key: next_state.key.clone(),
-            #[cfg(test)]
-            finalized_at_unix_ms: next_state.finalized_at_unix_ms,
             state: material.map(|material| material.finish(next_state)),
         })
     }
@@ -4018,8 +3900,6 @@ impl ReputationFinalizedArchive {
             archive: self,
             index,
             key: next_state.key.clone(),
-            #[cfg(test)]
-            finalized_at_unix_ms: next_state.finalized_at_unix_ms,
             state: Some(material.finish(next_state)),
         })
     }
@@ -4199,8 +4079,8 @@ impl ReputationFinalizedArchive {
     /// generation for a caller-owned retention decision.
     ///
     /// This read does not authorize or perform compaction. The caller must prepare and durably
-    /// approve the returned fence through [`Self::prepare_kura_authenticated_compaction`] and
-    /// [`Self::approve_and_install_kura_authenticated_compaction`].
+    /// approve the returned fence through [`Self::prepare_certified_compaction`] and
+    /// [`Self::approve_and_install_certified_compaction`].
     ///
     /// # Errors
     ///
@@ -4234,7 +4114,7 @@ impl ReputationFinalizedArchive {
     }
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
-    /// Preparation is read-only. Every physical prefix anchor and the fence's finality artifact are
+    /// Preparation is read-only. Every physical prefix anchor and the fence's certified block are
     /// reauthenticated against one frozen Kura boundary, then the complete canonical checkpoint
     /// bytes are digested into the returned proposal.
     ///
@@ -4242,14 +4122,15 @@ impl ReputationFinalizedArchive {
     ///
     /// Rejects an absent, stale, forked, unauthenticated, or non-advancing fence, any archive/Kura
     /// boundary change, resource exhaustion, or a damaged archive.
-    pub fn prepare_kura_authenticated_compaction(
+    pub fn prepare_certified_compaction(
         &self,
         fence: &ReputationFinalizedArchiveRetentionFenceV1,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
     ) -> Result<ReputationFinalizedArchiveCompactionProposalV1, ReputationFinalizedArchiveError>
     {
         let index = self.read_index()?;
-        let prepared = self.prepare_compaction_locked(&index, fence, kura)?;
+        let prepared = self.prepare_compaction_locked(&index, fence, state_ro, kura)?;
         compaction_proposal(&prepared, fence)
     }
     /// Durably approve and install one previously prepared compaction.
@@ -4264,9 +4145,10 @@ impl ReputationFinalizedArchive {
     /// In addition to preparation failures, rejects proposal substitution,
     /// missing or drifting authority identity, rollback, equivocation, an
     /// unchanged or ambiguous CAS, and any durable publication failure.
-    pub fn approve_and_install_kura_authenticated_compaction(
+    pub fn approve_and_install_certified_compaction(
         &self,
         proposal: &ReputationFinalizedArchiveCompactionProposalV1,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
         binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
@@ -4275,7 +4157,7 @@ impl ReputationFinalizedArchive {
         proposal.validate()?;
         let fence = proposal.fence();
         let mut index = self.write_index()?;
-        let prepared = self.prepare_compaction_locked(&index, fence, kura)?;
+        let prepared = self.prepare_compaction_locked(&index, fence, state_ro, kura)?;
         if compaction_proposal(&prepared, fence)? != *proposal {
             return Err(ReputationFinalizedArchiveError::RetentionProposalMismatch);
         }
@@ -4332,20 +4214,22 @@ impl ReputationFinalizedArchive {
         })
     }
     #[cfg(test)]
-    pub(crate) fn compact_kura_authenticated_prefix(
+    pub(crate) fn compact_certified_prefix(
         &self,
         fence: &ReputationFinalizedArchiveRetentionFenceV1,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
     ) -> Result<ReputationFinalizedArchiveCompactionOutcomeV1, ReputationFinalizedArchiveError>
     {
         let mut index = self.write_index()?;
-        let prepared = self.prepare_compaction_locked(&index, fence, kura)?;
+        let prepared = self.prepare_compaction_locked(&index, fence, state_ro, kura)?;
         self.publish_prepared_compaction(&mut index, prepared, || Ok(()))
     }
     fn prepare_compaction_locked(
         &self,
         index: &ArchiveIndex,
         fence: &ReputationFinalizedArchiveRetentionFenceV1,
+        state_ro: &impl StateReadOnly,
         kura: &Kura,
     ) -> Result<PreparedReputationFinalizedArchiveCompactionV1, ReputationFinalizedArchiveError>
     {
@@ -4512,7 +4396,7 @@ impl ReputationFinalizedArchive {
             // The finality digest is fixed-width. A nonzero placeholder lets
             // the exact production checkpoint shape hit local resource gates
             // before any Kura authentication or retention CAS.
-            kura_finality_artifact_digest: [1; 32],
+            certified_block_id: [1; 32],
             prior_checkpoint_digest,
             checkpoint_generation,
             cumulative_pruned_anchor_count,
@@ -4574,77 +4458,51 @@ impl ReputationFinalizedArchive {
         let preflight =
             PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(checkpoint.clone())?;
         prepare_checkpoint_publication(index, self.bounds, &preflight)?;
-        let boundary = kura.exact_replay_boundary().map_err(|error| {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "freeze reputation compaction Kura boundary",
-                detail: error.to_string(),
-            }
-        })?;
+        let certified =
+            CertifiedArchiveView::new(state_ro, kura).map_err(certified_finality_error)?;
+        if state_ro.network_id() != network_id {
+            return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
+                reason: "retention State is bound to another network",
+            });
+        }
         if let Some(active) = index.checkpoints.get(network_id) {
             let material = &active.persisted.checkpoint;
-            authenticate_archive_anchor_against_kura(
+            authenticate_archive_anchor_against_certified(
                 &material.retention_floor,
                 material.retention_floor_finalized_at_unix_ms,
-                kura,
-                &boundary,
+                &certified,
             )?;
-            let (artifact, _) = kura
-                .v2_finality_artifact_with_receipt(material.retention_floor.height)
-                .map_err(
-                    |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                        operation: "re-read prior retention-floor finality artifact",
-                        detail: error.to_string(),
-                    },
-                )?
-                .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    network_id: network_id.clone(),
-                    height: material.retention_floor.height,
-                    reason: "prior virtual base has no canonical V2 finality artifact",
-                })?;
-            if canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?
-                != material.kura_finality_artifact_digest
+            if *certified
+                .block(material.retention_floor.height)
+                .map_err(certified_finality_error)?
+                .id()
+                .0
+                .as_ref()
+                != material.certified_block_id
             {
                 return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    network_id: network_id.clone(),
+                    network_id: *network_id,
                     height: material.retention_floor.height,
-                    reason: "prior virtual-base finality artifact digest changed",
+                    reason: "prior virtual-base certified block identity changed",
                 });
             }
         }
         for entry in &anchors {
-            authenticate_archive_anchor_against_kura(
+            authenticate_archive_anchor_against_certified(
                 &entry.manifest.key,
                 entry.manifest.finalized_at_unix_ms,
-                kura,
-                &boundary,
+                &certified,
             )?;
         }
-        if kura.exact_replay_boundary().map_err(|error| {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "re-read reputation compaction Kura boundary",
-                detail: error.to_string(),
-            }
-        })? != boundary
-        {
-            return Err(
-                ReputationFinalizedArchiveError::QualificationBoundaryChanged { boundary: "Kura" },
-            );
-        }
-        let (artifact, _) = kura
-            .v2_finality_artifact_with_receipt(fence.compact_through.height)
-            .map_err(
-                |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                    operation: "read retention-floor finality artifact",
-                    detail: error.to_string(),
-                },
-            )?
-            .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                network_id: network_id.clone(),
-                height: fence.compact_through.height,
-                reason: "retention floor has no canonical V2 finality artifact",
-            })?;
-        checkpoint.kura_finality_artifact_digest =
-            canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?;
+        checkpoint.certified_block_id = *certified
+            .block(fence.compact_through.height)
+            .map_err(certified_finality_error)?
+            .id()
+            .0
+            .as_ref();
+        certified
+            .verify_unchanged()
+            .map_err(certified_finality_error)?;
         let persisted = PersistedReputationFinalizedVirtualBaseCheckpointV1::try_new(checkpoint)?;
         let checkpoint_bytes = prepare_checkpoint_publication(index, self.bounds, &persisted)?;
         let expected_archive_generation = index.generation.checked_add(1).ok_or(
@@ -6070,28 +5928,6 @@ impl ReputationFinalizedArchive {
                 reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
             });
         }
-        self.capture_gate
-            .ensure_unreserved()
-            .map_err(|wait| ReputationFinalizedArchiveError::CaptureReserved { wait })?;
-        Ok(index)
-    }
-    /// A held Kura lease must never wait on an archive reader that needs Kura.
-    fn try_write_reserved_index(
-        &self,
-        reservation: &ArchiveCaptureReservation,
-    ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndex>, ReputationFinalizedArchiveError> {
-        let index = self
-            .index
-            .try_write()
-            .map_err(|error| self.index_lock_error(error))?;
-        if index.requires_reopen {
-            return Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
-                reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
-            });
-        }
-        if !reservation.authorizes(&self.capture_gate) {
-            return Err(ReputationFinalizedArchiveError::CaptureOwnerMismatch);
-        }
         Ok(index)
     }
     fn index_lock_error(&self, error: ArchiveIndexLockError) -> ReputationFinalizedArchiveError {
@@ -6385,23 +6221,23 @@ enum ApprovedCheckpointCoverage {
     AwaitingCapture,
 }
 
-fn authenticate_approval_checkpoint_against_kura(
+fn authenticate_approval_checkpoint_against_certified(
     checkpoint: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
     index: &ArchiveIndex,
+    state_ro: &impl StateReadOnly,
     kura: &Kura,
 ) -> Result<ApprovedCheckpointCoverage, ReputationFinalizedArchiveError> {
     let material = &checkpoint.checkpoint;
-    let boundary = kura.exact_replay_boundary().map_err(|error| {
-        ReputationFinalizedArchiveError::KuraAuthentication {
-            operation: "freeze approved reputation checkpoint Kura boundary",
-            detail: error.to_string(),
-        }
-    })?;
-    authenticate_archive_anchor_against_kura(
+    if state_ro.network_id() != &material.retention_floor.network_id {
+        return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
+            reason: "retention recovery State is bound to another network",
+        });
+    }
+    let certified = CertifiedArchiveView::new(state_ro, kura).map_err(certified_finality_error)?;
+    authenticate_archive_anchor_against_certified(
         &material.retention_floor,
         material.retention_floor_finalized_at_unix_ms,
-        kura,
-        &boundary,
+        &certified,
     )?;
     let mut retained_anchors = vec![(
         material.retention_floor.clone(),
@@ -6427,43 +6263,27 @@ fn authenticate_approval_checkpoint_against_kura(
     validate_contiguous_archive_coverage(&material.retention_floor.network_id, &retained_anchors)?;
     let mut retained_tip_height = material.retention_floor.height;
     for (key, finalized_at_unix_ms) in retained_anchors.iter().skip(1) {
-        authenticate_archive_anchor_against_kura(key, *finalized_at_unix_ms, kura, &boundary)?;
+        authenticate_archive_anchor_against_certified(key, *finalized_at_unix_ms, &certified)?;
         retained_tip_height = key.height;
     }
-    let (artifact, _) = kura
-        .v2_finality_artifact_with_receipt(material.retention_floor.height)
-        .map_err(
-            |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "authenticate approved retention-floor finality artifact",
-                detail: error.to_string(),
-            },
-        )?
-        .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: material.retention_floor.network_id.clone(),
-            height: material.retention_floor.height,
-            reason: "approved retention floor has no canonical V2 finality artifact",
-        })?;
-    if canonical_domain_digest(KURA_FINALITY_ARTIFACT_DIGEST_DOMAIN_V1, &artifact)?
-        != material.kura_finality_artifact_digest
+    if *certified
+        .block(material.retention_floor.height)
+        .map_err(certified_finality_error)?
+        .id()
+        .0
+        .as_ref()
+        != material.certified_block_id
     {
         return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: material.retention_floor.network_id.clone(),
+            network_id: material.retention_floor.network_id,
             height: material.retention_floor.height,
-            reason: "approved retention-floor finality artifact digest changed",
+            reason: "approved retention-floor certified block identity changed",
         });
     }
-    if kura.exact_replay_boundary().map_err(|error| {
-        ReputationFinalizedArchiveError::KuraAuthentication {
-            operation: "re-read approved reputation checkpoint Kura boundary",
-            detail: error.to_string(),
-        }
-    })? != boundary
-    {
-        return Err(
-            ReputationFinalizedArchiveError::QualificationBoundaryChanged { boundary: "Kura" },
-        );
-    }
-    Ok(if retained_tip_height == boundary.count {
+    certified
+        .verify_unchanged()
+        .map_err(certified_finality_error)?;
+    Ok(if retained_tip_height == certified.tip_height() {
         ApprovedCheckpointCoverage::Complete
     } else {
         // Every retained anchor was authenticated against this exact boundary,
@@ -6595,84 +6415,31 @@ fn validate_contiguous_archive_coverage(
     }
     Ok(())
 }
-fn authenticate_archive_anchor_against_kura(
+fn authenticate_archive_anchor_against_certified(
     key: &ReputationFinalizedArchiveKeyV1,
     finalized_at_unix_ms: u64,
-    kura: &Kura,
-    boundary: &crate::kura::ExactReplayBoundary,
+    certified: &CertifiedArchiveView<'_, impl StateReadOnly>,
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    let height_index = usize::try_from(key.height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id.clone(),
-            height: key.height,
-            reason: "archive height is not representable by Kura",
-        })?;
-    let boundary_hash = boundary
-        .hashes
-        .get(height_index.get() - 1)
-        .map(|hash| *hash.as_ref())
-        .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id.clone(),
-            height: key.height,
-            reason: "archive height is absent from the exact Kura boundary",
-        })?;
-    if boundary_hash != key.block_hash {
-        return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id.clone(),
-            height: key.height,
-            reason: "archive hash differs from the exact Kura hash journal",
-        });
-    }
-    let (artifact, receipt) = kura
-        .v2_finality_artifact_with_receipt(key.height)
-        .map_err(
-            |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "authenticate archived v2 finality artifact",
-                detail: error.to_string(),
-            },
-        )?
-        .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id.clone(),
-            height: key.height,
-            reason: "archive height has no authenticated V2 finality artifact",
-        })?;
-    if artifact.height != key.height
-        || *artifact.block_hash.as_ref() != key.block_hash
-        || receipt.height() != key.height
-        || *receipt.block_hash().as_ref() != key.block_hash
+    let block = certified
+        .block(key.height)
+        .map_err(certified_finality_error)?;
+    if block.height() != key.height
+        || *block.block_hash().as_ref() != key.block_hash
+        || block.block_time_ms() != finalized_at_unix_ms
     {
         return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id.clone(),
+            network_id: key.network_id,
             height: key.height,
-            reason: "archive key differs from its authenticated V2 finality artifact",
-        });
-    }
-    let block = kura
-        .read_block_body(height_index)
-        .map_err(
-            |error| ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "read canonical archived block body",
-                detail: error.to_string(),
-            },
-        )?
-        .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id.clone(),
-            height: key.height,
-            reason: "result-bearing canonical block is unavailable for archive qualification",
-        })?;
-    if block.header().height().get() != key.height
-        || *block.hash().as_ref() != key.block_hash
-        || block.header().creation_time_ms != finalized_at_unix_ms
-    {
-        return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            network_id: key.network_id.clone(),
-            height: key.height,
-            reason: "archive timestamp or identity differs from the canonical block",
+            reason: "archive timestamp or identity differs from the certified block",
         });
     }
     Ok(())
+}
+fn certified_finality_error(error: ArchiveFinalityError) -> ReputationFinalizedArchiveError {
+    ReputationFinalizedArchiveError::KuraAuthentication {
+        operation: "authenticate current certified archive boundary",
+        detail: error.to_string(),
+    }
 }
 fn candidate_capture_key(
     state_ro: &impl StateReadOnly,
@@ -6705,37 +6472,6 @@ fn candidate_capture_key(
         *block_hash.as_ref(),
     )?;
     Ok((key, finalized_at_unix_ms))
-}
-fn authenticate_capture_key(
-    key: &ReputationFinalizedArchiveKeyV1,
-    expected_finalized_at_unix_ms: u64,
-    kura: &Kura,
-    receipt: &KuraV2CommitReceipt,
-) -> Result<(), ReputationFinalizedArchiveError> {
-    kura.authenticate_archive_capture(
-        key.network_id,
-        key.height,
-        key.block_hash,
-        expected_finalized_at_unix_ms,
-        receipt,
-    )
-    .map_err(capture_authentication_error)
-}
-
-fn capture_authentication_error(
-    error: KuraArchiveCaptureAuthenticationError,
-) -> ReputationFinalizedArchiveError {
-    match error {
-        KuraArchiveCaptureAuthenticationError::Identity(reason) => {
-            ReputationFinalizedArchiveError::FinalityAuthentication { reason }
-        }
-        KuraArchiveCaptureAuthenticationError::Storage(error) => {
-            ReputationFinalizedArchiveError::KuraAuthentication {
-                operation: "authenticate retained archive capture",
-                detail: error.to_string(),
-            }
-        }
-    }
 }
 fn projection_query_error(
     source: &'static str,
@@ -9030,15 +8766,6 @@ pub enum ReputationFinalizedArchiveError {
         /// Release Kura and State fences before awaiting this actual index owner.
         wait: concread::release::ReleaseWait,
     },
-    /// Another original candidate retains the archive predecessor and capacity.
-    #[error("finalized reputation archive has an outstanding candidate capture")]
-    CaptureReserved {
-        /// Exact owner-release event to await after dropping all State/archive writers.
-        wait: crate::query::ArchiveCaptureWait,
-    },
-    /// A retained insertion was presented to a different original archive owner.
-    #[error("finalized reputation capture belongs to another archive owner")]
-    CaptureOwnerMismatch,
     /// Archive resource ceilings are zero, inconsistent, or unrepresentable.
     #[error("invalid finalized reputation archive bounds: {reason}")]
     InvalidBounds {
@@ -9057,7 +8784,7 @@ pub enum ReputationFinalizedArchiveError {
         /// Stable validation failure.
         reason: &'static str,
     },
-    /// A Kura receipt, its verified finality artifact, and the immutable state
+    /// A certified Kura block and the immutable state
     /// view do not identify one exact result-bearing block.
     #[error("finalized reputation capture failed Kura authentication: {reason}")]
     FinalityAuthentication {
@@ -9459,6 +9186,7 @@ pub enum ReputationFinalizedArchiveError {
 mod tests {
     mod frame_identity_tests;
     include!("reputation_finalized/preparation_tests.rs");
+    include!("reputation_finalized/certified_tests.rs");
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -9508,6 +9236,15 @@ mod tests {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("construct deterministic test key");
         AccountId::new(keypair.public_key().clone())
+    }
+    fn empty_test_state(kura: &Arc<Kura>) -> crate::state::State {
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            Arc::clone(kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            iroha_model_base::chain::ChainId::from("reputation-archive-local-test"),
+            network_id(0x61),
+        )
     }
     fn bounds() -> ReputationFinalizedArchiveBounds {
         ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20)
@@ -10098,7 +9835,7 @@ mod tests {
             retention_floor: state.key.clone(),
             retention_floor_finalized_at_unix_ms: state.finalized_at_unix_ms,
             retention_floor_anchor_digest: target.anchor_digest,
-            kura_finality_artifact_digest: [0xA5; 32],
+            certified_block_id: [0xA5; 32],
             prior_checkpoint_digest: None,
             checkpoint_generation: 1,
             cumulative_pruned_anchor_count: bounded_len(anchors.len())
@@ -10522,6 +10259,7 @@ mod tests {
                 archive_root(&omitted_directory),
                 bounds(),
                 &network_id(0x61),
+                &empty_test_state(&omitted_kura).query_view(),
                 omitted_kura.as_ref(),
                 &omitted_binding,
                 &omitted_authority,
@@ -10552,6 +10290,7 @@ mod tests {
                 archive_root(&stale_directory),
                 bounds(),
                 &network_id(0x61),
+                &empty_test_state(&stale_kura).query_view(),
                 stale_kura.as_ref(),
                 &stale_binding,
                 &stale_authority,
@@ -10625,7 +10364,7 @@ mod tests {
         .expect("construct source-lineage successor floor");
         current.retention_floor_finalized_at_unix_ms += 1;
         current.retention_floor_anchor_digest = [0xD1; 32];
-        current.kura_finality_artifact_digest = [0xD2; 32];
+        current.certified_block_id = [0xD2; 32];
         current.prior_checkpoint_digest = Some(previous.checkpoint_digest);
         current.checkpoint_generation += 1;
         current.cumulative_pruned_anchor_count += 1;
@@ -11129,7 +10868,7 @@ mod tests {
         let archive = open_archive(&directory, tight_bounds);
         let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
-            archive.prepare_kura_authenticated_compaction(&fence, kura.as_ref()),
+            archive.prepare_certified_compaction(&fence, &empty_test_state(&kura).query_view(), kura.as_ref()),
             Err(ReputationFinalizedArchiveError::RecordTooLarge {
                 size,
                 maximum,
@@ -11147,8 +10886,9 @@ mod tests {
         let authority = TestRetentionAuthority::new();
         let binding = authority.binding();
         assert!(matches!(
-            archive.approve_and_install_kura_authenticated_compaction(
+            archive.approve_and_install_certified_compaction(
                 &proposal,
+                &empty_test_state(&kura).query_view(),
                 kura.as_ref(),
                 &binding,
                 &authority,
@@ -11248,7 +10988,7 @@ mod tests {
             .expect("advance archive after fence freeze");
         let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
-            archive.compact_kura_authenticated_prefix(&fence, &kura),
+            archive.compact_certified_prefix(&fence, &empty_test_state(&kura).query_view(), &kura),
             Err(ReputationFinalizedArchiveError::RetentionFenceChanged {
                 expected_generation: 1,
                 observed_generation: 2,
@@ -11338,7 +11078,11 @@ mod tests {
         );
         let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
-            archive.compact_kura_authenticated_prefix(&stale_fence, &kura),
+            archive.compact_certified_prefix(
+                &stale_fence,
+                &empty_test_state(&kura).query_view(),
+                &kura
+            ),
             Err(ReputationFinalizedArchiveError::RetentionFenceChanged {
                 expected_generation: 2,
                 observed_generation: 3,
@@ -11382,7 +11126,11 @@ mod tests {
         let mut substituted_fence = fresh_fence;
         substituted_fence.expected_checkpoint_digest = None;
         assert!(matches!(
-            archive.compact_kura_authenticated_prefix(&substituted_fence, &kura),
+            archive.compact_certified_prefix(
+                &substituted_fence,
+                &empty_test_state(&kura).query_view(),
+                &kura
+            ),
             Err(ReputationFinalizedArchiveError::InvalidRetentionFence {
                 reason: "retention fence does not bind the active checkpoint head",
             })

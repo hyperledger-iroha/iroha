@@ -264,6 +264,11 @@ pub(crate) struct P256ArithmeticStarkFixedProviderV1 {
     trace_size: usize,
 }
 impl P256ArithmeticStarkFixedProviderV1 {
+    /// Allocated compact verifier topology payload.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocated_heap_bytes_v1(&self) -> usize {
+        super::allocation_payload::vector_v1(&self.operations)
+    }
     /// Validate the deterministic topology and establish one padded native domain.
     pub(crate) fn new_v1(
         operations: &[ZkX509P256ArithmeticTopologyV1],

@@ -107407,7 +107407,7 @@
     },
     "/v1/sorafs/publish/proof": {
       "post": {
-        "description": "Return SorafsPublicationProofV1 containing at most 1024 consecutive signed RS16 native finality artifacts from the caller's independent checkpoint and the exact executed SignedBlockWire carrier. CanReadAllLedgerData is required because the carrier includes the full block. The caller must verify its independently retained network/checkpoint, every successor, exact signed challenged assertion and successful execution output within its monotonic deadline. HTTP success and returned finality without this verification are not publication evidence.",
+        "description": "Return SorafsPublicationProofV1 containing only lineage: at most 1024 consecutive SumeragiFinalityProof frames including the caller's independent checkpoint floor. Each frame carries its complete result-bearing SignedBlockWire and embedded current commit certificate. CanReadAllLedgerData is required because the frames include full blocks. The caller must independently select a bounded canonical SumeragiFinalityCheckpoint, validate its configured network and chain label, and authenticate every successor through the retained parent/result and lag-2 committee commitments. A response cannot select its own trust root. The exact signed challenged assertion and successful execution output must verify within the caller's monotonic deadline before retaining an advanced checkpoint. HTTP success alone is not publication evidence.",
         "requestBody": {
           "content": {
             "application/x-norito": {

@@ -4,7 +4,6 @@
 //! original writer and releases it with its exact predecessor identity retained.
 //! Block hashes move their original private tree without a chain copy or physical lock.
 //! World/runtime journals and tiered snapshots retain their original ownership.
-//! Archive plans retain original logical reservations and filesystem owners.
 //! The private terminal consumer joins exact QC/Kura/Native custody, retains the
 //! original Queue for namespace retirement, and refuses retired participant
 //! manifests. Concrete descriptor, wrapper and effects allocations are admitted;
@@ -12,16 +11,6 @@
 
 use super::super::*;
 use super::{PreparedCarrier, PreparedCarrierFields, execution_prefix::ValidatedExecutionPrefix};
-#[cfg(test)]
-use crate::query::{
-    provider_ingest_finalized::ProviderIngestFinalizedArchiveV1,
-    reputation_finalized::ReputationFinalizedArchive,
-};
-use crate::query::{
-    provider_ingest_finalized::{PreparedProviderIngestCapture, ProviderCandidateCapture},
-    reputation_finalized::{PreparedReputationCapture, ReputationCandidateCapture},
-};
-
 #[path = "journal_resources.rs"]
 mod journal_resources;
 pub(crate) use journal_resources::{CarrierJournalShellReservation, FundedBox};
@@ -41,8 +30,7 @@ pub(crate) use decision_binding::{PublishedNativeApply, RetainedCarrier};
 use runtime_journals::RuntimeJournalInputs;
 use runtime_journals::RuntimeJournals;
 
-/// Candidate journal admission distinguishes local archive failure from execution.
-/// Archive inability is not a consensus verdict on the authenticated proposal.
+/// Candidate journal admission distinguishes local resource failure from execution.
 #[derive(thiserror::Error)]
 pub(crate) enum CarrierJournalPreparationError<'state, Admission, E> {
     /// Execution hit a local storage limit; no candidate receipt may be published.
@@ -50,10 +38,6 @@ pub(crate) enum CarrierJournalPreparationError<'state, Admission, E> {
     LocalStorageRefusal {
         /// The exact candidate, still retaining its original journals.
         carrier: PreparedCarrier<'state>,
-        /// Pre-execution provider predecessor retained for a local retry.
-        provider: Option<ProviderCandidateCapture>,
-        /// Pre-execution reputation predecessor retained for a local retry.
-        reputation: Option<ReputationCandidateCapture>,
         /// The first local refusal, independent of contract error handling.
         error: StateStorageAdmissionError,
         /// The original journal shell reservation.
@@ -64,10 +48,6 @@ pub(crate) enum CarrierJournalPreparationError<'state, Admission, E> {
     JournalAdmission {
         /// The unmodified borrowed owner; callers must not retain it across a wait.
         carrier: PreparedCarrier<'state>,
-        /// Original archive predecessors, still reserved for a synchronous retry.
-        provider: Option<ProviderCandidateCapture>,
-        /// Original reputation predecessor and its exact capture cursors.
-        reputation: Option<ReputationCandidateCapture>,
         /// Original resource-admission refusal, before any allocating capture.
         error: E,
         /// Original pre-execution shell capacity retained for the same retry.
@@ -76,14 +56,6 @@ pub(crate) enum CarrierJournalPreparationError<'state, Admission, E> {
     /// The original World journals do not share one execution mode.
     #[error("candidate World capture: {0}")]
     WorldCapture(#[from] world_journals::CaptureError<std::convert::Infallible>),
-    /// State writers are released and all original journals survive archive refusal.
-    #[error("candidate archive preparation: {error}")]
-    ArchivePreparation {
-        /// Exact lifetime-free carrier, including original captured archive material.
-        carrier: FundedBox<StagedCarrierCapture<Admission>>,
-        /// Typed local dependency or recovery diagnostic, never proposal invalidity.
-        error: CarrierArchivePreparationError,
-    },
     /// The original transaction journal does not extend its owned predecessor.
     #[error("candidate transaction membership: {0}")]
     Membership(#[from] storage_transactions::TransactionsBlockError),
@@ -106,102 +78,13 @@ impl<Admission, E: std::fmt::Debug> std::fmt::Debug
             Self::WorldCapture(error) => f.debug_tuple("WorldCapture").field(error).finish(),
             Self::Membership(error) => f.debug_tuple("Membership").field(error).finish(),
             Self::Geometry(error) => f.debug_tuple("Geometry").field(error).finish(),
-            Self::ArchivePreparation { error, .. } => {
-                f.debug_tuple("ArchivePreparation").field(error).finish()
-            }
         }
-    }
-}
-
-/// Cloneable diagnostic retaining the exact archive's refusal and release observation.
-#[derive(Clone, Debug, thiserror::Error)]
-pub(crate) enum CarrierArchivePreparationError {
-    /// Provider capture or insertion admission remains locally unavailable.
-    #[error("provider-ingest candidate capture: {0}")]
-    Provider(Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1>),
-    /// Reputation capture or insertion admission remains locally unavailable.
-    #[error("reputation candidate capture: {0}")]
-    Reputation(Arc<crate::query::reputation_finalized::ReputationFinalizedArchiveError>),
-}
-
-/// Detached execution with partially prepared archives; no State reference or writer survives.
-/// Only successful completion exposes the existing decision-binding journal owner.
-pub(crate) struct StagedCarrierCapture<Admission> {
-    provider: Option<ProviderCandidateCapture>,
-    reputation: Option<ReputationCandidateCapture>,
-    // A failed original capture cannot be retried against another State view.
-    capture_refusal: Option<CarrierArchivePreparationError>,
-    // Capacity is inside this last field and therefore outlives archive payloads.
-    journals: PreparedCarrierJournals<Admission>,
-}
-
-impl<Admission> StagedCarrierCapture<Admission> {
-    /// Match the original executed proposal while archive capture remains incomplete.
-    pub(crate) fn matches_candidate(
-        &self,
-        context: &iroha_data_model::block::consensus_v2::HeightContext,
-        proposal: &iroha_data_model::block::SignedBlock,
-    ) -> bool {
-        self.journals
-            .matches_validation_candidate(context, proposal)
-    }
-}
-
-impl<Admission> FundedBox<StagedCarrierCapture<Admission>> {
-    /// Resume the exact boxed capture without replacing its allocation on refusal.
-    pub(crate) fn try_complete(
-        mut self,
-    ) -> Result<PreparedCarrierJournals<Admission>, (Self, CarrierArchivePreparationError)> {
-        if let Err(error) = self.try_prepare_archives() {
-            return Err((self, error));
-        }
-        Ok(self.into_inner().into_journals())
-    }
-}
-
-impl<Admission> StagedCarrierCapture<Admission> {
-    // Initial capture and boxed retries prepare the same retained archive owners.
-    // This borrowed step never moves the large carrier or allocates another box.
-    fn try_prepare_archives(&mut self) -> Result<(), CarrierArchivePreparationError> {
-        if let Some(error) = &self.capture_refusal {
-            return Err(error.clone());
-        }
-        if let Some(provider) = &mut self.provider {
-            provider
-                .try_prepare()
-                .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;
-        }
-        if let Some(reputation) = &mut self.reputation {
-            reputation
-                .try_prepare()
-                .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;
-        }
-        Ok(())
-    }
-
-    // Both callers complete original insertion preparation before moving journals.
-    fn into_journals(mut self) -> PreparedCarrierJournals<Admission> {
-        self.journals.provider_capture = self.provider.take().map(|owner| {
-            owner
-                .into_prepared()
-                .ok()
-                .expect("successful exact provider preparation")
-        });
-        self.journals.reputation_capture = self.reputation.take().map(|owner| {
-            owner
-                .into_prepared()
-                .ok()
-                .expect("successful exact reputation preparation")
-        });
-        self.journals
     }
 }
 
 /// Borrowed complete candidate before original-State projection or journal capture.
 /// Source custody has already moved out of raw State and remains part of this
 /// one admission, including the original witness and actual invocation owners.
-/// Archive predecessor owners were acquired earlier under their existing bounds;
-/// this callback does not retroactively fund those preexecution allocations.
 pub(crate) struct CarrierJournalInputs<'owner, 'state> {
     /// Original result-bearing block, including its retained validation state.
     pub(crate) valid: &'owner crate::block::ValidBlock,
@@ -219,10 +102,6 @@ pub(crate) struct CarrierJournalInputs<'owner, 'state> {
     pub(crate) da_pins: &'owner Vec<DaPinIntentWithLocation>,
     /// Original event allocation, including unused capacity and nested payloads.
     pub(crate) publication_events: &'owner Vec<EventBox>,
-    /// Exact preexecution provider owner; this is not a new archive observation.
-    pub(crate) provider: Option<&'owner ProviderCandidateCapture>,
-    /// Exact preexecution reputation predecessor and its retained capture cursors.
-    pub(crate) reputation: Option<&'owner ReputationCandidateCapture>,
     /// Exact pointee layout of the effects Box allocated after this admission.
     /// This covers its inline storage; nested owners still require their own
     /// accounting within the complete original candidate admission.
@@ -258,8 +137,6 @@ pub(crate) struct PreparedCarrierJournals<
     components: Components,
     world_effects: world_commit::PreparedWorldEffects,
     geometry: carrier_geometry_preparation::PreparedCarrierGeometry,
-    provider_capture: Option<PreparedProviderIngestCapture>,
-    reputation_capture: Option<PreparedReputationCapture>,
     publication_events: Vec<EventBox>,
     tiered_snapshot: tiered_publication::PreparedTieredSnapshot,
     // Keep one admitted allocation across consuming phase transitions. Inline
@@ -267,7 +144,7 @@ pub(crate) struct PreparedCarrierJournals<
     // success/refusal value, exhausting ordinary stacks during authentication.
     effects: FundedBox<RetainedCarrierEffects>,
     // Rust drops fields in declaration order. Capacity outlives every retained
-    // journal, archive plan and deferred effect, including partial publication.
+    // journal and deferred effect, including partial publication.
     admission: Admission,
 }
 
@@ -317,7 +194,7 @@ pub(super) struct RetainedCarrierEffects {
 }
 
 impl<'state> PreparedCarrier<'state> {
-    /// Capture original-State projections, detach the actual journals, then prepare archives.
+    /// Capture original-State projections and detach the actual journals.
     ///
     /// StateReadOnly is used only before decomposition. No surrogate State,
     /// reconstructed membership writer or second World tail is introduced.
@@ -329,15 +206,12 @@ impl<'state> PreparedCarrier<'state> {
     /// do not account for retained memory.
     /// Detachment moves original MV allocations without cloning; execution's
     /// earlier allocations require their own prior admission. The reservation stays
-    /// alive until all journals and deferred effects have been released. Archive
-    /// arguments must be the exact predecessor owners reserved before execution.
-    /// Admission refusal returns the original borrowed carrier and these owners
+    /// alive until all journals and deferred effects have been released.
+    /// Admission refusal returns the original borrowed carrier
     /// for synchronous handling only; no State writer may cross an async wait.
     pub(crate) fn prepare_journals<Admission, E>(
         self,
         journal_shells: CarrierJournalShellReservation<Admission>,
-        provider_capture: Option<ProviderCandidateCapture>,
-        reputation_capture: Option<ReputationCandidateCapture>,
         admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>) -> Result<Admission, E>,
     ) -> Result<
         PreparedCarrierJournals<Admission>,
@@ -346,8 +220,6 @@ impl<'state> PreparedCarrier<'state> {
         if let Err(error) = self.state.require_storage_admission() {
             return Err(CarrierJournalPreparationError::LocalStorageRefusal {
                 carrier: self,
-                provider: provider_capture,
-                reputation: reputation_capture,
                 error,
                 journal_shells,
             });
@@ -365,8 +237,8 @@ impl<'state> PreparedCarrier<'state> {
             _publication_events,
         } = &*self;
         // Declare before the original owners: reverse local drop order must
-        // release them before capacity on every early error, including archive
-        // admission before the StateBlock has been decomposed.
+        // release them before capacity on every early admission error, before
+        // the StateBlock has been decomposed.
         let admission = match admit_journals(CarrierJournalInputs {
             valid,
             state,
@@ -376,16 +248,12 @@ impl<'state> PreparedCarrier<'state> {
             native_amx_manifest,
             da_pins: _world_effects.admission_pins(),
             publication_events: _publication_events,
-            provider: provider_capture.as_ref(),
-            reputation: reputation_capture.as_ref(),
             retained_effects_layout: std::alloc::Layout::new::<RetainedCarrierEffects>(),
         }) {
             Ok(admission) => admission,
             Err(error) => {
                 return Err(CarrierJournalPreparationError::JournalAdmission {
                     carrier: self,
-                    provider: provider_capture,
-                    reputation: reputation_capture,
                     error,
                     journal_shells,
                 });
@@ -394,13 +262,8 @@ impl<'state> PreparedCarrier<'state> {
         let CarrierJournalShellReservation {
             world: world_shells,
             effects: effects_charge,
-            capture: capture_charge,
             ..
         } = journal_shells;
-        // Parameters drop after locals. Move archive payload owners into locals
-        // declared after capacity so every capture/error/unwind releases them first.
-        let mut provider_capture = provider_capture;
-        let mut reputation_capture = reputation_capture;
         // Declare projection payloads before their original writer owner so
         // unwind releases every physical writer before any projection retires.
         #[cfg(feature = "telemetry")]
@@ -411,7 +274,6 @@ impl<'state> PreparedCarrier<'state> {
         let committed_musubi_replication_shortfall_releases;
         let tiered_snapshot;
         let geometry;
-        let mut capture_refusal;
         let checkpoint;
         let lifecycle;
         let da_commitments;
@@ -421,7 +283,7 @@ impl<'state> PreparedCarrier<'state> {
         let mut original = self;
         let state = &mut original.parts_mut().state;
         // Admit capture overlap, retained originals/final values and eventual
-        // installation before projecting geometry/archives or detaching a journal.
+        // installation before projecting geometry or detaching a journal.
         // The callback can inspect the original typed World/runtime/source inputs; it
         // cannot mutate them or treat this local reservation as finality.
         // Preserve commit's dirty-only gauges from this exact overlay. Once
@@ -448,19 +310,6 @@ impl<'state> PreparedCarrier<'state> {
             &state.state_ref.tiered_snapshot_worker,
         );
         geometry = state.prepare_carrier_geometry()?;
-        // Reservations were acquired before execution. Original-State capture
-        // never acquires an archive index; every refusal still detaches the
-        // admitted execution before returning control to a possible waiter.
-        capture_refusal = provider_capture
-            .as_mut()
-            .and_then(|owner| owner.capture_original(state.as_ref()).err())
-            .map(|error| CarrierArchivePreparationError::Provider(Arc::new(error)));
-        if capture_refusal.is_none() {
-            capture_refusal = reputation_capture
-                .as_mut()
-                .and_then(|owner| owner.capture_original(state.as_ref()).err())
-                .map(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)));
-        }
         checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&state);
         lifecycle = state.pending_autoscale_lifecycle.as_ref().map(|pending| {
             carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &state.nexus)
@@ -553,8 +402,6 @@ impl<'state> PreparedCarrier<'state> {
             kura: Arc::clone(&state_ref.kura),
             components,
             world_effects,
-            provider_capture: None,
-            reputation_capture: None,
             geometry,
             publication_events,
             tiered_snapshot,
@@ -590,20 +437,7 @@ impl<'state> PreparedCarrier<'state> {
             },
             admission,
         };
-        let mut carrier = StagedCarrierCapture {
-            provider: provider_capture,
-            reputation: reputation_capture,
-            capture_refusal,
-            journals,
-        };
-        if let Err(error) = carrier.try_prepare_archives() {
-            return Err(CarrierJournalPreparationError::ArchivePreparation {
-                carrier: FundedBox::new(carrier, capture_charge),
-                error,
-            });
-        }
-        drop(capture_charge);
-        Ok(carrier.into_journals())
+        Ok(journals)
     }
 }
 
@@ -664,8 +498,6 @@ impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Com
             kura,
             world_effects,
             geometry,
-            provider_capture,
-            reputation_capture,
             publication_events,
             tiered_snapshot,
             effects,
@@ -685,8 +517,6 @@ impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Com
                     kura,
                     world_effects,
                     geometry,
-                    provider_capture,
-                    reputation_capture,
                     publication_events,
                     tiered_snapshot,
                     effects,

@@ -3551,11 +3551,6 @@ pub(crate) mod validation_custody;
 
 pub(crate) mod carrier_queue_retirement;
 
-/// Exact archive predecessor custody before the retained validator executes.
-// TODO: consume through the production CarrierValidator with full resource admission.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) mod archive_reservations;
-
 #[cfg_attr(
     not(test),
     allow(
@@ -3585,10 +3580,6 @@ pub(crate) struct V2ApplyService {
     carrier_shell_budget: mv::allocation::AllocationBudget,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
-    provider_ingest_finalized_archive:
-        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
-    reputation_finalized_archive:
-        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     network_id: NetworkId,
     block_cadence: Duration,
     genesis_account: AccountId,
@@ -4317,12 +4308,6 @@ impl V2ApplyService {
         state: Arc<State>,
         queue: Arc<Queue>,
         kura: Arc<Kura>,
-        provider_ingest_finalized_archive: Option<
-            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
-        >,
-        reputation_finalized_archive: Option<
-            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
-        >,
         block_cadence: Duration,
         genesis_account: AccountId,
         events_sender: EventsSender,
@@ -4337,8 +4322,6 @@ impl V2ApplyService {
             carrier_shell_budget,
             queue,
             kura,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
             network_id,
             block_cadence,
             genesis_account,
@@ -5557,13 +5540,13 @@ impl V2ApplyService {
         // Kura owns the first irreversible commit point. This call is also the
         // idempotent repair boundary for a durable block whose merge
         // association was interrupted after its block fsync.
-        let pre_wsv_finality_receipt = if store_block {
+        if store_block {
             #[cfg(test)]
             self.before_successful_apply_kura_store_for_test();
             self.kura.store_block(committed_block.clone())?;
             #[cfg(test)]
             self.inject_test_crash(tests::CrashPoint::KuraStore)?;
-            let receipt = self
+            let _receipt = self
                 .kura
                 .store_v2_finality_artifact(artifact)
                 .map_err(|error| {
@@ -5572,10 +5555,7 @@ impl V2ApplyService {
                         &error,
                     )
                 })?;
-            Some(receipt)
-        } else {
-            None
-        };
+        }
         #[cfg(test)]
         if store_block {
             self.after_successful_apply_kura_store_for_test();
@@ -5735,47 +5715,6 @@ impl V2ApplyService {
         timings.record();
         #[cfg(test)]
         self.inject_test_crash(tests::CrashPoint::WsvCheckpoint)?;
-        // TODO: Add an automatic governed retention controller and deployment
-        // policy before treating this bounded archive as suitable for indefinite
-        // node operation. Explicit Kura-authenticated, sealed-CAS-approved prefix
-        // compaction is available; reaching a configured ceiling without an
-        // authorized retention decision intentionally remains fail-stop.
-        if let Some(archive) = self.provider_ingest_finalized_archive.as_ref() {
-            let receipt = pre_wsv_finality_receipt.as_ref().ok_or_else(|| {
-                V2ApplyError::CommittedRecoveryRequired {
-                    stage: "provider-ingest finalized archive capture",
-                    detail: "the exact pre-WSV Kura finality receipt is unavailable".to_owned(),
-                }
-            })?;
-            archive
-                .capture_kura_authenticated_view(state_block.as_ref(), self.kura.as_ref(), receipt)
-                .map_err(|error| {
-                    V2ApplyError::committed_recovery_required(
-                        "provider-ingest finalized archive capture",
-                        &error,
-                    )
-                })?;
-            #[cfg(test)]
-            self.inject_test_crash(tests::CrashPoint::ProviderIngestArchiveCapture)?;
-        }
-        if let Some(archive) = self.reputation_finalized_archive.as_ref() {
-            let receipt = pre_wsv_finality_receipt.as_ref().ok_or_else(|| {
-                V2ApplyError::CommittedRecoveryRequired {
-                    stage: "reputation finalized archive capture",
-                    detail: "the exact pre-WSV Kura finality receipt is unavailable".to_owned(),
-                }
-            })?;
-            archive
-                .capture_kura_authenticated_view(state_block.as_ref(), self.kura.as_ref(), receipt)
-                .map_err(|error| {
-                    V2ApplyError::committed_recovery_required(
-                        "reputation finalized archive capture",
-                        &error,
-                    )
-                })?;
-            #[cfg(test)]
-            self.inject_test_crash(tests::CrashPoint::ReputationArchiveCapture)?;
-        }
         #[cfg(feature = "test-network-native-amx-fault-injection")]
         if let Some(execution_context) = committed_block.as_ref().execution_context() {
             for external in &execution_context.external {
@@ -6348,8 +6287,6 @@ mod retirement_release_tests {
             Arc::clone(&state),
             Arc::clone(&queue),
             state.kura_handle(),
-            None,
-            None,
             state.sumeragi_block_cadence(),
             iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
             events,

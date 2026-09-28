@@ -1358,12 +1358,6 @@ impl ProductionV2Services {
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
         kura: Arc<crate::kura::Kura>,
-        provider_ingest_finalized_archive: Option<
-            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
-        >,
-        reputation_finalized_archive: Option<
-            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
-        >,
         block_cadence: Duration,
         genesis_account: iroha_data_model::account::AccountId,
         events_sender: EventsSender,
@@ -1382,8 +1376,6 @@ impl ProductionV2Services {
             Arc::clone(&state),
             queue,
             Arc::clone(&kura),
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
             block_cadence,
             genesis_account,
             events_sender,

@@ -3,19 +3,18 @@
 use super::pin_registry::{PinManifestRecord, ReplicationOrderRecord};
 use crate::{
     NetworkId,
-    block::{
-        consensus_v2::finality::{V2FinalityArtifact, verify_finality_successor},
-        decode_framed_signed_block,
-        proofs::TrustedBlockProofAnchor,
-    },
     isi::sorafs::AssertSorafsPublicationV1,
+    query::CommittedTransaction,
+    sumeragi_finality::{
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
+    },
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use norito::{Decode, Encode};
 
 /// Maximum canonical publication response, including its authenticated executed block carrier.
 pub const PUBLICATION_PROOF_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
-/// Maximum consecutive finality artifacts accepted in one publication proof.
+/// Maximum consecutive current-certificate proofs accepted in one publication response.
 pub const PUBLICATION_PROOF_MAX_BLOCKS_V1: usize = 1024;
 
 /// Bounded request for metadata or one chunk under an exact live native replication assignment.
@@ -66,21 +65,20 @@ pub struct SorafsPublicationProofRequestV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::publication::SorafsPublicationProofV1")]
 pub struct SorafsPublicationProofV1 {
-    /// Consecutive exact native artifacts, including the independently pinned floor.
-    pub lineage: Vec<V2FinalityArtifact>,
-    /// Canonical `SignedBlockWire` containing the exact successful signed assertion.
-    pub executed_block: Vec<u8>,
+    /// Consecutive canonical certified blocks, including the independently pinned floor.
+    /// The last frame contains the exact successful signed assertion.
+    pub lineage: Vec<SumeragiFinalityProof>,
 }
 
 /// Opaque successful verification of the client's original challenged assertion.
 #[derive(Debug)]
 pub struct VerifiedSorafsPublicationV1 {
-    finality: V2FinalityArtifact,
+    finality: SumeragiFinalityCheckpoint,
     completed: bool,
 }
 impl VerifiedSorafsPublicationV1 {
-    /// Verified artifact that can be retained as the next independent checkpoint.
-    pub fn finality(&self) -> &V2FinalityArtifact {
+    /// Verified compact prefix that can be retained as the next independent checkpoint.
+    pub fn finality(&self) -> &SumeragiFinalityCheckpoint {
         &self.finality
     }
     /// Whether the proven instruction required every assigned provider's finalized completion.
@@ -96,24 +94,23 @@ pub struct SorafsPublicationProofErrorV1;
 
 /// Verify the exact signed assertion against independently pinned network and predecessor state.
 ///
-/// `checkpoint` must come from an independently trusted local configuration or a preceding call's
-/// verified output. Never pass the proof's first artifact as the checkpoint. The caller must start
-/// a monotonic deadline before generating its challenge and reject verification after that deadline.
+/// `checkpoint` must come from an independently authenticated local selection or a preceding
+/// call's verified output. The caller must first compare its chain label with the configured
+/// chain using `SumeragiFinalityVerifier::from_trusted_checkpoint`. A proof response cannot supply
+/// its own trust root. The caller must start a monotonic deadline before generating its challenge
+/// and reject verification after that deadline.
 pub fn verify_sorafs_publication_v1(
     network: &NetworkId,
-    checkpoint: &V2FinalityArtifact,
+    checkpoint: &SumeragiFinalityCheckpoint,
     expected: &SignedTransaction,
     proof: &SorafsPublicationProofV1,
 ) -> Result<VerifiedSorafsPublicationV1, SorafsPublicationProofErrorV1> {
     let rejected = SorafsPublicationProofErrorV1;
-    if proof.lineage.is_empty()
+    if proof.lineage.len() < 2
         || proof.lineage.len() > PUBLICATION_PROOF_MAX_BLOCKS_V1
-        || proof.executed_block.len() > PUBLICATION_PROOF_MAX_BYTES_V1
-        || norito::core::encoded_frame_len(proof).map_err(|_| rejected)?
+        || norito::canonical_frame_len(proof).map_err(|_| rejected)?
             > PUBLICATION_PROOF_MAX_BYTES_V1
-        || checkpoint.height_context.network_id != *network
         || expected.network_id() != Some(network)
-        || proof.lineage.first() != Some(checkpoint)
     {
         return Err(rejected);
     }
@@ -128,43 +125,61 @@ pub fn verify_sorafs_publication_v1(
         .downcast_ref::<AssertSorafsPublicationV1>()
         .ok_or(rejected)?;
     if assertion.challenge == [0; 32]
-        || assertion.minimum_height != checkpoint.height
-        || assertion.minimum_block_hash != *checkpoint.block_hash.as_ref()
+        || assertion.minimum_height != checkpoint.height()
+        || assertion.minimum_block_hash != *checkpoint.block_hash().as_ref()
     {
         return Err(rejected);
     }
-    checkpoint.verify().map_err(|_| rejected)?;
-    for edge in proof.lineage.windows(2) {
-        verify_finality_successor(&edge[0], &edge[1]).map_err(|_| rejected)?;
-    }
-    let last = proof.lineage.last().ok_or(rejected)?;
-    if last.height <= checkpoint.height {
-        return Err(rejected);
-    }
-    let block = decode_framed_signed_block(&proof.executed_block).map_err(|_| rejected)?;
-    let entry_hash = expected.hash_as_entrypoint();
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        &block,
-        last,
-        last.context_id(),
-        &entry_hash,
+    let mut verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        checkpoint,
+        network,
+        checkpoint.chain_id(),
     )
     .map_err(|_| rejected)?;
-    let actual = block
-        .network_entrypoint_at(anchor.entry_index() as usize)
+    // Certificate witnesses may differ between honest replicas; authenticate the same decision.
+    verifier
+        .verify_same_decision(checkpoint.tip(), &proof.lineage[0])
+        .map_err(|_| rejected)?;
+    let mut verified_tip = None;
+    for edge in &proof.lineage[1..] {
+        verified_tip = Some(verifier.verify(edge).map_err(|_| rejected)?);
+    }
+    let verified_tip = verified_tip.ok_or(rejected)?;
+    let block = verified_tip.block();
+    let entry_hash = expected.hash_as_entrypoint();
+    let input_index = block
+        .network_entrypoints()
+        .position(|entry| entry.hash() == entry_hash)
+        .and_then(|index| u32::try_from(index).ok())
         .ok_or(rejected)?;
-    if actual != &TransactionEntrypoint::External(expected.clone()) {
+    let entrypoint = block
+        .network_entrypoint_at(input_index as usize)
+        .ok_or(rejected)?;
+    if entrypoint != &TransactionEntrypoint::External(expected.clone()) {
         return Err(rejected);
     }
-    let inclusion = block.network_execution_proof(&entry_hash).ok_or(rejected)?;
-    let (_, output) = block
-        .network_output_at(anchor.entry_index())
-        .ok_or(rejected)?;
-    if !inclusion.verify(&anchor) || !output.result.is_ok() {
-        return Err(rejected);
-    }
+    let (output_index, _) = block.network_output_at(input_index).ok_or(rejected)?;
+    let output = block
+        .execution_outputs()
+        .get(output_index as usize)
+        .ok_or(rejected)?
+        .clone();
+    let committed = CommittedTransaction {
+        block_hash: block.hash(),
+        entrypoint_hash: entrypoint.hash(),
+        entrypoint_proof: block.network_input_proof(input_index).ok_or(rejected)?,
+        entrypoint: entrypoint.clone(),
+        output_hash: iroha_crypto::HashOf::new(&output),
+        output_proof: block.output_proof(output_index).ok_or(rejected)?,
+        output,
+    };
+    verified_tip
+        .verify_committed_transaction(network, &committed)
+        .map_err(|_| rejected)?;
     Ok(VerifiedSorafsPublicationV1 {
-        finality: last.clone(),
+        finality: verifier
+            .export_checkpoint(proof.lineage.last().ok_or(rejected)?)
+            .map_err(|_| rejected)?,
         completed: assertion.require_complete,
     })
 }

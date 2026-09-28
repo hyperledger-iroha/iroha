@@ -381,8 +381,8 @@ mod carrier_metadata_preparation;
 mod carrier_preparation;
 mod carrier_source_admission;
 pub(crate) use carrier_preparation::{
-    CarrierArchivePreparationError, CarrierJournalPreparationError, CarrierJournalShellReservation,
-    PreparedCarrier, PublishedCarrier, PublishedNativeApply, RetainedCarrier,
+    CarrierJournalShellReservation, PreparedCarrier, PublishedCarrier, PublishedNativeApply,
+    RetainedCarrier,
 };
 mod committed_hash_journal;
 #[cfg(test)]

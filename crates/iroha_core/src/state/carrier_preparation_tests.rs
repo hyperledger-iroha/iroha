@@ -354,8 +354,6 @@ fn production_candidate_admits_metadata_before_returning_execution_prefix() {
         Arc::clone(&state),
         queue,
         Arc::clone(&kura),
-        None,
-        None,
         state.sumeragi_block_cadence(),
         SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         events,

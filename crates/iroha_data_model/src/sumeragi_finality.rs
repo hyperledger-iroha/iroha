@@ -8,6 +8,8 @@
 
 mod commitment;
 pub use commitment::*;
+mod checkpoint;
+pub use checkpoint::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint};
 
 use std::collections::BTreeMap;
 
@@ -328,6 +330,8 @@ struct Decision {
 #[derive(Debug, Clone)]
 pub struct SumeragiFinalityVerifier {
     genesis: SignedBlock,
+    chain_id: String,
+    genesis_committee: Vec<FinalityValidator>,
     instance: Hash32,
     genesis_committee_digest: [u8; 32],
     decisions: BTreeMap<u64, Decision>,
@@ -357,6 +361,8 @@ impl SumeragiFinalityVerifier {
         );
         Ok(Self {
             genesis: trusted_genesis.clone(),
+            chain_id: chain_id.to_owned(),
+            genesis_committee: validators,
             instance,
             genesis_committee_digest: chain_hash(&committee_digest_preimage(&committee)).0,
             decisions: BTreeMap::new(),
@@ -375,10 +381,12 @@ impl SumeragiFinalityVerifier {
         &mut self,
         proof: &SumeragiFinalityProof,
     ) -> Result<VerifiedSumeragiBlock, FinalityError> {
-        let next = self
-            .decisions
-            .last_key_value()
-            .map_or(1, |(height, _)| height.saturating_add(1));
+        let next = match self.decisions.last_key_value() {
+            None => 1,
+            Some((height, _)) => height
+                .checked_add(1)
+                .ok_or_else(|| FinalityError("authenticated height exhausted".into()))?,
+        };
         need(
             proof.height() == next,
             "proof must immediately extend the authenticated prefix",

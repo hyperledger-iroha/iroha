@@ -54,17 +54,33 @@ pub fn bridge_key_address_of(account: &AccountId) -> Option<[u8; 20]> {
 }
 
 /// Promote the bridge keys pending for `epoch` at the boundary block ending `epoch − 1`
-/// (§4.3.2 step 1).
+/// (§4.3.2 step 1): each pending key activating at or before `epoch` becomes active and the
+/// previous active key is retired; each pending revocation due by `epoch` retires the active key.
 ///
 /// # Errors
 ///
-/// Fails closed until ws31 implements promotion.
+/// Fails only when a promoted state cannot be stored.
 pub fn promote_pending_for_epoch(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-    _epoch: u64,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    epoch: u64,
 ) -> Result<(), Error> {
-    // TODO(ws31): pending → active, previous active → retired, revocations (§4.2.2).
-    Err(not_wired("bridge-key promotion", "ws31"))
+    let due: Vec<_> = super::store::bridge_keys::iter(&*state_transaction.world)
+        .filter(|(_, state)| {
+            state
+                .pending
+                .is_some_and(|key| key.activation_epoch <= epoch)
+                || state
+                    .pending_revocation_epoch
+                    .is_some_and(|revocation| revocation <= epoch)
+        })
+        .map(|(peer, state)| (peer.clone(), state.clone()))
+        .collect();
+    for (peer, mut state) in due {
+        if state.promote_for_epoch(epoch) {
+            super::store::bridge_keys::insert(state_transaction, peer, state)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -111,11 +127,42 @@ mod tests {
     }
 
     #[test]
-    fn promotion_fails_closed_until_implemented() {
+    fn promotion_activates_due_keys_and_revocations_only() {
+        use super::super::store;
+        use crate::smartcontracts::isi::sccp::test_support::peer;
+        use iroha_data_model::sccp::keys::{SccpBridgeKeyStateV1, SccpBridgeKeyV1};
+
+        let key = |address: u8, epoch: u64| SccpBridgeKeyV1 {
+            public_key: [2; 33],
+            address: [address; 20],
+            activation_epoch: epoch,
+            registered_at_height: 1,
+            faulted: false,
+        };
         let state = blank_state();
         let mut block = state.block(header(2));
         let mut stx = block.transaction();
-        let error = promote_pending_for_epoch(&mut stx, 1).expect_err("skeleton");
-        assert!(format!("{error}").contains("TODO(ws31)"), "{error}");
+        let mut rotating = SccpBridgeKeyStateV1::default();
+        rotating.active = Some(key(1, 0));
+        rotating.stage_key(key(2, 3));
+        store::bridge_keys::insert(&mut stx, peer(1), rotating).expect("state");
+        let mut later = SccpBridgeKeyStateV1::default();
+        later.stage_key(key(3, 5));
+        store::bridge_keys::insert(&mut stx, peer(2), later).expect("state");
+        let mut revoking = SccpBridgeKeyStateV1::default();
+        revoking.active = Some(key(4, 0));
+        revoking.stage_revocation(3);
+        store::bridge_keys::insert(&mut stx, peer(3), revoking).expect("state");
+
+        promote_pending_for_epoch(&mut stx, 3).expect("promotion");
+        let first = store::bridge_keys::get(&*stx.world, &peer(1)).expect("state");
+        assert_eq!(first.active.map(|key| key.address), Some([2; 20]));
+        assert_eq!(first.retired.len(), 1);
+        let second = store::bridge_keys::get(&*stx.world, &peer(2)).expect("state");
+        assert!(second.active.is_none(), "epoch 5 key is not due at epoch 3");
+        assert!(second.pending.is_some());
+        let third = store::bridge_keys::get(&*stx.world, &peer(3)).expect("state");
+        assert!(third.active.is_none(), "revocation retired the key");
+        assert_eq!(third.retired.len(), 1);
     }
 }

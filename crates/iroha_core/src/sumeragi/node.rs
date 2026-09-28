@@ -478,6 +478,19 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
 }
 
 impl Prepared {
+    /// Bind SoraFS capture after startup reconciliation and before consensus can advance.
+    ///
+    /// # Errors
+    /// The exact committed tip cannot be captured or this executor is already bound.
+    pub fn attach_finalized_archives(
+        &self,
+        archives: super::executor::FinalizedArchives,
+    ) -> Result<(), NodeError> {
+        self.executor
+            .attach_finalized_archives(archives)
+            .map_err(NodeError::Input)
+    }
+
     /// The instance id (`I`): peers bind it in the handshake.
     pub fn instance(&self) -> Hash32 {
         self.instance

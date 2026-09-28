@@ -81,8 +81,6 @@ pub(crate) struct DecisionBoundCarrierJournals<
 /// Checkpoint attachment still grants no publication or retirement authority.
 #[must_use = "retain the current carrier phase until authorized publication or drop"]
 pub(crate) enum RetainedCarrier<Admission> {
-    /// Original detached execution awaiting its original archive capture owners.
-    Capturing(super::FundedBox<super::StagedCarrierCapture<Admission>>),
     /// Actual detached execution, before an exact verified decision is joined.
     Validated(PreparedCarrierJournals<Admission>),
     /// The same journals after consuming their ValidBlock under verified finality.
@@ -103,7 +101,6 @@ impl<Admission> RetainedCarrier<Admission> {
         &self,
     ) -> &crate::sumeragi::exec::NativeAmxApplicationManifestV1 {
         match self {
-            Self::Capturing(carrier) => &carrier.journals.native_amx_manifest,
             Self::Validated(journals) => &journals.native_amx_manifest,
             Self::Decided(carrier) => &carrier.journals.native_amx_manifest,
             Self::Checkpointed(carrier) => &carrier.journals.native_amx_manifest,
@@ -117,7 +114,6 @@ impl<Admission> RetainedCarrier<Admission> {
         proposal: &SignedBlock,
     ) -> bool {
         match self {
-            Self::Capturing(carrier) => carrier.matches_candidate(context, proposal),
             Self::Validated(journals) => journals.matches_validation_candidate(context, proposal),
             Self::Decided(carrier) => carrier
                 .journals
@@ -128,26 +124,12 @@ impl<Admission> RetainedCarrier<Admission> {
         }
     }
 
-    /// Expose the original prefix only after all original captures are complete.
+    /// Expose the original execution prefix retained by each publication phase.
     pub(crate) fn ready_commitment(&self) -> Option<ExecutionCommitment> {
         match self {
-            Self::Capturing(_) => None,
             Self::Validated(journals) => Some(journals.execution_prefix_commitment()),
             Self::Decided(carrier) => Some(carrier.journals.execution_prefix_commitment()),
             Self::Checkpointed(carrier) => Some(carrier.journals.execution_prefix_commitment()),
-        }
-    }
-
-    /// Resume only the original capture; every refusal retains the current phase.
-    pub(crate) fn resume_capture(
-        self,
-    ) -> Result<Self, (Self, super::CarrierArchivePreparationError)> {
-        match self {
-            Self::Capturing(carrier) => carrier
-                .try_complete()
-                .map(Self::Validated)
-                .map_err(|(carrier, error)| (Self::Capturing(carrier), error)),
-            ready => Ok(ready),
         }
     }
 }
@@ -202,8 +184,6 @@ impl<Admission> PreparedCarrierJournals<Admission> {
             components,
             world_effects,
             geometry,
-            provider_capture,
-            reputation_capture,
             publication_events,
             tiered_snapshot,
             effects,
@@ -225,8 +205,6 @@ impl<Admission> PreparedCarrierJournals<Admission> {
                     components,
                     world_effects,
                     geometry,
-                    provider_capture,
-                    reputation_capture,
                     publication_events,
                     tiered_snapshot,
                     effects,
@@ -337,9 +315,6 @@ mod service_publication;
 mod physical_publication;
 pub(crate) use physical_publication::PublishedCarrier;
 pub(crate) use physical_publication::PublishedNativeApply;
-
-#[path = "archive_publication.rs"]
-pub(crate) mod archive_publication;
 
 #[path = "execution_witness_publication.rs"]
 pub(crate) mod execution_witness_publication;

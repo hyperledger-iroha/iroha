@@ -137,10 +137,9 @@ use iroha_data_model::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use iroha_primitives::{
-    json::Json as IrohaJson,
-    numeric::{Numeric, NumericSpec, Quantity},
-};
+#[cfg(test)]
+use iroha_primitives::numeric::NumericSpec;
+use iroha_primitives::{json::Json as IrohaJson, numeric::Quantity};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
 #[cfg(feature = "telemetry")]
@@ -161,10 +160,11 @@ use iroha_torii_shared::sumeragi_evidence_api::{
     SumeragiEvidenceCountResponse, SumeragiEvidenceListWireResponse,
 };
 use mv::storage::StorageReadOnly;
+#[cfg(test)]
+use norito::to_bytes;
 use norito::{
     codec::{Decode, Encode},
     json::{self, Map, Value},
-    to_bytes,
 };
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::Sha256;
@@ -715,43 +715,6 @@ pub struct HistoryWindowQuery {
     pub from: Option<u64>,
     /// Optional result cap (0 yields an empty result set).
     pub limit: Option<u64>,
-}
-/// Apply a height window to a newest-first history vector while clamping to a server cap.
-pub fn clamp_history_window<T, F>(
-    items_newest_first: Vec<T>,
-    from: Option<u64>,
-    limit: Option<u64>,
-    cap: u64,
-    height_fn: F,
-) -> Vec<T>
-where
-    T: Clone,
-    F: Fn(&T) -> u64,
-{
-    let capped_limit = limit
-        .map(|lim| lim.min(cap))
-        .unwrap_or(cap)
-        .min(usize::MAX as u64) as usize;
-    let start_from =
-        from.unwrap_or_else(|| items_newest_first.first().map(&height_fn).unwrap_or(0));
-    items_newest_first
-        .into_iter()
-        .filter(|item| height_fn(item) <= start_from)
-        .take(capped_limit)
-        .collect()
-}
-#[cfg(test)]
-mod pagination_tests {
-    use super::{clamp_history_window, pagination_bounds};
-    routing_test! { sync pagination_bounds_limit_zero_returns_empty
-        let (start, end) = pagination_bounds(10, 0, Some(0), Some(5));
-        assert_eq!((start, end), (0, 0));
-    }
-    routing_test! { sync clamp_history_window_limit_zero_returns_empty
-        let items = vec![3u64, 2, 1];
-        let windowed = clamp_history_window(items, None, Some(0), 10, |v| *v);
-        assert!(windowed.is_empty());
-    }
 }
 include!("routing/pagination_ordering.rs");
 app_api_items! {

@@ -328,8 +328,6 @@ fn assert_native_preparation_success_in_fixture(
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, std::convert::Infallible>(()),
         )
         .unwrap();
@@ -432,8 +430,6 @@ fn assert_native_durable_source_authentication_in_fixture(fixture: NativeControl
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, std::convert::Infallible>(()),
         )
         .unwrap();

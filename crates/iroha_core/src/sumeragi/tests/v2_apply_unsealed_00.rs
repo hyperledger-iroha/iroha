@@ -6,22 +6,7 @@ use crate::{
         GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
     },
     lane_consensus::LaneExecutablePayloadV1,
-    query::{
-        provider_ingest_finalized::{
-            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveInsertOutcomeV1,
-            ProviderIngestFinalizedArchiveV1,
-        },
-        reputation_finalized::{
-            ReputationFinalizedArchive, ReputationFinalizedArchiveBounds,
-            ReputationFinalizedArchiveError, ReputationFinalizedArchiveInsertOutcome,
-            ReputationFinalizedArchiveRetentionApprovalRecordV1,
-            ReputationFinalizedArchiveRetentionAuthorityBindingV1,
-            ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
-            ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
-            ReputationFinalizedArchiveRetentionAuthorityV1,
-        },
-        store::LiveQueryStore,
-    },
+    query::store::LiveQueryStore,
     queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
     state::World,
     sumeragi::{
@@ -82,9 +67,8 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
-include!("v2_apply_unsealed_00_reputation_retention_authority.rs");
 #[test]
 fn restart_recovery_classification_distinguishes_commit_boundaries() {
     assert!(
@@ -462,9 +446,6 @@ impl ApplyFixture {
     fn new_with_lane_payload(include_lane_payload: bool) -> Self {
         Self::new_with_options(include_lane_payload, false, false, false)
     }
-    fn new_with_reputation_archive() -> Self {
-        Self::new_with_options(false, true, false, false)
-    }
     fn new_with_lane_lifecycle() -> Self {
         Self::new_with_options(false, false, true, false)
     }
@@ -578,9 +559,14 @@ impl ApplyFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let network_id = crate::unit_test_support::synthetic_network_id("sumeragi-v2-apply-crash-test");
+        let network_id =
+            crate::unit_test_support::synthetic_network_id("sumeragi-v2-apply-crash-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id,
+                u64::MAX,
+                &roster,
+            );
         let mut context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -706,8 +692,6 @@ impl ApplyFixture {
             Arc::clone(&state),
             Arc::clone(&queue),
             Arc::clone(&kura),
-            None,
-            None,
             block_cadence,
             transaction_authority.clone(),
             events_sender,
@@ -951,8 +935,6 @@ impl ApplyFixture {
             Arc::clone(&state),
             queue,
             Arc::clone(&self.kura),
-            self.service.provider_ingest_finalized_archive.clone(),
-            self.service.reputation_finalized_archive.clone(),
             self.service.block_cadence,
             authority,
             events_sender,
@@ -1248,9 +1230,10 @@ fn build_successor_apply_fixture_with_autonomous_payloads(
 }
 #[test]
 fn durable_application_evidence_rejects_identity_mutations() {
-    let worker = crate::sumeragi::threads::sumeragi_thread_builder("durable-application-evidence-test")
-        .spawn(durable_application_evidence_rejects_identity_mutations_fixture_body)
-        .expect("run Apply evidence checks on the production consensus stack");
+    let worker =
+        crate::sumeragi::threads::sumeragi_thread_builder("durable-application-evidence-test")
+            .spawn(durable_application_evidence_rejects_identity_mutations_fixture_body)
+            .expect("run Apply evidence checks on the production consensus stack");
     if let Err(payload) = worker.join() {
         std::panic::resume_unwind(payload);
     }

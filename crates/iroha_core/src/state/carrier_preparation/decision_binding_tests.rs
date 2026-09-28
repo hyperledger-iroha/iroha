@@ -30,8 +30,6 @@ fn captured(
         .unwrap_or_else(|(_, error)| panic!("actual carrier execution: {error}"))
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(Reservation(Arc::clone(released))),
         )
         .unwrap_or_else(|error| panic!("capture original journals: {error}"))
@@ -357,8 +355,6 @@ fn original_capture_pool_remains_reserved_through_decision_binding_and_handoff()
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
-            None,
-            None,
             |inputs| {
                 let bytes = inputs
                     .world_journal_shell_bytes()?

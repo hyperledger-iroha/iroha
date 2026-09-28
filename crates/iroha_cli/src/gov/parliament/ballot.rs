@@ -14,9 +14,12 @@
 //!    ballot is in `TimedCommitment` (`FreezeTimedOvnCorpus`).
 //!
 //! `ballot status` shows this account's part in the active hidden ballots of an
-//! attempt (and whether a key file can cast them), `ballot relay` submits other
-//! jurors' published records, and `ballot anchor` prints a finality anchor for
-//! cross-checking a checkpoint. Invitation responses, public-finding
+//! attempt (and whether a key file can cast them), and `ballot relay` submits
+//! other jurors' published records. The trusted checkpoint is pinned from an
+//! independent source; the retired Sumeragi v2 finality-anchor lookup has no
+//! replacement until casting proofs move to Sumeragi finality proofs
+//! (TODO(ws24): re-anchor ballots on `SumeragiFinalityVerifier` with that
+//! migration). Invitation responses, public-finding
 //! endorsements and absences are the sibling `iroha gov parliament
 //! respond-invitation|endorse|record-absence` commands, and the threshold
 //! opening is `iroha gov parliament finalize-opened-ballot`.
@@ -367,13 +370,6 @@ trait BallotSource {
 
     /// The committed projection of one Parliament attempt.
     fn attempt(&self, governance_attempt_id: GovernanceAttemptId) -> Result<AttemptSnapshot>;
-
-    /// The finality anchor served at `height`, verified against `network_id`.
-    fn finality_anchor(
-        &self,
-        height: NonZeroU64,
-        network_id: NetworkId,
-    ) -> Result<(BridgeFinalityProof, HashOf<BlockHeader>)>;
 }
 
 impl BallotSource for Client {
@@ -408,15 +404,6 @@ impl BallotSource for Client {
             current_height: response.current_height,
             body_states: response.body_states,
         })
-    }
-
-    fn finality_anchor(
-        &self,
-        height: NonZeroU64,
-        network_id: NetworkId,
-    ) -> Result<(BridgeFinalityProof, HashOf<BlockHeader>)> {
-        self.get_bridge_finality_anchor(height, network_id)
-            .wrap_err("failed to fetch the finality anchor")
     }
 }
 
@@ -1677,60 +1664,6 @@ impl Run for StatusArgs {
     }
 }
 
-/// Print the finality anchor that the configured Torii serves at one height.
-///
-/// The anchor is verified only against the configured network; compare it with
-/// an independent source before pinning it with `--trusted-checkpoint-*`.
-#[derive(clap::Args, Debug)]
-pub struct AnchorArgs {
-    /// Finalized height of the anchor.
-    #[arg(long)]
-    pub height: NonZeroU64,
-}
-
-/// Summary line and JSON document for one served finality anchor.
-fn anchor_document(
-    height: NonZeroU64,
-    proof: &BridgeFinalityProof,
-    block_hash: &HashOf<BlockHeader>,
-) -> Result<(String, norito::json::Value)> {
-    if proof.finality_artifact.height != height.get() {
-        bail!("the served finality anchor is for a different height");
-    }
-    let context_id = hex::encode(proof.finality_artifact.context_id().0.as_ref());
-    let block_hash = hex::encode(block_hash.as_ref());
-    let value = norito::json!({
-        "height": (height.get()),
-        "context_id": (context_id.clone()),
-        "block_hash": (block_hash.clone()),
-        "trust": "served by the configured Torii; compare with an independent source before pinning",
-    });
-    Ok((
-        format!(
-            "height={height} context_id={context_id} block_hash={block_hash} (compare with an \
-             independent source before pinning)"
-        ),
-        value,
-    ))
-}
-
-impl AnchorArgs {
-    /// Fetch the anchor from `source` and print it.
-    fn execute<C: RunContext, S: BallotSource>(self, context: &mut C, source: &S) -> Result<()> {
-        let network_id = context.config().network_id;
-        let (proof, block_hash) = source.finality_anchor(self.height, network_id)?;
-        let (summary, value) = anchor_document(self.height, &proof, &block_hash)?;
-        print_with_summary(context, Some(summary), &value)
-    }
-}
-
-impl Run for AnchorArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        self.execute(context, &client)
-    }
-}
-
 /// Timed-OVN ballot participation commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum BallotCommand {
@@ -1744,8 +1677,6 @@ pub enum BallotCommand {
     Relay(RelayArgs),
     /// Show this account's part in the active hidden ballots of an attempt.
     Status(StatusArgs),
-    /// Print the finality anchor served at one height for checkpoint cross-checks.
-    Anchor(AnchorArgs),
 }
 
 impl Run for BallotCommand {
@@ -1756,7 +1687,6 @@ impl Run for BallotCommand {
             Self::Dropout(args) => args.run(context),
             Self::Relay(args) => args.run(context),
             Self::Status(args) => args.run(context),
-            Self::Anchor(args) => args.run(context),
         }
     }
 }

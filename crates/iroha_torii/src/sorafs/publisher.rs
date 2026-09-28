@@ -10,7 +10,7 @@ use axum::{
 use iroha_core::query::provider_ingest_source::{
     PublisherSourceBindingV1, authorize_publisher_source_v1,
 };
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use iroha_core::state::WorldReadOnly;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     pin_registry::{ManifestDigest, ReplicationOrderId},
@@ -219,12 +219,9 @@ pub(crate) async fn publication_proof(
     body: Bytes,
 ) -> Response {
     use iroha_core::state::{StateReadOnlyWithTransactions, TransactionsReadOnly};
-    use iroha_data_model::{
-        block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
-        sorafs::publication::{
-            PUBLICATION_PROOF_MAX_BLOCKS_V1, PUBLICATION_PROOF_MAX_BYTES_V1,
-            SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
-        },
+    use iroha_data_model::sorafs::publication::{
+        PUBLICATION_PROOF_MAX_BLOCKS_V1, PUBLICATION_PROOF_MAX_BYTES_V1,
+        SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
     };
 
     if crate::require_full_ledger_carrier_permission(&state, &verified.account).is_err() {
@@ -268,27 +265,17 @@ pub(crate) async fn publication_proof(
             let mut lineage = Vec::new();
             let mut total_bytes = 0usize;
             for candidate in request.floor_height..=height {
-                let artifact = view
-                    .kura()
-                    .v2_finality_artifact(candidate)
-                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-                    .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-                iroha_core::query::signer_finality::verify_signer_finality_v1(
-                    &view,
-                    candidate,
-                    *artifact.block_hash.as_ref(),
-                )
-                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+                let artifact = iroha_core::sumeragi::finality::build_proof(&view, candidate)
+                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
                 if candidate == request.floor_height
-                    && *artifact.block_hash.as_ref() != request.floor_block_hash
+                    && *artifact.block_header.hash().as_ref() != request.floor_block_hash
                 {
                     return Err(StatusCode::CONFLICT);
                 }
                 total_bytes = total_bytes
                     .checked_add(
-                        norito::to_bytes(&artifact)
-                            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-                            .len(),
+                        norito::canonical_frame_len(&artifact)
+                            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
                     )
                     .ok_or(StatusCode::PAYLOAD_TOO_LARGE)?;
                 if total_bytes > PUBLICATION_PROOF_MAX_BYTES_V1 {
@@ -296,28 +283,8 @@ pub(crate) async fn publication_proof(
                 }
                 lineage.push(artifact);
             }
-            let available = PUBLICATION_PROOF_MAX_BYTES_V1
-                .saturating_sub(total_bytes)
-                .saturating_sub(4096)
-                .min(AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1);
-            let height =
-                std::num::NonZeroU64::new(height).ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-            let executed_block = state
-                .state
-                .executed_block_wire(
-                    height,
-                    iroha_core::state::BlockProofLimits {
-                        max_block_wire_bytes: available as u64,
-                        max_work_items: view.pipeline().query_max_fetch_size,
-                        max_response_bytes: available as u64,
-                    },
-                )
-                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
             canonical_response(
-                &SorafsPublicationProofV1 {
-                    lineage,
-                    executed_block,
-                },
+                &SorafsPublicationProofV1 { lineage },
                 PUBLICATION_PROOF_MAX_BYTES_V1,
             )
         }),

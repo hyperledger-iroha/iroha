@@ -3986,6 +3986,26 @@ pub(crate) struct P256MainVerifierFixedSourceV1 {
     scalar: super::p256_scalar_bit_bus::P256ScalarBitBusStarkFixedProviderV1,
 }
 impl P256MainVerifierFixedSourceV1 {
+    /// Allocated schedules shared by the five native signature sources.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    fn allocated_heap_bytes_v1(&self) -> usize {
+        use super::allocation_payload::sum_v1;
+        sum_v1([
+            self.certificate_execution.value.allocated_heap_bytes_v1(),
+            self.certificate_execution.writer.allocated_heap_bytes_v1(),
+            self.certificate_sorted.allocated_heap_bytes_v1(),
+            self.certificate_arithmetic.fixed.allocated_heap_bytes_v1(),
+            self.wallet_execution.value.allocated_heap_bytes_v1(),
+            self.wallet_execution.writer.allocated_heap_bytes_v1(),
+            self.wallet_sorted.allocated_heap_bytes_v1(),
+            self.wallet_arithmetic.fixed.allocated_heap_bytes_v1(),
+            self.certificate_sink.fixed.allocated_heap_bytes_v1(),
+            self.optional_certificate_sink
+                .fixed
+                .allocated_heap_bytes_v1(),
+            self.wallet_sink.fixed.allocated_heap_bytes_v1(),
+        ])
+    }
     /// Compile all verifier-owned schedules once.
     pub(crate) fn new_v1() -> Result<Self, P256AggregateAdapterErrorV1> {
         Ok(Self {
@@ -4492,6 +4512,84 @@ impl core::fmt::Debug for P256MainBaseSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBaseSourceV1 {
+    /// Forecast the largest serial native source construction before allocating it.
+    pub(crate) fn replay_scratch_forecast_v1() -> Result<usize, P256AggregateAdapterErrorV1> {
+        let certificate = super::p256_value_bus::p256_value_source_scratch_forecast_v1(
+            P256EcdsaRoleV1::CertificateOrCrl,
+        )?;
+        let wallet = super::p256_value_bus::p256_value_source_scratch_forecast_v1(
+            P256EcdsaRoleV1::WalletOwnership,
+        )?;
+        Ok(certificate.max(wallet))
+    }
+    /// Predict the complete canonical five-signature source before private allocations.
+    ///
+    /// The compact verifier schedules are measured using their actual capacities;
+    /// private matrices use the exact reserve sizes in their canonical builders.
+    pub(crate) fn allocation_forecast_v1() -> Result<usize, P256AggregateAdapterErrorV1> {
+        use super::allocation_payload::sum_v1;
+        use super::p256_value_bus::p256_value_source_allocation_forecast_v1;
+        use core::mem::size_of;
+        let fixed = P256MainVerifierFixedSourceV1::new_v1()?;
+        let signatures = [P256EcdsaRoleV1::CertificateOrCrl; 4]
+            .into_iter()
+            .chain([P256EcdsaRoleV1::WalletOwnership]);
+        let mut total = sum_v1([
+            size_of::<Self>().max(size_of::<P256MainBoundSourceV1>()),
+            fixed.allocated_heap_bytes_v1(),
+        ]);
+        for role in signatures {
+            let value = p256_value_source_allocation_forecast_v1(role)?;
+            let arithmetic_rows =
+                P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
+            let arithmetic = arithmetic_rows
+                * (size_of::<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>()
+                    + size_of::<super::p256_air::ZkX509P256ArithmeticFixedRowV1>());
+            let window = P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1
+                * (size_of::<[F; P256_WINDOW_BASE_WIDTH_V1]>()
+                    + size_of::<[F; P256_WINDOW_STARK_AUX_WIDTH_V1]>());
+            let scalar = P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
+                * size_of::<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]>();
+            let sink = super::p256_external_binding_air::p256_external_binding_rows_v1(role)
+                * size_of::<super::p256_external_binding_air::P256ExternalBindingRowV1>();
+            total = sum_v1([total, value, arithmetic, window, scalar, sink]);
+        }
+        Ok(total)
+    }
+    /// Reachable native source payload, excluding the separately borrowed assembly.
+    pub(crate) fn allocated_payload_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            core::mem::size_of_val(self),
+            self.fixed
+                .as_ref()
+                .map_or(0, P256MainVerifierFixedSourceV1::allocated_heap_bytes_v1),
+            self.signatures.as_ref().map_or(0, |signatures| {
+                sum_v1(signatures.iter().map(|signature| {
+                    sum_v1([
+                        signature
+                            .value
+                            .as_ref()
+                            .map_or(0, |value| value.allocated_heap_bytes_v1()),
+                        signature
+                            .scalar
+                            .as_ref()
+                            .map_or(0, |scalar| scalar.allocated_heap_bytes_v1()),
+                        signature.arithmetic.as_ref().map_or(0, |trace| {
+                            sum_v1([vector_v1(&trace.fixed), vector_v1(&trace.base)])
+                        }),
+                        signature.window.as_ref().map_or(0, |trace| {
+                            sum_v1([vector_v1(&trace.base), vector_v1(&trace.aux)])
+                        }),
+                        signature
+                            .sink
+                            .as_ref()
+                            .map_or(0, |trace| vector_v1(&trace.rows)),
+                    ])
+                }))
+            }),
+        ])
+    }
     /// Compile all five role-positioned signatures from the canonical MAIN
     /// assembly before any P-256 base commitment is exposed.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -5225,6 +5323,40 @@ impl core::fmt::Debug for P256MainBoundSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBoundSourceV1 {
+    /// Reachable native source payload, excluding the separately borrowed assembly.
+    pub(crate) fn allocated_payload_bytes_v1(&self) -> usize {
+        use super::allocation_payload::{sum_v1, vector_v1};
+        sum_v1([
+            core::mem::size_of_val(self),
+            self.fixed
+                .as_ref()
+                .map_or(0, P256MainVerifierFixedSourceV1::allocated_heap_bytes_v1),
+            self.signatures.as_ref().map_or(0, |signatures| {
+                sum_v1(signatures.iter().map(|signature| {
+                    sum_v1([
+                        signature
+                            .value
+                            .as_ref()
+                            .map_or(0, |value| value.allocated_heap_bytes_v1()),
+                        signature
+                            .scalar
+                            .as_ref()
+                            .map_or(0, |scalar| scalar.allocated_heap_bytes_v1()),
+                        signature.arithmetic.as_ref().map_or(0, |trace| {
+                            sum_v1([vector_v1(&trace.fixed), vector_v1(&trace.base)])
+                        }),
+                        signature.window.as_ref().map_or(0, |trace| {
+                            sum_v1([vector_v1(&trace.base), vector_v1(&trace.aux)])
+                        }),
+                        signature
+                            .sink
+                            .as_ref()
+                            .map_or(0, |trace| vector_v1(&trace.rows)),
+                    ])
+                }))
+            }),
+        ])
+    }
     fn ensure_bound_v1(&self) -> Result<(), P256AggregateAdapterErrorV1> {
         let post_base = self.post_base.ok_or(P256AggregateAdapterErrorV1::Phase)?;
         let claims = self
@@ -5727,6 +5859,81 @@ mod arithmetic_fp4_tests;
 mod sink_fp4_tests;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn p256_main_capacity_payload_counts_retained_matrices_and_schedule_clones() {
+        use super::super::allocation_payload::vector_v1;
+        let mut source = P256MainBaseSourceV1 {
+            signatures: Some(core::array::from_fn(|_| P256MainSignatureBaseV1 {
+                role: P256EcdsaRoleV1::CertificateOrCrl,
+                value: None,
+                scalar: None,
+                arithmetic: Some(ZkX509P256ArithmeticTraceV1 {
+                    fixed: Vec::with_capacity(5),
+                    base: Vec::with_capacity(7),
+                }),
+                window: Some(P256WindowBatchStarkTraceV1 {
+                    base: Vec::with_capacity(3),
+                    aux: Vec::with_capacity(11),
+                }),
+                digest_reduction: None,
+                result_x_reduction: None,
+                low_s: None,
+                sink: None,
+            })),
+            fixed: None,
+            bind_attempted: false,
+        };
+        let signatures = source.signatures.as_ref().unwrap();
+        let expected_matrices = signatures
+            .iter()
+            .map(|signature| {
+                let arithmetic = signature.arithmetic.as_ref().unwrap();
+                let window = signature.window.as_ref().unwrap();
+                vector_v1(&arithmetic.fixed)
+                    + vector_v1(&arithmetic.base)
+                    + vector_v1(&window.base)
+                    + vector_v1(&window.aux)
+            })
+            .sum::<usize>();
+        assert_eq!(
+            source.allocated_payload_bytes_v1(),
+            core::mem::size_of_val(&source) + expected_matrices
+        );
+        let forecast = P256MainBaseSourceV1::allocation_forecast_v1().unwrap();
+        let scratch = P256MainBaseSourceV1::replay_scratch_forecast_v1().unwrap();
+        assert!(scratch < super::super::allocation_payload::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1);
+        eprintln!("canonical P256 source construction scratch forecast: {scratch}");
+        let mandatory_arithmetic = 5 * 14_828 * 32 * 211 * 8;
+        assert_eq!(mandatory_arithmetic, 4_004_746_240);
+        assert!(forecast > mandatory_arithmetic);
+        assert!(forecast < super::super::allocation_payload::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1);
+        eprintln!("canonical P256 retained source allocation forecast: {forecast}");
+        let fixed = P256MainVerifierFixedSourceV1::new_v1().unwrap();
+        let fixed_payload = fixed.allocated_heap_bytes_v1();
+        assert!(fixed_payload > 0);
+        assert!(fixed.clone().allocated_heap_bytes_v1() <= fixed_payload);
+        source.fixed = Some(fixed);
+        assert_eq!(
+            source.allocated_payload_bytes_v1(),
+            core::mem::size_of_val(&source) + expected_matrices + fixed_payload
+        );
+        source.zeroize_private_v1();
+        assert_eq!(
+            source.allocated_payload_bytes_v1(),
+            core::mem::size_of_val(&source)
+        );
+        let bound = P256MainBoundSourceV1 {
+            signatures: None,
+            fixed: None,
+            post_base: None,
+            terminal_claims: None,
+        };
+        assert_eq!(
+            bound.allocated_payload_bytes_v1(),
+            core::mem::size_of_val(&bound)
+        );
+    }
+
     use super::super::{
         credential_pre_aux::{
             ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,

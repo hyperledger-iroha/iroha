@@ -147,7 +147,11 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_data_model::parameter::system::ConsensusMode;
-    let world = crate::state::World::new();
+    let signer = KeyPair::try_from_seed(vec![0x55; 32], Algorithm::Ed25519)
+        .expect("deterministic transaction signer");
+    let authority = AccountId::new(signer.public_key().clone());
+    let world =
+        crate::state::World::with([], [Account::new(authority.clone()).build(&authority)], []);
     {
         let mut block = world.block();
         *block.sccp_parameters.get_mut() =
@@ -204,15 +208,43 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         .expect("the schedule covers the next height");
     drop(view);
     let cadence = Duration::from_millis(scheduled.params.block_time_ms);
-    let block = payload::empty_block(
+    let block_time = parent.header().creation_time() + cadence;
+    let transaction = chain.sign(
+        &signer,
+        [InstructionBox::from(Log::new(
+            Level::DEBUG,
+            "SCCP scheduled height inputs".to_owned(),
+        ))],
+        u64::try_from(block_time.as_millis()).expect("fixture time fits") - 1,
+    );
+    let (_, time_source) = TimeSource::new_mock(block_time);
+    let accepted = AcceptedTransaction::accept_with_time_source(
+        transaction,
+        &chain.network_id(),
+        Duration::from_secs(1),
+        state.view().world().parameters().transaction(),
+        &iroha_config::parameters::actual::Crypto::default(),
+        &time_source,
+    )
+    .expect("the signed fixture transaction is accepted");
+    let router = crate::queue::Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        tokio::sync::broadcast::channel(16).0,
+    );
+    let plan = router
+        .route_plan_with_state(&accepted, state)
+        .expect("the signed fixture transaction routes");
+    let block = payload::assemble(
         state,
         Assembly {
             parent: &parent,
             view: 0,
             cadence,
         },
+        &[(accepted, plan)],
     )
-    .expect("the deterministic empty block");
+    .expect("the canonical nonempty block");
+    assert_eq!(block.network_entrypoint_count(), 1);
     let topology = Topology::new(scheduled.committee.clone());
     let executed = ValidBlock::validate_sumeragi_block(
         block,

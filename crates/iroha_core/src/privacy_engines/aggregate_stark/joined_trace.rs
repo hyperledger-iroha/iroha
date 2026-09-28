@@ -86,6 +86,7 @@ impl JoinedTraceCommitmentPlanV1 {
     /// Every polynomial and index is checked before commitment allocation or
     /// FFT work. Native coefficient vectors stay in their original clearing
     /// owners. Column order and root bytes are independent of Rayon scheduling.
+    #[cfg(test)]
     pub(crate) fn commit_v1(
         &self,
         domains: AggregateStarkDomainsV1,

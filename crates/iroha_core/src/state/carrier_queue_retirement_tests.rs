@@ -381,8 +381,6 @@ fn immutable_apply_service_exposes_only_its_actual_state_and_queue() {
         Arc::clone(&state),
         Arc::clone(&queue),
         Arc::clone(&state.kura),
-        None,
-        None,
         state.sumeragi_block_cadence(),
         iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         events,

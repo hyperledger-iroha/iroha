@@ -52,11 +52,19 @@ fn retention_restart_rejects_extra_crash_candidate_without_cleanup() {
     let network_id = third.key.network_id;
     drop(archive);
     let kura = Kura::blank_kura_for_testing();
+    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
+        crate::state::World::new(),
+        Arc::clone(&kura),
+        crate::query::store::LiveQueryStore::start_test(),
+        "retention-recovery".parse().unwrap(),
+        network_id,
+    );
     assert!(matches!(
         ProviderIngestFinalizedArchiveV1::try_open_with_retention_authority(
             &root,
             bounds(),
             &network_id,
+            &state.view(),
             kura.as_ref(),
             &binding,
             &authority,

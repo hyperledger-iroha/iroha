@@ -1,6 +1,7 @@
 //! The lag-2 height-configuration schedule of the global Sumeragi instance (`specs/sumeragi.md`
 //! §10.1), the genesis committee, the validation of the on-chain Sumeragi chain parameters and
-//! the mapping to the core's [`Committee`], [`ChainParams`] and [`HeightConfig`].
+//! the mapping to the core's [`Committee`], [`ChainParams`](iroha_sumeragi::types::ChainParams)
+//! and [`HeightConfig`].
 //!
 //! **Rule.** Heights `g + 1` and `g + 2` use the configuration of the genesis state; every later
 //! height `h + 2` uses what the state after block `h` schedules. After executing block `h` the
@@ -39,8 +40,7 @@ use iroha_genesis::GenesisBlock;
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
     api::ConfigError,
-    pacemaker::FRAME_OVERHEAD,
-    types::{ChainParams, Committee, CommitteeError, HeightConfig, PublicKey},
+    types::{Committee, CommitteeError, HeightConfig, PublicKey},
 };
 use norito::{
     NoritoDeserialize, NoritoSerialize,
@@ -595,6 +595,7 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use iroha_logger::Level;
+    use iroha_sumeragi::{pacemaker::FRAME_OVERHEAD, types::ChainParams};
 
     use super::*;
     use crate::{

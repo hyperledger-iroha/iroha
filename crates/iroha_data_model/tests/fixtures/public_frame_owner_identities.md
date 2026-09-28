@@ -9,7 +9,7 @@ describe valid current frames; they do not preserve former malformed-input behav
 | Fixture | Coverage | SHA-256 |
 | --- | --- | --- |
 | `id_box_identity_frames.json` | All 13 IdBox variants, None, Some(permission), empty Vec and all-variant Vec: 17 frames | `440a4413817a41e1e67d2c4a6623738d73e884ac4c993c9c2a334a2cc1533146` |
-| `block_signature_identity_frames.json` | Two genuinely signed headers and root/Option/Vec containers: seven frames | `2a7313c77ce8975f1f8613c1f8f4a2a0b0068f706ef3c40f8f7b7f412fe7d325` |
+| `block_signature_identity_frames.json` | Two genuinely signed headers and root/Option/Vec containers: seven frames | `8e27aad16cffff5f7e0b8ba9c7b4dbf1fd397709ab2a5e3994c61ca7052cd7b8` |
 
 The compiler-observed nominal owners are
 `iroha_data_model::id::model::IdBox` and
@@ -219,7 +219,13 @@ codec-direction hashes, and uses the existing shared contract checker.
 
 | Fixture | Coverage | SHA-256 |
 | --- | --- | --- |
-| `fresh_event_identity_frames.json` | 55 data filters, five governance filters, 11 game sessions, nine event messages and 23 subscriptions | `d22ee9ed3006af7f0db34b931ea230bf124c91fe0f11825db0145a4a1f3258a3` |
+| `fresh_event_identity_frames.json` | 55 data filters, five governance filters, 11 game sessions, nine event messages and 23 subscriptions | `c32171f5c8e0cf816f51912e75ff6de296c23b29d1f0b183c2c23b142719164b` |
+
+On 2026-09-28, the native event capture refreshed the default Configuration and
+Bridge filter masks after removal of their retired SCCP event variants. Their
+root/Some frames and the combined Vec now carry the sole remaining event bit;
+all other 98 frames are unchanged. The ignored
+`capture_current_fresh_event_identity_frames` test reproduces this capture.
 
 EventMessage's slice decoder previously skipped its own field envelope and
 rejected its encoder's output. EventBox, EventFilterBox and subscriptions reset

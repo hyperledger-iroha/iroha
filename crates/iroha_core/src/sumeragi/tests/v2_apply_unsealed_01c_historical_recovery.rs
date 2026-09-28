@@ -1258,8 +1258,6 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             Arc::clone(&fixture.state),
             Arc::clone(&queue),
             Arc::clone(&fixture.kura),
-            None,
-            None,
             fixture.service.block_cadence,
             fixture.service.genesis_account.clone(),
             events_sender.clone(),
@@ -1500,14 +1498,15 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             let generation = fixture.state.state_view_generation();
             std::thread::scope(|scope| {
                 let release = ReleaseSuccessfulApply(Arc::clone(&pause));
-                let worker = crate::sumeragi::threads::sumeragi_thread_builder("successful-apply-frontier")
-                    .spawn_scoped(scope, || {
-                        let _finished = NotifySuccessfulApplyExit(Arc::clone(&pause));
-                        service
-                            .execute(active_context.context(), &mut body_store, &task)
-                            .expect("successful Apply completes after the observation pause");
-                    })
-                    .expect("spawn real Apply worker");
+                let worker =
+                    crate::sumeragi::threads::sumeragi_thread_builder("successful-apply-frontier")
+                        .spawn_scoped(scope, || {
+                            let _finished = NotifySuccessfulApplyExit(Arc::clone(&pause));
+                            service
+                                .execute(active_context.context(), &mut body_store, &task)
+                                .expect("successful Apply completes after the observation pause");
+                        })
+                        .expect("spawn real Apply worker");
                 pause.before_store.wait_until_arrived();
                 let hook_pause = Arc::clone(&pause);
                 lane_work.set_merge_validation_hook_for_test(
@@ -1725,7 +1724,8 @@ fn assert_cold_merge_registry_replay_boundary(
     let startup_nexus = fixture.state.nexus_snapshot();
     let startup_lane_manifests = fixture.state.lane_manifests.read().clone();
     let restore = |snapshot| {
-        crate::state::deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+        crate::state::deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::clone(&startup_lane_manifests),
             kura: Arc::clone(&fixture.kura),
             query_handle: LiveQueryStore::start_test(),

@@ -2235,7 +2235,7 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
     ));
 }
 #[test]
-fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
+fn main_phase_source_retains_original_masks_and_authenticates_replay() {
     let source = include_str!("main_aggregate.rs");
     let helper_start = source
         .find("fn sample_main_trace_group_v1")
@@ -2246,16 +2246,34 @@ fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
         .expect("MAIN commitment helper end");
     let helper = &source[helper_start..helper_end];
     assert!(
-        helper.contains("MaskedTracePolynomialSetV1::sample_columns_v1"),
-        "MAIN sampling must retain all masked native polynomials for the joined commitment"
+        helper.contains("MainTraceMaskGroupV1::sample_v1"),
+        "MAIN sampling must retain the original independent masks for every joined column"
     );
     assert!(
-        !helper.contains("commit_masked_trace_columns_v1(")
+        !helper.contains("MaskedTracePolynomialSetV1::sample_columns_v1")
+            && !helper.contains("commit_masked_trace_columns_v1(")
             && !helper.contains("commit_masked_trace_columns_retaining_encrypted_scratch_v1")
             && !helper.contains("spill_replayed_masked_trace_columns_v1")
             && !helper.contains("replay_masked_trace_columns_via_encrypted_scratch_v1"),
-        "MAIN must not discard its committed polynomials or reconstruct them from native witness"
+        "MAIN must not retain the whole masked coefficient matrix or substitute an unrelated spool"
     );
+    let replay_source = include_str!("main_trace_replay.rs");
+    let replay_start = replay_source
+        .find("fn replay_v1(")
+        .expect("original-mask replay");
+    let replay_end = replay_source[replay_start..]
+        .find("/// Six exact groups")
+        .map(|offset| replay_start + offset)
+        .expect("mask replay end");
+    let replay = &replay_source[replay_start..replay_end];
+    assert!(replay.contains("masked_trace_coefficients_with_mask_v1"));
+    assert!(replay.contains("mask.coefficients()"));
+    assert!(!replay.contains("sample_trace_mask_v1"));
+    assert!(
+        !replay.contains("rng"),
+        "replay cannot resample a committed mask"
+    );
+    assert!(replay_source.contains("masks: Vec<ReplayableTraceMaskV1>"));
     let phase_start = source
         .find("pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng")
         .expect("typed MAIN phase one");
@@ -2264,15 +2282,60 @@ fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
         .map(|offset| phase_start + offset)
         .expect("typed MAIN phase end");
     let phases = &source[phase_start..phase_end];
+    let bound_start = phases
+        .find("pub(crate) fn bind_credential_pre_aux_v1_with_rng")
+        .expect("credential-bound phase");
+    let base = &phases[..bound_start];
+    let preallocation = base
+        .find("check_before_sources_v1")
+        .expect("source preallocation gate");
+    let source_shapes = base
+        .find("check_source_shapes_v1")
+        .expect("native source shape forecast");
+    let p256_construction = base
+        .find("P256MainBaseSourceV1::new_v1")
+        .expect("P256 construction");
+    let actual_capacities = base
+        .find("check_native_sources_v1")
+        .expect("actual source capacity gate");
+    let base_entropy = base
+        .find("sample_main_trace_group_v1")
+        .expect("first base mask sampling");
+    assert!(
+        preallocation < source_shapes
+            && source_shapes < p256_construction
+            && p256_construction < actual_capacities
+            && actual_capacities < base_entropy,
+        "source admission must precede bulk allocation, and actual capacity admission must precede entropy"
+    );
+    let bound = &phases[bound_start..];
+    let bound_preallocation = bound
+        .find("check_before_sources_v1")
+        .expect("bound source preallocation gate");
+    let bound_construction = bound
+        .find("projection.bind_challenges_v1")
+        .expect("bound source construction");
+    let bound_capacities = bound
+        .find("check_native_sources_v1")
+        .expect("bound capacity gate");
+    let aux_entropy = bound
+        .find("sample_main_trace_group_v1")
+        .expect("first auxiliary mask sampling");
+    assert!(
+        bound_preallocation < bound_construction
+            && bound_construction < bound_capacities
+            && bound_capacities < aux_entropy,
+        "bound sources must be admitted before auxiliary entropy"
+    );
     assert_eq!(
         phases.matches("base_polynomials.push(polynomials)").count(),
         FULL_PROFILE_TRACE_GROUPS_V1,
-        "phase one must retain exactly six base polynomial sets"
+        "phase one must retain exactly six base mask groups"
     );
     assert_eq!(
         phases.matches("aux_polynomials.push(polynomials)").count(),
         FULL_PROFILE_TRACE_GROUPS_V1,
-        "phase two must retain exactly six auxiliary polynomial sets"
+        "phase two must retain exactly six auxiliary mask groups"
     );
     let provenance = phases
         .find("matches_main_pre_aux_v1")
@@ -2392,6 +2455,24 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     let finish = &source[finish_start..finish_end];
     assert!(finish.contains("commit_joined_v1"));
     assert!(finish.contains("self.composition_material_v1()"));
+    assert!(finish.contains("MainTraceReplaySourcesV1::Bound"));
+    let base_replay = finish
+        .find("let base_openings = self.base_polynomials.commit_joined_v1")
+        .expect("base opening replay");
+    let aux_replay = finish
+        .find("let aux_openings = self.aux_polynomials.commit_joined_v1")
+        .expect("auxiliary opening replay");
+    let base_root_check = finish
+        .find("base_openings.commitment.root != trace_group.base_root")
+        .expect("base root equality");
+    let aux_root_check = finish
+        .find("aux_openings.commitment.root != trace_group.aux_root")
+        .expect("auxiliary root equality");
+    let publish = finish
+        .find("trace_group.base_frontier =")
+        .expect("opening publication");
+    assert!(base_replay < base_root_check && aux_replay < base_root_check);
+    assert!(base_root_check < publish && aux_root_check < publish);
     let material_start = source
         .find("fn composition_material_v1(&self)")
         .expect("retained composition material");

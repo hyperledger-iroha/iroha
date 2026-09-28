@@ -17,6 +17,8 @@ pub(crate) mod accumulator_air;
 pub(crate) mod accumulator_stark;
 pub(crate) mod air;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) mod allocation_payload;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod codec;
 pub(crate) mod credential_pre_aux;
 pub(crate) mod credential_stark;

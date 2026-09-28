@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1705 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1870 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1704 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1869 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -332,20 +332,22 @@ class BeaconGateTests(unittest.TestCase):
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cache_and_reproposal_reuse_original_owner',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_foreign_store_returns_request_before_execution',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner',
-            'sumeragi::v2_apply::tests::archive_reservations::acquires_original_pair_without_execution',
-            'sumeragi::v2_apply::tests::archive_reservations::index_busy_wakes_original_runner',
-            'sumeragi::v2_apply::tests::archive_reservations::second_capture_refusal_releases_first',
-            'sumeragi::v2_apply::tests::archive_reservations::original_capture_drop_wakes_runner_and_preserves_old_wait',
-            'sumeragi::v2_apply::tests::archive_reservations::rejects_mismatch_before_acquisition',
-            'sumeragi::v2_apply::tests::archive_reservations::handoff_retains_owner_on_context_wire_and_service_mismatch',
-            'sumeragi::v2_apply::tests::archive_reservations::local_archive_failure_requires_recovery',
-            'query::archive_capture::tests::only_the_exact_original_gate_accepts_its_retained_owner',
-            'query::archive_capture::tests::observers_neither_own_nor_cancel_the_reservation',
-            'query::archive_capture::tests::release_before_wait_registration_cannot_be_missed',
-            'query::archive_capture::tests::active_wait_is_woken_by_the_actual_owner_drop',
-            'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
-            'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
-            'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
+            'sumeragi::executor::archive_tests::partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications',
+            'sumeragi::executor::archive_tests::pending_capture_rejects_substituted_header_qc_state_and_missing_certificate',
+            'sumeragi::executor::archive_tests::archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_reopen',
+            'sumeragi::executor::archive_tests::below_quorum_current_frame_cannot_finish_pending_archive_capture',
+            'query::archive_finality::tests::certified_archive_authenticates_genesis_and_current_commit_certificates',
+            'query::archive_finality::tests::certified_archive_rejects_foreign_kura_and_hash_cache_only_state',
+            'query::archive_finality::tests::certified_archive_refuses_changed_durable_boundary_and_uncommitted_successor',
+            'query::archive_finality::tests::certified_archive_does_not_accept_a_below_quorum_certificate',
+            'query::archive_finality::tests::certified_archive_rejects_identical_durable_frames_for_a_foreign_state_network',
+            'kura::tests::certified_archive_reads_release_kura_custody_on_success_and_refusal',
+            'query::provider_ingest_finalized::tests::certified_capture_tests::certified_capture_capacity_refusal_retries_without_artifact_or_state_writes',
+            'query::provider_ingest_finalized::tests::certified_capture_tests::certified_capture_contention_preserves_exact_bytes_and_releases_for_retry',
+            'query::provider_ingest_finalized::tests::certified_capture_tests::certified_capture_moves_original_archive_to_worker_without_a_detached_producer',
+            'query::provider_ingest_finalized::tests::certified_capture_tests::certified_retention_waits_for_actual_index_owner_before_authority_or_file_mutation',
+            'query::reputation_finalized::tests::certified_capture_contention_returns_release_without_mutation_and_retries_exactly',
+            'query::reputation_finalized::tests::certified_capture_rebuilds_after_partial_io_with_identical_bytes_and_one_policy_charge',
             'state::tests::native_consumer_source_custody_moves_original_all_route_owners',
             'state::tests::native_recorded_execution_retains_sources_results_aliases_and_complete_witness',
             'state::tests::native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer',
@@ -377,7 +379,7 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
             'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
         )
-        self.assertEqual(len(required), 64)
+        self.assertEqual(len(required), 66)
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("native_connection_gate", gate.__file__)
             selected_gate = importlib.util.module_from_spec(spec)
@@ -486,7 +488,6 @@ class BeaconGateTests(unittest.TestCase):
                          r'#\[path = "v2_apply_tests\.rs"\]\s*mod tests;')
         apply_tests = source("sumeragi/v2_apply_tests.rs")
         for filename, module, count in (
-            ("archive_reservations_tests.rs", "archive_reservations", 7),
             ("native_preparation_error_tests.rs", "native_preparation_errors", 7),
         ):
             self.assertIn('include!("v2_apply/' + filename + '");', apply_tests)
@@ -495,12 +496,44 @@ class BeaconGateTests(unittest.TestCase):
             names = re.findall(r"#\[test\]\s*fn\s+(\w+)", leaf)
             self.assertEqual(len(names), count)
             required.update("sumeragi::v2_apply::tests::" + module + "::" + name for name in names)
-        self.assertIn("mod archive_capture;", source("query/mod.rs"))
-        capture = source("query/archive_capture.rs")
-        self.assertIn("mod tests {", capture)
-        capture_names = re.findall(r"#\[(?:tokio::)?test\]\s*(?:async\s+)?fn\s+(\w+)", capture)
-        self.assertEqual(len(capture_names), 7)
-        required.update("query::archive_capture::tests::" + name for name in capture_names)
+        self.assertIn("mod archive_tests;", source("sumeragi/executor.rs"))
+        executor_archive_names = re.findall(r"#\[test\]\s*fn\s+(\w+)", source("sumeragi/executor/archive_tests.rs"))
+        self.assertEqual(len(executor_archive_names), 4)
+        required.update("sumeragi::executor::archive_tests::" + name for name in executor_archive_names)
+        self.assertIn("mod archive_finality;", source("query/mod.rs"))
+        finality_names = re.findall(r"#\[test\]\s*fn\s+(\w+)", source("query/archive_finality.rs"))
+        self.assertEqual(len(finality_names), 5)
+        required.update("query::archive_finality::tests::" + name for name in finality_names)
+        self.assertNotIn("mod archive_capture;", source("query/mod.rs"))
+        self.assertFalse((root / "query/archive_capture.rs").exists())
+        self.assertIn('include!("kura/tests/10d_native_amx_publication_capacity.rs");', source("kura.rs"))
+        custody_name = "certified_archive_reads_release_kura_custody_on_success_and_refusal"
+        self.assertEqual(len(re.findall(
+            r"#\[test\]\s*fn\s+" + custody_name + r"\b",
+            source("kura/tests/10d_native_amx_publication_capacity.rs"))), 1)
+        required.add("kura::tests::" + custody_name)
+        self.assertRegex(source("query/provider_ingest_finalized.rs"),
+                         r'#\[path = "\.\./certified_capture_tests\.rs"\]\s*mod certified_capture_tests;')
+        self.assertIn('include!("reputation_finalized/certified_tests.rs");',
+                      source("query/reputation_finalized.rs"))
+        archive_owners = (
+            ("provider_ingest_finalized/certified_capture_tests.rs",
+             "provider_ingest_finalized::tests::certified_capture_tests::", (
+                "certified_capture_capacity_refusal_retries_without_artifact_or_state_writes",
+                "certified_capture_contention_preserves_exact_bytes_and_releases_for_retry",
+                "certified_capture_moves_original_archive_to_worker_without_a_detached_producer",
+                "certified_retention_waits_for_actual_index_owner_before_authority_or_file_mutation",
+            )),
+            ("reputation_finalized/certified_tests.rs", "reputation_finalized::tests::", (
+                "certified_capture_contention_returns_release_without_mutation_and_retries_exactly",
+                "certified_capture_rebuilds_after_partial_io_with_identical_bytes_and_one_policy_charge",
+            )),
+        )
+        for filename, module, names in archive_owners:
+            leaf = source("query/" + filename)
+            for name in names:
+                self.assertEqual(len(re.findall(r"#\[test\]\s*fn\s+" + name + r"\b", leaf)), 1)
+                required.add("query::" + module + name)
         registered = {name for _, names in gate.CORE_NATIVE_CONNECTION_STAGES for name in names}
         self.assertEqual(required - registered, set())
         self.assertFalse(any(name.startswith("state::tests::native_service_")

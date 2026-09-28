@@ -152,3 +152,42 @@ goals have implementation and regression evidence.
   `multi_fetch::tests::` selects 32 tests. Both run through `cargo_fast.sh` in
   the existing `kagemusha-v1` target slot. Scoped formatting and diff whitespace
   checks pass; these shared-checkout results do not qualify the full workspace.
+
+- 2026-09-28: fresh current-source compilation reaches Core and Torii production
+  libraries; Core test compilation finds a retired SCCP permission name in an
+  existing refusal test, now corrected to the canonical route-proposal permission.
+  The codec guard and 79 focused capacity/provider-ingest/TLS contract tests pass.
+  Previous broad test counts remain historical evidence while shared sources change.
+- The current consensus migration exposed two active integration gaps: publication
+  still read retired finality sidecars, and the daemon explicitly refused configured
+  provider/reputation archives because the current executor did not capture them.
+  Publication now uses current embedded certificates and a compact independently
+  trusted checkpoint; model and native validation are pending. Current archive
+  capture is being connected to commit completion with exact-decision retry, while
+  obsolete archive-specific V2 receipt/publication plumbing is being removed.
+  TODO: finish equivalent current archive failure/restart tests before retiring their
+  old path's assertions, then qualify native constructors and all four-validator
+  workflows. SR3/SR4/SR5/SR8 remain active.
+
+- Current compact checkpoint/publication model tests pass all 11 selected cases.
+  The CAR library passes all 362 tests on the current source. The replacement
+  archive path now binds to the current executor before the driver starts,
+  retains one committed decision after a capture failure, and retries capture
+  without reexecuting its transactions or emitting completion twice. Equivalent
+  current-certificate authority, I/O failure, contention and restart tests are
+  present; native compilation and their execution are still required. Retired
+  archive-only V2 reservation/publication types and their daemon replay setup
+  are removed, with release-gate selectors migrated to the current cases.
+- Current-source storage/retrieval suites finish successfully: `sorafs_node`
+  1,565 passed/two ignored, `sorafs_car` 362 passed, and `sorafs_orchestrator`
+  227 passed/two ignored. The updated provider-ingest source-contract suite
+  passes 29 cases. These scoped results preserve SR1/SR2/SR6/SR7 acceptance;
+  Core/Torii/daemon native tests and four-validator workflow closure remain open.
+- Native test compilation exposes three migrated-test API mismatches (a required
+  validator resume method, a private block-hash writer helper, and removed archive
+  fields in a refusal pattern); each is corrected without changing refusal
+  semantics. Compiler diagnostics also identify obsolete archive reservation
+  APIs. Those and the old archive-only Kura lease helpers are removed completely;
+  replacement tests use the actual current index writer, certified chain and
+  insertion implementation, including release notification and partial-I/O retry.
+  A fresh native compile and execution remain required after these corrections.

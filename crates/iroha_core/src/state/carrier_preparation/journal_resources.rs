@@ -3,7 +3,7 @@
 //! This finite structural reservation precedes execution and cannot stand in for
 //! concrete World payload, execution scratch, decoding, runtime or archive work.
 
-use super::{RetainedCarrierEffects, StagedCarrierCapture};
+use super::RetainedCarrierEffects;
 use crate::state::world_journals::resources::{
     WorldJournalShellDemand, WorldJournalShellReservation,
 };
@@ -15,12 +15,11 @@ use std::{
 };
 
 /// Fixed retention storage from one original finite pool before execution.
-/// The admission type fixes the exact unfinished-capture Box layout.
+/// The admission type remains bound to the original complete candidate owner.
 #[must_use = "move original credits through candidate capture, not into a replacement reservation"]
 pub(crate) struct CarrierJournalShellReservation<A> {
     pub(super) world: WorldJournalShellReservation,
     pub(super) effects: AllocationCharge,
-    pub(super) capture: AllocationCharge,
     _admission: PhantomData<fn() -> A>,
 }
 
@@ -30,7 +29,6 @@ impl<A> CarrierJournalShellReservation<A> {
         let total = world
             .total_bytes()
             .checked_add(Layout::new::<RetainedCarrierEffects>().size())
-            .and_then(|sum| sum.checked_add(Layout::new::<StagedCarrierCapture<A>>().size()))
             .ok_or(AllocationRefusal::DemandOverflow)?;
         Ok((world, total))
     }
@@ -44,14 +42,10 @@ impl<A> CarrierJournalShellReservation<A> {
         let effects = reservation
             .try_split(Layout::new::<RetainedCarrierEffects>())
             .expect("the complete aggregate includes the exact effects Box");
-        let capture = reservation
-            .try_split(Layout::new::<StagedCarrierCapture<A>>())
-            .expect("the complete aggregate includes the typed capture Box");
         assert_eq!(reservation.remaining_bytes(), 0);
         Ok(Self {
             world,
             effects,
-            capture,
             _admission: PhantomData,
         })
     }
@@ -125,9 +119,7 @@ mod tests {
         let (world, bytes) = CarrierJournalShellReservation::<()>::demand().unwrap();
         assert_eq!(
             bytes,
-            world.total_bytes()
-                + Layout::new::<RetainedCarrierEffects>().size()
-                + Layout::new::<StagedCarrierCapture<()>>().size()
+            world.total_bytes() + Layout::new::<RetainedCarrierEffects>().size()
         );
         let too_small = AllocationBudget::new(bytes - 1);
         assert!(matches!(
@@ -142,10 +134,6 @@ mod tests {
             reservation.effects.layout(),
             Layout::new::<RetainedCarrierEffects>()
         );
-        assert_eq!(
-            reservation.capture.layout(),
-            Layout::new::<StagedCarrierCapture<()>>()
-        );
         assert!(matches!(
             budget.try_reserve_bytes(1),
             Err(AllocationRefusal::Capacity { .. })
@@ -154,9 +142,8 @@ mod tests {
         assert_eq!(budget.reserved_bytes(), 0);
         let (_, larger) = CarrierJournalShellReservation::<[u8; 4096]>::demand().unwrap();
         assert_eq!(
-            larger - bytes,
-            Layout::new::<StagedCarrierCapture<[u8; 4096]>>().size()
-                - Layout::new::<StagedCarrierCapture<()>>().size()
+            larger, bytes,
+            "admission is retained inline, with no obsolete capture Box"
         );
     }
 

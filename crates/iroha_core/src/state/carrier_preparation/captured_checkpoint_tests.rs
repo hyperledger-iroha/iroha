@@ -32,8 +32,6 @@ fn native_checkpoint_fixture() -> Box<NativeCheckpointFixture> {
     let journals = prepared
         .prepare_journals(
             crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-            None,
-            None,
             |_| Ok::<_, Infallible>(()),
         )
         .unwrap();
@@ -44,8 +42,6 @@ fn native_checkpoint_fixture() -> Box<NativeCheckpointFixture> {
         Arc::clone(&state),
         phase_queue(),
         Arc::clone(&state.kura),
-        None,
-        None,
         state.sumeragi_block_cadence(),
         iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         events,

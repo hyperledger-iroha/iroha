@@ -631,5 +631,3 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
 
 #[cfg(test)]
 mod finality_descendant_tests;
-#[cfg(test)]
-mod sorafs_publication_tests;

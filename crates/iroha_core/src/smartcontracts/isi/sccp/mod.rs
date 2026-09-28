@@ -76,14 +76,6 @@ pub(crate) fn not_wired(what: &str, owner: &str) -> Error {
     Error::InvariantViolation(format!("SCCP: {what} not implemented yet (TODO({owner}))").into())
 }
 
-/// Build the fail-closed block-hook error of an SCCP step that is not implemented yet.
-#[must_use]
-pub(crate) fn not_wired_block(what: &str, owner: &str) -> crate::block::BlockValidationError {
-    crate::block::BlockValidationError::ExecutionContextInvalid(format!(
-        "SCCP: {what} not implemented yet (TODO({owner}))"
-    ))
-}
-
 /// Return whether `instruction` is one of the ten SCCP v1 instructions.
 ///
 /// Every SCCP instruction routes to the universal dataspace (§4.19) and is admitted by the
@@ -156,8 +148,6 @@ mod tests {
             Error::InvariantViolation("SCCP: widget not implemented yet (TODO(ws99))".into())
         );
         assert_eq!(todo_owner(&error).as_deref(), Some("ws99"));
-        let block_error = not_wired_block("hook step", "ws30");
-        assert!(format!("{block_error}").contains("SCCP: hook step not implemented yet"));
     }
 
     #[test]

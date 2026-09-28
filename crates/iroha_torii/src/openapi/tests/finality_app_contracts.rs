@@ -371,12 +371,8 @@ fn signed_status_documents_actual_driver_fields() {
     let schemas = openapi_schemas();
     let schema = contract_schema(&schemas, "SumeragiStatusResponse");
     let properties = contract_object(schema.get("properties"), "current status properties");
-    for field in native.as_object().unwrap().keys() {
-        assert!(properties.contains_key(field), "native field {field} is not documented");
-    }
-    for absent in contract_words("beacon_horizon protocol_version restart_required height_context last_committed_subject") {
-        assert!(!properties.contains_key(absent), "retired status field {absent}");
-    }
+    assert_eq!(object_field_set(native.as_object().expect("current status object")), object_field_set(properties));
+    member_contracts! { properties; Absent => contract_strings("status.absent"); }
     assert_eq!(native.get("instance").and_then(Value::as_str), Some("07".repeat(32).as_str()));
     let footprint = native.get("footprint").and_then(Value::as_object).unwrap();
     assert_eq!(object_field_set(footprint), object_field_set(contract_object(contract_schema(&schemas, "SumeragiFootprint").get("properties"), "footprint properties")));
@@ -437,15 +433,9 @@ fn generated_spec_documents_exact_current_sumeragi_status() {
         let actual = document.get("paths").and_then(Value::as_object).and_then(|paths| paths.get(path)).and_then(Value::as_object).and_then(|item| item.get("get")).and_then(Value::as_object).map(|operation| operation_response_schema_ref(operation, "200", path));
         assert_eq!(actual, catalog_openapi_route_enabled(CatalogHttpMethod::Get, path).then_some(expected), "{label} catalog projection");
     }
-    let status = contract_schema(schemas, "SumeragiStatusResponse");
-    scalar_contracts! { status.get("additionalProperties") => Flag(false); }
-    let properties = contract_object(status.get("properties"), "status properties");
-    for field in contract_words("instance height view stage leader proxy_tail high_qc_view level start_level t_retx_ms committed_height applied_height awaiting signer unanchored abstaining halted footprint") {
-        assert!(properties.contains_key(field), "current status field {field}");
-    }
-    for field in contract_words("protocol_version node_fingerprint config_fingerprint build_fingerprint phase height_context_id last_commit_qc beacon_horizon") {
-        assert!(!properties.contains_key(field), "retired status field {field}");
-    }
+    assert_exact_closed_required_schema_fields(schemas, "SumeragiStatusResponse", &contract_strings("status.required"));
+    let properties = contract_object(contract_schema(schemas, "SumeragiStatusResponse").get("properties"), "status properties");
+    member_contracts! { properties; Absent => contract_strings("status.absent"); }
     scalar_contracts! { properties.get("footprint").and_then(|schema| schema.get("$ref")) => Text("#/components/schemas/SumeragiFootprint"); }
     let diagnostics = contract_schema(schemas, "SumeragiDiagnosticsResponse");
     scalar_contracts! { diagnostics.get("additionalProperties") => Flag(false); }

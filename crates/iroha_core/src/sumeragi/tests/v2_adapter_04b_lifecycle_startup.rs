@@ -1019,8 +1019,6 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
             exact_state,
             queue,
             Arc::clone(&kura),
-            None,
-            None,
             events_sender,
         )
         .expect("authenticated cadence must cross the runner-only factory seal");
@@ -1577,8 +1575,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             Arc::clone(&state),
             Arc::clone(&queue),
             Arc::clone(&kura),
-            None,
-            None,
             state.sumeragi_block_cadence(),
             genesis_account.clone(),
             events_sender.clone(),
@@ -1789,8 +1785,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 let inputs = ordinary.bind_production_lifecycle_owner_factory_inputs_v1(
                     super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
                         local_signer, state.sumeragi_block_cadence(),
-                    ), storage, Arc::clone(&state), Arc::clone(&queue), Arc::clone(&kura),
-                    None, None, events_sender.clone(),
+                    ), storage, Arc::clone(&state), Arc::clone(&queue), Arc::clone(&kura), events_sender.clone(),
                 ).unwrap_or_else(|error| panic!("bind original standalone Apply dependencies: {error}"));
                 let quarantined = super::super::v2_body_store::V2BodyStore::open_with_policy(
                     storage_root.join("bodies"),
@@ -2074,8 +2069,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                     Arc::clone(&state),
                     Arc::clone(&queue),
                     Arc::clone(&kura),
-                    None,
-                    None,
                     events_sender.clone(),
                 )
                 .unwrap_or_else(|error| panic!("bind pending Kura lifecycle inputs: {error}"));
@@ -2218,8 +2211,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 Arc::clone(&state),
                 Arc::clone(&queue),
                 Arc::clone(&kura),
-                None,
-                None,
                 events_sender.clone(),
             )
             .unwrap_or_else(|error| panic!("bind production marker-replay inputs: {error}"));

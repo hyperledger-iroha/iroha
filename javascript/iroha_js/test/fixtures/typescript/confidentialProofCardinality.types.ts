@@ -26,9 +26,12 @@ buildConfidentialUnshieldProofV2({ ...unshield, inputs: [] });
 // @ts-expect-error V3 unshield has at most one change output.
 buildConfidentialUnshieldProofV3({ ...unshield, outputs: [output, output] });
 
-import { ConfidentialProver, ConfidentialProverError } from "../../../index.js";
+import { ConfidentialProver, ConfidentialProverError, type ConfidentialProof } from "../../../index.js";
 declare const wallet: ConfidentialProver;
-wallet.proveTransfer({ inputs: [note], outputs: [output], treeCommitments: [], rootHex: "" });
+const pendingProof: Promise<ConfidentialProof> = wallet.proveTransfer({ inputs: [note], outputs: [output], treeCommitments: [], rootHex: "" });
+// @ts-expect-error Proving is asynchronous and cannot be treated as an immediate proof.
+const immediateProof: ConfidentialProof = pendingProof;
+void immediateProof;
 wallet.proveRedemption({ inputs: [note], publicAmount: 7n, treeCommitments: [], rootHex: "" });
 wallet.proveRedemption({ inputs: [note], publicAmount: 5n, change: { amount: 2n, rhoHex: "" }, treeCommitments: [], rootHex: "" });
 wallet.dispose();

@@ -13214,7 +13214,9 @@ seiyaku Privacy {
         retired.payload_bytes = Buffer::from(retired_builder.encode_payload());
         retired.payload_hash_hex = Some(hex::encode(retired_hash));
         retired.signature = Buffer::from(retired_signature.payload().to_vec());
-        let error = finalize_signed_transaction(retired).expect_err("retired intent must reject");
+        let error = finalize_signed_transaction(retired)
+            .err()
+            .expect("retired intent must reject");
         assert!(error.reason.contains("requires Ordinary admission intent"));
         let mut missing_authority = valid_input();
         missing_authority.authority.clear();
