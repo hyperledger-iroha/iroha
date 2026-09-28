@@ -8,6 +8,10 @@
 //! Future work will extend overlays to be produced by IVM prepasses (draining queued ISIs without
 //! mutating state) and to incorporate trigger side effects. For now the type is mostly a thin
 //! wrapper that keeps chunking logic and admission limits (`pipeline.overlay_max_*`) in one place.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::smartcontracts::ivm::cache::{
+    ExecutableProgramSummary, GenericProgramSummary, IvmCache,
+};
 use crate::{
     executor::{
         ContractEntrypointAuthorizationSnapshot, ensure_asset_definition_registration_allowed,
@@ -20,7 +24,7 @@ use crate::{
             admission_validate_pvp,
         },
         ivm::{
-            cache::{ExecutableProgramSummary, GenericProgramSummary, IvmCache, ProgramSummary},
+            cache::ProgramSummary,
             host::{AmxBudgetViolation, HostOutputLimits, QueryStateSource},
         },
     },
@@ -32,6 +36,8 @@ use iroha_config::parameters::actual::QueryCursorMode;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::transaction::executable::ContractInvocation;
 use iroha_data_model::{
     errors::CanonicalErrorKind,
     executor::{IvmAdmissionError, ManifestCodeHashMismatchInfo},
@@ -45,9 +51,11 @@ use iroha_data_model::{
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
     proof::VerifyingKeyId,
-    smart_contract::ContractAddress,
-    smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
-    transaction::{Executable, SignedTransaction, executable::ContractInvocation},
+    smart_contract::{
+        ContractAddress,
+        manifest::{ContractManifest, MANIFEST_METADATA_KEY},
+    },
+    transaction::{Executable, SignedTransaction},
     zk::{
         BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
         OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
@@ -127,6 +135,7 @@ struct OverlayLifecycleCompletion {
 fn smart_contract_heap_limit(state: &impl StateReadOnly) -> u64 {
     state.world().parameters().smart_contract().memory().get()
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn configure_zk_lane_trace_collection(vm: &mut ivm::IVM, halo2_enabled: bool) {
     vm.set_zk_trace_enabled(halo2_enabled && vm.zk_mode_enabled());
 }
@@ -377,6 +386,7 @@ fn parse_contract_call_execution_context_from_source(
         argument_record,
     }))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn parse_prepared_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     contract: &ivm::PreparedContract,
@@ -501,6 +511,7 @@ fn authorize_and_prepare_raw_contract_dispatch<R: StateReadOnly>(
     };
     Ok((call_context, runtime_context, authorization))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn validate_bound_contract_manifest(
     manifest: &ContractManifest,
     summary: &ProgramSummary,
@@ -534,6 +545,7 @@ fn map_program_summary_error(error: ivm::VMError) -> OverlayBuildError {
         error,
     ))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn cached_amx_analysis(
     ivm_cache: &mut IvmCache,
     summary: &ProgramSummary,
@@ -543,6 +555,7 @@ fn cached_amx_analysis(
         .analyze_program(summary, bytecode)
         .map_err(map_program_analysis_error)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn cached_generic_amx_analysis(
     ivm_cache: &mut IvmCache,
     summary: &GenericProgramSummary,
@@ -895,6 +908,7 @@ fn queued_manifest_matches(queued: &[InstructionBox], manifest: &ContractManifes
             .is_some_and(|registered| registered.manifest() == manifest)
     })
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn append_verified_contract_metadata_registration<R: StateReadOnly>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -946,6 +960,7 @@ fn append_verified_contract_metadata_registration<R: StateReadOnly>(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn append_verified_contract_metadata_registration_to_queued<R: StateReadOnly>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -1114,9 +1129,21 @@ struct OverlayInstructionExecutionContext {
 enum TxOverlaySource {
     #[default]
     Instructions,
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     ContractCall,
     Ivm,
     IvmProved,
+}
+impl TxOverlaySource {
+    /// Whether this overlay was produced by a live contract/IVM execution at the block height.
+    fn is_live_execution(self) -> bool {
+        match self {
+            #[cfg(any(test, feature = "iroha-core-tests"))]
+            Self::ContractCall => true,
+            Self::Ivm => true,
+            Self::Instructions | Self::IvmProved => false,
+        }
+    }
 }
 /// Overlay of a transaction's intended operations.
 #[derive(Debug, Clone, Default)]
@@ -1434,21 +1461,6 @@ impl TxOverlay {
             byte_size: OnceLock::new(),
         }
     }
-    /// Create an overlay from IVM-produced instructions and observed IVM gas usage.
-    pub fn from_ivm_instructions(instrs: Vec<InstructionBox>, ivm_gas_used: u64) -> Self {
-        Self {
-            instructions: instrs,
-            execution_contexts: None,
-            entrypoint_authorization: None,
-            lifecycle_completion: None,
-            ivm_gas_used: Some(ivm_gas_used),
-            completed_axt: Vec::new(),
-            durable_state_overlay: BTreeMap::new(),
-            durable_state_authorizations: BTreeMap::new(),
-            source: TxOverlaySource::Ivm,
-            byte_size: OnceLock::new(),
-        }
-    }
     /// Create an overlay from IVM-produced artifacts including durable state writes.
     pub fn from_ivm_execution(
         instrs: Vec<InstructionBox>,
@@ -1473,6 +1485,7 @@ impl TxOverlay {
             byte_size: OnceLock::new(),
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn from_host_execution(
         instructions: Vec<InstructionBox>,
         execution_contexts: Vec<OverlayInstructionExecutionContext>,
@@ -1498,6 +1511,7 @@ impl TxOverlay {
             byte_size: OnceLock::new(),
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn from_queued_execution(
         queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
         ivm_gas_used: u64,
@@ -1561,6 +1575,7 @@ impl TxOverlay {
     pub fn instruction_count(&self) -> usize {
         self.instructions.len()
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Whether this overlay carries durable smart-contract state changes.
     pub fn has_durable_state_changes(&self) -> bool {
         !self.completed_axt.is_empty() || !self.durable_state_overlay.is_empty()
@@ -1569,6 +1584,7 @@ impl TxOverlay {
     pub fn instructions(&self) -> impl ExactSizeIterator<Item = &InstructionBox> {
         self.instructions.iter()
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Borrow the overlay instructions as a slice.
     pub fn instruction_slice(&self) -> &[InstructionBox] {
         &self.instructions
@@ -1602,6 +1618,7 @@ impl TxOverlay {
     ) -> Result<(), ValidationFail> {
         self.apply_inner(state_tx, authority, self.instructions.len().max(1))
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Apply the overlay with a specific chunk size (number of instructions per chunk).
     ///
     /// # Errors
@@ -1698,11 +1715,10 @@ impl TxOverlay {
         chunk: usize,
     ) -> Result<(), ValidationFail> {
         let result = (|| -> Result<(), ValidationFail> {
-            let execution_height = matches!(
-                self.source,
-                TxOverlaySource::ContractCall | TxOverlaySource::Ivm
-            )
-            .then_some(state_tx.block_height());
+            let execution_height = self
+                .source
+                .is_live_execution()
+                .then_some(state_tx.block_height());
             if self.source == TxOverlaySource::IvmProved {
                 crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
                     self.completed_axt.len(),
@@ -1932,6 +1948,7 @@ impl TxOverlay {
         })();
         result
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn with_entrypoint_authorization(
         mut self,
         authorization: Option<ContractEntrypointAuthorizationSnapshot>,
@@ -1939,6 +1956,7 @@ impl TxOverlay {
         self.entrypoint_authorization = authorization;
         self
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn with_lifecycle_completion(
         mut self,
         contract_address: &ContractAddress,
@@ -1951,6 +1969,7 @@ impl TxOverlay {
         self
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn tx_overlay_from_host_queued<R: StateReadOnly>(
     state_ro: &R,
     queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
@@ -1988,6 +2007,7 @@ fn tx_overlay_from_host_queued<R: StateReadOnly>(
         durable_state_authorizations,
     )
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
     state_ro: &R,
     replay: IvmProvedReplay,
@@ -2040,6 +2060,7 @@ fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
         durable_state_authorizations,
     )
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 struct GenericOverlayExecution {
     overlay: TxOverlay,
     #[cfg(test)]
@@ -2049,6 +2070,7 @@ struct GenericOverlayExecution {
     #[cfg(test)]
     force_live_rebuild: bool,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn validate_generic_program_context<R: StateReadOnly>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -2061,6 +2083,7 @@ fn validate_generic_program_context<R: StateReadOnly>(
     )
     .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn execute_generic_program_overlay<R>(
     tx: &SignedTransaction,
@@ -2162,6 +2185,7 @@ where
         force_live_rebuild,
     })
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Build an overlay for a signed transaction without mutating state.
 ///
 /// # Errors
@@ -2176,6 +2200,7 @@ where
     let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
     build_overlay_for_transaction_with_cache(tx, state_ro, &mut ivm_cache)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Build an overlay for a signed transaction using a caller-provided IVM cache.
 ///
 /// # Errors
@@ -11125,6 +11150,7 @@ fn encode_proved_overlay_bounded<T: norito::NoritoSerialize>(
     })?;
     Ok(writer.into_inner())
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Execute an `Executable::Ivm` transaction in the local state view and derive the corresponding
 /// [`iroha_data_model::transaction::IvmProved`] payload.
 ///
@@ -11147,29 +11173,6 @@ where
         vk_record.version,
         vk_record.gas_schedule_id.as_deref(),
         None,
-    )
-}
-/// Bounded Torii/operator variant of [`derive_ivm_proved_payload_from_ivm_execution`].
-///
-/// Retained items and bytes remain bounded by the live on-chain smart-contract
-/// parameters. `max_output_bytes` adds a stricter tooling transport cap and can
-/// never widen the consensus budget.
-pub fn derive_ivm_proved_payload_from_ivm_execution_bounded<R>(
-    state_ro: &R,
-    tx: &SignedTransaction,
-    vk_record: &iroha_data_model::proof::VerifyingKeyRecord,
-    max_output_bytes: usize,
-) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
-where
-    R: StateReadOnly + QueryStateSource,
-{
-    derive_ivm_proved_payload_from_ivm_execution_inner(
-        state_ro,
-        tx,
-        &vk_record.circuit_id,
-        vk_record.version,
-        vk_record.gas_schedule_id.as_deref(),
-        Some(max_output_bytes),
     )
 }
 /// Bounded tooling derivation using only the lightweight verifier policy

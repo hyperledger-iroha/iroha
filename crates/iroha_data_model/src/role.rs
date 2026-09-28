@@ -35,7 +35,6 @@ mod model {
     )]
     #[getset(get = "pub")]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::role::model::RoleId")]
     pub struct RoleId {
@@ -45,7 +44,6 @@ mod model {
     /// Role is a tag for a set of permission tokens.
     #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[display("{id}")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::role::model::Role")]
     pub struct Role {
@@ -63,7 +61,6 @@ mod model {
     }
     /// Builder for [`Role`]
     #[derive(Debug, Display, Clone, Getters, IdEqOrdHash, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
     #[display("{grant_to}: {inner}")]
     pub struct NewRole {

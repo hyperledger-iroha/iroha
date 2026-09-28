@@ -5,6 +5,7 @@
 //! callers still have to carry the complete history and enforce every reciprocal curve equation.
 
 use super::*;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use crate::zk::pasta_sha256::PastaSha256ByteV1;
 use snark_verifier::{
     loader::EcPointLoader as _, system::halo2::transcript::halo2::TranscriptObject, util::msm::Msm,
@@ -90,6 +91,7 @@ pub(super) fn validate_hybrid_commitment_limb_indices_v1(
 pub(in crate::zk::kagemusha_v1_recursion) type DeferredProofStreamV1<'chip, C> =
     Vec<TranscriptObject<C, DeferredLoader<'chip, C>>>;
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// One succinct scalar-half result and the exact canonical proof bytes it consumed.
 ///
 /// The byte count is fixed by the authenticated ordinary-proof profile, not by a new witness
@@ -168,6 +170,13 @@ where
     /// hybrid-proof object have been absorbed.
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Proof-read commitments for instance columns one and two, in that order.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the test-gated global claim inventory re-reads the carrier commitments"
+        )
+    )]
     pub(in crate::zk::kagemusha_v1_recursion) carrier_commitments: [DeferredEcPoint<'chip, C>; 2],
     /// Exact proof-read objects, including both hybrid carrier commitments.
     pub(in crate::zk::kagemusha_v1_recursion) loaded_stream: DeferredProofStreamV1<'chip, C>,
@@ -185,6 +194,7 @@ where
     loaded_stream: DeferredProofStreamV1<'chip, C>,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Verify an ordinary proof and expose its assigned canonical bytes for a containing frame.
 ///
 /// Use this entry point when the canonical authorization or credit envelope must hash the exact
@@ -216,6 +226,7 @@ where
     )
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Verify an authenticated internal helper proof at its exact smaller IPA domain.
 ///
 /// The returned opening accumulator retains that smaller round count. A monetary caller must
@@ -288,6 +299,7 @@ where
     Ok((accumulator, transcript_binding))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Reconstruct exactly the proof-read objects, excluding transcript public inputs and constants.
 ///
 /// The pinned transcript appends only in `read_scalar` and `read_ec_point`; common inputs and

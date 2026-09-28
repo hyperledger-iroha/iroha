@@ -10,7 +10,6 @@ use iroha_core::{
     sumeragi::network_topology::Topology,
     tx::AcceptedTransaction,
 };
-use iroha_crypto::Algorithm;
 use iroha_data_model::prelude as dm;
 use iroha_primitives::const_vec::ConstVec;
 use std::{borrow::Cow, sync::Arc};
@@ -27,13 +26,6 @@ fn checked_smoke_account(seed: u8, context: &'static str) -> (dm::AccountId, Key
     let kp = checked_smoke_keypair(seed, iroha_crypto::Algorithm::Ed25519, context);
     let account = dm::AccountId::new(kp.public_key().clone());
     (account, kp)
-}
-fn checked_smoke_account_id(seed: u8, context: &'static str) -> AccountId {
-    AccountId::new(
-        checked_smoke_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
-            .public_key()
-            .clone(),
-    )
 }
 fn account_with_key() -> (dm::AccountId, KeyPair) {
     checked_smoke_account(0x40, "derive transaction query smoke fixture account key")
@@ -58,15 +50,6 @@ impl Drop for DebugEnvGuard {
         super::debug_toggle_override::set_torii_override(self.prev_torii_debug_match);
         super::debug_toggle_override::set_iroha_override(self.prev_iroha_debug_tx_eval);
     }
-}
-fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
-    crate::json_object(pairs)
-}
-fn arr(values: Vec<Value>) -> Value {
-    crate::json_array(values)
-}
-fn val<T: json::JsonSerialize + ?Sized>(value: &T) -> Value {
-    crate::json_value(value)
 }
 fn decode_latin1_utf8(input: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(input.len());

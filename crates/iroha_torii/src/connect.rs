@@ -9,14 +9,7 @@ use base64::Engine;
 use core::future::Future;
 use futures::{SinkExt, StreamExt};
 use iroha_core as corelib;
-use iroha_crypto::{Algorithm, MerkleTree, Signature};
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    block::proofs::{BlockProofs, BlockReceiptProof},
-    prelude::HashOf,
-    transaction::TransactionEntrypoint,
-};
+use iroha_data_model::{NetworkId, account::AccountId};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use iroha_torii_shared::{connect as proto, connect_sdk};
@@ -27,11 +20,25 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 // no direct HTTP responses here
 use crate::json_macros::JsonSerialize;
+#[cfg(test)]
+use iroha_crypto::Algorithm;
+#[cfg(test)]
+use iroha_crypto::MerkleTree;
+#[cfg(test)]
+use iroha_crypto::Signature;
+#[cfg(test)]
+use iroha_data_model::block::proofs::BlockProofs;
+#[cfg(test)]
+use iroha_data_model::block::proofs::BlockReceiptProof;
+#[cfg(test)]
+use iroha_data_model::prelude::HashOf;
+#[cfg(test)]
+use iroha_data_model::transaction::TransactionEntrypoint;
 /// Length in bytes of a Connect session identifier.
 pub const SID_LEN: usize = 32;
 /// Connect session identifier stored as raw bytes.
@@ -77,17 +84,9 @@ fn token_kind_for_role(role: proto::Role) -> connect_sdk::TokenKind {
         proto::Role::Wallet => connect_sdk::TokenKind::Wallet,
     }
 }
-fn unix_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
 fn expires_at_ms(ttl: Duration) -> u64 {
     let ttl_ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
-    unix_time_ms().saturating_add(ttl_ms)
+    crate::utils::unix_now_ms().saturating_add(ttl_ms)
 }
 #[derive(Clone)]
 pub struct Bus {
@@ -188,7 +187,10 @@ impl RoleTokenReservation {
             proto::Role::Wallet => self.session.wallet_token_hash.lock().await,
         };
         let mut last_activity = self.session.last_activity.lock().await;
-        if self.session.peer_claim_expired_at(unix_time_ms()) {
+        if self
+            .session
+            .peer_claim_expired_at(crate::utils::unix_now_ms())
+        {
             return Err(
                 "connect peer session claim expired before websocket attachment".to_owned(),
             );
@@ -646,11 +648,11 @@ impl Bus {
     }
     #[cfg(test)]
     async fn session_expired(&self, sid: &Sid, now: Instant) -> bool {
-        self.session_expired_at(sid, None, now, unix_time_ms())
+        self.session_expired_at(sid, None, now, crate::utils::unix_now_ms())
             .await
     }
     async fn session_expired_for(&self, sid: &Sid, expected: &Arc<Session>, now: Instant) -> bool {
-        self.session_expired_at(sid, Some(expected), now, unix_time_ms())
+        self.session_expired_at(sid, Some(expected), now, crate::utils::unix_now_ms())
             .await
     }
     async fn session_expired_at(
@@ -674,7 +676,8 @@ impl Bus {
         now.saturating_duration_since(last) > self.policy.session_ttl
     }
     async fn prune_expired_sessions(&self, now: Instant) -> usize {
-        self.prune_expired_sessions_at(now, unix_time_ms()).await
+        self.prune_expired_sessions_at(now, crate::utils::unix_now_ms())
+            .await
     }
     async fn prune_expired_sessions_at(&self, now: Instant, now_ms: u64) -> usize {
         let ttl = self.policy.session_ttl;
@@ -703,7 +706,7 @@ impl Bus {
         ttl: Duration,
         candidates: Vec<(Vec<u8>, Arc<Session>)>,
     ) -> usize {
-        self.remove_expired_candidates_at(now, unix_time_ms(), ttl, candidates)
+        self.remove_expired_candidates_at(now, crate::utils::unix_now_ms(), ttl, candidates)
             .await
     }
     async fn remove_expired_candidates_at(
@@ -824,13 +827,6 @@ impl Bus {
         }
         Ok(())
     }
-    /// Record a newly opened WS session.
-    pub async fn session_opened(&self, ip: IpAddr) {
-        let mut counts = self.per_ip_counts.lock().await;
-        let count = counts.entry(ip).or_insert(0);
-        *count = count.saturating_add(1);
-        self.shared.sessions_total.fetch_add(1, Ordering::Release);
-    }
     /// Record a closed WS session.
     pub async fn session_closed(&self, ip: IpAddr) {
         let mut counts = self.per_ip_counts.lock().await;
@@ -933,7 +929,7 @@ impl Bus {
                 "connect: unknown sid".into(),
             ));
         };
-        if sess.peer_claim_expired_at(unix_time_ms()) {
+        if sess.peer_claim_expired_at(crate::utils::unix_now_ms()) {
             iroha_logger::debug!(
                 sid = %hex::encode(sid),
                 "connect: reserve_token rejected expired peer session claim"
@@ -980,11 +976,12 @@ impl Bus {
         })
     }
     /// Validate a stable session management token.
+    #[cfg(test)]
     pub async fn authorize_management_token(&self, sid: Sid, token: &str) -> bool {
         let Some(sess) = self.inner.read().await.get(&sid.to_vec()).cloned() else {
             return false;
         };
-        if sess.peer_claim_expired_at(unix_time_ms()) {
+        if sess.peer_claim_expired_at(crate::utils::unix_now_ms()) {
             return false;
         }
         let supplied =
@@ -998,7 +995,7 @@ impl Bus {
     /// Return token-gated status for a single Connect session.
     pub async fn session_status(&self, sid: Sid, token: &str) -> Option<ConnectSessionStatus> {
         let sess = self.inner.read().await.get(&sid.to_vec()).cloned()?;
-        if sess.peer_claim_expired_at(unix_time_ms()) {
+        if sess.peer_claim_expired_at(crate::utils::unix_now_ms()) {
             return None;
         }
         let supplied =
@@ -1024,6 +1021,7 @@ impl Bus {
             origin: sess.origin.as_str(),
         })
     }
+    #[cfg(test)]
     async fn detach_if_empty(&self, sid: &Sid) {
         let key = sid.to_vec();
         let mut w = self.inner.write().await;
@@ -1097,6 +1095,7 @@ impl Bus {
         let sess = self.get_or_create(&sid).await;
         Self::attach_session(sess, role).await
     }
+    #[cfg(test)]
     async fn detach(&self, sid: Sid, role: proto::Role) {
         if let Some(sess) = self.inner.read().await.get(&sid.to_vec()) {
             match role {
@@ -1110,6 +1109,7 @@ impl Bus {
         }
         self.detach_if_empty(&sid).await;
     }
+    #[cfg(test)]
     pub async fn terminate_session(&self, sid: Sid, reason: &str) -> bool {
         self.terminate_session_inner(sid, reason, true).await
     }
@@ -1309,7 +1309,7 @@ impl Bus {
         if !self.session_is_current(&frame.sid, &sess).await {
             return;
         }
-        if sess.peer_claim_expired_at(unix_time_ms()) {
+        if sess.peer_claim_expired_at(crate::utils::unix_now_ms()) {
             debug!(sid = ?hex::encode(frame.sid), "connect: dropping frame for expired peer session claim");
             return;
         }
@@ -1362,8 +1362,8 @@ impl Bus {
                 | proto::ConnectControlV1::Reject { .. } => sender == proto::Role::Wallet,
                 proto::ConnectControlV1::Close { who, .. } => *who == sender,
                 proto::ConnectControlV1::Ping { .. } | proto::ConnectControlV1::Pong { .. } => true,
-                // Server events use an independent Torii-owned sequence and
-                // are delivered only by `send_server_event`.
+                // Server events use an independent Torii-owned sequence;
+                // clients never originate them.
                 proto::ConnectControlV1::ServerEvent { .. } => false,
             };
             if !valid_owner {
@@ -1922,7 +1922,7 @@ impl Bus {
             );
             return;
         }
-        if claim.expires_at_ms <= unix_time_ms() {
+        if claim.expires_at_ms <= crate::utils::unix_now_ms() {
             debug!(
                 sid = ?hex::encode(claim.sid),
                 "connect: dropping expired P2P session claim"
@@ -2038,7 +2038,7 @@ impl Bus {
             debug!(sid = ?hex::encode(sid), "connect: dropping P2P relay for unknown session");
             return;
         };
-        if sess.peer_claim_expired_at(unix_time_ms()) {
+        if sess.peer_claim_expired_at(crate::utils::unix_now_ms()) {
             debug!(sid = ?hex::encode(sid), "connect: dropping P2P relay for expired peer session claim");
             return;
         }
@@ -2123,7 +2123,9 @@ impl Bus {
         let Some(current) = sessions.get(&sid.to_vec()) else {
             return false;
         };
-        if !Arc::ptr_eq(current, expected) || current.peer_claim_expired_at(unix_time_ms()) {
+        if !Arc::ptr_eq(current, expected)
+            || current.peer_claim_expired_at(crate::utils::unix_now_ms())
+        {
             return false;
         }
         *current.last_activity.lock().await = Instant::now();
@@ -2181,7 +2183,9 @@ impl Bus {
         }
         let sessions = self.inner.read().await;
         let current = sessions.get(&sid.to_vec())?;
-        if !Arc::ptr_eq(current, expected) || current.peer_claim_expired_at(unix_time_ms()) {
+        if !Arc::ptr_eq(current, expected)
+            || current.peer_claim_expired_at(crate::utils::unix_now_ms())
+        {
             return None;
         }
         let queue = current.heartbeat_queue(role).await;
@@ -2669,6 +2673,7 @@ impl Bus {
         }
     }
     /// Broadcast a block proof payload to locally attached Connect peers.
+    #[cfg(test)]
     pub async fn broadcast_block_proof(
         &self,
         proofs: &BlockProofs,
@@ -2706,6 +2711,7 @@ impl Bus {
         }
         Ok(())
     }
+    #[cfg(test)]
     async fn send_server_event(
         &self,
         sid: &[u8],
@@ -2725,7 +2731,9 @@ impl Bus {
         let Some(current) = sessions.get(&sid.to_vec()) else {
             return;
         };
-        if !Arc::ptr_eq(current, &session) || current.peer_claim_expired_at(unix_time_ms()) {
+        if !Arc::ptr_eq(current, &session)
+            || current.peer_claim_expired_at(crate::utils::unix_now_ms())
+        {
             return;
         }
         let seq = session.next_server_seq(dir).await;
@@ -2863,7 +2871,8 @@ impl Default for Policy {
             relay_strategy: RelayStrategy::Broadcast,
             ws_max_sessions: 10_000,
             ws_per_ip_max_sessions: 10,
-            ws_rate_per_ip_per_min: 120,
+            ws_rate_per_ip_per_min:
+                iroha_config::parameters::defaults::connect::WS_RATE_PER_IP_PER_MIN,
             session_ttl: Duration::from_mins(5),
             session_buffer_max_bytes: 262_144,
             heartbeat_interval: Duration::from_secs(30),

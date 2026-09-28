@@ -8,12 +8,7 @@
 //!
 //! This is used as the concrete `[1 | h]` issuer specialization pinned by
 //! LaZeR, not as an implementation of the full BLNS security reduction.
-#![allow(
-    dead_code,
-    non_camel_case_types,
-    non_snake_case,
-    non_upper_case_globals
-)]
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 mod comm;
 #[cfg(test)]
 mod kat_vectors;
@@ -66,6 +61,7 @@ impl Drop for Trapdoor {
 pub(super) struct Preimage {
     pub(super) first: Zeroizing<Box<[i16]>>,
     pub(super) second: Zeroizing<Box<[i16]>>,
+    #[cfg(test)]
     pub(super) norm_squared: u32,
 }
 pub(super) fn generate_from_seed(seed: &[u8; 32], max_candidates: u32) -> Option<Trapdoor> {

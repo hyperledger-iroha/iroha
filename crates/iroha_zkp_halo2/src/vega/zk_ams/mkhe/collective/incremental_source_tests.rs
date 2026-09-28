@@ -771,8 +771,13 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
         "mod incremental_source_phase23;"
     );
     assert_eq!(source.matches(private_phase23).count(), 1);
-    // Exactly the private path and declaration: no public module or re-export.
-    assert_eq!(source.matches("incremental_source_phase23").count(), 2);
+    // Exactly the private path, the declaration and one test-only re-export of the
+    // materialized plane context: no public module.
+    assert_eq!(source.matches("incremental_source_phase23").count(), 3);
+    assert!(source.contains(concat!(
+        "#[cfg(test)]\n",
+        "pub(in crate::vega::zk_ams::mkhe) use incremental_source_phase23::MaterializedPlaneContextV1;"
+    )));
     let preceding_item = source
         .split(private_phase23)
         .next()

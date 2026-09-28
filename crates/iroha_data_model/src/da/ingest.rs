@@ -821,14 +821,6 @@ impl DaPinScopeAuthorizationV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[norito(deny_unknown_fields)]
 pub struct DaStripeLayout {
     /// Total row stripes (data + column parity).
@@ -849,14 +841,6 @@ pub struct DaStripeLayout {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1270,14 +1254,6 @@ impl DaIngestRequest {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]

@@ -41,8 +41,10 @@ pub(crate) const KAGEMUSHA_REPLAY_LEAF_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kg
 pub(crate) const KAGEMUSHA_REPLAY_NODE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmnode1");
 /// Aggregate private-state commitment domain.
 pub(crate) const KAGEMUSHA_STATE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmstate");
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Low limb of the canonical Pallas base/Vesta scalar field modulus.
 pub(crate) const KAGEMUSHA_FP_MODULUS_LOW_V1: u128 = 0x2246_98fc_094c_f91b_992d_30ed_0000_0001;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Low limb of the canonical Vesta base/Pallas scalar field modulus.
 pub(crate) const KAGEMUSHA_FQ_MODULUS_LOW_V1: u128 = 0x2246_98fc_0994_a8dd_8c46_eb21_0000_0001;
 
@@ -203,6 +205,7 @@ pub(crate) fn hash<F: KagemushaPoseidonFieldV1>(domain: u64, inputs: &[F]) -> F 
     F::kagemusha_poseidon_hash_v1(preimage)
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Return the protocol-fixed root of the empty depth-256 consumed-credit tree.
 pub(crate) fn empty_replay_root<F: KagemushaPoseidonFieldV1>() -> F {
     let mut root = hash(KAGEMUSHA_REPLAY_EMPTY_DOMAIN_V1, &[]);

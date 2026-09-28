@@ -50,6 +50,12 @@ mode0500 captures are retained unchanged. The signed-source owner exports only
 the selected commit and complete tree/object closure, excluding parent history,
 working-tree changes and gitlink contents.
 
+Source readers retain bounded lookahead across Git headers and adjacent pack
+objects. Pack inflation consumes each input byte once before the independent
+whole-pack checksum pass; small objects do not trigger repeated large disk
+reads. Object lengths, identities, hashes, deadlines and file custody checks
+remain mandatory on every verification pass.
+
 The shared capacity checker first probes the Mac backing host, then the guest's
 actual filesystem, then rechecks the Mac against the guest's full allocation
 bound. The receiver rechecks guest capacity under its private import lock before

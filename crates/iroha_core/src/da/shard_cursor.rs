@@ -212,6 +212,7 @@ impl DaShardCursorIndex {
         self.cursors.insert(key, cursor);
         Ok(())
     }
+    #[cfg(test)]
     /// Bulk-advance cursors using all commitments in the bundle.
     ///
     /// # Errors
@@ -647,6 +648,7 @@ impl DaShardCursorJournal {
         self.upsert(entry);
         Ok(())
     }
+    #[cfg(test)]
     /// Retrieve the cursor for a lane if present.
     #[must_use]
     pub fn cursor_for_lane(&self, lane_id: LaneId) -> Option<&LaneShardCursor> {

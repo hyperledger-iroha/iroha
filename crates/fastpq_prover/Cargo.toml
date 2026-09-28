@@ -9,6 +9,7 @@ publish = false
 [features]
 default = []
 dev-tools = []
+# Synchronous GPU FFT/LDE planner helpers exercised by the `planner` benchmark.
 bench = []
 fastpq-gpu = ["dep:block", "dep:metal"]
 
@@ -44,6 +45,7 @@ iroha_test_samples = { workspace = true }
 [[bench]]
 name = "planner"
 harness = false
+required-features = ["bench"]
 
 [[bin]]
 name = "fastpq_metal_bench"

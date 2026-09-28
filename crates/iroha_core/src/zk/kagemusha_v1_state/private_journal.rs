@@ -5,11 +5,13 @@
 
 use rustix::fs::{Mode, OFlags};
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use std::os::unix::fs::FileExt as _;
 use std::{
     cell::Cell,
     fs::{File, Metadata, TryLockError},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::{FileExt as _, MetadataExt as _},
+    os::unix::fs::MetadataExt as _,
     path::{Component, Path, PathBuf},
 };
 
@@ -49,6 +51,7 @@ pub(crate) struct PrivateJournal {
     next_sequence: u64,
     previous_frame_hash: DigestV1,
     // One verified immutable prefix, scoped to this held descriptor and invalidated by poison.
+    #[cfg(test)]
     verified_recovery_prefix: Cell<Option<super::KagemushaRecoveryJournalPrefixV1>>,
     poisoned: Cell<bool>,
     // A consumer cannot recursively materialize another record through this same owner.
@@ -174,6 +177,7 @@ impl PrivateJournal {
             read_bytes: 0,
             next_sequence: 0,
             previous_frame_hash: [0; 32],
+            #[cfg(test)]
             verified_recovery_prefix: Cell::new(None),
             poisoned: Cell::new(false),
             #[cfg(test)]
@@ -243,6 +247,7 @@ impl PrivateJournal {
     pub(crate) fn observed_version(&self) -> JournalFileVersion {
         self.observed_version
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn recovery_prefix(
         &self,
     ) -> Result<super::KagemushaRecoveryJournalPrefixV1, PrivateJournalError> {
@@ -257,6 +262,7 @@ impl PrivateJournal {
         })
     }
 
+    #[cfg(test)]
     /// Require the selected frame boundary to occur in this actual owned, fully replayed WAL.
     /// A validated append-only suffix is permitted; this does not authenticate hardware selection.
     /// Positional reads leave the replay/append cursor untouched. At most one verified prefix is
@@ -294,6 +300,7 @@ impl PrivateJournal {
         }
     }
 
+    #[cfg(test)]
     fn scan_recovery_prefix(
         &self,
         expected: super::KagemushaRecoveryJournalPrefixV1,
@@ -577,6 +584,7 @@ impl Drop for CompleteScanLease<'_> {
     fn drop(&mut self) {
         if !self.complete {
             self.journal.poisoned.set(true);
+            #[cfg(test)]
             self.journal.verified_recovery_prefix.set(None);
         }
         self.journal.scanning.set(false);

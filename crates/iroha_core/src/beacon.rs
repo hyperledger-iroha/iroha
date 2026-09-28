@@ -30,9 +30,10 @@ pub use dkg_private_exchange::{
     sign_global_threshold_beacon_dkg_recipient_key_v1,
 };
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use seat_readiness::prove_global_threshold_beacon_seat_readiness_v1;
 pub use seat_readiness::{
     global_threshold_beacon_seat_readiness_challenge_v1,
-    prove_global_threshold_beacon_seat_readiness_v1,
     verify_global_threshold_beacon_seat_readiness_v1,
 };
 
@@ -2854,7 +2855,8 @@ pub use fixtures::{
 };
 #[cfg(test)]
 pub(crate) use fixtures::{
-    prepared_session_and_signers_fixture_v1, signed_pulses_fixture_for_roster_and_anchors,
+    prepared_session_and_signers_fixture_for_keys_v1, prepared_session_and_signers_fixture_v1,
+    signed_pulses_fixture_for_roster_and_anchors,
 };
 
 #[cfg(test)]

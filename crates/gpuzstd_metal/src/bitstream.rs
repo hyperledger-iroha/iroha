@@ -6,12 +6,14 @@ pub enum BitstreamError {
     UnexpectedEof,
 }
 const MAX_BITS: u32 = 56;
+#[cfg(test)]
 pub(crate) struct BitWriter {
     buffer: u64,
     bit_count: u32,
     out: Vec<u8>,
     max_bytes: usize,
 }
+#[cfg(test)]
 impl BitWriter {
     pub(crate) fn with_capacity(max_bytes: usize) -> Self {
         Self {
@@ -106,6 +108,7 @@ impl<'a> BitReader<'a> {
         self.bit_count -= bits;
         Ok(value)
     }
+    #[cfg(test)]
     pub(crate) fn align_to_byte(&mut self) {
         let skip = self.bit_count & 7;
         self.buffer >>= skip;

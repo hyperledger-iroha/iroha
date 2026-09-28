@@ -18,7 +18,6 @@ mod model {
         Encode,
         iroha_schema::IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[event_set(schema_name = "iroha_data_model::events::data::musubi::model::MusubiEventSet")]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::data::musubi::model::MusubiEvent")]
@@ -65,9 +64,18 @@ mod model {
         RegistryPolicyChanged(MusubiRegistryPolicyEventV1),
     }
     /// Compact first-package-claim event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiPackageClaimedEventV1"
     )]
@@ -84,9 +92,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact immutable-release publication event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiReleasePublishedEventV1"
     )]
@@ -103,9 +120,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact yank/unyank event with its immutable archive binding.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiReleaseYankEventV1"
     )]
@@ -116,9 +142,18 @@ mod model {
         pub archive_id: crate::musubi::ArchiveId,
     }
     /// Compact accepted-member removal event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiPackageMemberRemovedEventV1"
     )]
@@ -135,9 +170,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact terminal transition for a pending package-member invitation.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiMaintainerInvitationLifecycleEventV1"
     )]
@@ -154,9 +198,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact Parliament package-recovery event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiPackageRecoveredEventV1"
     )]
@@ -173,9 +226,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact archive-registration event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiArchiveRegisteredEventV1"
     )]
@@ -190,9 +252,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact provider bundle-attestation registration event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiProviderBundleAttestationRegisteredEventV1"
     )]
@@ -208,10 +279,19 @@ mod model {
     }
     /// Closed archive-location transition kind.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiArchiveLocationTransitionV1"
     )]
@@ -226,9 +306,18 @@ mod model {
         EvidenceRefreshed,
     }
     /// Compact archive-location lifecycle event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiArchiveLocationEventV1"
     )]
@@ -254,9 +343,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact Parliament artifact-takedown event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiArtifactTakedownEventV1"
     )]
@@ -273,9 +371,18 @@ mod model {
         pub finalized_height: u64,
     }
     /// Compact registry-policy replacement event.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(
         name = "iroha_data_model::events::data::musubi::model::MusubiRegistryPolicyEventV1"
     )]

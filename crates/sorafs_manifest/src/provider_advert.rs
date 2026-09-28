@@ -806,7 +806,7 @@ impl norito::json::JsonDeserialize for SignatureAlgorithm {
         let label = <String as norito::json::JsonDeserialize>::json_deserialize(parser)?;
         match label.as_str() {
             "ed25519" => Ok(Self::Ed25519),
-            "multi-sig" | "multisig" => Ok(Self::MultiSig),
+            "multi-sig" => Ok(Self::MultiSig),
             other => Err(norito::json::Error::Message(format!(
                 "unknown signature algorithm `{other}`"
             ))),
@@ -815,7 +815,7 @@ impl norito::json::JsonDeserialize for SignatureAlgorithm {
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         match value.as_str() {
             Some("ed25519") => Ok(Self::Ed25519),
-            Some("multi-sig" | "multisig") => Ok(Self::MultiSig),
+            Some("multi-sig") => Ok(Self::MultiSig),
             Some(other) => Err(norito::json::Error::Message(format!(
                 "unknown signature algorithm `{other}`"
             ))),

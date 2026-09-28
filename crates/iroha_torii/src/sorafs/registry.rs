@@ -4,15 +4,18 @@ use crate::sorafs::capability_name;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
 use iroha_core::state::{WorldReadOnly, WorldView};
+#[cfg(test)]
+use iroha_data_model::sorafs::capacity::CapacityDisputeEvidence;
+#[cfg(test)]
+use iroha_data_model::sorafs::pin_registry::{PinManifestRecord, PinPolicy, StorageClass};
 use iroha_data_model::sorafs::{
     capacity::{
-        CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
-        CapacityDisputeRecord, CapacityDisputeStatus, CapacityFeeLedgerEntry, ProviderId,
+        CapacityDeclarationRecord, CapacityDisputeId, CapacityDisputeRecord, CapacityDisputeStatus,
+        CapacityFeeLedgerEntry, ProviderId,
     },
     pin_registry::{
-        ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord, ManifestDigest,
-        PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
-        ReplicationOrderStatus, StorageClass,
+        ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinStatus, ReplicationOrderId,
+        ReplicationOrderRecord, ReplicationOrderStatus,
     },
     pricing::ProviderCreditRecord,
 };
@@ -37,7 +40,6 @@ use sorafs_manifest::{
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -658,9 +660,6 @@ pub(crate) struct PinRegistrySnapshot {
     pub(crate) manifests: Vec<RegistryManifest>,
     pub(crate) aliases: Vec<RegistryAlias>,
     pub(crate) replication_orders: Vec<RegistryReplicationOrder>,
-    manifest_by_digest: HashMap<String, usize>,
-    alias_by_manifest_digest: HashMap<String, usize>,
-    successor_by_predecessor: HashMap<String, SuccessorIndex>,
 }
 /// Bounded replication-order projection decoded after filtering and pagination.
 #[derive(Debug, Clone)]
@@ -761,90 +760,8 @@ impl PinRegistryMetricsSummary {
     }
 }
 #[cfg(test)]
-impl PinRegistrySnapshot {
-    pub(crate) fn manifest_by_digest(&self, digest_hex: &str) -> Option<&RegistryManifest> {
-        self.manifest_by_digest
-            .get(digest_hex)
-            .and_then(|index| self.manifests.get(*index))
-    }
-    pub(crate) fn alias_by_manifest_digest(&self, digest_hex: &str) -> Option<&RegistryAlias> {
-        self.alias_by_manifest_digest
-            .get(digest_hex)
-            .and_then(|index| self.aliases.get(*index))
-    }
-    fn successor_selection(&self, predecessor_hex: &str) -> SuccessorSelection<'_> {
-        let Some(index) = self.successor_by_predecessor.get(predecessor_hex) else {
-            return SuccessorSelection {
-                best: None,
-                has_fork: false,
-            };
-        };
-        SuccessorSelection {
-            best: self.manifests.get(index.best),
-            has_fork: index.count > 1,
-        }
-    }
-    pub(crate) fn lineage_for(&self, digest_hex: &str) -> ManifestLineageSummary {
-        let Some(manifest) = self.manifest_by_digest(digest_hex) else {
-            return ManifestLineageSummary {
-                successor_of_hex: None,
-                head_hex: digest_hex.to_owned(),
-                depth_to_head: 0,
-                approved_successor: None,
-                immediate_successor: None,
-                anomalies: vec!["ManifestMissing".to_string()],
-            };
-        };
-        let mut anomalies = Vec::new();
-        let mut visited = HashSet::new();
-        visited.insert(digest_hex.to_owned());
-        let selection = self.successor_selection(digest_hex);
-        if selection.has_fork {
-            anomalies.push("SuccessorForkResolved".to_string());
-        }
-        let immediate_successor = selection.best.map(lineage_successor_from);
-        let mut approved_successor = immediate_successor
-            .as_ref()
-            .filter(|successor| successor.approved_epoch.is_some())
-            .cloned();
-        let mut head = manifest;
-        let mut depth: u32 = 0;
-        let mut current = selection.best;
-        let mut hops: usize = 0;
-        while let Some(next) = current {
-            hops = hops.saturating_add(1);
-            if hops > MAX_LINEAGE_DEPTH {
-                anomalies.push("LineageDepthExceeded".to_string());
-                break;
-            }
-            if !visited.insert(next.digest_hex.clone()) {
-                anomalies.push("LineageCycleDetected".to_string());
-                break;
-            }
-            depth = depth.saturating_add(1);
-            head = next;
-            if approved_successor.is_none() && next.approved_epoch.is_some() {
-                approved_successor = Some(lineage_successor_from(next));
-            }
-            let next_selection = self.successor_selection(&next.digest_hex);
-            if next_selection.has_fork {
-                anomalies.push("SuccessorForkResolved".to_string());
-            }
-            current = next_selection.best;
-        }
-        ManifestLineageSummary {
-            successor_of_hex: manifest.successor_of_hex.clone(),
-            head_hex: head.digest_hex.clone(),
-            depth_to_head: depth,
-            approved_successor,
-            immediate_successor,
-            anomalies,
-        }
-    }
-}
 #[derive(Debug, Clone)]
 pub(crate) struct RegistryManifest {
-    digest: ManifestDigest,
     digest_hex: String,
     chunker: RegistryChunkerHandle,
     chunk_digest_hex: String,
@@ -860,6 +777,7 @@ pub(crate) struct RegistryManifest {
     status_timestamp_unix: Option<u64>,
     governance_refs: Vec<GovernanceReference>,
 }
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct RegistryChunkerHandle {
     profile_id: u32,
@@ -868,6 +786,7 @@ struct RegistryChunkerHandle {
     semver: String,
     multihash_code: u64,
 }
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct AliasBindingProjection {
     namespace: String,
@@ -895,7 +814,6 @@ pub(crate) struct RegistryAlias {
 pub(crate) struct RegistryReplicationOrder {
     order_id_hex: String,
     manifest_digest_hex: String,
-    manifest_cid: Vec<u8>,
     issued_by: String,
     issued_epoch: u64,
     deadline_epoch: u64,
@@ -955,8 +873,10 @@ pub(crate) struct GovernanceReference {
     pub cid: Option<String>,
     pub kind: GovernanceRefKind,
     pub effective_at_unix: Option<u64>,
+    #[cfg(test)]
     pub alias_label: Option<String>,
     pub manifest_digest_hex: Option<String>,
+    #[cfg(test)]
     pub signers: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -973,6 +893,7 @@ fn unix_to_rfc3339_string(unix: u64) -> Option<String> {
     let timestamp = OffsetDateTime::from_unix_timestamp(seconds).ok()?;
     timestamp.format(&Rfc3339).ok()
 }
+#[cfg(test)]
 pub(crate) fn optional_rfc3339(unix: Option<u64>) -> Option<String> {
     unix.and_then(unix_to_rfc3339_string)
 }
@@ -986,33 +907,6 @@ fn lineage_rfc3339_to_json(unix: Option<u64>) -> Result<Value, json::Error> {
                     "lineage timestamp {unix} is outside the canonical RFC 3339 range"
                 ))
             }),
-    }
-}
-#[cfg(test)]
-struct SuccessorSelection<'a> {
-    best: Option<&'a RegistryManifest>,
-    has_fork: bool,
-}
-#[derive(Debug, Clone, Copy)]
-#[cfg(test)]
-struct SuccessorIndex {
-    best: usize,
-    count: usize,
-}
-#[cfg(test)]
-fn successor_is_better(candidate: &RegistryManifest, current: &RegistryManifest) -> bool {
-    match (candidate.approved_epoch, current.approved_epoch) {
-        (Some(candidate_epoch), Some(current_epoch)) => {
-            candidate_epoch > current_epoch
-                || (candidate_epoch == current_epoch && candidate.digest_hex > current.digest_hex)
-        }
-        (Some(_), None) => true,
-        (None, Some(_)) => false,
-        (None, None) => {
-            candidate.submitted_epoch > current.submitted_epoch
-                || (candidate.submitted_epoch == current.submitted_epoch
-                    && candidate.digest_hex > current.digest_hex)
-        }
     }
 }
 fn metadata_timestamp_hint(metadata: &Metadata, key: &str) -> Option<u64> {
@@ -1066,6 +960,7 @@ fn parse_governance_reference(
         .get("effective_at")
         .and_then(norito::json::Value::as_u64);
     let targets = object.get("targets").and_then(|raw| raw.as_object());
+    #[cfg(test)]
     let alias_label = targets
         .and_then(|map| map.get("alias"))
         .and_then(norito::json::Value::as_str)
@@ -1078,6 +973,7 @@ fn parse_governance_reference(
         GovernanceRefKind::RevokeManifest => Some(manifest_digest_hex.to_owned()),
         _ => None,
     });
+    #[cfg(test)]
     let signers = object
         .get("signers")
         .and_then(|raw| raw.as_array())
@@ -1092,8 +988,10 @@ fn parse_governance_reference(
         cid,
         kind,
         effective_at_unix,
+        #[cfg(test)]
         alias_label,
         manifest_digest_hex,
+        #[cfg(test)]
         signers,
     })
 }
@@ -1107,6 +1005,7 @@ fn parse_governance_kind(raw: &str) -> GovernanceRefKind {
     }
 }
 impl GovernanceReference {
+    #[cfg(test)]
     fn to_json(&self) -> Value {
         let mut map = Map::new();
         map.insert(
@@ -1141,6 +1040,7 @@ impl GovernanceReference {
     }
 }
 impl GovernanceRefKind {
+    #[cfg(test)]
     fn as_str(&self) -> &str {
         match self {
             GovernanceRefKind::AliasRotate => "AliasRotate",
@@ -1149,15 +1049,6 @@ impl GovernanceRefKind {
             GovernanceRefKind::RevokeManifest => "RevokeManifest",
             GovernanceRefKind::Other(value) => value.as_str(),
         }
-    }
-}
-#[cfg(test)]
-fn lineage_successor_from(manifest: &RegistryManifest) -> LineageSuccessor {
-    LineageSuccessor {
-        digest_hex: manifest.digest_hex.clone(),
-        status: manifest.status.clone(),
-        approved_epoch: manifest.approved_epoch,
-        status_timestamp_unix: manifest.status_timestamp_unix,
     }
 }
 #[cfg(test)]
@@ -1248,18 +1139,21 @@ pub(crate) enum PinRegistryError {
         alias_label: String,
         digest_hex: String,
     },
+    #[cfg(test)]
     #[error("failed to serialize manifest metadata for {digest_hex}: {source}")]
     SerializeManifestMetadata {
         digest_hex: String,
         #[source]
         source: json::Error,
     },
+    #[cfg(test)]
     #[error("failed to serialize manifest policy for {digest_hex}: {source}")]
     SerializeManifestPolicy {
         digest_hex: String,
         #[source]
         source: json::Error,
     },
+    #[cfg(test)]
     #[error("invalid manifest lifecycle for {digest_hex}: {reason}")]
     InvalidManifestLifecycle { digest_hex: String, reason: String },
     #[error("failed to decode replication order payload for {order_id_hex}: {source}")]
@@ -1300,43 +1194,10 @@ pub(crate) fn collect_pin_registry(
         replication_orders.push(RegistryReplicationOrder::from_store(order_id, record)?);
     }
     replication_orders.sort_by(|a, b| a.order_id_hex.cmp(&b.order_id_hex));
-    let manifest_by_digest = manifests
-        .iter()
-        .enumerate()
-        .map(|(index, manifest)| (manifest.digest_hex.clone(), index))
-        .collect();
-    let mut successor_by_predecessor = HashMap::<String, SuccessorIndex>::new();
-    for (index, manifest) in manifests.iter().enumerate() {
-        let Some(predecessor) = manifest.successor_of_hex.as_ref() else {
-            continue;
-        };
-        successor_by_predecessor
-            .entry(predecessor.clone())
-            .and_modify(|selection| {
-                selection.count = selection.count.saturating_add(1);
-                if successor_is_better(manifest, &manifests[selection.best]) {
-                    selection.best = index;
-                }
-            })
-            .or_insert(SuccessorIndex {
-                best: index,
-                count: 1,
-            });
-    }
-    let mut alias_by_manifest_digest = HashMap::new();
-    for (index, alias) in aliases.iter().enumerate() {
-        // Preserve the prior sorted-first behaviour when multiple aliases reference a manifest.
-        alias_by_manifest_digest
-            .entry(alias.manifest_digest_hex.clone())
-            .or_insert(index);
-    }
     Ok(PinRegistrySnapshot {
         manifests,
         aliases,
         replication_orders,
-        manifest_by_digest,
-        alias_by_manifest_digest,
-        successor_by_predecessor,
     })
 }
 #[derive(Debug, Clone)]
@@ -1633,7 +1494,9 @@ where
         orders,
     })
 }
+#[cfg(test)]
 impl RegistryManifest {
+    #[cfg(test)]
     fn from_store(
         digest: &ManifestDigest,
         record: &PinManifestRecord,
@@ -1691,7 +1554,6 @@ impl RegistryManifest {
             metadata_timestamp_hint(&record.metadata, METADATA_STATUS_TIMESTAMP_KEY);
         let governance_refs = governance_refs_from_metadata(&record.metadata, &digest_hex);
         Ok(Self {
-            digest: *digest,
             digest_hex,
             chunker,
             chunk_digest_hex: record.chunk_digest_sha3_256.encode_hex::<String>(),
@@ -1710,27 +1572,7 @@ impl RegistryManifest {
             governance_refs,
         })
     }
-    pub(crate) fn successor_of_hex(&self) -> Option<&str> {
-        self.successor_of_hex.as_deref()
-    }
-    pub(crate) fn status_timestamp_unix(&self) -> Option<u64> {
-        self.status_timestamp_unix
-    }
-    pub(crate) fn governance_summary(&self) -> GovernanceSummary {
-        GovernanceSummary::from_references(self.governance_refs.clone())
-    }
-    pub(crate) fn status_label(&self) -> &'static str {
-        self.status.label()
-    }
-    pub(crate) fn digest_hex(&self) -> &str {
-        &self.digest_hex
-    }
-    pub(crate) fn chunker_handle(&self) -> String {
-        format!(
-            "{}.{}@{}",
-            self.chunker.namespace, self.chunker.name, self.chunker.semver
-        )
-    }
+    #[cfg(test)]
     pub(crate) fn to_json(&self) -> Result<Value, json::Error> {
         let mut map = Map::new();
         map.insert("digest_hex".into(), Value::String(self.digest_hex.clone()));
@@ -1807,7 +1649,9 @@ impl GovernanceSummary {
         }
     }
 }
+#[cfg(test)]
 impl RegistryChunkerHandle {
+    #[cfg(test)]
     fn to_json(&self) -> Result<Value, json::Error> {
         let mut map = Map::new();
         map.insert("profile_id".into(), json::to_value(&self.profile_id)?);
@@ -1821,7 +1665,9 @@ impl RegistryChunkerHandle {
         Ok(Value::Object(map))
     }
 }
+#[cfg(test)]
 impl AliasBindingProjection {
+    #[cfg(test)]
     fn to_json(&self) -> Value {
         let mut map = Map::new();
         map.insert("namespace".into(), Value::String(self.namespace.clone()));
@@ -1867,9 +1713,6 @@ impl RegistryAlias {
     }
     pub(crate) fn alias_label(&self) -> &str {
         &self.alias_label
-    }
-    pub(crate) fn manifest_digest_hex(&self) -> &str {
-        &self.manifest_digest_hex
     }
     pub(crate) fn proof_b64(&self) -> &str {
         &self.proof_b64
@@ -2049,7 +1892,6 @@ impl RegistryReplicationOrder {
         Ok(Self {
             order_id_hex,
             manifest_digest_hex: record.manifest_digest.as_bytes().encode_hex::<String>(),
-            manifest_cid: order.manifest_cid.clone(),
             issued_by: record.issued_by.to_string(),
             issued_epoch: record.issued_epoch,
             deadline_epoch: record.deadline_epoch,
@@ -2061,39 +1903,23 @@ impl RegistryReplicationOrder {
             provider_completions,
         })
     }
-    pub(crate) fn status_label(&self) -> &'static str {
-        self.status.label()
-    }
-    pub(crate) fn manifest_digest_hex(&self) -> &str {
-        &self.manifest_digest_hex
-    }
-    pub(crate) fn manifest_cid(&self) -> &[u8] {
-        &self.manifest_cid
-    }
-    pub(crate) fn providers(&self) -> &[String] {
-        &self.providers
-    }
     /// Epoch when the replication order was issued.
+    #[cfg(test)]
     pub(crate) fn issued_epoch(&self) -> u64 {
         self.issued_epoch
     }
     /// Epoch by which the replication order must complete.
+    #[cfg(test)]
     pub(crate) fn deadline_epoch(&self) -> u64 {
         self.deadline_epoch
     }
     /// Completion epoch when the order succeeded, if applicable.
+    #[cfg(test)]
     pub(crate) fn completion_epoch(&self) -> Option<u64> {
         match self.status {
             ReplicationOrderStatusProjection::Completed { epoch } => Some(epoch),
             _ => None,
         }
-    }
-    /// Whether the order expired without completion.
-    pub(crate) fn is_expired(&self) -> bool {
-        matches!(
-            self.status,
-            ReplicationOrderStatusProjection::Expired { .. }
-        )
     }
     pub(crate) fn to_json(&self) -> Result<Value, json::Error> {
         let mut map = Map::new();
@@ -2220,6 +2046,7 @@ impl ReplicationOrderStatusProjection {
         Ok(Value::Object(map))
     }
 }
+#[cfg(test)]
 fn pin_policy_to_json(policy: &PinPolicy) -> Result<Value, json::Error> {
     let mut map = Map::new();
     map.insert("min_replicas".into(), json::to_value(&policy.min_replicas)?);
@@ -2297,6 +2124,7 @@ fn replication_order_to_json(order: &ReplicationOrderV1) -> Result<Value, json::
     map.insert("metadata".into(), json::to_value(&order.metadata)?);
     Ok(Value::Object(map))
 }
+#[cfg(test)]
 fn storage_class_label(class: StorageClass) -> &'static str {
     match class {
         StorageClass::Hot => "hot",
@@ -2324,7 +2152,7 @@ mod tests {
             ]
         );
     }
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
+    use base64::engine::general_purpose::STANDARD as BASE64_STD;
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
         account::AccountId,
@@ -2332,7 +2160,7 @@ mod tests {
             capacity::{CapacityDeclarationRecord, CapacityFeeLedgerEntry},
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, ManifestRootCid,
-                PinManifestRecord, PinPolicy, PinStatus, ProviderIngestCompletionAuthorityV1,
+                PinManifestRecord, PinPolicy, ProviderIngestCompletionAuthorityV1,
                 ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
                 ReplicationOrderCompletionRecord, ReplicationOrderId, ReplicationOrderRecord,
                 ReplicationOrderStatus, StorageClass,
@@ -2340,7 +2168,6 @@ mod tests {
             pricing::ProviderCreditRecord,
         },
     };
-    use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
     use sorafs_manifest::{
         capacity::{
@@ -2350,7 +2177,6 @@ mod tests {
         },
         provider_advert::StakePointer,
     };
-    use std::str::FromStr;
     fn fixture_manifest_root_cid() -> ManifestRootCid {
         let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(include_bytes!(
             "../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"

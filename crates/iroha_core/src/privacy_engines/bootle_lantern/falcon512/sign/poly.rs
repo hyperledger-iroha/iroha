@@ -26,21 +26,10 @@ use super::flr::FLR;
 //     has n/2 elements; the remaining n/2 (the imaginary parts of the
 //     FFT coefficients) are implicitly zero and are omitted.
 // Complex multiplication.
-#[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn flc_mul(x_re: FLR, x_im: FLR, y_re: FLR, y_im: FLR) -> (FLR, FLR) {
     (x_re * y_re - x_im * y_im, x_re * y_im + x_im * y_re)
 }
-/* unused
-// Complex division.
-#[inline(always)]
-fn flc_div(x_re: FLR, x_im: FLR, y_re: FLR, y_im: FLR) -> (FLR, FLR) {
-    let m = FLR::ONE / (y_re.square() + y_im.square());
-    let b_re = m * y_re;
-    let b_im = m * -y_im;
-    flc_mul(x_re, x_im, b_re, b_im)
-}
-*/
 // Convert a polynomial from normal representation to FFT.
 pub(crate) fn FFT(logn: u32, f: &mut [FLR]) {
     // First iteration of the FFT algorithm would compute
@@ -158,16 +147,6 @@ pub(crate) fn poly_neg(logn: u32, a: &mut [FLR]) {
         }
     }
 }
-/* unused
-// Replace polynomial a with its Hermitian adjoint adj(a). The polynomial
-// must be in FFT representation.
-pub(crate) fn poly_adj_fft(logn: u32, a: &mut [FLR]) {
-    let n = 1usize << logn;
-    for i in (n >> 1)..n {
-        a[i] = -a[i];
-    }
-}
-*/
 // Multiply polynomial a with polynomial b. The polynomials must be in
 // FFT representation.
 pub(crate) fn poly_mul_fft(logn: u32, a: &mut [FLR], b: &[FLR]) {
@@ -212,74 +191,6 @@ pub(crate) fn poly_mulconst(logn: u32, a: &mut [FLR], x: FLR) {
         }
     }
 }
-/* unused
-// Divide polynomial a by polynomial b. The polynomials MUST be in FFT
-// representation.
-pub(crate) fn poly_div_fft(logn: u32, a: &mut [FLR], b: &[FLR]) {
-    let hn = 1usize << (logn - 1);
-    for i in 0..hn {
-        let (re, im) = flc_div(a[i], a[i + hn], b[i], b[i + hn]);
-        a[i] = re;
-        a[i + hn] = im;
-    }
-}
-*/
-/* unused
-// Set polynomial d to 1/(f*adj(f) + g*adj(g)). All polynomials are in
-// FFT representation. Since the output d is self-adjoint, only its
-// first n/2 coefficients are set; the other n/2 coefficients are
-// implicitly zero, but need not exist in the destination slice.
-pub(crate) fn poly_invnorm2_fft(logn: u32,
-    d: &mut [FLR], f: &[FLR], g: &[FLR])
-{
-    let hn = 1usize << (logn - 1);
-    for i in 0..hn {
-        let nf = f[i].square() + f[i + hn].square();
-        let ng = g[i].square() + g[i + hn].square();
-        d[i] = FLR::ONE / (nf + ng);
-    }
-}
-*/
-/* unused
-// Given polynomial F, G, f and g, set d to F*adj(f) + G*adj(g). All
-// polynomials are in FFT representation.
-pub(crate) fn poly_add_muladj_fft(logn: u32,
-    d: &mut [FLR], F: &[FLR], G: &[FLR], f: &[FLR], g: &[FLR])
-{
-    let hn = 1usize << (logn - 1);
-    for i in 0..hn {
-        let (a_re, a_im) = flc_mul(F[i], F[i + hn], f[i], f[i + hn]);
-        let (b_re, b_im) = flc_mul(G[i], G[i + hn], g[i], g[i + hn]);
-        d[i] = a_re + b_re;
-        d[i + hn] = a_im + b_im;
-    }
-}
-*/
-/* unused
-// Multiply polynomial a by polynomial b, where b is self-adjoint. Only
-// the first n/2 coefficients of b are accessed. All polynomials are in
-// FFT representation.
-pub(crate) fn poly_mul_selfadj_fft(logn: u32, a: &mut [FLR], b: &[FLR]) {
-    let hn = 1usize << (logn - 1);
-    for i in 0..hn {
-        a[i] *= b[i];
-        a[i + hn] *= b[i];
-    }
-}
-*/
-/* unused
-// Divide polynomial a by polynomial b, where b is self-adjoint. Only
-// the first n/2 coefficients of b are accessed. All polynomials are in
-// FFT representation.
-pub(crate) fn poly_div_selfadj_fft(logn: u32, a: &mut [FLR], b: &[FLR]) {
-    let hn = 1usize << (logn - 1);
-    for i in 0..hn {
-        let x = FLR::ONE / b[i];
-        a[i] *= x;
-        a[i + hn] *= x;
-    }
-}
-*/
 // Perform an LDL decomposition of a self-adjoint matrix G. The matrix
 // is G = [[g00, g01], [adj(g01), g11]]; g00 and g11 are self-adjoint
 // polynomials. The decomposition is G = L*D*adj(L), with:
@@ -306,27 +217,6 @@ pub(crate) fn poly_LDL_fft(logn: u32, g00: &[FLR], g01: &mut [FLR], g11: &mut [F
         }
     }
 }
-/* unused
-// This is identical to poly_LDL_fft() except that the output polynomials
-// l10 and d11 are written into separate output buffers instead of
-// overwriting the provided g01 and g11.
-pub(crate) fn poly_LDLmv_fft(logn: u32,
-    d11: &mut [FLR], l10: &mut [FLR], g00: &[FLR], g01: &[FLR], g11: &[FLR])
-{
-    let hn = 1usize << (logn - 1);
-    for i in 0..hn {
-        let (g00_re, g00_im) = (g00[i], g00[i + hn]);
-        let (g01_re, g01_im) = (g01[i], g01[i + hn]);
-        let (g11_re, g11_im) = (g11[i], g11[i + hn]);
-        let (mu_re, mu_im) = flc_div(g01_re, g01_im, g00_re, g00_im);
-        let (zo_re, zo_im) = flc_mul(mu_re, mu_im, g01_re, -g01_im);
-        d11[i] = g11_re - zo_re;
-        d11[i + hn] = g11_im - zo_im;
-        l10[i] = mu_re;
-        l10[i + hn] = -mu_im;
-    }
-}
-*/
 // Split operation on a polynomial: for input polynomial f, half-size
 // polynomials f0 and f1 (modulo X^(n/2)+1) are such that
 // f = f0(x^2) + x*f1(x^2). All polynomials are in FFT representation.

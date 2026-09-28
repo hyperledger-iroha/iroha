@@ -106,7 +106,6 @@ mod model {
         crate :: DeriveJsonDeserialize,
     )]
     #[norito(decode_from_slice)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::block::model::SignedBlock")]
     pub struct SignedBlock {
@@ -212,6 +211,7 @@ impl SignedBlock {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -243,6 +243,7 @@ impl SignedBlock {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -807,6 +808,7 @@ impl SignedBlock {
             da_commitments_hash,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
+            global_beacon_pulse_hash: None,
             execution_context_hash: None,
             creation_time_ms,
             view_change_index: 0,
@@ -826,6 +828,7 @@ impl SignedBlock {
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
         };
         Ok(SignedBlock {
             signatures: [signature].into_iter().collect(),
@@ -998,7 +1001,6 @@ pub mod error {
             Encode,
             IntoSchema,
         )]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum BlockRejectionReason {
             /// Block was rejected during consensus.
             ConsensusBlockRejection,
@@ -1667,7 +1669,10 @@ mod tests {
         assert_eq!(canonical_block.first(), Some(&1), "signed block V1 prefix");
         // signatures, payload, result, commit_certificate
         let mut block = split_default_norito_fields(&canonical_block[1..], 4);
-        let mut payload = split_default_norito_fields(&block[1], 7);
+        // header, external_entrypoints, da_commitments, da_proof_policies,
+        // da_pin_intents, npos_consensus_effects, global_beacon_pulse,
+        // execution_context
+        let mut payload = split_default_norito_fields(&block[1], 8);
         assert_eq!(&payload[1][..8], &1_u64.to_le_bytes());
         let entrypoints = split_default_norito_fields(&payload[1][8..], 1);
         assert_eq!(entrypoints[0], canonical_entrypoint[1..]);
@@ -1774,6 +1779,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -1790,6 +1796,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
         };
         let mut with_context = payload.clone();
         with_context.execution_context = Some(BlockExecutionContextBundle::new(vec![
@@ -1817,6 +1824,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -1871,6 +1879,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -1950,6 +1959,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -1989,6 +1999,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2041,6 +2052,8 @@ mod tests {
             #[norito(required)]
             npos_consensus_effects: Option<NposConsensusEffects>,
             #[norito(required)]
+            global_beacon_pulse: Option<crate::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+            #[norito(required)]
             execution_context: Option<BlockExecutionContextBundle>,
         }
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 10, 0);
@@ -2053,6 +2066,7 @@ mod tests {
             // `None` has the exact retired option-slot encoding without reintroducing its type.
             retired_roster_slot: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
             execution_context: None,
         };
         let bytes = pre_release.encode();
@@ -2071,6 +2085,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
             execution_context: None,
         };
         let bytes = payload.encode();
@@ -2180,6 +2195,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
         };
         let key_pair = checked_bls_keypair();
         let signature = checked_block_signature(0, &key_pair, &payload.header);
@@ -2213,6 +2229,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: Some(DaPinIntentBundle::default()),
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
         };
         let with_payload = SignedBlock::presigned_with_payload(signature, payload);
         assert!(with_payload.da_commitments().is_none());
@@ -2239,6 +2256,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
         };
         let signature = checked_block_signature(0, &key_pair, &payload.header);
         let block = SignedBlock::presigned_with_payload(signature, payload);
@@ -2268,6 +2286,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2288,6 +2307,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2416,6 +2436,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2472,6 +2493,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2511,6 +2533,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2552,6 +2575,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2587,6 +2611,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2629,6 +2654,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2680,6 +2706,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2787,6 +2814,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2866,6 +2894,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -2898,6 +2927,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -3023,6 +3053,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -3047,6 +3078,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,
@@ -3077,6 +3109,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
             },
             result: None,
             commit_certificate: None,

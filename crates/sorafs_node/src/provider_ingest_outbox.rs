@@ -2437,6 +2437,7 @@ impl ProviderIngestOutbox {
         Ok(ProviderIngestEnqueueResultV1::Inserted { job_id })
     }
     /// Atomically claim the next eligible source job in admission sequence.
+    #[cfg(test)]
     pub fn claim_next_source(
         &self,
         owner: ProviderIngestClaimOwnerV1,
@@ -4433,6 +4434,7 @@ impl ProviderIngestOutbox {
         self.persist_candidate(&mut state, candidate)
     }
     /// Deterministically prune only governed terminal tombstones.
+    #[cfg(test)]
     pub fn prune_terminal(
         &self,
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
@@ -4730,6 +4732,7 @@ impl ProviderIngestOutbox {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum SourceEligibility {
     Eligible,
     ExpiredLease,

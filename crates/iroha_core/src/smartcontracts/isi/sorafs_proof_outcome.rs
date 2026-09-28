@@ -1,5 +1,6 @@
 //! Finalized chain-authoritative SoraFS PDP and PoTR outcome handlers.
 use super::*;
+use crate::smartcontracts::isi::helpers::instruction_error_as_query_failure as query_failure;
 use crate::{
     smartcontracts::ValidSingularQuery,
     state::{StateTransaction, WorldReadOnly},
@@ -1270,12 +1271,6 @@ impl Execute for SubmitSorafsProofOutcome {
             .smart_contract_state
             .insert(key, encode_state(&candidate, "proof-outcome record")?);
         append_event_journal(state_transaction, &candidate)
-    }
-}
-fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    match error {
-        InstructionExecutionError::Query(error) => error,
-        error => QueryExecutionFail::Conversion(error.to_string()),
     }
 }
 fn resolve_finalized_cursor(

@@ -708,6 +708,49 @@ fn set_parameter_explicit_json_roundtrips_through_both_native_encodings() {
 }
 
 #[test]
+fn validation_fee_policy_requires_the_exact_public_instruction_box_frame() {
+    use iroha_data_model::validation_fee::ValidationFeeChargingMode;
+
+    let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
+    let typed = ProposeValidationFeePolicy {
+        policy: ValidationFeePolicyV1 {
+            schema_version: 1,
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])),
+            ),
+            policy_version: 1,
+            previous_policy_hash: None,
+            ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ds_scale: 2,
+            fee: "0.1".parse().unwrap(),
+            treasury_account_id: account(),
+            charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
+            effective_from_height: 121_100,
+            expires_after_height: None,
+            exemption_classes: Vec::new(),
+            treasury_payout_binding: None,
+        },
+        payout_lifecycle_proposal_id: None,
+    };
+    let boxed = InstructionBox::from(typed.clone());
+    let frame = norito::encode_canonical(&boxed).unwrap();
+    let json = decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX).unwrap();
+    assert_eq!(
+        encode_instruction_frame(&json, FIXTURE_NETWORK_PREFIX).unwrap(),
+        frame
+    );
+    let concrete = norito::encode_canonical(&typed).unwrap();
+    assert_ne!(concrete, frame);
+    assert!(decode_instruction_aligned(&concrete).is_err());
+    assert!(decode_instruction_frame(&concrete, FIXTURE_NETWORK_PREFIX).is_err());
+    assert!(decode_instruction_archive(&concrete, FIXTURE_NETWORK_PREFIX).is_err());
+    let mut trailing = frame.clone();
+    trailing.push(0);
+    assert!(decode_instruction_aligned(&trailing).is_err());
+    assert!(decode_instruction_aligned(&frame[..frame.len() - 1]).is_err());
+}
+
+#[test]
 fn structured_asset_holding_limit_roundtrips_the_existing_model_json_contract() {
     let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
     let instruction = InstructionBox::from(

@@ -335,6 +335,7 @@ impl FcmpWalletNoteV1 {
         bytes[cursor..cursor + 32].copy_from_slice(&self.output_y);
         bytes
     }
+    #[cfg(test)]
     fn decode(
         bytes: &[u8],
         expected_output_id: [u8; 32],
@@ -554,6 +555,7 @@ pub fn encrypt_fcmp_wallet_note_v1(
     validate_fcmp_encrypted_output_v1(pool_id, output, &encrypted)?;
     Ok(encrypted)
 }
+#[cfg(test)]
 /// Decrypt and authenticate one fixed-width FCMP++ wallet note.
 pub fn decrypt_fcmp_wallet_note_v1(
     pool_id: PrivacyPoolIdV1,

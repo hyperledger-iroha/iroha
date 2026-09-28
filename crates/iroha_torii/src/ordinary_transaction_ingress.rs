@@ -40,7 +40,8 @@ pub(super) fn authenticate(
     }
     if !matches!(routing_plan, RoutingPlan::Single(_)) {
         return Err(
-            "multi-route transactions require signature-bound QueuePlanSynced admission".to_owned(),
+            "multi-route transaction admission is unsupported by the current consensus driver"
+                .to_owned(),
         );
     }
     let signed = match transaction {
@@ -123,6 +124,8 @@ pub(super) async fn submit(
         permit,
         "ordinary_transaction_admission_worker_failed",
         move || {
+            require_current_transaction_admission(accepted.entrypoint().admission_intent())?;
+            require_current_transaction_route(&routing_plan)?;
             authenticate(&worker_app, accepted.entrypoint(), &routing_plan).map_err(|message| {
                 Error::Query(iroha_data_model::ValidationFail::NotPermitted(message))
             })?;

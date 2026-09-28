@@ -15,7 +15,7 @@ use std::{
 };
 pub const HYOSHI_BEATS: f32 = 16.0;
 pub const OBACHI_OFFSET_BEATS: f32 = HYOSHI_BEATS * 0.5;
-#[allow(dead_code)]
+#[cfg(test)]
 pub const PRELUDE_BEATS: f32 = 0.0;
 const TOTAL_SECTIONS: usize = 3;
 const BEATS_PER_SECTION: f32 = HYOSHI_BEATS;
@@ -132,7 +132,6 @@ const TAIKO_NOTE: u8 = 48;
 const SHOKO_NOTE: u8 = 81;
 const KAKKO_HIGH_NOTE: u8 = 76;
 const KAKKO_LOW_NOTE: u8 = 77;
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SequenceLayer {
     Hichiriki,
@@ -713,7 +712,6 @@ impl Ornaments {
         self.bits & mark.bit() != 0
     }
 }
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum OrnamentMark {
     Seme,
@@ -723,7 +721,6 @@ pub enum OrnamentMark {
     Oshi,
     Mawashi,
     Suriage,
-    Orite,
 }
 impl OrnamentMark {
     const fn bit(self) -> u8 {
@@ -735,7 +732,6 @@ impl OrnamentMark {
             Self::Oshi => 1 << 4,
             Self::Mawashi => 1 << 5,
             Self::Suriage => 1 << 6,
-            Self::Orite => 1 << 7,
         }
     }
 }

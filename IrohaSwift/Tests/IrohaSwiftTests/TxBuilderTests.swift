@@ -486,12 +486,16 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(transactionSignatureReader.remaining(), 0)
         var signatureReader = CanonicalNoritoReader(data: signaturePayload)
         XCTAssertEqual(try signatureReader.readUInt64LE(), 64)
+        var signature = Data()
         for _ in 0..<64 {
-            XCTAssertEqual(try signatureReader.readCompactField().count, 1)
+            let byte = try signatureReader.readCompactField()
+            XCTAssertEqual(byte.count, 1)
+            signature.append(byte)
         }
         XCTAssertEqual(signatureReader.remaining(), 0)
 
         let payload = try signedReader.readCompactField()
+        XCTAssertTrue(keypair.privateKey.publicKey.isValidSignature(signature, for: IrohaHash.hash(payload)))
         XCTAssertEqual(try signedReader.readCompactField(), Data([0]))
         XCTAssertEqual(signedReader.remaining(), 0)
         var payloadReader = CanonicalNoritoReader(data: payload)
@@ -536,7 +540,7 @@ final class TxBuilderTests: XCTestCase {
         )
         XCTAssertEqual(
             try admissionIntentReader.readUInt32LE(),
-            TransactionAdmissionIntentV1.queuePlanSynced.rawValue
+            TransactionAdmissionIntentV1.ordinary.rawValue
         )
         XCTAssertEqual(admissionIntentReader.remaining(), 0)
         var metadataReader = CanonicalNoritoReader(

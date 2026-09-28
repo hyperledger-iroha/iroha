@@ -7,16 +7,6 @@ use crate::vega::zk_ams::mkhe::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the test store keeps both exact persisted widths inline for Copy CAS snapshots"
-)]
-#[derive(Clone, Copy)]
-enum Stored {
-    Legacy([u8; LEGACY_RECORD_BYTES_V1]),
-    Lifecycle(RecordV2),
-}
-
 #[derive(Clone, Copy, Default)]
 enum MutationMode {
     #[default]
@@ -27,14 +17,13 @@ enum MutationMode {
 }
 
 struct TestStore {
-    value: Option<Stored>,
+    value: Option<RecordV2>,
     put_mode: MutationMode,
     cas_mode: MutationMode,
-    put_competitor: Option<Stored>,
-    cas_competitor: Option<Stored>,
+    put_competitor: Option<RecordV2>,
+    cas_competitor: Option<RecordV2>,
     load_error_at: Option<usize>,
     dirty_absent: bool,
-    dirty_legacy_tail: bool,
     loads: usize,
     puts: usize,
     compares: usize,
@@ -50,7 +39,6 @@ impl Default for TestStore {
             cas_competitor: None,
             load_error_at: None,
             dirty_absent: false,
-            dirty_legacy_tail: false,
             loads: 0,
             puts: 0,
             compares: 0,
@@ -76,14 +64,7 @@ impl ZkAmsMkheDirectRkgOneLifecycleStoreV2 for TestStore {
                 }
                 Ok(ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Absent)
             }
-            Some(Stored::Legacy(value)) => {
-                record[..LEGACY_RECORD_BYTES_V1].copy_from_slice(&value);
-                if self.dirty_legacy_tail {
-                    record[LEGACY_RECORD_BYTES_V1] = 1;
-                }
-                Ok(ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Legacy334)
-            }
-            Some(Stored::Lifecycle(value)) => {
+            Some(value) => {
                 *record = value;
                 Ok(ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Lifecycle640)
             }
@@ -106,7 +87,7 @@ impl ZkAmsMkheDirectRkgOneLifecycleStoreV2 for TestStore {
         if self.value.is_some() {
             return Ok(ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2::AlreadyPresent);
         }
-        self.value = Some(Stored::Lifecycle(*record));
+        self.value = Some(*record);
         match self.put_mode {
             MutationMode::Normal => {
                 Ok(ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2::InsertedByThisCall)
@@ -131,11 +112,11 @@ impl ZkAmsMkheDirectRkgOneLifecycleStoreV2 for TestStore {
             self.value = Some(competitor);
         }
         let outcome = match self.value {
-            Some(Stored::Lifecycle(value)) if value == *expected => {
-                self.value = Some(Stored::Lifecycle(*replacement));
+            Some(value) if value == *expected => {
+                self.value = Some(*replacement);
                 ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExchangedByThisCall
             }
-            Some(Stored::Lifecycle(value)) if value == *replacement => {
+            Some(value) if value == *replacement => {
                 ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExactReplay
             }
             _ => ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::Conflict,
@@ -217,23 +198,11 @@ fn fresh_permit_requires_absent_inserted_by_this_call_and_exact_reload() {
 }
 
 #[test]
-fn legacy_and_racing_fresh_are_quarantined_without_a_permit() {
+fn racing_fresh_is_quarantined_without_a_permit() {
     let scope = fixture_scope();
     let (fresh, _, _) = fixture_records();
-    let mut legacy = TestStore {
-        value: Some(Stored::Legacy([0x42; LEGACY_RECORD_BYTES_V1])),
-        ..TestStore::default()
-    };
-    assert!(matches!(
-        reserve_scope_v2(scope, &mut legacy),
-        Ok(DirectRkgOneFreshReservationOutcomeV2::Quarantined(
-            DirectRkgOneLifecycleObservationV2::LegacyV1Quarantined
-        ))
-    ));
-    assert_eq!((legacy.loads, legacy.puts), (1, 0));
-
     let mut race = TestStore {
-        put_competitor: Some(Stored::Lifecycle(fresh)),
+        put_competitor: Some(fresh),
         ..TestStore::default()
     };
     assert!(matches!(
@@ -303,14 +272,14 @@ fn every_cas_is_reloaded_once_and_only_this_calls_exchange_succeeds() {
     let key = stable_storage_key_v2(scope).expect("stable key");
     let (fresh, published, proof) = fixture_records();
     let mut store = TestStore {
-        value: Some(Stored::Lifecycle(fresh)),
+        value: Some(fresh),
         ..TestStore::default()
     };
     exchange_exact_v2(scope, key, &fresh, &published, &mut store).expect("own exchange");
     assert_eq!((store.loads, store.compares), (1, 1));
     assert!(exchange_exact_v2(scope, key, &fresh, &published, &mut store).is_err());
     assert_eq!((store.loads, store.compares), (2, 2));
-    store.value = Some(Stored::Lifecycle(proof));
+    store.value = Some(proof);
     assert!(exchange_exact_v2(scope, key, &fresh, &published, &mut store).is_err());
     assert_eq!((store.loads, store.compares), (3, 3));
 }
@@ -321,7 +290,7 @@ fn cas_error_or_panic_after_write_returns_no_successor_and_leaves_observation_on
     let key = stable_storage_key_v2(scope).expect("stable key");
     let (fresh, published, _) = fixture_records();
     let mut lost_ack = TestStore {
-        value: Some(Stored::Lifecycle(fresh)),
+        value: Some(fresh),
         cas_mode: MutationMode::ErrorAfter,
         ..TestStore::default()
     };
@@ -332,14 +301,14 @@ fn cas_error_or_panic_after_write_returns_no_successor_and_leaves_observation_on
         Ok(LoadedV2::Lifecycle(DecodedStateV2::PublishedUnbound(_)))
     ));
     let mut error_before = TestStore {
-        value: Some(Stored::Lifecycle(fresh)),
+        value: Some(fresh),
         cas_mode: MutationMode::ErrorBefore,
         ..TestStore::default()
     };
     assert!(exchange_exact_v2(scope, key, &fresh, &published, &mut error_before).is_err());
     assert_eq!((error_before.loads, error_before.compares), (1, 1));
     let mut reload_error = TestStore {
-        value: Some(Stored::Lifecycle(fresh)),
+        value: Some(fresh),
         load_error_at: Some(1),
         ..TestStore::default()
     };
@@ -347,7 +316,7 @@ fn cas_error_or_panic_after_write_returns_no_successor_and_leaves_observation_on
     assert_eq!((reload_error.loads, reload_error.compares), (1, 1));
 
     let mut panic_after = TestStore {
-        value: Some(Stored::Lifecycle(fresh)),
+        value: Some(fresh),
         cas_mode: MutationMode::PanicAfter,
         ..TestStore::default()
     };
@@ -373,14 +342,6 @@ fn actual_width_and_clean_padding_are_mandatory() {
     };
     assert!(reserve_scope_v2(scope, &mut dirty_absent).is_err());
     assert_eq!(dirty_absent.puts, 0);
-
-    let mut dirty_legacy = TestStore {
-        value: Some(Stored::Legacy([0x42; LEGACY_RECORD_BYTES_V1])),
-        dirty_legacy_tail: true,
-        ..TestStore::default()
-    };
-    assert!(reserve_scope_v2(scope, &mut dirty_legacy).is_err());
-    assert_eq!(dirty_legacy.puts, 0);
 }
 
 #[test]

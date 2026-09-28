@@ -15,7 +15,10 @@ use curve25519_dalek::{
     RistrettoPoint, constants::RISTRETTO_BASEPOINT_POINT, ristretto::CompressedRistretto,
     scalar::Scalar, traits::Identity,
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use iroha_data_model::transaction::{Executable, signed::TransactionSignatureError};
 use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
@@ -31,10 +34,7 @@ use iroha_data_model::{
         PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
         ZK_AMS_PHC_VERSION_V1,
     },
-    transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
-        signed::TransactionSignatureError,
-    },
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_zkp_halo2::vega::{
@@ -68,7 +68,7 @@ use p256::{
         PrimeField as _, bigint::U256, group::Group as _, ops::Reduce, sec1::ToEncodedPoint as _,
     },
 };
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand_core_06::{CryptoRng, RngCore};
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256, Sha3_512};
 use thiserror::Error;
@@ -88,6 +88,7 @@ pub const ZK_AMS_LSAG_PROOF_VERSION_V1: u8 = 1;
 pub const ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1: u8 = 1;
 /// Canonical holder-possession proof wire version.
 pub const ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1: u8 = 1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Smallest closed Phase-V ring.
 pub const ZK_AMS_MIN_RING_SIZE_V1: usize = 16;
 /// Largest closed Phase-V ring.
@@ -150,6 +151,7 @@ pub enum ZkAmsPrivacyActionEffectV1 {
     /// Atomically create one account and consume one anonymous key image.
     ProvisionAccount,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Pure ZK-AMS proving output ready for transaction signing.
 ///
 /// The payload and canonical genesis binding are private. This type deliberately implements neither
@@ -166,6 +168,7 @@ pub struct ZkAmsPreparedPrivacyActionV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkAmsPreparedPrivacyActionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -183,6 +186,7 @@ impl core::fmt::Debug for ZkAmsPreparedPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkAmsPreparedPrivacyActionV1 {
     /// Borrow the final revalidated payload for the isolated native release runner.
     #[cfg(feature = "privacy-release-evidence")]
@@ -363,6 +367,7 @@ pub enum ZkAmsPrivacyActionIntentErrorV1 {
     #[error("the locally produced ZK-AMS payload failed intent validation")]
     FinalIntentBinding,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Closed failure for the canonical prove-then-sign ZK-AMS transaction path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ZkAmsPrivacyActionBuildErrorV1 {
@@ -727,6 +732,7 @@ pub fn prepare_zk_ams_provision_account_transaction_intent_v1(
         PrivacyZkAmsActionV1::ProvisionAccount(action),
     )
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Validate a prepared ZK-AMS statement against its exact single-action
 /// transaction context and return the canonical transaction-intent digest.
 ///
@@ -777,6 +783,7 @@ fn validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(
     }
     Ok(validated)
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct ZkAmsPrivacyActionIntegrityV1 {
     canonical_genesis_hash: [u8; 32],
@@ -788,7 +795,9 @@ struct ZkAmsPrivacyActionIntegrityV1 {
     proof_bytes: u32,
     encoded_proof_envelope_bytes: u32,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkAmsPreparedPrivacyActionV1 {
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     const fn integrity(&self) -> ZkAmsPrivacyActionIntegrityV1 {
         ZkAmsPrivacyActionIntegrityV1 {
             canonical_genesis_hash: self.canonical_genesis_hash,
@@ -802,6 +811,7 @@ impl ZkAmsPreparedPrivacyActionV1 {
         }
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zk_ams_action_binding_v1<'a>(
     statement: &'a IrohaZkAmsStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -820,6 +830,7 @@ fn zk_ams_action_binding_v1<'a>(
         generator_digest: zk_ams_generator_digest_v1(),
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_zk_ams_signing_authority_v1(
     authority: &AccountId,
     private_key: &PrivateKey,
@@ -833,6 +844,7 @@ fn validate_zk_ams_signing_authority_v1(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_zk_ams_payload_integrity_v1(
     payload: &TransactionPayload,
     expected: ZkAmsPrivacyActionIntegrityV1,
@@ -925,6 +937,7 @@ fn validate_zk_ams_payload_integrity_v1(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn finalize_zk_ams_prepared_action_v1(
     context: &ZkAmsPrivacyActionTransactionContextV1,
     statement: IrohaZkAmsStatementV1,
@@ -1000,6 +1013,7 @@ fn finalize_zk_ams_prepared_action_v1(
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::PreparedPayloadDrift)?;
     Ok(prepared)
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Prepare and prove one canonical ordered ZK-AMS batch admission.
 ///
 /// The function owns the complete transaction context and public action while
@@ -1053,30 +1067,7 @@ where
         profile,
     )
 }
-/// Prepare and prove one canonical ordered ZK-AMS batch admission with OS randomness.
-///
-/// # Errors
-///
-/// Returns the same closed failures as
-/// [`prepare_zk_ams_batch_admission_privacy_action_with_rng_v1`].
-pub fn prepare_zk_ams_batch_admission_privacy_action_v1(
-    context: ZkAmsPrivacyActionTransactionContextV1,
-    governance: ZkAmsPrivacyActionGovernanceV1,
-    action: PrivacyZkAmsBatchAdmissionV1,
-    witnesses: &[ZkAmsBatchCredentialWitnessV1<'_>],
-    config: ZkAmsMaskedProverConfigV1,
-    canonical_genesis_hash: [u8; 32],
-) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1> {
-    prepare_zk_ams_batch_admission_privacy_action_with_rng_v1(
-        context,
-        governance,
-        action,
-        witnesses,
-        config,
-        canonical_genesis_hash,
-        &mut OsRng,
-    )
-}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Prepare and prove one canonical ZK-AMS anonymous account provisioning action.
 ///
 /// # Errors
@@ -1115,6 +1106,7 @@ where
         rng,
     )
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn prepare_zk_ams_provision_privacy_action_with_rng_and_profile_v1<R>(
     context: ZkAmsPrivacyActionTransactionContextV1,
     governance: ZkAmsPrivacyActionGovernanceV1,
@@ -1154,29 +1146,7 @@ where
         profile,
     )
 }
-/// Prepare and prove one canonical ZK-AMS account provisioning action with OS randomness.
-///
-/// # Errors
-///
-/// Returns the same closed failures as [`prepare_zk_ams_provision_privacy_action_with_rng_v1`].
-pub fn prepare_zk_ams_provision_privacy_action_v1(
-    context: ZkAmsPrivacyActionTransactionContextV1,
-    governance: ZkAmsPrivacyActionGovernanceV1,
-    action: PrivacyZkAmsProvisionAccountV1,
-    signer_index: usize,
-    secret: &ZkAmsSeedSecretV1,
-    canonical_genesis_hash: [u8; 32],
-) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1> {
-    prepare_zk_ams_provision_privacy_action_with_rng_v1(
-        context,
-        governance,
-        action,
-        signer_index,
-        secret,
-        canonical_genesis_hash,
-        &mut OsRng,
-    )
-}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Consume and sign a payload returned by the canonical ZK-AMS prover.
 ///
 /// The complete proof, statement, envelope hash, genesis binding, and proof-independent intent are
@@ -1228,64 +1198,7 @@ pub fn sign_prepared_zk_ams_privacy_action_v1(
         encoded_proof_envelope_bytes: integrity.encoded_proof_envelope_bytes,
     })
 }
-/// Build, prove, bind, and sign one canonical ZK-AMS batch admission.
-///
-/// Authority validation precedes all proof work.
-///
-/// # Errors
-///
-/// Returns a closed validation, proving, binding, or signing failure.
-pub fn build_signed_zk_ams_batch_admission_privacy_action_with_rng_v1<R>(
-    context: ZkAmsPrivacyActionTransactionContextV1,
-    governance: ZkAmsPrivacyActionGovernanceV1,
-    action: PrivacyZkAmsBatchAdmissionV1,
-    witnesses: &[ZkAmsBatchCredentialWitnessV1<'_>],
-    config: ZkAmsMaskedProverConfigV1,
-    canonical_genesis_hash: [u8; 32],
-    private_key: &PrivateKey,
-    rng: &mut R,
-) -> Result<SignedZkAmsPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
-where
-    R: CryptoRng + RngCore,
-{
-    validate_zk_ams_signing_authority_v1(&context.authority, private_key)?;
-    let prepared = prepare_zk_ams_batch_admission_privacy_action_with_rng_v1(
-        context,
-        governance,
-        action,
-        witnesses,
-        config,
-        canonical_genesis_hash,
-        rng,
-    )?;
-    sign_prepared_zk_ams_privacy_action_v1(prepared, private_key)
-}
-/// Build, prove, bind, and sign one canonical ZK-AMS batch admission with OS randomness.
-///
-/// # Errors
-///
-/// Returns the same closed failures as
-/// [`build_signed_zk_ams_batch_admission_privacy_action_with_rng_v1`].
-pub fn build_signed_zk_ams_batch_admission_privacy_action_v1(
-    context: ZkAmsPrivacyActionTransactionContextV1,
-    governance: ZkAmsPrivacyActionGovernanceV1,
-    action: PrivacyZkAmsBatchAdmissionV1,
-    witnesses: &[ZkAmsBatchCredentialWitnessV1<'_>],
-    config: ZkAmsMaskedProverConfigV1,
-    canonical_genesis_hash: [u8; 32],
-    private_key: &PrivateKey,
-) -> Result<SignedZkAmsPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1> {
-    build_signed_zk_ams_batch_admission_privacy_action_with_rng_v1(
-        context,
-        governance,
-        action,
-        witnesses,
-        config,
-        canonical_genesis_hash,
-        private_key,
-        &mut OsRng,
-    )
-}
+#[cfg(test)]
 /// Build, prove, bind, and sign one canonical ZK-AMS provisioning action.
 ///
 /// Authority validation precedes all proof work.
@@ -1317,32 +1230,6 @@ where
         rng,
     )?;
     sign_prepared_zk_ams_privacy_action_v1(prepared, private_key)
-}
-/// Build, prove, bind, and sign one canonical ZK-AMS provisioning action with OS randomness.
-///
-/// # Errors
-///
-/// Returns the same closed failures as
-/// [`build_signed_zk_ams_provision_privacy_action_with_rng_v1`].
-pub fn build_signed_zk_ams_provision_privacy_action_v1(
-    context: ZkAmsPrivacyActionTransactionContextV1,
-    governance: ZkAmsPrivacyActionGovernanceV1,
-    action: PrivacyZkAmsProvisionAccountV1,
-    signer_index: usize,
-    secret: &ZkAmsSeedSecretV1,
-    canonical_genesis_hash: [u8; 32],
-    private_key: &PrivateKey,
-) -> Result<SignedZkAmsPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1> {
-    build_signed_zk_ams_provision_privacy_action_with_rng_v1(
-        context,
-        governance,
-        action,
-        signer_index,
-        secret,
-        canonical_genesis_hash,
-        private_key,
-        &mut OsRng,
-    )
 }
 /// Zeroizing canonical little-endian Ristretto scalar used as a seed secret.
 pub struct ZkAmsSeedSecretV1 {
@@ -2026,6 +1913,7 @@ pub fn sign_zk_ams_provision_statement_v1<R: CryptoRng + RngCore>(
     verify_zk_ams_provision_statement_v1(statement, binding, &encoded)?;
     Ok(encoded)
 }
+#[cfg(test)]
 /// Prove possession of the seed scalar for one ordered admission anchor.
 ///
 /// This proof is intentionally a separate composed Schnorr component, not an

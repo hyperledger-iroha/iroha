@@ -249,31 +249,6 @@ pub fn genesis_with_keypair(
         genesis_key_pair,
     )
 }
-/// Build the default genesis using a custom signing key pair and post-topology instructions.
-#[allow(dead_code)]
-pub fn genesis_with_keypair_and_post_topology(
-    extra_transactions: Vec<Vec<InstructionBox>>,
-    post_topology_transactions: Vec<Vec<InstructionBox>>,
-    topology: UniqueVec<PeerId>,
-    topology_entries: Vec<GenesisTopologyEntry>,
-    genesis_key_pair: KeyPair,
-) -> GenesisBlock {
-    genesis_with_keypair_and_post_topology_with_policies(
-        extra_transactions,
-        post_topology_transactions,
-        topology,
-        topology_entries,
-        genesis_key_pair,
-        chain_id(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-    )
-}
 
 /// Build and sign the default genesis with post-topology instructions without
 /// pre-executing its transactions.
@@ -610,7 +585,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     block.0 = signed_block;
     (block, staged_hash, raw_genesis)
 }
-#[allow(dead_code)]
+#[cfg(test)]
 fn build_minimal_genesis_unexecuted(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
@@ -1229,8 +1204,16 @@ pub(crate) fn staged_genesis_policy_hashes(
     )
     .map(|(_, hashes)| hashes)
 }
+/// Stack of the genesis pre-execution thread. Block validation acquires the whole World
+/// overlay in a few very large frames; unoptimized builds need far more than a default 2 MiB
+/// test or runtime thread, as the node's own execution threads do.
+const GENESIS_PREEXECUTION_STACK_BYTES: usize = 64 * 1024 * 1024;
+
 /// Pre-execute with the supplied runtime address profile. Configuration-free test helpers
 /// use the caller's native address scope for both instruction construction and execution.
+///
+/// Execution runs on a dedicated thread with [`GENESIS_PREEXECUTION_STACK_BYTES`] of stack,
+/// so callers on ordinary test threads do not overflow; a panic there resumes on the caller.
 pub(crate) fn preexecute_genesis_with_runtime_config(
     block: &GenesisBlock,
     genesis_account: &AccountId,
@@ -1247,18 +1230,61 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     ),
     Report,
 > {
-    // Parsing ActualRoot scopes only that parse. Cached blocks and independent staging
-    // can reach this execution boundary later, from a different thread and profile.
-    let _profile = runtime_config.map(|config| {
-        iroha_data_model::account::address::ChainDiscriminantGuard::enter(
-            *config.common.chain_discriminant.value(),
-        )
-    });
     if topology.is_empty() {
         return Err(eyre!("genesis topology is empty"));
     }
     #[cfg(test)]
     GENESIS_PREEXECUTION_COUNT.with(|count| count.set(count.get() + 1));
+    // Parsing ActualRoot scopes only that parse. Cached blocks and independent staging
+    // can reach this execution boundary later, from a different thread and profile; without
+    // a runtime profile the caller's address scope applies.
+    let discriminant = runtime_config.map_or_else(
+        iroha_data_model::account::address::chain_discriminant,
+        |config| *config.common.chain_discriminant.value(),
+    );
+    std::thread::scope(|scope| {
+        let execution = std::thread::Builder::new()
+            .name("genesis-preexecution".to_owned())
+            .stack_size(GENESIS_PREEXECUTION_STACK_BYTES)
+            .spawn_scoped(scope, || {
+                let _profile =
+                    iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
+                preexecute_genesis_on_current_thread(
+                    block,
+                    genesis_account,
+                    topology,
+                    genesis_key_pair,
+                    pipeline_config,
+                    nexus_config,
+                    zk_config,
+                    runtime_config,
+                )
+            })
+            .map_err(|error| {
+                Report::new(error).wrap_err("failed to spawn the genesis pre-execution thread")
+            })?;
+        execution
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn preexecute_genesis_on_current_thread(
+    block: &GenesisBlock,
+    genesis_account: &AccountId,
+    topology: &[PeerId],
+    genesis_key_pair: &KeyPair,
+    pipeline_config: Option<&ActualPipeline>,
+    nexus_config: Option<&ActualNexus>,
+    zk_config: Option<&ActualZk>,
+    runtime_config: Option<&ActualRoot>,
+) -> Result<
+    (
+        iroha_data_model::block::SignedBlock,
+        StagedGenesisPolicyHashes,
+    ),
+    Report,
+> {
     let effective_nexus = runtime_config.map(|config| &config.nexus).or(nexus_config);
     let nexus = resolve_preexec_nexus_config(effective_nexus, block.0.da_proof_policies())?;
     let query_handle = LiveQueryStore::start_test();

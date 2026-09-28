@@ -143,6 +143,60 @@ impl JoinedTraceCommitmentPlanV1 {
         commitment.finish()
     }
 
+    /// Replay immutable native sources with their original explicit masks.
+    /// The callback transfers one clearing coefficient allocation at a time;
+    /// at most eight transforms coexist and the leaf framing is unchanged.
+    pub(crate) fn commit_replayed_v1(
+        &self,
+        domains: AggregateStarkDomainsV1,
+        opening_indices: &[usize],
+        mut coefficients: impl FnMut(usize, usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
+    ) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
+        domains.validate()?;
+        let rows = checked_domain_size_v1(self.commitment_lde_log2)?;
+        if !opening_indices.is_empty() {
+            validate_canonical_index_set_v1(rows, opening_indices)?;
+        }
+        let (leaf, node) = self.roles_v1(domains);
+        let mut commitment = StreamingRowCommitmentV1::new(
+            domains.digest_context,
+            leaf,
+            node,
+            JOINED_TRACE_GROUP_MARKER_V1,
+            rows,
+            self.width,
+            opening_indices,
+        )?;
+        for (group, (native, range)) in self.groups.iter().enumerate() {
+            for start in (0..range.len()).step_by(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+                let end = (start + MASKED_TRACE_LDE_COLUMN_BATCH_V1).min(range.len());
+                let mut batch = Vec::new();
+                batch
+                    .try_reserve_exact(end - start)
+                    .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+                for column in start..end {
+                    batch.push(ZeroizingFieldColumnV1(coefficients(group, column)?));
+                }
+                let evaluations = batch
+                    .par_iter()
+                    .map(|column| {
+                        masked_trace_coefficients_on_coset_v1(
+                            column,
+                            *native,
+                            self.commitment_lde_log2,
+                        )
+                        .map(ZeroizingFieldColumnV1)
+                        .map_err(map_transparent_error_v1)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                for evaluation in &evaluations {
+                    commitment.absorb_column(evaluation)?;
+                }
+            }
+        }
+        commitment.finish()
+    }
+
     /// Hash an opened common-domain row without copying its logical slices.
     /// No current/next row or relation is omitted by this primitive.
     #[cfg(test)]

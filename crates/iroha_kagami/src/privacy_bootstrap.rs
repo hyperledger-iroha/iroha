@@ -595,7 +595,7 @@ fn read_bounded(path: &Path, max_bytes: u64, description: &str) -> color_eyre::R
     let opened = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect opened {description}"))?;
-    if !same_input_metadata_v1(&before, &opened) {
+    if !crate::secure_fs::same_single_link_input_snapshot(&before, &opened) {
         bail!("{description} changed before its immutable snapshot was opened");
     }
     let mut bytes = Vec::new();
@@ -609,35 +609,10 @@ fn read_bounded(path: &Path, max_bytes: u64, description: &str) -> color_eyre::R
     let after = file
         .metadata()
         .wrap_err_with(|| format!("failed to re-inspect opened {description}"))?;
-    if !same_input_metadata_v1(&opened, &after) {
+    if !crate::secure_fs::same_single_link_input_snapshot(&opened, &after) {
         bail!("{description} changed while its immutable snapshot was read");
     }
     Ok(bytes)
-}
-#[cfg(unix)]
-fn same_input_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.is_file()
-        && right.is_file()
-        && left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == 1
-        && right.nlink() == 1
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-#[cfg(not(unix))]
-fn same_input_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_file()
-        && right.is_file()
-        && left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
 }
 fn write_new_artifact_pair(
     first_path: &Path,
@@ -719,7 +694,7 @@ fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
     let Ok(opened) = file.metadata() else {
         return;
     };
-    if same_input_metadata_v1(&named, &opened) {
+    if crate::secure_fs::same_single_link_input_snapshot(&named, &opened) {
         let _ = fs::remove_file(path);
     }
 }

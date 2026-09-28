@@ -527,6 +527,7 @@ impl Drop for RotationKeys {
 /// # Errors
 /// Returns [`DirectoryBuildError`] when configuration parsing, certificate verification,
 /// or metadata reconciliation fails.
+#[cfg(test)]
 pub fn build_snapshot_from_config(
     path: &Path,
 ) -> Result<DirectorySnapshotBundle, DirectoryBuildError> {

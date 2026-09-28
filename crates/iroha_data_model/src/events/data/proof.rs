@@ -18,7 +18,6 @@ mod model {
         Encode,
         iroha_schema::IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[event_set(schema_name = "iroha_data_model::events::data::proof::model::ProofEventSet")]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::data::proof::model::ProofEvent")]
@@ -119,10 +118,18 @@ mod model {
     }
     /// Source of a proof pruning pass.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::data::proof::model::ProofPruneOrigin")]
     pub enum ProofPruneOrigin {
         /// Retention enforcement triggered while inserting a new proof record.

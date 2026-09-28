@@ -140,3 +140,15 @@ goals have implementation and regression evidence.
   FastPQ integration changes. Those changes are owned by the active merge task.
   SR3/SR4/SR5/SR8 remain open pending native tests, binary builds and actual
   four-validator publication, restart, repair and Parliament revocation.
+- 2026-09-27: review of PRs #5629/#5630 confirmed that public revocation
+  structural validation and the complete consuming retrieval runtime are already
+  tracked on `optimizations`; the draft rollback is unnecessary. Scheduler
+  policy eligibility now precedes temporary quota and capacity checks, so a
+  permitted provider can recover while a genuinely all-denied set fails
+  immediately. Regression coverage combines policy filters with request quotas,
+  typed throttling, stream capacity and burst limits.
+  Fresh focused library tests pass: `sorafs_manifest` with
+  `provider_admission::tests::` selects 37 tests; `sorafs_car` with
+  `multi_fetch::tests::` selects 32 tests. Both run through `cargo_fast.sh` in
+  the existing `kagemusha-v1` target slot. Scoped formatting and diff whitespace
+  checks pass; these shared-checkout results do not qualify the full workspace.

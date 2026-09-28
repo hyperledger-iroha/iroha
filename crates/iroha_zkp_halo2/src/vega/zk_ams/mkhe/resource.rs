@@ -77,6 +77,7 @@ pub struct ZkAmsMkheResourceCertificateV1 {
 }
 impl ZkAmsMkheResourceCertificateV1 {
     /// Return true only when both static accounting and measured release evidence are complete.
+    #[cfg(test)]
     #[must_use]
     pub const fn is_release_ready(self) -> bool {
         self.ciphertext_ceiling_met

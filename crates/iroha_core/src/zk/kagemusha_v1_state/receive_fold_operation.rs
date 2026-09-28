@@ -1,29 +1,37 @@
 //! State-machine preparation and atomic installation for one KAGEMUSHA `ReceiveFold`.
 
+#[cfg(test)]
 use iroha_data_model::kagemusha::{
     KagemushaCreditOpeningV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
     KagemushaPastaStateCommitmentV1, kagemusha_device_key_reference_v1,
     kagemusha_prepared_transfer_digest_v1,
 };
+#[cfg(test)]
 use norito::codec::Encode;
 
+#[cfg(test)]
+use super::receive_fold::ReceiveFoldV1;
+#[cfg(test)]
 use super::{
-    ConsumedCreditInsertWitnessV1, CreditIdV1, DigestV1, KagemushaGuardBundleVerifierV1,
-    KagemushaHistoryAbortOutcomeV1, KagemushaHistoryCommitOutcomeV1,
-    KagemushaHistoryDualInsertPreparationV1, KagemushaHistoryPrepareOutcomeV1,
-    KagemushaHistoryProofRootBridgeRequestV1, KagemushaHistoryRecoveryOutcomeV1,
-    KagemushaHistoryRootSelectionCertificateV1, KagemushaHistoryRootSelectionSubjectV1,
-    KagemushaHistoryTransitionAuthorizationV1, KagemushaHistoryTreeV1,
-    KagemushaPreparedHistoryCasV1, KagemushaRecursiveVerifierV1, KagemushaStateErrorV1,
-    KagemushaStateMachineV1, KagemushaStateV1, KagemushaTransitionKindV1,
-    TransitionAuthorizationV1, TransitionAuxiliaryBindingsV1, TransitionPreviewV1,
-    canonical_sha256_digest, kagemusha_incoming_proof_binding_digest_v1,
+    ConsumedCreditInsertWitnessV1, CreditIdV1, DigestV1, KagemushaHistoryCommitOutcomeV1,
+    KagemushaHistoryPrepareOutcomeV1, KagemushaHistoryProofRootBridgeRequestV1,
+    KagemushaHistoryRecoveryOutcomeV1, KagemushaHistoryRootSelectionCertificateV1,
+    KagemushaHistoryRootSelectionSubjectV1, KagemushaHistoryTransitionAuthorizationV1,
+    KagemushaHistoryTreeV1, KagemushaPreparedHistoryCasV1, KagemushaStateErrorV1, KagemushaStateV1,
+    KagemushaTransitionKindV1, TransitionAuthorizationV1, TransitionAuxiliaryBindingsV1,
+    TransitionPreviewV1, canonical_sha256_digest, kagemusha_incoming_proof_binding_digest_v1,
     local_transition_transport_digest, map_authenticated_history_error,
-    receive_fold::{ReceiveFoldCreditV1, ReceiveFoldErrorV1, ReceiveFoldV1},
-    receiver_sequence_entry_bytes, require_history_proof_root_bridge_v1,
+    receive_fold::{ReceiveFoldCreditV1, ReceiveFoldErrorV1},
+    receiver_sequence_entry_bytes,
     sparse_merkle::{ExactConsumedCreditIndex, PreparedConsumedCreditInsertV1},
 };
+use super::{
+    KagemushaGuardBundleVerifierV1, KagemushaRecursiveVerifierV1, KagemushaStateMachineV1,
+};
+#[cfg(test)]
+use super::{KagemushaHistoryDualInsertPreparationV1, require_history_proof_root_bridge_v1};
 
+#[cfg(test)]
 /// Complete private input for one staged peer credit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerCreditFoldInputV1 {
@@ -57,7 +65,9 @@ pub struct PeerCreditFoldInputV1 {
     pub replay_insert_witness: ConsumedCreditInsertWitnessV1,
 }
 
+#[cfg(test)]
 impl PeerCreditFoldInputV1 {
+    #[cfg(test)]
     fn transcript_credit(&self) -> ReceiveFoldCreditV1 {
         ReceiveFoldCreditV1 {
             amount: self.amount,
@@ -71,6 +81,7 @@ impl PeerCreditFoldInputV1 {
     }
 }
 
+#[cfg(test)]
 /// One singular receive transition plus its recoverable replay-tree plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerCreditFoldPreviewV1 {
@@ -88,6 +99,7 @@ pub struct PeerCreditFoldPreviewV1 {
     prepared_replay: PreparedConsumedCreditV1,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedConsumedCreditV1 {
     starting_root: KagemushaPastaStateCommitmentV1,
@@ -95,6 +107,7 @@ struct PreparedConsumedCreditV1 {
     insert: PreparedConsumedCreditInsertV1,
 }
 
+#[cfg(test)]
 impl PreparedConsumedCreditV1 {
     fn prepare(
         index: &ExactConsumedCreditIndex,
@@ -136,6 +149,7 @@ impl PreparedConsumedCreditV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldEffectV1"
@@ -146,11 +160,14 @@ struct ReceiveFoldEffectV1 {
     receive_credit_binding_digest: DigestV1,
 }
 
+#[cfg(test)]
 const RECEIVE_FOLD_DECISION_ID_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:receive-fold:terminal-decision-id\0";
+#[cfg(test)]
 const RECEIVE_FOLD_DECISION_VALUE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:receive-fold:terminal-decision-value\0";
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionIdV1"
@@ -160,6 +177,7 @@ struct ReceiveFoldDecisionIdV1 {
     credit_id: CreditIdV1,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionValueV1"
@@ -177,6 +195,7 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: super::KagemushaAuthenticatedHistoryStoreV1,
 {
+    #[cfg(test)]
     /// Preview folding exactly one staged credit into the aggregate successor.
     pub fn preview_receive_fold(
         &mut self,
@@ -318,6 +337,7 @@ where
         })
     }
 
+    #[cfg(test)]
     /// Return the hardware signing request selecting this fold's dual history roots.
     pub fn receive_fold_history_root_selection_signing_bytes(
         &self,
@@ -337,6 +357,7 @@ where
         .map_err(map_authenticated_history_error)
     }
 
+    #[cfg(test)]
     /// Attach the hardware root selection after verifying the same paired state proof.
     pub fn authorize_receive_fold_history(
         &self,
@@ -378,6 +399,7 @@ where
         Ok(authorization)
     }
 
+    #[cfg(test)]
     /// Verify and atomically install one prepared receive fold.
     pub fn receive_fold_prepared(
         &mut self,
@@ -387,33 +409,7 @@ where
         self.install_receive_fold(preview, authorization, false)
     }
 
-    /// Resume the same authorized fold after a crash at the external CAS boundary.
-    pub fn recover_receive_fold_prepared(
-        &mut self,
-        preview: PeerCreditFoldPreviewV1,
-        authorization: TransitionAuthorizationV1,
-    ) -> Result<KagemushaStateV1, KagemushaStateErrorV1> {
-        self.install_receive_fold(preview, authorization, true)
-    }
-
-    /// Release the WAL entry for an abandoned, uncommitted fold preview.
-    pub fn abandon_receive_fold_preview(
-        &mut self,
-        preview: &PeerCreditFoldPreviewV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        match self
-            .authenticated_history
-            .abort_prepared(preview.authenticated_history_transaction.transaction_id())
-            .map_err(map_authenticated_history_error)?
-        {
-            KagemushaHistoryAbortOutcomeV1::Aborted
-            | KagemushaHistoryAbortOutcomeV1::AlreadyAborted => Ok(()),
-            KagemushaHistoryAbortOutcomeV1::AlreadyCommitted { .. } => {
-                Err(KagemushaStateErrorV1::StateInvariant)
-            }
-        }
-    }
-
+    #[cfg(test)]
     fn install_receive_fold(
         &mut self,
         preview: PeerCreditFoldPreviewV1,
@@ -585,6 +581,7 @@ where
         Ok(self.state.clone())
     }
 
+    #[cfg(test)]
     fn validate_receive_fold_history_preview(
         &self,
         preview: &PeerCreditFoldPreviewV1,
@@ -616,6 +613,7 @@ where
         Ok(())
     }
 
+    #[cfg(test)]
     fn receive_fold_credit(
         &self,
         credit_id: CreditIdV1,
@@ -670,6 +668,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn receive_fold_effect_digest(
     credit: &PeerCreditFoldInputV1,
     receive_credit_binding_digest: DigestV1,
@@ -684,6 +683,7 @@ fn receive_fold_effect_digest(
     )
 }
 
+#[cfg(test)]
 fn receive_fold_error(_: ReceiveFoldErrorV1) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::InvalidPeerCredit
 }

@@ -6,6 +6,7 @@ impl Error {
             | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Expired => StatusCode::BAD_REQUEST,
             queue::Error::KagemushaV1OperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
+            queue::Error::UnsupportedTransactionAdmission { .. } => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
@@ -44,6 +45,10 @@ impl Error {
             queue::Error::KagemushaV1OperationCarrierRejected { .. } => (
                 "kagemusha_v1_operation_carrier_rejected",
                 "KAGEMUSHA V1 operation carrier failed canonical admission",
+            ),
+            queue::Error::UnsupportedTransactionAdmission { .. } => (
+                "unsupported_transaction_admission",
+                "current consensus requires Ordinary admission with a single resolved route",
             ),
             queue::Error::UnresolvedRoute { .. } => (
                 "queue_unresolved_route",
@@ -196,6 +201,9 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
             format!("KAGEMUSHA V1 operation carrier failed canonical admission: {reason}"),
         ),
+        queue::Error::UnsupportedTransactionAdmission { reason } => {
+            ("PRTRY:UNSUPPORTED_TRANSACTION_ADMISSION", reason.clone())
+        }
         queue::Error::UnresolvedRoute { reason } => (
             "PRTRY:ROUTE_UNRESOLVED",
             format!("transaction route could not be resolved: {reason}"),

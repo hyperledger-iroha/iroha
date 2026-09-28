@@ -27,19 +27,28 @@
 //! release-parameter KAT all exist.
 
 #![allow(dead_code)]
+#[cfg(test)]
 use super::{
     ZkAmsMkheErrorV1,
-    manifest::{ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1},
+    manifest::release_profile_v1,
     packing::{ZkAmsT256PackedPlaintextV1, zk_ams_t256_packing_layout_v1},
+    phase23_encrypted::{
+        zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
+    },
+};
+use super::{
+    manifest::ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
     phase23_encrypted::{
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
         ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
-        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, zk_ams_phase23_release_map_manifest_v1,
-        zk_ams_phase23_release_map_set_digest_v1,
+        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1,
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
+#[cfg(test)]
 use crate::generalized_bulletproof::{SecretMultiexpBuilder, SecretPoint};
+use crate::vega::masked_relaxed::MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
+#[cfg(test)]
 use crate::vega::{
     VegaT256PointV1, VegaT256ScalarV1 as Scalar, VegaTranscriptV1,
     algebra::{decompress_univariate, eq_evals, eq_evaluate, evaluate_univariate},
@@ -48,15 +57,16 @@ use crate::vega::{
         ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1,
     },
     derive_t256_generators_v1,
-    masked_relaxed::MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
     sponge::{keccak256, shake256},
     sumcheck::{CompressedUnivariate, SumcheckProof},
 };
+#[cfg(test)]
 use core::fmt;
 const RNS_LINK_VERSION_V1: u8 = 1;
 const RNS_LINK_EVALUATIONS_PER_LIMB_V1: usize = 5;
 pub(super) const ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1: usize = 38;
 const RNS_LINK_REJECTION_ATTEMPTS_V1: usize = 128;
+#[cfg(test)]
 const RNS_LINK_FAMILY_COUNT_V1: usize = 6;
 const RNS_LINK_MAX_CHUNKS_PER_FAMILY_V1: usize = 16;
 const RNS_LINK_MAX_LOGICAL_VALUES_V1: usize =
@@ -80,6 +90,7 @@ const RNS_LINK_BITNESS_MAX_SUMCHECK_ROUNDS_V1: usize = 10;
 const RNS_LINK_BITNESS_SUMCHECK_DEGREE_V1: usize = 3;
 const RNS_LINK_SCALAR_WIRE_BYTES_V1: usize = 32;
 const RNS_LINK_POINT_WIRE_BYTES_V1: usize = 33;
+#[cfg(test)]
 const RNS_LINK_BITNESS_CODEC_MAGIC_V1: [u8; 8] = *b"ZKRNBIT1";
 const RNS_LINK_BITNESS_CODEC_HEADER_BYTES_V1: usize = 112;
 const RNS_LINK_BITNESS_CODEC_MAX_BODY_BYTES_V1: usize = RNS_LINK_BITNESS_MAX_SUMCHECK_ROUNDS_V1
@@ -90,50 +101,92 @@ const RNS_LINK_BITNESS_CODEC_MAX_BODY_BYTES_V1: usize = RNS_LINK_BITNESS_MAX_SUM
     + RNS_LINK_SCALAR_WIRE_BYTES_V1;
 const RNS_LINK_BITNESS_CODEC_MAX_BYTES_V1: usize =
     RNS_LINK_BITNESS_CODEC_HEADER_BYTES_V1 + RNS_LINK_BITNESS_CODEC_MAX_BODY_BYTES_V1;
+#[cfg(test)]
 const BITNESS_CODEC_MANIFEST_OFFSET_V1: usize = 12;
+#[cfg(test)]
 const BITNESS_CODEC_VALUE_COUNT_OFFSET_V1: usize = 44;
+#[cfg(test)]
 const BITNESS_CODEC_SUMCHECK_ROUNDS_OFFSET_V1: usize = 46;
+#[cfg(test)]
 const BITNESS_CODEC_SUMCHECK_DEGREE_OFFSET_V1: usize = 47;
+#[cfg(test)]
 const BITNESS_CODEC_SUMCHECK_COEFFICIENT_COUNT_OFFSET_V1: usize = 48;
+#[cfg(test)]
 const BITNESS_CODEC_IPA_ROUNDS_OFFSET_V1: usize = 50;
+#[cfg(test)]
 const BITNESS_CODEC_IPA_LEFT_COUNT_OFFSET_V1: usize = 51;
+#[cfg(test)]
 const BITNESS_CODEC_IPA_RIGHT_COUNT_OFFSET_V1: usize = 52;
+#[cfg(test)]
 const BITNESS_CODEC_POINT_BYTES_OFFSET_V1: usize = 53;
+#[cfg(test)]
 const BITNESS_CODEC_SCALAR_BYTES_OFFSET_V1: usize = 54;
+#[cfg(test)]
 const BITNESS_CODEC_RESERVED_OFFSET_V1: usize = 55;
+#[cfg(test)]
 const BITNESS_CODEC_SUMCHECK_BYTES_OFFSET_V1: usize = 56;
+#[cfg(test)]
 const BITNESS_CODEC_EVALUATION_BYTES_OFFSET_V1: usize = 64;
+#[cfg(test)]
 const BITNESS_CODEC_IPA_LEFT_BYTES_OFFSET_V1: usize = 72;
+#[cfg(test)]
 const BITNESS_CODEC_IPA_RIGHT_BYTES_OFFSET_V1: usize = 80;
+#[cfg(test)]
 const BITNESS_CODEC_FINAL_WITNESS_BYTES_OFFSET_V1: usize = 88;
+#[cfg(test)]
 const BITNESS_CODEC_BODY_BYTES_OFFSET_V1: usize = 96;
+#[cfg(test)]
 const BITNESS_CODEC_TOTAL_BYTES_OFFSET_V1: usize = 104;
+#[cfg(test)]
 const CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.context";
+#[cfg(test)]
 const ALGORITHM_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.immutable-algorithm-manifest";
+#[cfg(test)]
 const COMMITMENT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.commitment";
+#[cfg(test)]
 const COMMITMENT_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.ordered-commitment-root";
+#[cfg(test)]
 const PRECHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.prechallenge";
+#[cfg(test)]
 const EVALUATION_POINT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.evaluation-point";
+#[cfg(test)]
 const CHALLENGE_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.challenge-set";
+#[cfg(test)]
 const IPA_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.ipa";
+#[cfg(test)]
 const BITNESS_SUMCHECK_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.bitness-sumcheck";
+#[cfg(test)]
 const IPA_GENERATOR_LABEL_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.ipa-generators";
+#[cfg(test)]
 const BITNESS_ALGORITHM_LABEL_V1: &[u8] = b"rns-link-algorithm";
+#[cfg(test)]
 const BITNESS_CONTEXT_LABEL_V1: &[u8] = b"rns-link-context";
+#[cfg(test)]
 const BITNESS_IPA_KEY_LABEL_V1: &[u8] = b"rns-link-ipa-key";
+#[cfg(test)]
 const BITNESS_VALUE_COUNT_LABEL_V1: &[u8] = b"rns-link-value-count";
+#[cfg(test)]
 const BITNESS_COMMITMENT_LABEL_V1: &[u8] = b"rns-link-bit-commitment";
+#[cfg(test)]
 const BITNESS_TAU_CHALLENGE_LABEL_V1: &[u8] = b"rns-link-bitness-tau";
+#[cfg(test)]
 const BITNESS_SUMCHECK_POLYNOMIAL_LABEL_V1: &[u8] = b"p";
+#[cfg(test)]
 const BITNESS_SUMCHECK_CHALLENGE_LABEL_V1: &[u8] = b"c";
+#[cfg(test)]
 const IPA_EVALUATION_LABEL_V1: &[u8] = b"rns-link-ipa-evaluation";
+#[cfg(test)]
 const IPA_LEFT_LABEL_V1: &[u8] = b"rns-link-ipa-left";
+#[cfg(test)]
 const IPA_RIGHT_LABEL_V1: &[u8] = b"rns-link-ipa-right";
+#[cfg(test)]
 const IPA_CHALLENGE_LABEL_V1: &[u8] = b"rns-link-ipa-challenge";
+#[cfg(test)]
 const NATIVE_GEOMETRY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.native-release-geometry";
+#[cfg(test)]
 const RNS_LINK_MANIFEST_DOMAINS_V1: [&[u8]; 8] = [
     CONTEXT_DOMAIN_V1,
     COMMITMENT_DOMAIN_V1,
@@ -144,6 +197,7 @@ const RNS_LINK_MANIFEST_DOMAINS_V1: [&[u8]; 8] = [
     IPA_TRANSCRIPT_DOMAIN_V1,
     BITNESS_SUMCHECK_DOMAIN_V1,
 ];
+#[cfg(test)]
 const RNS_LINK_MANIFEST_TRANSCRIPT_LABELS_V1: [&[u8]; 13] = [
     IPA_GENERATOR_LABEL_V1,
     BITNESS_ALGORITHM_LABEL_V1,
@@ -159,11 +213,15 @@ const RNS_LINK_MANIFEST_TRANSCRIPT_LABELS_V1: [&[u8]; 13] = [
     IPA_RIGHT_LABEL_V1,
     IPA_CHALLENGE_LABEL_V1,
 ];
+#[cfg(test)]
 const BITNESS_RELATION_DESCRIPTOR_V1: &[u8] =
     b"sum_x:eq(tau,x)*b(x)*(b(x)-1)=0:cubic:compressed-constant-quadratic-cubic";
+#[cfg(test)]
 const IPA_RELATION_DESCRIPTOR_V1: &[u8] =
     b"P=<a,G>+<a,b>*U:fold-a=x*aL+x^-1*aR:fold-b=x^-1*bL+x*bR:fold-G=x^-1*GL+x*GR";
+#[cfg(test)]
 const BITNESS_CODEC_SCHEMA_DESCRIPTOR_V1: &[u8] = b"header-be:magic[0..8],version8,flags9,header_len10..12,manifest12..44,value_count44..46,sumcheck_rounds46,degree47,coeff_count48..50,ipa_rounds50,left_count51,right_count52,point_bytes53,scalar_bytes54,reserved55,sumcheck_len56..64,evaluation_len64..72,left_len72..80,right_len80..88,final_len88..96,body_len96..104,total_len104..112;body=sumcheck_be||evaluation_be||left_points||right_points||final_be";
+#[cfg(test)]
 const RNS_LINK_MANIFEST_FORMAT_DESCRIPTORS_V1: [&[u8]; 3] = [
     BITNESS_RELATION_DESCRIPTOR_V1,
     IPA_RELATION_DESCRIPTOR_V1,
@@ -197,10 +255,12 @@ std::thread_local! {
     static RNS_LINK_IPA_KEY_DERIVATIONS_V1: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RNS_LINK_CODEC_BODY_ALLOCATIONS_V1: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+#[cfg(test)]
 fn is_nonzero_digest(digest: [u8; 32]) -> bool {
     digest != [0; 32]
 }
 /// The six logical witness families in their only accepted transcript order.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(super) enum ZkAmsPhase23RnsLinkFamilyV1 {
@@ -211,6 +271,7 @@ pub(super) enum ZkAmsPhase23RnsLinkFamilyV1 {
     W = 5,
     RW = 6,
 }
+#[cfg(test)]
 const RNS_LINK_FAMILY_ORDER_V1: [ZkAmsPhase23RnsLinkFamilyV1; RNS_LINK_FAMILY_COUNT_V1] = [
     ZkAmsPhase23RnsLinkFamilyV1::X,
     ZkAmsPhase23RnsLinkFamilyV1::U,
@@ -220,6 +281,7 @@ const RNS_LINK_FAMILY_ORDER_V1: [ZkAmsPhase23RnsLinkFamilyV1; RNS_LINK_FAMILY_CO
     ZkAmsPhase23RnsLinkFamilyV1::RW,
 ];
 /// Exact packed logical-value count for one canonical native family.
+#[cfg(test)]
 pub(super) const fn expected_logical_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     match family {
         ZkAmsPhase23RnsLinkFamilyV1::X => RNS_LINK_X_LOGICAL_VALUES_V1,
@@ -230,12 +292,14 @@ pub(super) const fn expected_logical_values_v1(family: ZkAmsPhase23RnsLinkFamily
         ZkAmsPhase23RnsLinkFamilyV1::RW => RNS_LINK_RW_LOGICAL_VALUES_V1,
     }
 }
+#[cfg(test)]
 const fn expected_semantic_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     match family {
         ZkAmsPhase23RnsLinkFamilyV1::U => RNS_LINK_U_SEMANTIC_VALUES_V1,
         _ => expected_logical_values_v1(family),
     }
 }
+#[cfg(test)]
 const fn expected_hyrax_rows_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     match family {
         ZkAmsPhase23RnsLinkFamilyV1::X | ZkAmsPhase23RnsLinkFamilyV1::U => 0,
@@ -252,6 +316,7 @@ const fn expected_hyrax_rows_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
 /// `semantic_value_count` records the padding-free accumulator shape. The
 /// `packed_value_count` differs only for `U`, whose one relaxation scalar is
 /// replicated into every constraint-row slot before encrypted evaluation.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkFamilyGeometryV1 {
     family: ZkAmsPhase23RnsLinkFamilyV1,
@@ -266,6 +331,7 @@ pub(super) struct ZkAmsPhase23RnsLinkFamilyGeometryV1 {
 ///
 /// This descriptor is public statement metadata only. It is deliberately not a proof, a receipt, or
 /// release evidence, and there is no conversion from it to any verified RNS-Link capability.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkReleaseGeometryV1 {
     profile_digest: [u8; 32],
@@ -277,6 +343,7 @@ pub(super) struct ZkAmsPhase23RnsLinkReleaseGeometryV1 {
     commitment_count: u16,
     digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkReleaseGeometryV1 {
     fn family(
         &self,
@@ -289,6 +356,7 @@ impl ZkAmsPhase23RnsLinkReleaseGeometryV1 {
             .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
     }
 }
+#[cfg(test)]
 fn validate_ordered_native_family_chunk_counts_v1(
     geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
     families: &[(ZkAmsPhase23RnsLinkFamilyV1, usize)],
@@ -313,6 +381,7 @@ fn validate_ordered_native_family_chunk_counts_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_replicated_u_chunk_coefficients_v1(
     chunks: &[ZkAmsT256PackedPlaintextV1],
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -325,6 +394,7 @@ fn validate_replicated_u_chunk_coefficients_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_replicated_u_decoded_slots_v1(slots: &[[u8; 32]]) -> Result<(), ZkAmsMkheErrorV1> {
     let first = slots.first().ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
     if slots[1..].iter().any(|value| value != first) {
@@ -332,6 +402,7 @@ fn validate_replicated_u_decoded_slots_v1(slots: &[[u8; 32]]) -> Result<(), ZkAm
     }
     Ok(())
 }
+#[cfg(test)]
 fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
 -> Result<ZkAmsPhase23RnsLinkReleaseGeometryV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -454,6 +525,7 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
         digest,
     })
 }
+#[cfg(test)]
 #[derive(Clone)]
 struct RnsLinkImmutableAlgorithmManifestInputsV1 {
     version: u8,
@@ -468,9 +540,11 @@ struct RnsLinkImmutableAlgorithmManifestInputsV1 {
     format_descriptors: [&'static [u8]; RNS_LINK_MANIFEST_FORMAT_DESCRIPTORS_V1.len()],
     codec_magic: [u8; RNS_LINK_BITNESS_CODEC_MAGIC_V1.len()],
 }
+#[cfg(test)]
 fn usize_as_manifest_u64_v1(value: usize) -> Result<u64, ZkAmsMkheErrorV1> {
     u64::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
+#[cfg(test)]
 fn canonical_algorithm_manifest_inputs_v1()
 -> Result<RnsLinkImmutableAlgorithmManifestInputsV1, ZkAmsMkheErrorV1> {
     let native_geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1()?;
@@ -524,6 +598,7 @@ fn canonical_algorithm_manifest_inputs_v1()
         codec_magic: RNS_LINK_BITNESS_CODEC_MAGIC_V1,
     })
 }
+#[cfg(test)]
 fn append_manifest_byte_strings_v1(
     frame: &mut Vec<u8>,
     values: &[&[u8]],
@@ -543,6 +618,7 @@ fn append_manifest_byte_strings_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn immutable_algorithm_manifest_digest_from_inputs_v1(
     inputs: &RnsLinkImmutableAlgorithmManifestInputsV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -590,17 +666,21 @@ fn immutable_algorithm_manifest_digest_from_inputs_v1(
 /// Digest only immutable proof-algorithm inputs. Mutable readiness flags,
 /// measured evidence, and release-KAT pins are deliberately absent: including
 /// any of them would make installing a KAT change the proof it is meant to pin.
+#[cfg(test)]
 fn immutable_algorithm_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     immutable_algorithm_manifest_digest_from_inputs_v1(&canonical_algorithm_manifest_inputs_v1()?)
 }
+#[cfg(test)]
 #[path = "phase23_rns_link_context_authority_v1.rs"]
 mod context_authority_v1;
+#[cfg(test)]
 pub(super) use context_authority_v1::ZkAmsPhase23RnsLinkContextV1;
 /// Producer-claimed roots of tables that must exist before Fiat--Shamir sampling.
 ///
 /// The type remains part of the private structural checkpoint, but production has no digest-only
 /// constructor. Tests can build hostile shells; a release prover must instead gain a constructor
 /// that consumes state-owned openings and actual committed tables.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     layout_digest: [u8; 32],
@@ -612,6 +692,7 @@ pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     negacyclic_quotient_digest: [u8; 32],
     padding_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
@@ -660,6 +741,7 @@ impl ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     }
 }
 /// One present ciphertext chunk and all tables cross-bound to it.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkChunkCommitmentV1 {
     family: ZkAmsPhase23RnsLinkFamilyV1,
@@ -673,6 +755,7 @@ pub(super) struct ZkAmsPhase23RnsLinkChunkCommitmentV1 {
     hyrax_commitment: [u8; 33],
     digests: ZkAmsPhase23RnsLinkCommitmentDigestsV1,
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkChunkCommitmentV1 {
     /// Test-only constructor for structural and hostile-shell coverage.
     /// Production deliberately has no caller-digest construction corridor.
@@ -760,6 +843,7 @@ impl ZkAmsPhase23RnsLinkChunkCommitmentV1 {
         keccak256(&frame)
     }
 }
+#[cfg(test)]
 fn canonical_absent_chunk_bitmap_v1(chunk_count: u16) -> Result<u16, ZkAmsMkheErrorV1> {
     let count = usize::from(chunk_count);
     if count == 0 || count > RNS_LINK_MAX_CHUNKS_PER_FAMILY_V1 {
@@ -774,6 +858,7 @@ fn canonical_absent_chunk_bitmap_v1(chunk_count: u16) -> Result<u16, ZkAmsMkheEr
 }
 /// A sealed, canonical commitment set. Challenge derivation accepts this type
 /// rather than raw statement fields, making commit-before-challenge structural.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkPrechallengeV1 {
     context_digest: [u8; 32],
@@ -781,6 +866,7 @@ pub(super) struct ZkAmsPhase23RnsLinkPrechallengeV1 {
     commitment_count: u16,
     transcript_digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkPrechallengeV1 {
     pub(super) fn from_ordered_commitments(
         context: &ZkAmsPhase23RnsLinkContextV1,
@@ -862,6 +948,7 @@ impl ZkAmsPhase23RnsLinkPrechallengeV1 {
     }
 }
 /// One canonical, nonzero evaluation point for one RNS prime and repetition.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkEvaluationPointV1 {
     limb_index: u8,
@@ -870,6 +957,7 @@ pub(super) struct ZkAmsPhase23RnsLinkEvaluationPointV1 {
     value: u64,
 }
 /// Complete challenge set derived only after sealing every commitment.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkChallengeSetV1 {
     prechallenge_digest: [u8; 32],
@@ -877,6 +965,7 @@ pub(super) struct ZkAmsPhase23RnsLinkChallengeSetV1 {
     points: Vec<ZkAmsPhase23RnsLinkEvaluationPointV1>,
     digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkChallengeSetV1 {
     fn validate_for_release(
         &self,
@@ -889,6 +978,7 @@ impl ZkAmsPhase23RnsLinkChallengeSetV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 fn derive_release_evaluation_points_v1(
     prechallenge: &ZkAmsPhase23RnsLinkPrechallengeV1,
 ) -> Result<ZkAmsPhase23RnsLinkChallengeSetV1, ZkAmsMkheErrorV1> {
@@ -901,6 +991,7 @@ fn derive_release_evaluation_points_v1(
 /// ordered commitments. It is never accepted from the proof producer. The wire decoder may use this
 /// value to reject a digest shell or a structurally valid envelope carrying commitments from
 /// another proof. This binding deliberately makes no claim that the relation responses verify.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     pub(super) profile_digest: [u8; 32],
@@ -910,6 +1001,7 @@ pub(super) struct ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     pub(super) ordered_commitment_root: [u8; 32],
     pub(super) hyrax_commitments: [VegaT256PointV1; RNS_LINK_RELEASE_COMMITMENTS_V1],
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     /// Recompute every transport-binding field from verifier-owned native
     /// relation types. No digest supplied by a proof producer is an input.
@@ -962,10 +1054,12 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 // Its proof/release admission remains owned by the consuming verifier.
 #[path = "phase23_rns_link_external_source.rs"]
 mod external_source;
+pub(in crate::vega::zk_ams::mkhe) use external_source::ZkAmsPhase23RnsLinkSecretChunkV1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use external_source::{
     ZkAmsPhase23RnsLinkExternalSourceAssemblyV1, ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
-    ZkAmsPhase23RnsLinkSecretChunkV1,
 };
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "cross-field prerequisite remains production-uninhabited until source/range/mask/qPCS seals and the global ZK lookup theorem are wired"
@@ -984,6 +1078,7 @@ type RnsLinkContextConstructorV1 = fn(
     [u8; 32],
     [u8; 32],
 ) -> Result<ZkAmsPhase23RnsLinkContextV1, ZkAmsMkheErrorV1>;
+#[cfg(test)]
 type RnsLinkChallengeConstructorV1 =
     fn(
         &ZkAmsPhase23RnsLinkPrechallengeV1,
@@ -991,8 +1086,10 @@ type RnsLinkChallengeConstructorV1 =
 #[cfg(test)]
 const RNS_LINK_CONTEXT_SIGNATURE_GUARD_V1: RnsLinkContextConstructorV1 =
     ZkAmsPhase23RnsLinkContextV1::new;
+#[cfg(test)]
 const RNS_LINK_CHALLENGE_SIGNATURE_GUARD_V1: RnsLinkChallengeConstructorV1 =
     derive_release_evaluation_points_v1;
+#[cfg(test)]
 fn derive_evaluation_points_for_moduli_v1(
     prechallenge: &ZkAmsPhase23RnsLinkPrechallengeV1,
     moduli: &[u64],
@@ -1079,6 +1176,7 @@ fn derive_evaluation_points_for_moduli_v1(
 }
 /// Unbiased reduction of a 64-bit Fiat--Shamir word. Zero and points already
 /// used for the same limb are rejected under an exact, governed retry ceiling.
+#[cfg(test)]
 fn sample_canonical_nonzero_distinct_v1<F>(
     modulus: u64,
     prior_values: &[u64],
@@ -1114,10 +1212,12 @@ where
 /// Source-level guard: every production RNS-Link secret vector is the same
 /// audited owner used by the native T256 Bulletproof backend. A raw `Vec` is
 /// intentionally not accepted anywhere in the production witness container.
+#[cfg(test)]
 type AuditedRnsLinkSecretScalarsV1 = ZeroizingT256ScalarVecV1;
 /// Move-only owner for every secret table retained by an RNS-Link prover.
 /// The field types are the compile-time erasure guard; test-only integer oracle
 /// vectors below are not part of this production witness boundary.
+#[cfg(test)]
 struct ZkAmsPhase23RnsLinkWitnessSecretsV1 {
     bit_planes: AuditedRnsLinkSecretScalarsV1,
     small_openings: AuditedRnsLinkSecretScalarsV1,
@@ -1126,6 +1226,7 @@ struct ZkAmsPhase23RnsLinkWitnessSecretsV1 {
     negacyclic_quotients: AuditedRnsLinkSecretScalarsV1,
     hyrax_blindings: AuditedRnsLinkSecretScalarsV1,
 }
+#[cfg(test)]
 impl fmt::Debug for ZkAmsPhase23RnsLinkWitnessSecretsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1155,12 +1256,14 @@ impl ZkAmsPhase23RnsLinkWitnessSecretsV1 {
     }
 }
 /// Generator basis for one logarithmic RNS-Link inner-product opening.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct ZkAmsPhase23RnsLinkIpaKeyV1 {
     generators: Vec<VegaT256PointV1>,
     evaluation_generator: VegaT256PointV1,
     digest: [u8; 32],
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkIpaKeyV1 {
     fn derive(vector_len: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         if !(2..=RNS_LINK_IPA_MAX_VECTOR_LEN_V1).contains(&vector_len)
@@ -1217,6 +1320,7 @@ impl ZkAmsPhase23RnsLinkIpaKeyV1 {
         })
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkIpaStatementV1 {
     relation_context_digest: [u8; 32],
@@ -1225,6 +1329,7 @@ struct ZkAmsPhase23RnsLinkIpaStatementV1 {
     commitment: VegaT256PointV1,
     evaluation: Scalar,
 }
+#[cfg(test)]
 impl ZkAmsPhase23RnsLinkIpaStatementV1 {
     fn validate(&self, key: &ZkAmsPhase23RnsLinkIpaKeyV1) -> Result<(), ZkAmsMkheErrorV1> {
         if !is_nonzero_digest(self.relation_context_digest)
@@ -1237,12 +1342,14 @@ impl ZkAmsPhase23RnsLinkIpaStatementV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkIpaProofV1 {
     left: Vec<VegaT256PointV1>,
     right: Vec<VegaT256PointV1>,
     final_witness: Scalar,
 }
+#[cfg(test)]
 fn rns_link_secret_inner_product_v1(
     left: &[Scalar],
     right: &[Scalar],
@@ -1256,12 +1363,14 @@ fn rns_link_secret_inner_product_v1(
     }
     Ok(sum)
 }
+#[cfg(test)]
 fn rns_link_secret_msm_v1(
     scalars: &[Scalar],
     points: &[VegaT256PointV1],
 ) -> Result<SecretPoint<VegaT256PointV1>, ZkAmsMkheErrorV1> {
     rns_link_secret_msm_with_extra_v1(scalars, points, None)
 }
+#[cfg(test)]
 fn rns_link_secret_msm_with_extra_v1(
     scalars: &[Scalar],
     points: &[VegaT256PointV1],
@@ -1290,7 +1399,9 @@ fn rns_link_secret_msm_with_extra_v1(
         .evaluate()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
+#[cfg(test)]
 struct ZeroizingRnsLinkTranscriptPointV1([u8; 64]);
+#[cfg(test)]
 impl ZeroizingRnsLinkTranscriptPointV1 {
     fn new(point: &VegaT256PointV1) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut owned = Self([0; 64]);
@@ -1303,6 +1414,7 @@ impl ZeroizingRnsLinkTranscriptPointV1 {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingRnsLinkTranscriptPointV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -1311,6 +1423,7 @@ impl Drop for ZeroizingRnsLinkTranscriptPointV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
+#[cfg(test)]
 fn rns_link_squeeze_nonzero_v1(
     transcript: &mut VegaTranscriptV1,
     label: &'static [u8],
@@ -1325,6 +1438,7 @@ fn rns_link_squeeze_nonzero_v1(
     }
     Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
+#[cfg(test)]
 fn absorb_rns_link_ipa_round_v1(
     transcript: &mut VegaTranscriptV1,
     left: &VegaT256PointV1,
@@ -1340,6 +1454,7 @@ fn absorb_rns_link_ipa_round_v1(
         .absorb_raw(IPA_RIGHT_LABEL_V1, right.as_ref())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
+#[cfg(test)]
 fn prove_rns_link_ipa_v1(
     key: &ZkAmsPhase23RnsLinkIpaKeyV1,
     statement: &ZkAmsPhase23RnsLinkIpaStatementV1,
@@ -1413,6 +1528,7 @@ fn prove_rns_link_ipa_v1(
         final_witness: witness.as_slice()[0],
     })
 }
+#[cfg(test)]
 fn verify_rns_link_ipa_v1(
     key: &ZkAmsPhase23RnsLinkIpaKeyV1,
     statement: &ZkAmsPhase23RnsLinkIpaStatementV1,
@@ -1475,6 +1591,7 @@ fn verify_rns_link_ipa_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkBitnessStatementV1 {
     relation_context_digest: [u8; 32],
@@ -1482,12 +1599,14 @@ struct ZkAmsPhase23RnsLinkBitnessStatementV1 {
     key_digest: [u8; 32],
     commitment: VegaT256PointV1,
 }
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkBitnessProofV1 {
     sumcheck: SumcheckProof,
     evaluation: Scalar,
     ipa: ZkAmsPhase23RnsLinkIpaProofV1,
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RnsLinkBitnessCodecShapeV1 {
     vector_len: usize,
@@ -1502,6 +1621,7 @@ struct RnsLinkBitnessCodecShapeV1 {
     body_bytes: usize,
     total_bytes: usize,
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RnsLinkBitnessCodecLayoutV1 {
     shape: RnsLinkBitnessCodecShapeV1,
@@ -1511,6 +1631,7 @@ struct RnsLinkBitnessCodecLayoutV1 {
     ipa_right_offset: usize,
     final_witness_offset: usize,
 }
+#[cfg(test)]
 fn rns_link_bitness_codec_shape_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
 ) -> Result<RnsLinkBitnessCodecShapeV1, ZkAmsMkheErrorV1> {
@@ -1581,6 +1702,7 @@ fn rns_link_bitness_codec_shape_v1(
         total_bytes,
     })
 }
+#[cfg(test)]
 fn rns_link_wire_array_v1<const N: usize>(
     bytes: &[u8],
     offset: usize,
@@ -1594,18 +1716,22 @@ fn rns_link_wire_array_v1<const N: usize>(
         .try_into()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
+#[cfg(test)]
 fn rns_link_wire_u16_v1(bytes: &[u8], offset: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     Ok(u16::from_be_bytes(rns_link_wire_array_v1(bytes, offset)?))
 }
+#[cfg(test)]
 fn rns_link_wire_u64_v1(bytes: &[u8], offset: usize) -> Result<u64, ZkAmsMkheErrorV1> {
     Ok(u64::from_be_bytes(rns_link_wire_array_v1(bytes, offset)?))
 }
+#[cfg(test)]
 fn rns_link_wire_length_v1(bytes: &[u8], offset: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     usize::try_from(rns_link_wire_u64_v1(bytes, offset)?)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 /// Allocation-light structural pass. It completes exact length arithmetic and canonical
 /// scalar/point validation before proof vectors or IPA generators can be allocated.
+#[cfg(test)]
 fn preflight_rns_link_bitness_wire_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
     bytes: &[u8],
@@ -1738,6 +1864,7 @@ fn preflight_rns_link_bitness_wire_v1(
         final_witness_offset,
     })
 }
+#[cfg(test)]
 fn write_rns_link_wire_u16_v1(
     bytes: &mut [u8],
     offset: usize,
@@ -1755,6 +1882,7 @@ fn write_rns_link_wire_u16_v1(
         .copy_from_slice(&encoded);
     Ok(())
 }
+#[cfg(test)]
 fn write_rns_link_wire_u64_v1(
     bytes: &mut [u8],
     offset: usize,
@@ -1772,6 +1900,7 @@ fn write_rns_link_wire_u64_v1(
         .copy_from_slice(&encoded);
     Ok(())
 }
+#[cfg(test)]
 fn encode_rns_link_bitness_proof_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
     proof: &ZkAmsPhase23RnsLinkBitnessProofV1,
@@ -1883,6 +2012,7 @@ fn encode_rns_link_bitness_proof_v1(
     preflight_rns_link_bitness_wire_v1(statement, &bytes)?;
     Ok(bytes)
 }
+#[cfg(test)]
 fn decode_rns_link_bitness_proof_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
     bytes: &[u8],
@@ -1958,6 +2088,7 @@ fn decode_rns_link_bitness_proof_v1(
         },
     })
 }
+#[cfg(test)]
 fn rns_link_bitness_transcript_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
 ) -> Result<VegaTranscriptV1, ZkAmsMkheErrorV1> {
@@ -2003,6 +2134,7 @@ fn rns_link_bitness_transcript_v1(
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
     Ok(transcript)
 }
+#[cfg(test)]
 fn bind_rns_link_public_table_v1(
     table: &mut Vec<Scalar>,
     challenge: Scalar,
@@ -2018,6 +2150,7 @@ fn bind_rns_link_public_table_v1(
     table.truncate(half);
     Ok(())
 }
+#[cfg(test)]
 fn bind_rns_link_secret_table_v1(
     table: &mut AuditedRnsLinkSecretScalarsV1,
     challenge: Scalar,
@@ -2034,6 +2167,7 @@ fn bind_rns_link_secret_table_v1(
     table.clear_and_truncate(half);
     Ok(())
 }
+#[cfg(test)]
 fn interpolate_rns_link_cubic_v1(
     evaluations: [Scalar; 4],
 ) -> Result<[Scalar; 4], ZkAmsMkheErrorV1> {
@@ -2054,6 +2188,7 @@ fn interpolate_rns_link_cubic_v1(
     let linear = evaluations[1] - constant - quadratic - cubic;
     Ok([constant, linear, quadratic, cubic])
 }
+#[cfg(test)]
 fn prove_rns_link_bitness_sumcheck_v1(
     mut bits: AuditedRnsLinkSecretScalarsV1,
     tau: &[Scalar],
@@ -2124,6 +2259,7 @@ fn prove_rns_link_bitness_sumcheck_v1(
     }
     Ok((SumcheckProof::new(rounds), challenges, bits.as_slice()[0]))
 }
+#[cfg(test)]
 fn verify_rns_link_bitness_sumcheck_v1(
     proof: &SumcheckProof,
     round_count: usize,
@@ -2155,6 +2291,7 @@ fn verify_rns_link_bitness_sumcheck_v1(
     }
     Ok((claim, challenges))
 }
+#[cfg(test)]
 fn prove_rns_link_bitness_v1(
     relation_context_digest: [u8; 32],
     bits: AuditedRnsLinkSecretScalarsV1,
@@ -2238,6 +2375,7 @@ fn prove_rns_link_bitness_v1(
         },
     ))
 }
+#[cfg(test)]
 fn verify_rns_link_bitness_v1(
     expected_relation_context_digest: [u8; 32],
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
@@ -2301,6 +2439,7 @@ fn verify_rns_link_bitness_v1(
         &mut transcript,
     )
 }
+#[cfg(test)]
 fn verify_rns_link_bitness_wire_v1(
     expected_relation_context_digest: [u8; 32],
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,

@@ -52,7 +52,6 @@ pub mod json;
 /// VM-backed Kotodama test runner shared by developer tools.
 pub mod koto_test_driver;
 pub mod kotodama;
-pub mod kotodama_std;
 pub mod limits;
 pub mod list;
 mod memory;
@@ -76,6 +75,7 @@ pub mod private_input;
 mod registers;
 pub mod runtime;
 pub mod schema_registry;
+mod sha256_ref;
 mod sha3;
 pub mod signature;
 pub mod stack_policy;
@@ -134,20 +134,17 @@ pub use crate::metadata::{
 pub use crate::prepared::PreparedContract;
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{
-    aes::{
-        aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
-        aesdec_n_rounds_many, aesenc, aesenc_impl, aesenc_n_rounds_many, sbox,
-    },
+    aes::{aesdec, aesdec_impl, aesenc, aesenc_impl, sbox},
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
-        aesdec_batch_cuda, aesdec_cuda, aesdec_rounds_batch_cuda, aesenc_batch_cuda, aesenc_cuda,
-        aesenc_rounds_batch_cuda, bitonic_sort_pairs, bn254_add_batch_cuda, bn254_add_cuda,
-        bn254_mul_batch_cuda, bn254_mul_cuda, bn254_sub_batch_cuda, bn254_sub_cuda, cuda_available,
-        cuda_disabled, cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda,
-        keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda,
-        poseidon6_cuda_many, reset_cuda_backend_for_tests, sha256_compress_cuda,
-        sha256_leaves_cuda, sha256_pairs_reduce_cuda, vadd32_cuda, vadd64_cuda, vand_cuda,
-        vector_add_f32, vor_cuda, vxor_cuda,
+        aesdec_batch_cuda, aesdec_cuda, aesenc_batch_cuda, aesenc_cuda, bitonic_sort_pairs,
+        bn254_add_batch_cuda, bn254_add_cuda, bn254_mul_batch_cuda, bn254_mul_cuda,
+        bn254_sub_batch_cuda, bn254_sub_cuda, cuda_available, cuda_disabled,
+        cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda, keccak_f1600_cuda,
+        poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda, poseidon6_cuda_many,
+        reset_cuda_backend_for_tests, sha256_compress_cuda, sha256_leaves_cuda,
+        sha256_pairs_reduce_cuda, vadd32_cuda, vadd64_cuda, vand_cuda, vector_add_f32, vor_cuda,
+        vxor_cuda,
     },
     decoder::decode,
     error::{

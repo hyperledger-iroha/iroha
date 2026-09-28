@@ -20,7 +20,7 @@ use std::{
     fmt::Debug,
     fs::{self, File, OpenOptions},
     io::{self, Cursor, Read, Write as _},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::IpAddr,
     num::NonZeroU16,
     path::{Component, Path, PathBuf},
     sync::{
@@ -1885,6 +1885,7 @@ impl GatewayComplianceController {
         document.normalize()
     }
     /// Deterministically merge normalized feeds into an unsigned catalog.
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn build_catalog_payload(
         &self,
         sequence: u64,
@@ -3730,51 +3731,13 @@ fn normalize_resolved_addresses(
             maximum,
         });
     }
-    if addresses.iter().any(|address| !is_public_ip(*address)) {
+    if addresses
+        .iter()
+        .any(|address| !crate::utils::is_public_ip(*address))
+    {
         return Err(GatewayComplianceError::NonPublicAddress);
     }
     Ok(())
-}
-fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_ipv4(ip),
-        IpAddr::V6(ip) => is_public_ipv6(ip),
-    }
-}
-fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || ip.is_unspecified()
-        || a == 0
-        || a >= 240
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 192 && b == 0 && c == 0)
-        || (a == 192 && b == 88 && c == 99)
-        || (a == 198 && (18..=19).contains(&b)))
-}
-fn is_public_ipv6(ip: Ipv6Addr) -> bool {
-    let segments = ip.segments();
-    let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
-    let documentation_v2 = segments[0] == 0x3fff && (segments[1] & 0xf000) == 0;
-    let orchid = segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010;
-    let transition = (segments[0] == 0x2001 && segments[1] == 0)
-        || segments[0] == 0x2002
-        || ip.to_ipv4_mapped().is_some();
-    !((segments[0] & 0xe000) != 0x2000
-        || ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || documentation
-        || documentation_v2
-        || orchid
-        || transition)
 }
 fn decompress_bounded(
     bytes: &[u8],

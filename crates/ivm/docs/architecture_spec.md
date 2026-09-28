@@ -63,15 +63,14 @@ Optional acceleration can fail closed or fall back without changing opcodes, gas
 values, memory, or proofs. Qualification tests compare available accelerated paths with the scalar
 implementation.
 
-## Parallel block execution
+## Transaction concurrency
 
-One contract remains sequential. At block scope, transactions with nonconflicting declared access
-sets may run in isolated contexts on a lazily created worker pool. Workers return buffered writes
-without publishing them. The coordinator applies successful batches in original block order
-through one safe-Rust RwLock state path. There is no hardware transactional-memory path.
+Each contract executes sequentially and IVM has no block scheduler. Hosts own transaction-level
+concurrency: they pass declared access sets through `IVMHost::begin_tx`, receive observed accesses
+from `IVMHost::finish_tx`, and commit results in canonical block order. There is no hardware
+transactional-memory path.
 
-Thread count, completion order, and CPU capabilities affect throughput only. Declared access-set
-conflicts add dependency edges that reduce concurrency without changing observable state. See
+Thread count, completion order, and CPU capabilities affect throughput only. See
 [parallel_execution.md](parallel_execution.md).
 
 ## Host boundary and ABI

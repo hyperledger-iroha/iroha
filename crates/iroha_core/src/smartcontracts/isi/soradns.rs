@@ -1,8 +1,8 @@
 //! Resolver attestation directory governance ISIs.
 use super::*;
+use crate::smartcontracts::isi::helpers::verify_signature_for_signer;
 use crate::state::StateTransaction;
 use hex::encode as hex_encode;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     events::data::{DataEvent, soradns::SoradnsDirectoryEvent},
     isi::error::{InstructionExecutionError, InvalidParameterError},
@@ -433,22 +433,6 @@ fn verify_builder_signature(record: &ResolverDirectoryRecordV1) -> Result<(), Er
         &payload,
     )
     .map_err(|err| invalid_parameter(format!("builder signature verification failed: {err}")))
-}
-fn verify_signature_for_signer(
-    signature: &Signature,
-    signer: &PublicKey,
-    payload: &[u8],
-) -> Result<(), iroha_crypto::Error> {
-    match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-        }
-        _ => {}
-    }
-    signature.verify(signer, payload)
 }
 fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>, Error> {
     let (_, pk_bytes) = record

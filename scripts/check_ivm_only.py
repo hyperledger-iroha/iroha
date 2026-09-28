@@ -25,7 +25,6 @@ UPSTREAM_VENDOR_ROOTS = {
     "vendor/halo2-axiom",
     "vendor/halo2-base",
     "vendor/halo2curves-axiom",
-    "vendor/streebog",
     "vendor/vega-prover",
     "vendor/wayland-scanner-0.31.10",
 }

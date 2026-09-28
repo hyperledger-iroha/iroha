@@ -12,18 +12,16 @@ use iroha_data_model::soradns::{
 use iroha_primitives::soradns::derive_gateway_hosts;
 use norito::{decode_from_bytes_with_limits, json};
 use thiserror::Error;
-/// Convenience alias for the SoraDNS RAD payload.
-pub type ResolverAttestation = ResolverAttestationDocumentV1;
 /// Domain separator used when hashing RAD payloads.
 pub const RAD_HASH_DOMAIN: &[u8] = b"rad-v1";
 /// Decode a RAD payload from Norito bytes.
-pub fn decode_rad_entries(bytes: &[u8]) -> Result<Vec<ResolverAttestation>> {
+pub fn decode_rad_entries(bytes: &[u8]) -> Result<Vec<ResolverAttestationDocumentV1>> {
     if bytes.len() > MAX_RAD_SNAPSHOT_BYTES {
         eyre::bail!(
             "resolver attestation snapshot exceeds the {MAX_RAD_SNAPSHOT_BYTES}-byte limit"
         );
     }
-    let entries: Vec<ResolverAttestation> =
+    let entries: Vec<ResolverAttestationDocumentV1> =
         decode_from_bytes_with_limits(bytes, rad_snapshot_decode_limits())
             .wrap_err("failed to decode resolver attestation entries")?;
     if entries.len() > MAX_RAD_ENTRIES {
@@ -40,7 +38,9 @@ pub fn decode_rad_entries(bytes: &[u8]) -> Result<Vec<ResolverAttestation>> {
     Ok(entries)
 }
 /// Perform structural validation for a RAD entry before it is added to state.
-pub fn validate_rad(rad: &ResolverAttestation) -> Result<(), ResolverAttestationValidationError> {
+pub fn validate_rad(
+    rad: &ResolverAttestationDocumentV1,
+) -> Result<(), ResolverAttestationValidationError> {
     validate_rad_resource_bounds(rad)?;
     if rad.version != RAD_VERSION_V1 {
         return Err(ResolverAttestationValidationError::UnsupportedVersion { found: rad.version });
@@ -79,7 +79,7 @@ pub fn validate_rad(rad: &ResolverAttestation) -> Result<(), ResolverAttestation
 }
 /// Validate all variable-width fields in one decoded RAD.
 pub(crate) fn validate_rad_resource_bounds(
-    rad: &ResolverAttestation,
+    rad: &ResolverAttestationDocumentV1,
 ) -> Result<(), ResolverAttestationValidationError> {
     check_string("fqdn", &rad.fqdn, MAX_IDENTIFIER_BYTES)?;
     check_string(
@@ -165,10 +165,10 @@ pub(crate) fn validate_rad_resource_bounds(
 }
 /// Account the heap retained by one RAD, including decoded spare capacities.
 pub(crate) fn rad_retained_bytes(
-    rad: &ResolverAttestation,
+    rad: &ResolverAttestationDocumentV1,
 ) -> Result<usize, ResolverAttestationValidationError> {
     validate_rad_resource_bounds(rad)?;
-    let mut bytes = std::mem::size_of::<ResolverAttestation>()
+    let mut bytes = std::mem::size_of::<ResolverAttestationDocumentV1>()
         // Account for allocator rounding hidden by compact crypto wrappers.
         .checked_add(4096)
         .ok_or(ResolverAttestationValidationError::RetainedSizeOverflow)?;
@@ -231,7 +231,7 @@ pub(crate) fn rad_retained_bytes(
     Ok(bytes)
 }
 fn validate_operator_account_bounds(
-    rad: &ResolverAttestation,
+    rad: &ResolverAttestationDocumentV1,
 ) -> Result<(), ResolverAttestationValidationError> {
     let controller = rad.operator_account.controller();
     if let Some(key) = controller.single_signatory() {
@@ -261,7 +261,7 @@ fn validate_operator_account_bounds(
 }
 fn charge_operator_account(
     total: &mut usize,
-    rad: &ResolverAttestation,
+    rad: &ResolverAttestationDocumentV1,
 ) -> Result<(), ResolverAttestationValidationError> {
     let controller = rad.operator_account.controller();
     if let Some(key) = controller.single_signatory() {
@@ -344,7 +344,7 @@ fn charge_string_vec(
     Ok(())
 }
 /// Compute the canonical digest of a RAD entry (matching the release tooling).
-pub fn compute_rad_digest(rad: &ResolverAttestation) -> Result<[u8; 32]> {
+pub fn compute_rad_digest(rad: &ResolverAttestationDocumentV1) -> Result<[u8; 32]> {
     let value = json::to_value(rad).wrap_err("failed to convert RAD into JSON value")?;
     let canonical_bytes = canonicalize_norito_bytes(&value)
         .map_err(eyre::Error::from)
@@ -421,7 +421,7 @@ mod tests {
             TlsProvisioningProfile, TlsTransportV1,
         },
     };
-    fn base_rad() -> ResolverAttestation {
+    fn base_rad() -> ResolverAttestationDocumentV1 {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");
         let operator_account = {
             let public_key: PublicKey =
@@ -430,7 +430,7 @@ mod tests {
                     .expect("valid public key literal");
             AccountId::new(public_key)
         };
-        ResolverAttestation {
+        ResolverAttestationDocumentV1 {
             version: RAD_VERSION_V1,
             resolver_id: [1; 32],
             fqdn: "docs.sora".to_string(),

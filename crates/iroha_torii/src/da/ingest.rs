@@ -12,7 +12,7 @@ use super::{
     DaSpoolBatchReport, persistence, storage_class_label, taikai, taikai::taikai_ingest,
 };
 use crate::{
-    NoritoQuery, SharedAppState, panic_recovery,
+    SharedAppState, panic_recovery,
     routing::MaybeTelemetry,
     sorafs::api::ResponseError,
     utils::{self, ResponseFormat},
@@ -43,10 +43,7 @@ use iroha_data_model::{
         pin_intent::DaPinIntent,
         prelude::*,
     },
-    sorafs::{
-        capacity::ProviderId,
-        pin_registry::{ManifestDigest, StorageClass},
-    },
+    sorafs::pin_registry::{ManifestDigest, StorageClass},
     taikai::TaikaiSegmentWindow,
 };
 use iroha_logger::{error, warn};
@@ -56,9 +53,11 @@ use iroha_torii_shared::da::sampling::compute_sample_window;
 use iroha_zkp_halo2::pallas::{
     Params as IpaCurveParams, Polynomial as IpaPolynomial, Scalar as IpaScalar,
 };
+#[cfg(test)]
+use norito::json::Map;
 use norito::{
     decode_from_bytes,
-    json::{self, JsonSerialize, Map, Value},
+    json::{self, JsonSerialize},
     to_bytes,
 };
 use sorafs_car::{
@@ -278,9 +277,6 @@ struct CanonicalPayload<'a> {
 impl CanonicalPayload<'_> {
     fn as_slice(&self) -> &[u8] {
         &self.bytes
-    }
-    fn len(&self) -> usize {
-        self.bytes.len()
     }
     fn into_vec(self) -> Vec<u8> {
         self.bytes.into_owned()
@@ -1733,7 +1729,8 @@ pub async fn handler_post_da_ingest(
                     &app.sorafs_alias_cache_policy,
                     app.sorafs_admission
                         .as_deref()
-                        .and_then(crate::sorafs::AdmissionRegistry::council_policy).as_deref(),
+                        .and_then(crate::sorafs::AdmissionRegistry::council_policy)
+                        .as_deref(),
                     &telemetry,
                 )
                 .map_err(|(status, message)| {
@@ -3312,6 +3309,7 @@ pub(crate) struct ManifestArtifacts {
     pub(super) rent_gib: u64,
     pub(super) rent_months: u32,
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn resolve_manifest(
     request: &DaIngestRequest,

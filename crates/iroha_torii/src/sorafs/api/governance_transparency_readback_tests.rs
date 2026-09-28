@@ -11,8 +11,19 @@ fn governance_mirror_fixture() -> (
 ) {
     let (app, temp_dir, _digest_hex, block_cid_hex, node_cid_hex) =
         sorafs_app_state_with_governance_runtime_index();
-    let ((runtime_index, _runtime_metadata), verified) =
-        load_verified_governance_dag_runtime_index(&app).expect("load verified runtime fixture");
+    let (runtime_index, _runtime_metadata) =
+        load_governance_dag_runtime_index(&app).expect("load verified runtime fixture");
+    let snapshot = app
+        .sorafs_node
+        .governance_dag_runtime_snapshot()
+        .expect("read typed runtime fixture")
+        .expect("published runtime fixture");
+    let head_bytes = snapshot.head_bytes();
+    let signed_head: GovernanceDagHeadV1 =
+        decode_canonical_governance_dag_value(head_bytes, "governance DAG head")
+            .unwrap_or_else(|_| panic!("decode canonical governance DAG head"));
+    let head_raw_ipfs_cid = governance_dag_raw_ipfs_cid(head_bytes);
+    let head_blake3_hex = encode(blake3_hash(head_bytes).as_bytes());
     let runtime_blocks = runtime_index
         .json_array(&["blocks"])
         .expect("generated runtime blocks");
@@ -30,10 +41,22 @@ fn governance_mirror_fixture() -> (
         let node_cid = runtime_block
             .json_str(&["node_cid_hex"])
             .expect("runtime node CID");
-        let encoded_blake3 = verified
-            .encoded_blake3_hex
-            .get(position)
-            .expect("verified runtime block digest");
+        let encoded_blake3 = runtime_block
+            .json_str(&["encoded_blake3"])
+            .expect("verified runtime block digest")
+            .to_owned();
+        let block_path = runtime_block
+            .json_str(&["block_path"])
+            .expect("verified runtime block path");
+        let block_bytes = read_bounded_governance_dag_file(
+            &app,
+            &governance_dag_root_dir(&app)
+                .unwrap_or_else(|_| panic!("governance DAG root"))
+                .join(block_path),
+            u64::try_from(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX),
+            "canonical governance DAG block",
+        )
+        .unwrap_or_else(|_| panic!("read verified runtime block"));
         let payload_kind = runtime_block
             .json_str(&["payload_kind"])
             .expect("runtime payload kind");
@@ -63,13 +86,7 @@ fn governance_mirror_fixture() -> (
         block.insert("blake3".into(), Value::from(encoded_blake3.clone()));
         block.insert(
             "ipfs_cid".into(),
-            Value::from(
-                verified
-                    .raw_ipfs_cid
-                    .get(position)
-                    .expect("verified runtime block IPFS CID")
-                    .clone(),
-            ),
+            Value::from(governance_dag_raw_ipfs_cid(&block_bytes)),
         );
         blocks.push(Value::Object(block));
         by_block_cid_hex.insert(block_cid.to_owned(), Value::from(position_u64));
@@ -85,21 +102,12 @@ fn governance_mirror_fixture() -> (
     let mut head = Map::new();
     head.insert(
         "head_block_cid_hex".into(),
-        Value::from(encode(&verified.head.head_block_cid)),
+        Value::from(encode(&signed_head.head_block_cid)),
     );
-    head.insert("block_count".into(), Value::from(verified.head.block_count));
-    head.insert(
-        "generated_at".into(),
-        Value::from(verified.head.generated_at),
-    );
-    head.insert(
-        "ipfs_cid".into(),
-        Value::from(verified.head_raw_ipfs_cid.clone()),
-    );
-    head.insert(
-        "blake3".into(),
-        Value::from(verified.head_blake3_hex.clone()),
-    );
+    head.insert("block_count".into(), Value::from(signed_head.block_count));
+    head.insert("generated_at".into(), Value::from(signed_head.generated_at));
+    head.insert("ipfs_cid".into(), Value::from(head_raw_ipfs_cid.clone()));
+    head.insert("blake3".into(), Value::from(head_blake3_hex.clone()));
 
     let mut index = Map::new();
     index.insert(
@@ -107,10 +115,7 @@ fn governance_mirror_fixture() -> (
         Value::from("sorafs.governance_dag.mirror.v1"),
     );
     index.insert("generation".into(), Value::from(7_u64));
-    index.insert(
-        "generated_at".into(),
-        Value::from(verified.head.generated_at),
-    );
+    index.insert("generated_at".into(), Value::from(signed_head.generated_at));
     index.insert("head".into(), Value::Object(head));
     index.insert(
         "archive".into(),
@@ -121,7 +126,7 @@ fn governance_mirror_fixture() -> (
             json_entry("ipfs_cid", Value::Null),
         ]),
     );
-    index.insert("block_count".into(), Value::from(verified.head.block_count));
+    index.insert("block_count".into(), Value::from(signed_head.block_count));
     index.insert(
         "indexed_block_count".into(),
         Value::from(u64::try_from(blocks.len()).expect("mirror block count fits u64")),
@@ -143,7 +148,7 @@ fn governance_mirror_fixture() -> (
     );
     let (index, metadata) = parse_governance_dag_mirror_index(&canonical_bytes, metadata)
         .expect("validate canonical mirror fixture");
-    let head_block_cid_hex = encode(&verified.head.head_block_cid);
+    let head_block_cid_hex = encode(&signed_head.head_block_cid);
     (
         app,
         temp_dir,

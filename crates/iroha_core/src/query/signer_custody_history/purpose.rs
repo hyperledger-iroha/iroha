@@ -1,5 +1,9 @@
 //! The three native purpose adapters; their public record schemas remain distinct.
 use super::*;
+#[cfg(test)]
+use iroha_data_model::sorafs::release_manifest_authority::{
+    self as manifest, ReleaseManifestCustodyRecordV1, ReleaseManifestExecutionV1,
+};
 use iroha_data_model::sorafs::{
     final_promotion_account_custody::{
         self as account, FinalPromotionAccountCustodyExecutionV1,
@@ -8,11 +12,9 @@ use iroha_data_model::sorafs::{
     final_promotion_authority::{
         self as receipt, FinalPromotionCustodyRecordV1, FinalPromotionExecutionV1,
     },
-    release_manifest_authority::{
-        self as manifest, ReleaseManifestCustodyRecordV1, ReleaseManifestExecutionV1,
-    },
 };
 
+#[cfg(test)]
 pub(crate) struct ManifestPurpose;
 pub(crate) struct ReceiptPurpose;
 pub(crate) struct AccountPurpose;
@@ -77,6 +79,7 @@ macro_rules! purpose {
         const _: () = assert!($bound == MAX_FRAME_BYTES_V1);
     };
 }
+#[cfg(test)]
 purpose!(
     ManifestPurpose,
     ReleaseManifestCustodyRecordV1,

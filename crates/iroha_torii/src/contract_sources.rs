@@ -1,7 +1,9 @@
 #![cfg(feature = "app_api")]
 use crate::{Error, JsonBody, data_dir};
 use axum::{http::StatusCode, response::IntoResponse};
-use iroha_core::state::{State as CoreState, StateReadOnly, WorldReadOnly};
+#[cfg(test)]
+use iroha_core::state::StateReadOnly as _;
+use iroha_core::state::{State as CoreState, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
@@ -1536,6 +1538,7 @@ fn persist_verified_source_record_locked(record: &StoredVerifiedSourceRecord) ->
         "verified-source record",
     )
 }
+#[cfg(test)]
 fn persist_verified_source_record(record: &StoredVerifiedSourceRecord) -> Result<(), Error> {
     let mutation_lock = verified_source_mutation_lock(&record.code_hash);
     let _guard = mutation_lock

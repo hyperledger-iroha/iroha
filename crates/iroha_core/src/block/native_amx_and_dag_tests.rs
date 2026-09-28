@@ -55,7 +55,9 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         DomainId::try_new("treasury", "cbuae").expect("treasury domain"),
     ] {
         seed_domain_name_lease(&mut world, &authority, &domain);
-        world.domains.insert(domain.clone(), Domain::new(domain).build(&authority));
+        world
+            .domains
+            .insert(domain.clone(), Domain::new(domain).build(&authority));
     }
     let nexus = {
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
@@ -84,7 +86,11 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         nexus
     };
     let (mut state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
-        world, nexus, LiveQueryStore::start_test(), chain_id.clone(), native_amx_test_network_id(),
+        world,
+        nexus,
+        LiveQueryStore::start_test(),
+        chain_id.clone(),
+        native_amx_test_network_id(),
     );
     install_test_lane_manifests(&state);
     for (dataspace, lane) in [(paynet, LaneId::new(1)), (cbuae, LaneId::new(2))] {
@@ -148,7 +154,9 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
             current_slot: 0,
         },
     );
-    state.seed_genesis_for_testing().expect("authenticate the native AMX ordinary predecessor");
+    state
+        .seed_genesis_for_testing()
+        .expect("authenticate the native AMX ordinary predecessor");
     let mut validator_set = keypairs
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -309,31 +317,6 @@ fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &Doma
         crate::sns::record_storage_key(&selector),
         norito::codec::Encode::encode(&record),
     );
-}
-#[allow(dead_code)]
-fn commit_block_at_height(
-    state: &State,
-    kura: &Arc<Kura>,
-    topology: &Topology,
-    leader_private: &PrivateKey,
-    height: u64,
-    prev_hash: Option<HashOf<BlockHeader>>,
-    creation_time_ms: u64,
-) -> HashOf<BlockHeader> {
-    let valid = ValidBlock::new_dummy_and_modify_header(leader_private, |header| {
-        header.set_height(NonZeroU64::new(height).expect("non-zero height in commit helper"));
-        header.set_prev_block_hash(prev_hash);
-        header.creation_time_ms = creation_time_ms;
-    });
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    {
-        let mut state_block = state.block(committed.as_ref().header());
-        let _ = state_block.apply_without_execution(&committed, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-    }
-    kura.store_block(committed.clone())
-        .expect("store committed block");
-    committed.as_ref().hash()
 }
 #[test]
 fn map_overlay_error_labels_amx_budget() {
@@ -720,7 +703,9 @@ fn canonical_output_repeat_validation_is_deterministic() {
         .collect();
     // Replay the same signed inputs against an unchanged predecessor and compare
     // the complete canonical outputs, including each transaction result.
-    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
+    state
+        .seed_genesis_for_testing()
+        .expect("authenticate ordinary fixture predecessor");
     let new_block = BlockBuilder::new(acc.clone())
         .chain(0, state.view().latest_block().as_deref())
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
@@ -736,8 +721,10 @@ fn canonical_output_repeat_validation_is_deterministic() {
     let mut sb = state.block(new_block.header());
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let first_outputs = vb.as_ref().execution_outputs().to_vec();
-    assert!(first_outputs.iter().all(|output| output.result().is_ok()),
-        "both independent transaction effects must execute successfully");
+    assert!(
+        first_outputs.iter().all(|output| output.result().is_ok()),
+        "both independent transaction effects must execute successfully"
+    );
     drop(sb);
     let new_block2 = BlockBuilder::new(acc)
         .chain(0, state.view().latest_block().as_deref())
@@ -745,6 +732,9 @@ fn canonical_output_repeat_validation_is_deterministic() {
         .unpack(|_| {});
     let mut sb2 = state.block(new_block2.header());
     let vb2 = ValidBlock::validate_unchecked(new_block2.into(), &mut sb2).unpack(|_| {});
-    assert_eq!(vb2.as_ref().execution_outputs(), first_outputs.as_slice(),
-        "canonical execution output bytes must be deterministic for the same predecessor and inputs");
+    assert_eq!(
+        vb2.as_ref().execution_outputs(),
+        first_outputs.as_slice(),
+        "canonical execution output bytes must be deterministic for the same predecessor and inputs"
+    );
 }

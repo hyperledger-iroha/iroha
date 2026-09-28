@@ -69,6 +69,7 @@ type StateTelemetry = crate::telemetry::StateTelemetry;
 type StateTelemetry = ();
 type NexusDataSpaceId = iroha_model_base::topology::DataSpaceId;
 type NexusLaneId = iroha_model_base::topology::LaneId;
+#[cfg(test)]
 /// Recovered lane execution distinguishes malformed input from local admission.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum LaneExecutionInputError {
@@ -80,6 +81,7 @@ pub(crate) enum LaneExecutionInputError {
     Storage(#[from] crate::state::StateStorageAdmissionError),
 }
 
+#[cfg(test)]
 impl From<&'static str> for LaneExecutionInputError {
     fn from(reason: &'static str) -> Self {
         Self::Invalid(reason)
@@ -174,22 +176,6 @@ pub(crate) fn authenticated_signed_replay_alias(
     };
     sealed_reveal_authenticated_at_block_start(state_block, reveal)
         .then(|| reveal.signed_transaction().hash_as_entrypoint())
-}
-/// Decide fee eligibility from the actual rejection before diagnostic projection.
-pub(crate) fn rejected_live_execution_fee_eligible(
-    executable: &Executable,
-    result: &TransactionResultInner,
-) -> bool {
-    (matches!(executable, Executable::Batch(_))
-        || matches!(
-            crate::state::standalone_governance_ballot_instruction_v1(executable),
-            Ok(Some(_))
-        ))
-        && !matches!(
-            result,
-            Err(TransactionRejectionReason::Validation(error))
-                if crate::executor::is_live_batch_overlay_limit_rejection(error)
-        )
 }
 /// Signed metadata key selecting restricted quarantine admission.
 pub(crate) const QUARANTINE_METADATA_KEY: &str = "quarantine";
@@ -1937,21 +1923,8 @@ impl<'tx> AcceptedTransaction<'tx> {
     {
         CheckedTransaction::new(self, state)
     }
-    /// Validate a genesis transaction, including its individual authorization proof.
-    ///
-    /// # Errors
-    ///
-    /// See [`AcceptTransactionFail`]
-    pub fn validate_genesis(
-        tx: &SignedTransaction,
-        max_clock_drift: Duration,
-        genesis_account: &AccountId,
-        crypto: &iroha_config::parameters::actual::Crypto,
-    ) -> Result<(), AcceptTransactionFail> {
-        let now = current_unix_time();
-        Self::validate_genesis_with_now(tx, max_clock_drift, genesis_account, crypto, now)
-    }
-    /// Like [`Self::validate_genesis`], but with a caller-provided "now" timestamp.
+    /// Validate a genesis transaction, including its individual authorization proof,
+    /// against a caller-provided "now" timestamp.
     ///
     /// # Errors
     ///
@@ -2558,6 +2531,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             metadata_depths: prepare_metadata_depths(self.metadata()?),
         })
     }
+    #[cfg(test)]
     pub(crate) fn stateless_cache_metadata(&self) -> Option<PreparedTransactionMetadata> {
         let signed = self.external()?;
         let payload_hash = *self
@@ -13606,8 +13580,6 @@ pub mod tests {
             ASSET_STR.parse().expect("sandbox asset name is valid"),
         )
     });
-    static FIFO_SCHEDULER_LOCK: LazyLock<std::sync::Mutex<()>> =
-        LazyLock::new(|| std::sync::Mutex::new(()));
     const SANDBOX_ACCOUNT_KEYS: [(&str, &str, &str); 5] = [
         (
             "alice",

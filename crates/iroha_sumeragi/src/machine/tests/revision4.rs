@@ -269,8 +269,8 @@ fn det_r4_cert_cache_lru_cleared_on_entry() {
 fn det_r4_own_messages_through_insertion() {
     let mut h = H::new(1, |_| 0);
     h.auto_exec = true;
-    // The harness never answers builds: the heartbeat (EMPTY) is proposed at idle + build.
-    h.run_until(h.params.idle_block_interval + h.local.build_timeout);
+    h.run_until(h.params.block_time);
+    h.built(b"transaction");
     assert_eq!(h.core.tip.height, 1, "n = 1 commits through its own votes");
     assert!(votes(&h.all).is_empty(), "nothing is routed to itself");
     // Its own timeout forms the TC of the view.
@@ -385,7 +385,14 @@ fn det_r4_advance_to_prunes_blocks_and_reported() {
         "keys of views < view − 1 are pruned"
     );
     assert!(h.core.t_pqc.is_none() && !h.core.late_entry && !h.core.asked);
-    assert_eq!(h.core.build, super::super::Build::Idle);
+    assert!(matches!(
+        h.core.build,
+        super::super::Build::Requested { .. }
+    ));
+    assert!(
+        h.core.proposal.is_none(),
+        "the new leader waits for real work"
+    );
 }
 
 /// §9.1: `exec_budget = min(e_max, φ·T_base/2)`, independent of the level (a view-1 build).

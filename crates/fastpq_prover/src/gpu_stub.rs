@@ -68,6 +68,7 @@ impl LdeDispatch {
     }
 }
 /// FFT stub that reports the backend as unsupported.
+#[cfg(any(test, feature = "bench"))]
 pub fn fft_columns(
     _columns: &mut [Vec<u64>],
     _log_size: u32,
@@ -104,6 +105,7 @@ pub fn ifft_columns_async(
     Err(GpuError::Unsupported(backend))
 }
 /// LDE stub that reports the backend as unsupported and leaves evaluation on the CPU.
+#[cfg(any(test, feature = "bench"))]
 pub fn lde_columns(
     _coeffs: &[Vec<u64>],
     _trace_log: u32,

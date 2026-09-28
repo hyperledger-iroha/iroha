@@ -44,6 +44,8 @@ pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
+#[cfg(test)]
+use iroha_data_model::block::consensus::ValidatorIndex;
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, rekey::AccountAlias},
@@ -52,7 +54,6 @@ use iroha_data_model::{
         consensus::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            ValidatorIndex,
         },
         *,
     },
@@ -1157,7 +1158,6 @@ fn validate_native_amx_receipt_against_plan_with_authority(
     }
     Ok(())
 }
-#[cfg_attr(not(test), allow(dead_code))]
 fn validate_native_amx_attestation_qc(
     receipt: &NativeAmxReceipt,
     leg: &NativeAmxLegRecordV2,
@@ -3552,6 +3552,7 @@ mod pending {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
                 execution_context: None,
             })
         }
@@ -3578,6 +3579,7 @@ mod pending {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
                 execution_context: None,
             })
         }
@@ -3596,6 +3598,8 @@ mod chained {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
+        pub(super) global_beacon_pulse:
+            Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
     impl BlockBuilder<Chained> {
@@ -3697,6 +3701,18 @@ mod chained {
             let hash = effects.as_ref().map(HashOf::new);
             self.0.header.set_npos_effects_hash(hash);
             self.0.npos_consensus_effects = effects;
+            self
+        }
+        /// Attach the current threshold pulse; it never substitutes transaction work.
+        #[must_use]
+        pub fn with_global_beacon_pulse(
+            mut self,
+            pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+        ) -> Self {
+            self.0
+                .header
+                .set_global_beacon_pulse_hash(pulse.as_ref().map(HashOf::new));
+            self.0.global_beacon_pulse = pulse;
             self
         }
         /// Attach durable execution context and update the header hash accordingly.
@@ -3813,6 +3829,7 @@ mod chained {
                 da_proof_policies: self.0.da_proof_policies,
                 da_pin_intents: self.0.da_pin_intents,
                 npos_consensus_effects: self.0.npos_consensus_effects,
+                global_beacon_pulse: self.0.global_beacon_pulse,
                 execution_context: self.0.execution_context,
             }
         }
@@ -3855,8 +3872,7 @@ mod chained {
         }
         /// Finish this block without a block signature (`specs/sumeragi.md` §3.2): the
         /// canonical resultless proposal a Sumeragi leader proposes, which its certified core
-        /// header authenticates, and the block every node synthesizes for `EMPTY` (so it must
-        /// not depend on any key).
+        /// header authenticates without depending on a local signing key.
         #[must_use]
         pub fn into_unsigned_proposal(self) -> SignedBlock {
             let mut builder = self;
@@ -3875,6 +3891,7 @@ mod chained {
                 da_proof_policies,
                 da_pin_intents,
                 npos_consensus_effects,
+                global_beacon_pulse,
                 execution_context,
             } = builder.0;
             SignedBlock::unsigned_with_payload(BlockPayload {
@@ -3888,6 +3905,7 @@ mod chained {
                 da_proof_policies,
                 da_pin_intents,
                 npos_consensus_effects,
+                global_beacon_pulse,
             })
         }
         /// Sign this block and get [`NewBlock`] using the provided validator index.
@@ -3934,6 +3952,8 @@ mod new {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
+        pub(super) global_beacon_pulse:
+            Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
     impl NewBlock {
@@ -3976,25 +3996,6 @@ mod new {
         pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
             self.npos_consensus_effects.as_ref()
         }
-        #[cfg(test)]
-        #[allow(dead_code)]
-        pub(crate) fn update_header(self, header: &BlockHeader, private_key: &PrivateKey) -> Self {
-            let signature = BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::try_from_hash(private_key, header.hash())
-                    .expect("test block signing should succeed"),
-            );
-            Self {
-                signature,
-                header: *header,
-                transactions: self.transactions,
-                da_commitments: self.da_commitments,
-                da_proof_policies: self.da_proof_policies,
-                da_pin_intents: self.da_pin_intents,
-                npos_consensus_effects: self.npos_consensus_effects,
-                execution_context: self.execution_context,
-            }
-        }
     }
     impl From<NewBlock> for SignedBlock {
         fn from(block: NewBlock) -> Self {
@@ -4012,6 +4013,7 @@ mod new {
                     da_proof_policies: block.da_proof_policies,
                     da_pin_intents: block.da_pin_intents,
                     npos_consensus_effects: block.npos_consensus_effects,
+                    global_beacon_pulse: block.global_beacon_pulse,
                 },
             )
         }
@@ -4513,8 +4515,8 @@ pub(crate) mod valid {
             context: SumeragiV2ValidationContext,
         },
         /// A block ordered by the Sumeragi core (`specs/sumeragi.md` §4): the certified
-        /// core header binds the payload, so block signatures are not checked; empty blocks
-        /// are valid (heartbeat and `EMPTY`); block time is canonical from the parent and
+        /// core header binds the nonempty payload, so block signatures are not checked;
+        /// block time is canonical from the parent and
         /// the cadence; nothing depends on a v2 height context.
         Sumeragi {
             block_cadence: Duration,
@@ -4561,8 +4563,8 @@ pub(crate) mod valid {
                 Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. } => None,
             }
         }
-        /// Whether a block must carry proposal work (the v2 gate). Sumeragi accepts empty
-        /// blocks: a leader can always propose (`specs/sumeragi.md` §4.4).
+        /// Whether to apply the retired proposal-work classifier. Current Sumeragi enforces
+        /// nonempty transaction work directly at its payload and admission boundary.
         const fn enforces_proposal_work(&self) -> bool {
             !matches!(
                 self,
@@ -6245,6 +6247,7 @@ pub(crate) mod valid {
         has_native_participant_frontiers: bool,
     }
     include!("block/pristine_consensus_effects.rs");
+    include!("block/current_beacon.rs");
 
     /// Owned, authenticated control inputs for the same Native execution scope.
     /// This is neither global block validity nor publication authority.
@@ -6367,6 +6370,7 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
         fn new_unverified(block: SignedBlock) -> Self {
             Self {
                 block,
@@ -6521,6 +6525,7 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+        #[cfg(test)]
         fn verify_signer_set(
             topology: &Topology,
             signers: &BTreeSet<ValidatorIndex>,
@@ -7593,6 +7598,24 @@ pub(crate) mod valid {
                 penalty_index.generation,
                 penalty_index.header,
             );
+            let prepared_pulse = if block.global_beacon_pulse().is_some() {
+                Some(
+                    Self::prepare_current_beacon_pulse(
+                        block,
+                        state,
+                        authoritative_mode.ok_or_else(|| {
+                            Self::npos_effects_error(
+                                "current pulse has no authenticated consensus mode",
+                            )
+                        })?,
+                    )?
+                    .ok_or_else(|| {
+                        Self::npos_effects_error("current pulse requirement disappeared")
+                    })?,
+                )
+            } else {
+                None
+            };
             let mut prepared_npos = Self::prepare_pristine_consensus_effects(
                 block,
                 state,
@@ -7635,6 +7658,9 @@ pub(crate) mod valid {
             let apply_npos = |state_block: &mut StateBlock<'_>| {
                 // Each constructor callback checks this before its first effect;
                 // do not reread diagnostic generation after QueuePlan staging.
+                if let Some(pulse) = prepared_pulse {
+                    pulse.apply(state_block)?;
+                }
                 prepared_npos.map_or(Ok(()), |prepared| prepared.apply(state_block))
             };
             let queue_plan_admissions = execution_context
@@ -8005,13 +8031,16 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let consensus_effects = if validation_profile.sumeragi_schedule().is_some() {
-                Self::validate_sumeragi_consensus_effects(&block).map(|()| {
-                    ValidatedNposPenaltyIndex {
-                        state,
-                        generation: state.state_view_generation(),
-                        header: block.header(),
-                        index: None,
-                    }
+                Self::validate_sumeragi_consensus_effects(
+                    &block,
+                    state,
+                    validation_profile.authoritative_consensus_mode(),
+                )
+                .map(|()| ValidatedNposPenaltyIndex {
+                    state,
+                    generation: state.state_view_generation(),
+                    header: block.header(),
+                    index: None,
                 })
             } else {
                 Self::validate_npos_effects_with_state(
@@ -8736,20 +8765,21 @@ pub(crate) mod valid {
                 }
             }
         }
-        /// Sumeragi blocks carry no consensus effects: evidence, penalties and the beacon are
-        /// not block payload (`specs/sumeragi.md` §4).
-        // TODO(WP8a): the effects section is deleted with v2.
+        /// Current blocks carry a dedicated pulse authenticated by current committed state.
+        /// Retired mixed NPoS effects are never accepted by the current protocol.
         fn validate_sumeragi_consensus_effects(
             block: &SignedBlock,
+            state: &State,
+            mode: iroha_data_model::parameter::system::ConsensusMode,
         ) -> Result<(), BlockValidationError> {
             if block.header().npos_effects_hash().is_some()
                 || block.npos_consensus_effects().is_some()
             {
                 return Err(Self::npos_effects_error(
-                    "Sumeragi blocks carry no consensus effects",
+                    "current Sumeragi blocks reject retired NPoS consensus effects",
                 ));
             }
-            Ok(())
+            Self::prepare_current_beacon_pulse(block, state, mode).map(|_| ())
         }
         fn validate_npos_effects_with_state<'state>(
             block: &SignedBlock,
@@ -8761,6 +8791,13 @@ pub(crate) mod valid {
         ) -> Result<ValidatedNposPenaltyIndex<'state>, BlockValidationError> {
             let generation = state.state_view_generation();
             let result = (|| {
+                if block.global_beacon_pulse().is_some()
+                    || block.header().global_beacon_pulse_hash().is_some()
+                {
+                    return Err(Self::npos_effects_error(
+                        "current global beacon pulse requires current Sumeragi validation",
+                    ));
+                }
                 Self::validate_npos_effects_header(block)?;
                 let block_height = block.header().height().get();
                 let actual_effects = block.npos_consensus_effects();
@@ -12311,6 +12348,7 @@ pub(crate) mod valid {
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
         }
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         /// Add additional signature for [`Self`]
         ///
         /// # Errors
@@ -12460,6 +12498,7 @@ pub(crate) mod valid {
                 Err(error) => Err((Box::new(self), Box::new(error))),
             })
         }
+        #[cfg(test)]
         /// Commit using a prevalidated signer set (e.g., from a QC).
         ///
         /// The block signatures are still verified to guard against forged aggregates; `signers`
@@ -12586,6 +12625,7 @@ pub(crate) mod valid {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 npos_consensus_effects: None,
+                global_beacon_pulse: None,
                 execution_context: None,
             });
             let default_policies = crate::da::proof_policy_bundle(
@@ -13258,6 +13298,7 @@ pub(crate) mod valid {
                     da_proof_policies: Some(policies),
                     da_pin_intents: None,
                     npos_consensus_effects: None,
+                    global_beacon_pulse: None,
                 },
             );
             block.replace_da_sidecars_for_testing(da_commitments, da_pin_intents);
@@ -15667,7 +15708,8 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
-            let network_id = crate::unit_test_support::synthetic_network_id("v2-artifact-bound-commit");
+            let network_id =
+                crate::unit_test_support::synthetic_network_id("v2-artifact-bound-commit");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
@@ -19291,6 +19333,7 @@ pub(crate) mod valid {
                     da_proof_policies: chained.0.da_proof_policies,
                     da_pin_intents: chained.0.da_pin_intents,
                     npos_consensus_effects: chained.0.npos_consensus_effects,
+                    global_beacon_pulse: chained.0.global_beacon_pulse,
                 },
             );
             validate_signed_voting_test_block!(

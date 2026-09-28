@@ -1687,11 +1687,6 @@ impl VpnConfig {
         meter_hash.copy_from_slice(&decoded);
         Ok(meter_hash)
     }
-    /// Return the configured meter hash as raw bytes. Only safe to call after `validate`.
-    pub fn meter_hash_bytes(&self) -> [u8; 32] {
-        self.try_meter_hash_bytes()
-            .expect("validated meter hash to decode")
-    }
     /// Guard ensuring the VPN overlay is compiled in when enabled.
     pub fn require_runtime_available(&self) -> Result<(), ConfigError> {
         if self.enabled && !vpn_runtime_available() {

@@ -26,12 +26,9 @@ use futures::{SinkExt, StreamExt, stream};
 use iroha_core::{smartcontracts::ValidSingularQuery, state::StateReadOnly};
 use iroha_data_model::{
     account::AccountId,
-    isi::{
-        Instruction,
-        sorafs::{
-            DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
-            RepaySorafsReserveCredit, RequestSorafsReserveMovement, SubmitSorafsReserveAppeal,
-        },
+    isi::sorafs::{
+        DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
+        RepaySorafsReserveCredit, RequestSorafsReserveMovement, SubmitSorafsReserveAppeal,
     },
     query::{
         error::{FindError, QueryExecutionFail},
@@ -1431,12 +1428,13 @@ fn require_expected_cursor(
     view: &impl StateReadOnly,
     expected: Option<ReserveFinalizedCursorV1>,
 ) -> Result<ReserveFinalizedCursorV1, Response> {
-    let actual = reserve_finalized_cursor(view).ok_or_else(|| {
-        json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "authoritative finalized SoraFS reserve state is unavailable",
-        )
-    })?;
+    let actual =
+        super::reserve_runtime::reserve_finalized_cursor_from_view(view).ok_or_else(|| {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authoritative finalized SoraFS reserve state is unavailable",
+            )
+        })?;
     if expected.is_some_and(|expected| expected != actual) {
         return Err(json_error(
             StatusCode::CONFLICT,
@@ -1444,16 +1442,6 @@ fn require_expected_cursor(
         ));
     }
     Ok(actual)
-}
-fn reserve_finalized_cursor(view: &impl StateReadOnly) -> Option<ReserveFinalizedCursorV1> {
-    u64::try_from(view.block_hashes().len())
-        .ok()
-        .zip(view.block_hashes().last())
-        .map(|(height, hash)| ReserveFinalizedCursorV1 {
-            height,
-            block_hash: *hash.as_ref(),
-        })
-        .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
 }
 fn anchored_record_response<T: norito::json::JsonSerialize>(
     cursor: ReserveFinalizedCursorV1,

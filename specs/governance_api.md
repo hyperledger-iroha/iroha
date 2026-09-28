@@ -220,6 +220,9 @@ plus reducer admission revalidate the same limits.
 The public threshold-key lifecycle instruction carries an exact-roster
 `2f + 1` certificate over the network, ordered roster, threshold, complete
 public transcript, containing height, action, and `expected_active_session_id`.
+The roster for containing height `h` is the committee that World's lag-2
+consensus schedule holds for `h` (committed in `R_{h−2}`, canonical key order),
+so execution and Torii admission read the same committed entry on every node.
 Core compare-and-sets that predecessor before applying the action. For the
 global beacon, an install or retirement included in block `H` is effective at
 `H + 1`; the session active at pulse height `H`, rather than the singleton

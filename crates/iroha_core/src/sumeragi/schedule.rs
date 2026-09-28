@@ -39,7 +39,7 @@ use iroha_genesis::GenesisBlock;
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
     api::ConfigError,
-    pacemaker::{FRAME_OVERHEAD, validate_chain},
+    pacemaker::FRAME_OVERHEAD,
     types::{ChainParams, Committee, CommitteeError, HeightConfig, PublicKey},
 };
 use norito::{
@@ -53,96 +53,7 @@ use crate::state::{StateBlock, WorldReadOnly, live_consensus_key_pop_for_peer_wi
 /// The schedule lag: the state after `h` schedules height `h + LAG` (§10.1).
 pub const LAG: u64 = 2;
 
-/// Largest consensus frame every node's transport accepts, the chain-wide bound that on-chain
-/// chain parameters are validated against (§9.4, O10): 16 MiB of payload plus the core's frame
-/// overhead. It is a protocol constant, not node configuration, so validation is deterministic;
-/// it equals the driver's default frame limit.
-pub const CHAIN_TRANSPORT_FRAME_LIMIT: u64 = 16 * 1024 * 1024 + FRAME_OVERHEAD as u64;
-
-/// Chain parameters of one height as stored in World and committed in `R` (§10.1, §12.4): the
-/// Norito and JSON form of the core's [`ChainParams`].
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::sumeragi::schedule::ChainParamsRecord")]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    NoritoSerialize,
-    NoritoDeserialize,
-    JsonSerialize,
-    JsonDeserialize,
-)]
-pub struct ChainParamsRecord {
-    /// Target block time in milliseconds (`block_cadence_ms`).
-    pub block_time_ms: u64,
-    /// Heartbeat interval of an idle chain in milliseconds.
-    pub idle_block_interval_ms: u64,
-    /// Execution budget `E_max` in milliseconds.
-    pub exec_budget_ms: u64,
-    /// Apply budget `A_max` in milliseconds.
-    pub apply_budget_ms: u64,
-    /// Largest block payload in bytes.
-    pub max_block_bytes: u32,
-    /// Fresh blocks from this view on are `EMPTY`.
-    pub empty_after_views: u64,
-    /// Epoch length in heights.
-    pub epoch_length_blocks: u64,
-}
-
-impl ChainParamsRecord {
-    /// The chain parameters the on-chain Sumeragi parameters define.
-    #[must_use]
-    pub fn from_parameters(params: &SumeragiParameters) -> Self {
-        Self {
-            block_time_ms: params.block_cadence_ms.get(),
-            idle_block_interval_ms: params.idle_block_interval_ms.get(),
-            exec_budget_ms: params.exec_budget_ms.get(),
-            apply_budget_ms: params.apply_budget_ms.get(),
-            max_block_bytes: params.max_block_bytes.get(),
-            empty_after_views: params.empty_after_views.get(),
-            epoch_length_blocks: params.epoch_length_blocks.get(),
-        }
-    }
-
-    /// The core's chain parameters.
-    #[must_use]
-    pub fn to_core(&self) -> ChainParams {
-        ChainParams {
-            block_time: self.block_time_ms,
-            idle_block_interval: self.idle_block_interval_ms,
-            e_max: self.exec_budget_ms,
-            a_max: self.apply_budget_ms,
-            max_block_bytes: self.max_block_bytes,
-            empty_after_views: self.empty_after_views,
-            epoch_length: self.epoch_length_blocks,
-        }
-    }
-
-    /// The record of the core's chain parameters.
-    #[must_use]
-    pub fn from_core(params: &ChainParams) -> Self {
-        Self {
-            block_time_ms: params.block_time,
-            idle_block_interval_ms: params.idle_block_interval,
-            exec_budget_ms: params.e_max,
-            apply_budget_ms: params.a_max,
-            max_block_bytes: params.max_block_bytes,
-            empty_after_views: params.empty_after_views,
-            epoch_length_blocks: params.epoch_length,
-        }
-    }
-
-    /// §9.4 validation against [`CHAIN_TRANSPORT_FRAME_LIMIT`].
-    ///
-    /// # Errors
-    /// The first violated rule.
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        validate_chain(&self.to_core(), CHAIN_TRANSPORT_FRAME_LIMIT)
-    }
-}
+pub use iroha_data_model::sumeragi_finality::{CHAIN_TRANSPORT_FRAME_LIMIT, ChainParamsRecord};
 
 /// The configuration of one height as stored in World: the committee (peers in the core's
 /// canonical key order) and the chain parameters.
@@ -316,6 +227,9 @@ pub enum ScheduleError {
     /// The chain parameters fail §9.4 validation.
     #[error("invalid chain parameters: {0}")]
     Params(ConfigError),
+    /// The signed NPoS policy contradicts the current consensus epoch authority.
+    #[error("NPoS epoch_length_blocks must equal the signed Sumeragi epoch_length_blocks")]
+    EpochPolicyMismatch,
     /// The stored schedule is not empty or three consecutive heights.
     #[error("the stored consensus schedule is malformed")]
     Malformed,
@@ -443,6 +357,11 @@ pub fn next_config(
     world: &impl WorldReadOnly,
     height: u64,
 ) -> Result<ScheduledConfig, ScheduleError> {
+    if world.sumeragi_npos_parameters().is_some_and(|npos| {
+        npos.epoch_length_blocks() != world.parameters().sumeragi().epoch_length_blocks
+    }) {
+        return Err(ScheduleError::EpochPolicyMismatch);
+    }
     let config = ScheduledConfig {
         height,
         committee: scheduled_committee(world, height)?,
@@ -562,11 +481,12 @@ pub fn validate_parameter_change(
     }
     let mut candidate = current.clone();
     match *change {
-        SumeragiParameter::IdleBlockIntervalMs(value) => candidate.idle_block_interval_ms = value,
+        SumeragiParameter::PayloadRetryIntervalMs(value) => {
+            candidate.payload_retry_interval_ms = value
+        }
         SumeragiParameter::ExecBudgetMs(value) => candidate.exec_budget_ms = value,
         SumeragiParameter::ApplyBudgetMs(value) => candidate.apply_budget_ms = value,
         SumeragiParameter::MaxBlockBytes(value) => candidate.max_block_bytes = value,
-        SumeragiParameter::EmptyAfterViews(value) => candidate.empty_after_views = value,
         SumeragiParameter::EpochLengthBlocks(value) => candidate.epoch_length_blocks = value,
         SumeragiParameter::MaxClockDriftMs(_) | SumeragiParameter::DemotionWindow(_) => {}
     }
@@ -683,6 +603,26 @@ mod tests {
         state::{State, World, derive_validator_key_id},
     };
 
+    #[test]
+    fn schedule_rejects_conflicting_npos_epoch_authority() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            block.parameters.get_mut().set_parameter(
+                iroha_data_model::parameter::Parameter::Custom(
+                    iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                        .into_custom_parameter(),
+                ),
+            );
+            block.parameters.get_mut().sumeragi.epoch_length_blocks = NonZeroU64::new(11).unwrap();
+            block.commit();
+        }
+        assert_eq!(
+            next_config(&world.view(), 2),
+            Err(ScheduleError::EpochPolicyMismatch)
+        );
+    }
+
     fn bls() -> KeyPair {
         KeyPair::random_with_algorithm(Algorithm::BlsNormal)
     }
@@ -775,8 +715,11 @@ mod tests {
             Err(ConfigError::MaxBlockBytesAboveTransport)
         );
         let mut record = params();
-        record.block_time_ms = record.idle_block_interval_ms + 1;
-        assert_eq!(record.validate(), Err(ConfigError::BlockTimeAboveIdle));
+        record.block_time_ms = record.payload_retry_interval_ms + 1;
+        assert_eq!(
+            record.validate(),
+            Err(ConfigError::BlockTimeAbovePayloadRetry)
+        );
         assert_eq!(
             CHAIN_TRANSPORT_FRAME_LIMIT,
             crate::sumeragi::driver::DriverConfig::default().frame_limit
@@ -831,7 +774,7 @@ mod tests {
             Err(ScheduleError::Committee(CommitteeError::Empty))
         );
         let mut bad = entry;
-        bad.params.empty_after_views = 0;
+        bad.params.payload_retry_interval_ms = 0;
         assert!(matches!(bad.height_config(), Err(ScheduleError::Params(_))));
     }
 
@@ -1004,10 +947,13 @@ mod tests {
             validate_parameter_change(&current, &window, false),
             Err(ScheduleError::GenesisOnly)
         );
-        let too_fast_idle = SumeragiParameter::IdleBlockIntervalMs(NonZeroU64::new(999).unwrap());
+        let too_fast_idle =
+            SumeragiParameter::PayloadRetryIntervalMs(NonZeroU64::new(999).unwrap());
         assert_eq!(
             validate_parameter_change(&current, &too_fast_idle, false),
-            Err(ScheduleError::Params(ConfigError::BlockTimeAboveIdle))
+            Err(ScheduleError::Params(
+                ConfigError::BlockTimeAbovePayloadRetry
+            ))
         );
         // In genesis the combination is checked when the schedule is installed.
         validate_parameter_change(&current, &too_fast_idle, true).expect("genesis defers");
@@ -1020,11 +966,10 @@ mod tests {
         ));
         for ok in [
             SumeragiParameter::MaxClockDriftMs(5),
-            SumeragiParameter::IdleBlockIntervalMs(NonZeroU64::new(6_000).unwrap()),
+            SumeragiParameter::PayloadRetryIntervalMs(NonZeroU64::new(6_000).unwrap()),
             SumeragiParameter::ExecBudgetMs(NonZeroU64::new(3_000).unwrap()),
             SumeragiParameter::ApplyBudgetMs(NonZeroU64::new(500).unwrap()),
             SumeragiParameter::MaxBlockBytes(NonZeroU32::new(1 << 20).unwrap()),
-            SumeragiParameter::EmptyAfterViews(NonZeroU64::new(3).unwrap()),
             SumeragiParameter::EpochLengthBlocks(NonZeroU64::new(7_200).unwrap()),
         ] {
             validate_parameter_change(&current, &ok, false).expect("valid change");

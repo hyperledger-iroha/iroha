@@ -20,7 +20,6 @@ mod model {
     #[norito_schema(name = "iroha_data_model::asset::alias::model::AssetDefinitionAlias")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct AssetDefinitionAlias(pub(super) ConstString);
 }
 impl AssetDefinitionAlias {

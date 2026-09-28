@@ -21,7 +21,6 @@ use iroha_torii_shared::private_settlement_api::{
 };
 use norito::json::{Map, Value};
 use std::{
-    convert::TryFrom,
     fmt::Write,
     path::{Path, PathBuf},
     str::FromStr as _,
@@ -490,30 +489,10 @@ fn private_settlement<C: RunContext>(
 }
 fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<()> {
     let client = context.client_from_config()?;
-    let status = norito::json::to_value(
-        &iroha::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()?,
-    )?;
-    let lanes = status
-        .get("lane_governance")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let sealed_count = status
-        .get("lane_governance_sealed_total")
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or_else(|| count_sealed(&lanes));
-    let sealed_aliases = status
-        .get("lane_governance_sealed_aliases")
-        .and_then(Value::as_array)
-        .map_or_else(
-            || collect_sealed_aliases(&lanes),
-            |arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            },
-        );
+    let status = iroha::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()?;
+    let sealed_count = status.lane_governance_sealed_total;
+    let sealed_aliases = status.lane_governance_sealed_aliases;
+    let lanes = norito::json::to_value(&status.lane_governance)?;
     let filtered_lanes = if args.only_missing {
         filter_lane_entries(lanes, true)
     } else {
@@ -523,13 +502,10 @@ fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<
         context.println(format_lane_summary(&filtered_lanes, args.only_missing))?;
     } else {
         let mut map = Map::new();
-        map.insert(
-            "sealed_total".into(),
-            Value::from(u64::try_from(sealed_count).unwrap_or(u64::MAX)),
-        );
+        map.insert("sealed_total".into(), Value::from(u64::from(sealed_count)));
         map.insert(
             "sealed_aliases".into(),
-            Value::Array(sealed_aliases.iter().cloned().map(Value::from).collect()),
+            Value::Array(sealed_aliases.into_iter().map(Value::from).collect()),
         );
         map.insert("lanes".into(), filtered_lanes);
         context.print_data(&Value::Object(map))?;
@@ -594,31 +570,6 @@ fn lane_still_sealed(entry: &Value) -> bool {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     required && !ready
-}
-fn count_sealed(value: &Value) -> usize {
-    match value {
-        Value::Array(entries) => entries
-            .iter()
-            .filter(|entry| lane_still_sealed(entry))
-            .count(),
-        _ => 0,
-    }
-}
-fn collect_sealed_aliases(value: &Value) -> Vec<String> {
-    match value {
-        Value::Array(entries) => entries
-            .iter()
-            .filter(|entry| lane_still_sealed(entry))
-            .filter_map(|entry| {
-                entry
-                    .as_object()
-                    .and_then(|map| map.get("alias"))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
 }
 fn format_lane_summary(value: &Value, only_missing: bool) -> String {
     let Some(array) = value.as_array() else {
@@ -1089,7 +1040,7 @@ mod tests {
             ("manifest_ready".into(), Value::from(true)),
         ]);
         let filtered = filter_lane_entries(
-            Value::Array(vec![Value::Object(sealed.clone()), Value::Object(ready)]),
+            Value::Array(vec![Value::Object(sealed), Value::Object(ready)]),
             true,
         );
         match &filtered {
@@ -1103,18 +1054,6 @@ mod tests {
         let summary = format_lane_summary(&filtered, true);
         assert!(summary.contains("sealed"));
         assert!(!summary.contains("ready"));
-        assert_eq!(
-            count_sealed(&Value::Array(vec![Value::Object(sealed.clone())])),
-            1
-        );
-        assert_eq!(
-            collect_sealed_aliases(&Value::Array(vec![Value::Object(sealed)])),
-            vec![String::from("sealed")]
-        );
-    }
-    #[test]
-    fn collect_sealed_aliases_returns_empty_on_non_array() {
-        assert!(collect_sealed_aliases(&Value::Null).is_empty());
     }
     #[test]
     fn validator_summary_formats_activation_and_status() {

@@ -25,9 +25,6 @@ use super::super::super::{
 
 #[path = "direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2.rs"]
 mod direct_rkg_one_lifecycle_v2;
-#[cfg(test)]
-#[path = "direct_rkg_one_publication_v1/direct_rkg_one_orphan_journal_v1.rs"]
-mod direct_rkg_one_orphan_journal_v1;
 pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_lifecycle_v2::DirectRkgOneProofDurabilityPermitV2;
 pub(super) use direct_rkg_one_lifecycle_v2::{
     DirectRkgOneFreshReservationOutcomeV2, DirectRkgOneProofPublishedUnverifiedOwnerV2,

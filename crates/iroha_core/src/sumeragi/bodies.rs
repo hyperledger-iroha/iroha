@@ -8,9 +8,11 @@
 //! committed body then lives in the block store).
 //!
 //! The store is bounded by [`BodyLimits::max_bytes`]: a body that would exceed it fails like a
-//! full disk and is retried by the persistence worker until pruning frees space. The core
-//! itself keeps a height to at most `empty_after_views` non-empty bodies plus header-sized ones
-//! (§8.4), so the bound is a guard against a local defect, never an eviction.
+//! full disk and is retried by the persistence worker until pruning frees space. Uncommitted
+//! view churn can exhaust this finite capacity. Prepared bodies remain durable because a
+//! delayed valid certificate can still require them; deleting superseded in-memory proposals
+//! alone is not authority to evict their bodies. Capacity exhaustion stops persistence until
+//! storage is recovered, preserving custody rather than silently discarding certified work.
 
 use std::{
     fs, io,
@@ -37,8 +39,7 @@ pub struct BodyLimits {
 }
 
 impl Default for BodyLimits {
-    /// 1 GiB: far above what the core keeps (a few heights of at most `empty_after_views`
-    /// blocks of `max_block_bytes` each).
+    /// Finite 1 GiB custody cap; prolonged uncommitted view churn can exhaust it.
     fn default() -> Self {
         Self { max_bytes: 1 << 30 }
     }

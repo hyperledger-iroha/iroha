@@ -482,7 +482,12 @@ fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
             .to_string_lossy()
             .into_owned();
         let bundled = cuda_dir.join(format!("{stem}.ptx"));
-        println!("cargo:rerun-if-changed={}", bundled.display());
+        // A missing watched file keeps the script permanently stale (nvcc and
+        // the whole downstream graph would rerun every build); the directory
+        // watch above already notices a PTX file being added.
+        if bundled.is_file() {
+            println!("cargo:rerun-if-changed={}", bundled.display());
+        }
         artifacts.push((path, bundled, out_dir.join(format!("{stem}.ptx")), stem));
     }
     if mode != CudaPtxMode::Generate {
@@ -680,31 +685,4 @@ fn explicit_cxx_configured() -> bool {
     env::var_os("CXX").is_some()
         || env::var_os("HOST_CXX").is_some()
         || env::vars_os().any(|(key, _)| key.to_string_lossy().starts_with("CXX_"))
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn cuda_ptx_mode_parser_is_strict() {
-        assert_eq!(parse_cuda_ptx_mode("bundled"), Ok(CudaPtxMode::Bundled));
-        assert_eq!(parse_cuda_ptx_mode("generate"), Ok(CudaPtxMode::Generate));
-        assert_eq!(parse_cuda_ptx_mode("check"), Ok(CudaPtxMode::Check));
-        assert!(parse_cuda_ptx_mode("fallback").is_err());
-        assert!(parse_cuda_ptx_mode("BUNDLED").is_err());
-        assert!(parse_cuda_ptx_mode("").is_err());
-    }
-    #[test]
-    fn ptx_validator_rejects_comment_only_placeholders() {
-        let path = Path::new("placeholder.ptx");
-        assert!(validate_ptx_bytes(path, b"// Placeholder PTX; CUDA stays disabled.\n").is_err());
-    }
-    #[test]
-    fn ptx_validator_accepts_required_directives_and_entry() {
-        let path = Path::new("kernel.ptx");
-        let ptx = b".version 7.8\n\
-                    .target sm_86\n\
-                    .address_size 64\n\
-                    .visible .entry kernel() { ret; }\n";
-        assert!(validate_ptx_bytes(path, ptx).is_ok());
-    }
 }

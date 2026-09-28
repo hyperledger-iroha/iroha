@@ -127,7 +127,7 @@ class CommandFactory:
         key = argv[argv.index('--node-public-key') + 1]
         return dict(version=1, state='ready', reason=None, challenge=argv[argv.index('--challenge') + 1],
             node_id=key, network_id=self.anchors['network_id'], genesis_hash=self.anchors['genesis_hash'],
-            context_id=self.anchors['context_id'], attestation_norito_base64='bmF0aXZlLXRlc3QtYnl0ZXM=')
+            consensus_instance='13' * 32, genesis_execution_hash='17' * 32, attestation_norito_base64='bmF0aXZlLXRlc3QtYnl0ZXM=')
 
     def __call__(self, argv, **kwargs):
         index = len(self.calls)

@@ -370,10 +370,6 @@ fn clip_lines(mut lines: Vec<String>, limit: usize) -> Vec<String> {
     lines.drain(0..start);
     lines
 }
-#[allow(dead_code)]
-pub fn center_line(text: &str, width: usize) -> String {
-    pad_center(text, width)
-}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,7 +3,7 @@
 //! Generates a post-quantum readiness summary for SoraGlobal gateway PoPs by
 //! validating the supplied SRCv2 bundle, TLS/ECH artefacts, and trustless
 //! verifier configuration, then emitting JSON/Markdown evidence for runbooks.
-use blake3::Hasher as Blake3;
+use crate::soranet_common::file_blake3_hex;
 use ed25519_dalek::VerifyingKey;
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::soranet::{
@@ -400,13 +400,6 @@ fn render_markdown(summary: &Map) -> String {
 - Trustless verifier: {trustless_state}\n\
 - Dashboards: {dashboards_text}\n",
     )
-}
-fn file_blake3_hex(path: &Path) -> Result<String> {
-    let mut hasher = Blake3::new();
-    let bytes = fs::read(path)
-        .wrap_err_with(|| format!("failed to read `{}` for hashing", path.display()))?;
-    hasher.update(&bytes);
-    Ok(hasher.finalize().to_hex().to_string())
 }
 fn component_state(summary: &Map, key: &str) -> String {
     summary

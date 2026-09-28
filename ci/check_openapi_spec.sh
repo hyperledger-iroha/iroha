@@ -694,7 +694,7 @@ CURRENT_MANIFEST_PATH="${OPENAPI_DIR}/versions/current/manifest.json"
 ALLOWED_SIGNERS_PATH="$(resolve_allowed_signers_path "${REPLAY_SOURCE_FIRST}")"
 
 # The release authority, current alias, and package-local runtime mirror are one
-# byte identity. Reject drift before paying for either live-router replay.
+# byte identity. Reject drift before paying for either generator replay.
 if [[ ! -f "${SPEC_PATH}" || -L "${SPEC_PATH}" ]]; then
   echo "error: canonical Torii OpenAPI authority must be a regular file: ${SPEC_PATH}" >&2
   exit 1
@@ -713,7 +713,7 @@ for authority in "${CURRENT_SPEC_PATH}" "${PACKAGE_SPEC_PATH}"; do
 done
 
 # Reject a stale first-release Musubi route/model contract before paying for
-# two complete live-router replays. The read-only check runs from the same
+# two complete generator replays. The read-only check runs from the same
 # sealed candidate mirror used by every Cargo gate below.
 (
   cd "${REPLAY_SOURCE_FIRST}"
@@ -739,7 +739,7 @@ fi
     tools/openapi/scripts/verify-openapi-versions.mjs
 )
 
-# Load the static authority through live Torii routers in two independent,
+# Project the static authority through Torii's compiled route catalog in two independent,
 # hard-link-free, sealed candidate clones. Assemble both replays from the same
 # immutable checked-in baseline; the caller's checkout remains read-only.
 mkdir -m 700 "${REPLAY_BASELINE}"
@@ -777,7 +777,7 @@ fi
 
 if ! diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" >/dev/null; then
   diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" || true
-  echo "error: the live Torii router did not serve the checked-in static authority." >&2
+  echo "error: the compiled Torii OpenAPI projection does not match the checked-in static authority." >&2
   print_refresh_help
   exit 1
 fi

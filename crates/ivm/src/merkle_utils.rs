@@ -92,17 +92,6 @@ pub fn compute_memory_leaf_digest(chunk: &[u8; 32]) -> [u8; 32] {
     out.copy_from_slice(&sha2::Sha256::digest(chunk));
     out
 }
-/// Compute the SHA-256 digest used as a register leaf from a value and tag.
-/// The register leaf is `SHA-256([tag(1)] || value_le(8))` where `tag=false`
-/// is encoded as 0 and `tag=true` as 1.
-pub fn compute_register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
-    let mut bytes = [0u8; 9];
-    bytes[0] = if tag { 1 } else { 0 };
-    bytes[1..].copy_from_slice(&value.to_le_bytes());
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&sha2::Sha256::digest(bytes));
-    out
-}
 /// A compact proof bundle suitable for IPC: includes the compact proof header
 /// (depth, dirs), the sibling list encoded as raw bytes (32‑zero indicates a
 /// missing sibling), and the proof-local root bytes.

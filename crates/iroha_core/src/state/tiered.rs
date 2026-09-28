@@ -3961,86 +3961,99 @@ enum TieredSegment {
     KagemushaRedemptionIdOperations,
     KagemushaTerminalNullifierOperations,
 }
+/// Every tiered segment in key-handle declaration order: segment variant, key-handle variant,
+/// on-disk directory name and backing `World` storage field. Each consumer expands its own
+/// exhaustive `match` from this single table, so the mappings cannot drift apart.
+macro_rules! tiered_segment_table {
+    ($callback:ident) => {
+        $callback! {
+            Domains, Domain, "domains", domains;
+            Accounts, Account, "accounts", accounts;
+            AccountRekeyRecords, AccountRekey, "account_rekey_records", account_rekey_records;
+            AccountRecoveryPolicies, AccountRecoveryPolicy, "account_recovery_policies", account_recovery_policies;
+            AccountRecoveryRequests, AccountRecoveryRequest, "account_recovery_requests", account_recovery_requests;
+            AssetDefinitions, AssetDefinition, "asset_definitions", asset_definitions;
+            AssetDefinitionAliasBindings, AssetDefinitionAliasBinding, "asset_definition_alias_bindings", asset_definition_alias_bindings;
+            Assets, Asset, "assets", assets;
+            AssetMetadata, AssetMetadata, "asset_metadata", asset_metadata;
+            AxtPolicies, AxtPolicy, "axt_policies", axt_policies;
+            AxtHandleCounters, AxtHandleCounter, "axt_handle_counters", axt_handle_counters;
+            AxtAssetIncarnations, AxtAssetIncarnation, "axt_asset_incarnations", axt_asset_incarnations;
+            AxtReplayLedger, AxtReplay, "axt_replay_ledger", axt_replay_ledger;
+            AxtHandleBudgetLedger, AxtHandleBudget, "axt_handle_budget_ledger", axt_handle_budget_ledger;
+            Nfts, Nft, "nfts", nfts;
+            Rwas, Rwa, "rwas", rwas;
+            Roles, Role, "roles", roles;
+            AccountPermissions, AccountPermission, "account_permissions", account_permissions;
+            AccountRoles, AccountRole, "account_roles", account_roles;
+            TxSequences, TxSequence, "tx_sequences", tx_sequences;
+            VerifyingKeys, VerifyingKey, "verifying_keys", verifying_keys;
+            RuntimeUpgrades, RuntimeUpgrade, "runtime_upgrades", runtime_upgrades;
+            PrivacyActivations, PrivacyActivation, "privacy_activations", privacy_activations;
+            PrivacyPgcAccounts, PrivacyPgcAccount, "privacy_pgc_accounts", privacy_pgc_accounts;
+            PrivacyPgcPoolInvariants, PrivacyPgcPoolInvariant, "privacy_pgc_pool_invariants", privacy_pgc_pool_invariants;
+            PrivacyNullifiers, PrivacyNullifier, "privacy_nullifiers", privacy_nullifiers;
+            PrivacyCommitments, PrivacyCommitment, "privacy_commitments", privacy_commitments;
+            PrivacyRoots, PrivacyRoot, "privacy_roots", privacy_roots;
+            PrivacyRootHeads, PrivacyRootHead, "privacy_root_heads", privacy_root_heads;
+            PrivateSettlementGovernance, PrivateSettlementGovernance, "private_settlement_governance", private_settlement_governance;
+            PrivateSettlementPools, PrivateSettlementPool, "private_settlement_pools", private_settlement_pools;
+            PrivateSettlementRoots, PrivateSettlementRoot, "private_settlement_roots", private_settlement_roots;
+            PrivateSettlementNullifiers, PrivateSettlementNullifier, "private_settlement_nullifiers", private_settlement_nullifiers;
+            PrivateSettlementOutputs, PrivateSettlementOutput, "private_settlement_outputs", private_settlement_outputs;
+            PrivateSettlementStagedLocks, PrivateSettlementStagedLock, "private_settlement_staged_locks", private_settlement_staged_locks;
+            PrivateSettlementReceipts, PrivateSettlementReceipt, "private_settlement_receipts", private_settlement_receipts;
+            PrivateSettlementAborts, PrivateSettlementAbort, "private_settlement_aborts", private_settlement_aborts;
+            Proofs, Proof, "proofs", proofs;
+            ProofTags, ProofTag, "proof_tags", proof_tags;
+            ProofsByTag, ProofByTag, "proofs_by_tag", proofs_by_tag;
+            ContractManifests, ContractManifest, "contract_manifests", contract_manifests;
+            ContractCode, ContractCode, "contract_code", contract_code;
+            ContractCodeUploads, ContractCodeUpload, "contract_code_uploads", contract_code_uploads;
+            ContractCodeUploadChunks, ContractCodeUploadChunk, "contract_code_upload_chunks", contract_code_upload_chunks;
+            ContractInstances, ContractInstance, "contract_instances", contract_instances;
+            ContractSubjectBindings, ContractSubjectBinding, "contract_subject_bindings", contract_subject_bindings;
+            ContractAliasBindings, ContractAliasBinding, "contract_alias_bindings", contract_alias_bindings;
+            SmartContractState, SmartContractState, "smart_contract_state", smart_contract_state;
+            ZkAssets, ZkAsset, "zk_assets", zk_assets;
+            Elections, Election, "elections", elections;
+            MinistryAgendaProposals, MinistryAgendaProposal, "ministry_agenda_proposals", ministry_agenda_proposals;
+            GovernanceProposals, GovernanceProposal, "governance_proposals", governance_proposals;
+            GovernanceReferenda, GovernanceReferendum, "governance_referenda", governance_referenda;
+            GovernanceLocks, GovernanceLock, "governance_locks", governance_locks;
+            GovernanceSlashes, GovernanceSlash, "governance_slashes", governance_slashes;
+            ParliamentAttempts, ParliamentAttempt, "parliament_attempts", parliament_attempts;
+            TleKeySessions, TleKeySession, "tle_key_sessions", tle_key_sessions;
+            TleKeySessionRosters, TleKeySessionRoster, "tle_key_session_rosters", tle_key_session_rosters;
+            TleKeySessionLifecycles, TleKeySessionLifecycle, "tle_key_session_lifecycles", tle_key_session_lifecycles;
+            TleActiveKeySession, TleActiveKeySession, "tle_active_key_session", tle_active_key_session;
+            TimedOvnEvidence, TimedOvnEvidence, "timed_ovn_evidence", timed_ovn_evidence;
+            ValidatorCandidateKeys, ValidatorCandidateKeys, "validator_candidate_keys", validator_candidate_keys;
+            ValidatorCommitteeTransitions, ValidatorCommitteeTransition, "validator_committee_transitions", validator_committee_transitions;
+            GlobalBeaconDkg, GlobalBeaconDkg, "global_beacon_dkg", global_beacon_dkg;
+            GlobalBeaconKeySessions, GlobalBeaconKeySession, "global_beacon_key_sessions", global_beacon_key_sessions;
+            GlobalBeaconActiveSession, GlobalBeaconActiveSession, "global_beacon_active_session", global_beacon_active_session;
+            GlobalBeaconLatestPulse, GlobalBeaconLatestPulse, "global_beacon_latest_pulse", global_beacon_latest_pulse;
+            GlobalBeaconPulses, GlobalBeaconPulse, "global_beacon_pulses", global_beacon_pulses;
+            KagemushaReservePools, KagemushaReservePool, "kagemusha_reserve_pools", kagemusha_reserve_pools;
+            KagemushaReserveOperations, KagemushaReserveOperation, "kagemusha_reserve_operations", kagemusha_reserve_operations;
+            KagemushaMintCreditOperations, KagemushaMintCreditOperation, "kagemusha_mint_credit_operations", kagemusha_mint_credit_operations;
+            KagemushaIssuanceOperations, KagemushaIssuanceOperation, "kagemusha_issuance_operations", kagemusha_issuance_operations;
+            KagemushaRedemptionIdOperations, KagemushaRedemptionIdOperation, "kagemusha_redemption_id_operations", kagemusha_redemption_id_operations;
+            KagemushaTerminalNullifierOperations, KagemushaTerminalNullifierOperation, "kagemusha_terminal_nullifier_operations", kagemusha_terminal_nullifier_operations;
+        }
+    };
+}
 impl TieredSegment {
     fn dir_name(self) -> &'static str {
-        match self {
-            TieredSegment::Domains => "domains",
-            TieredSegment::Accounts => "accounts",
-            TieredSegment::AccountRekeyRecords => "account_rekey_records",
-            TieredSegment::AccountRecoveryPolicies => "account_recovery_policies",
-            TieredSegment::AccountRecoveryRequests => "account_recovery_requests",
-            TieredSegment::AssetDefinitions => "asset_definitions",
-            TieredSegment::AssetDefinitionAliasBindings => "asset_definition_alias_bindings",
-            TieredSegment::Assets => "assets",
-            TieredSegment::AssetMetadata => "asset_metadata",
-            TieredSegment::AxtPolicies => "axt_policies",
-            TieredSegment::AxtHandleCounters => "axt_handle_counters",
-            TieredSegment::AxtAssetIncarnations => "axt_asset_incarnations",
-            TieredSegment::AxtReplayLedger => "axt_replay_ledger",
-            TieredSegment::AxtHandleBudgetLedger => "axt_handle_budget_ledger",
-            TieredSegment::Nfts => "nfts",
-            TieredSegment::Rwas => "rwas",
-            TieredSegment::Roles => "roles",
-            TieredSegment::AccountPermissions => "account_permissions",
-            TieredSegment::AccountRoles => "account_roles",
-            TieredSegment::TxSequences => "tx_sequences",
-            TieredSegment::VerifyingKeys => "verifying_keys",
-            TieredSegment::RuntimeUpgrades => "runtime_upgrades",
-            TieredSegment::PrivacyActivations => "privacy_activations",
-            TieredSegment::PrivacyPgcAccounts => "privacy_pgc_accounts",
-            TieredSegment::PrivacyPgcPoolInvariants => "privacy_pgc_pool_invariants",
-            TieredSegment::PrivacyNullifiers => "privacy_nullifiers",
-            TieredSegment::PrivacyCommitments => "privacy_commitments",
-            TieredSegment::PrivacyRoots => "privacy_roots",
-            TieredSegment::PrivacyRootHeads => "privacy_root_heads",
-            TieredSegment::PrivateSettlementGovernance => "private_settlement_governance",
-            TieredSegment::PrivateSettlementPools => "private_settlement_pools",
-            TieredSegment::PrivateSettlementRoots => "private_settlement_roots",
-            TieredSegment::PrivateSettlementNullifiers => "private_settlement_nullifiers",
-            TieredSegment::PrivateSettlementOutputs => "private_settlement_outputs",
-            TieredSegment::PrivateSettlementStagedLocks => "private_settlement_staged_locks",
-            TieredSegment::PrivateSettlementReceipts => "private_settlement_receipts",
-            TieredSegment::PrivateSettlementAborts => "private_settlement_aborts",
-            TieredSegment::Proofs => "proofs",
-            TieredSegment::ProofTags => "proof_tags",
-            TieredSegment::ProofsByTag => "proofs_by_tag",
-            TieredSegment::ContractManifests => "contract_manifests",
-            TieredSegment::ContractCode => "contract_code",
-            TieredSegment::ContractCodeUploads => "contract_code_uploads",
-            TieredSegment::ContractCodeUploadChunks => "contract_code_upload_chunks",
-            TieredSegment::ContractInstances => "contract_instances",
-            TieredSegment::ContractSubjectBindings => "contract_subject_bindings",
-            TieredSegment::ContractAliasBindings => "contract_alias_bindings",
-            TieredSegment::SmartContractState => "smart_contract_state",
-            TieredSegment::ZkAssets => "zk_assets",
-            TieredSegment::Elections => "elections",
-            TieredSegment::MinistryAgendaProposals => "ministry_agenda_proposals",
-            TieredSegment::GovernanceProposals => "governance_proposals",
-            TieredSegment::GovernanceReferenda => "governance_referenda",
-            TieredSegment::GovernanceLocks => "governance_locks",
-            TieredSegment::GovernanceSlashes => "governance_slashes",
-            TieredSegment::ParliamentAttempts => "parliament_attempts",
-            TieredSegment::TleKeySessions => "tle_key_sessions",
-            TieredSegment::TleKeySessionRosters => "tle_key_session_rosters",
-            TieredSegment::TleKeySessionLifecycles => "tle_key_session_lifecycles",
-            TieredSegment::TleActiveKeySession => "tle_active_key_session",
-            TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
-            TieredSegment::ValidatorCandidateKeys => "validator_candidate_keys",
-            TieredSegment::ValidatorCommitteeTransitions => "validator_committee_transitions",
-            TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
-            TieredSegment::GlobalBeaconKeySessions => "global_beacon_key_sessions",
-            TieredSegment::GlobalBeaconActiveSession => "global_beacon_active_session",
-            TieredSegment::GlobalBeaconLatestPulse => "global_beacon_latest_pulse",
-            TieredSegment::GlobalBeaconPulses => "global_beacon_pulses",
-            TieredSegment::KagemushaReservePools => "kagemusha_reserve_pools",
-            TieredSegment::KagemushaReserveOperations => "kagemusha_reserve_operations",
-            TieredSegment::KagemushaMintCreditOperations => "kagemusha_mint_credit_operations",
-            TieredSegment::KagemushaIssuanceOperations => "kagemusha_issuance_operations",
-            TieredSegment::KagemushaRedemptionIdOperations => "kagemusha_redemption_id_operations",
-            TieredSegment::KagemushaTerminalNullifierOperations => {
-                "kagemusha_terminal_nullifier_operations"
-            }
+        macro_rules! dir_names {
+            ($($segment:ident, $handle:ident, $dir:literal, $field:ident;)*) => {
+                match self {
+                    $(TieredSegment::$segment => $dir,)*
+                }
+            };
         }
+        tiered_segment_table!(dir_names)
     }
 }
 impl norito::json::JsonSerialize for TieredSegment {
@@ -4053,90 +4066,20 @@ impl norito::json::JsonDeserialize for TieredSegment {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let name = <String as norito::json::JsonDeserialize>::json_deserialize(parser)?;
-        let segment = match name.as_str() {
-            "domains" => TieredSegment::Domains,
-            "accounts" => TieredSegment::Accounts,
-            "account_rekey_records" => TieredSegment::AccountRekeyRecords,
-            "account_recovery_policies" => TieredSegment::AccountRecoveryPolicies,
-            "account_recovery_requests" => TieredSegment::AccountRecoveryRequests,
-            "asset_definitions" => TieredSegment::AssetDefinitions,
-            "asset_definition_alias_bindings" => TieredSegment::AssetDefinitionAliasBindings,
-            "assets" => TieredSegment::Assets,
-            "asset_metadata" => TieredSegment::AssetMetadata,
-            "axt_policies" => TieredSegment::AxtPolicies,
-            "axt_handle_counters" => TieredSegment::AxtHandleCounters,
-            "axt_asset_incarnations" => TieredSegment::AxtAssetIncarnations,
-            "axt_replay_ledger" => TieredSegment::AxtReplayLedger,
-            "axt_handle_budget_ledger" => TieredSegment::AxtHandleBudgetLedger,
-            "nfts" => TieredSegment::Nfts,
-            "rwas" => TieredSegment::Rwas,
-            "roles" => TieredSegment::Roles,
-            "account_permissions" => TieredSegment::AccountPermissions,
-            "account_roles" => TieredSegment::AccountRoles,
-            "tx_sequences" => TieredSegment::TxSequences,
-            "verifying_keys" => TieredSegment::VerifyingKeys,
-            "runtime_upgrades" => TieredSegment::RuntimeUpgrades,
-            "privacy_activations" => TieredSegment::PrivacyActivations,
-            "privacy_pgc_accounts" => TieredSegment::PrivacyPgcAccounts,
-            "privacy_pgc_pool_invariants" => TieredSegment::PrivacyPgcPoolInvariants,
-            "privacy_nullifiers" => TieredSegment::PrivacyNullifiers,
-            "privacy_commitments" => TieredSegment::PrivacyCommitments,
-            "privacy_roots" => TieredSegment::PrivacyRoots,
-            "privacy_root_heads" => TieredSegment::PrivacyRootHeads,
-            "private_settlement_governance" => TieredSegment::PrivateSettlementGovernance,
-            "private_settlement_pools" => TieredSegment::PrivateSettlementPools,
-            "private_settlement_roots" => TieredSegment::PrivateSettlementRoots,
-            "private_settlement_nullifiers" => TieredSegment::PrivateSettlementNullifiers,
-            "private_settlement_outputs" => TieredSegment::PrivateSettlementOutputs,
-            "private_settlement_staged_locks" => TieredSegment::PrivateSettlementStagedLocks,
-            "private_settlement_receipts" => TieredSegment::PrivateSettlementReceipts,
-            "private_settlement_aborts" => TieredSegment::PrivateSettlementAborts,
-            "proofs" => TieredSegment::Proofs,
-            "proof_tags" => TieredSegment::ProofTags,
-            "proofs_by_tag" => TieredSegment::ProofsByTag,
-            "contract_manifests" => TieredSegment::ContractManifests,
-            "contract_code" => TieredSegment::ContractCode,
-            "contract_code_uploads" => TieredSegment::ContractCodeUploads,
-            "contract_code_upload_chunks" => TieredSegment::ContractCodeUploadChunks,
-            "contract_instances" => TieredSegment::ContractInstances,
-            "contract_subject_bindings" => TieredSegment::ContractSubjectBindings,
-            "contract_alias_bindings" => TieredSegment::ContractAliasBindings,
-            "smart_contract_state" => TieredSegment::SmartContractState,
-            "zk_assets" => TieredSegment::ZkAssets,
-            "elections" => TieredSegment::Elections,
-            "ministry_agenda_proposals" => TieredSegment::MinistryAgendaProposals,
-            "governance_proposals" => TieredSegment::GovernanceProposals,
-            "governance_referenda" => TieredSegment::GovernanceReferenda,
-            "governance_locks" => TieredSegment::GovernanceLocks,
-            "governance_slashes" => TieredSegment::GovernanceSlashes,
-            "parliament_attempts" => TieredSegment::ParliamentAttempts,
-            "tle_key_sessions" => TieredSegment::TleKeySessions,
-            "tle_key_session_rosters" => TieredSegment::TleKeySessionRosters,
-            "tle_key_session_lifecycles" => TieredSegment::TleKeySessionLifecycles,
-            "tle_active_key_session" => TieredSegment::TleActiveKeySession,
-            "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
-            "validator_candidate_keys" => TieredSegment::ValidatorCandidateKeys,
-            "validator_committee_transitions" => TieredSegment::ValidatorCommitteeTransitions,
-            "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
-            "global_beacon_key_sessions" => TieredSegment::GlobalBeaconKeySessions,
-            "global_beacon_active_session" => TieredSegment::GlobalBeaconActiveSession,
-            "global_beacon_latest_pulse" => TieredSegment::GlobalBeaconLatestPulse,
-            "global_beacon_pulses" => TieredSegment::GlobalBeaconPulses,
-            "kagemusha_reserve_pools" => TieredSegment::KagemushaReservePools,
-            "kagemusha_reserve_operations" => TieredSegment::KagemushaReserveOperations,
-            "kagemusha_mint_credit_operations" => TieredSegment::KagemushaMintCreditOperations,
-            "kagemusha_issuance_operations" => TieredSegment::KagemushaIssuanceOperations,
-            "kagemusha_redemption_id_operations" => TieredSegment::KagemushaRedemptionIdOperations,
-            "kagemusha_terminal_nullifier_operations" => {
-                TieredSegment::KagemushaTerminalNullifierOperations
-            }
-            other => {
-                return Err(norito::json::Error::InvalidField {
-                    field: "segment".into(),
-                    message: format!("unknown tiered segment `{other}`"),
-                });
-            }
-        };
+        macro_rules! segment_for_dir_name {
+            ($($segment:ident, $handle:ident, $dir:literal, $field:ident;)*) => {
+                match name.as_str() {
+                    $($dir => TieredSegment::$segment,)*
+                    other => {
+                        return Err(norito::json::Error::InvalidField {
+                            field: "segment".into(),
+                            message: format!("unknown tiered segment `{other}`"),
+                        });
+                    }
+                }
+            };
+        }
+        let segment = tiered_segment_table!(segment_for_dir_name);
         Ok(segment)
     }
 }
@@ -4357,106 +4300,14 @@ pub(crate) enum TieredKeyHandle {
 }
 impl TieredKeyHandle {
     fn segment(&self) -> TieredSegment {
-        match self {
-            TieredKeyHandle::Domain(_) => TieredSegment::Domains,
-            TieredKeyHandle::Account(_) => TieredSegment::Accounts,
-            TieredKeyHandle::AccountRekey(_) => TieredSegment::AccountRekeyRecords,
-            TieredKeyHandle::AccountRecoveryPolicy(_) => TieredSegment::AccountRecoveryPolicies,
-            TieredKeyHandle::AccountRecoveryRequest(_) => TieredSegment::AccountRecoveryRequests,
-            TieredKeyHandle::AssetDefinition(_) => TieredSegment::AssetDefinitions,
-            TieredKeyHandle::AssetDefinitionAliasBinding(_) => {
-                TieredSegment::AssetDefinitionAliasBindings
-            }
-            TieredKeyHandle::Asset(_) => TieredSegment::Assets,
-            TieredKeyHandle::AssetMetadata(_) => TieredSegment::AssetMetadata,
-            TieredKeyHandle::AxtPolicy(_) => TieredSegment::AxtPolicies,
-            TieredKeyHandle::AxtHandleCounter(_) => TieredSegment::AxtHandleCounters,
-            TieredKeyHandle::AxtAssetIncarnation(_) => TieredSegment::AxtAssetIncarnations,
-            TieredKeyHandle::AxtReplay(_) => TieredSegment::AxtReplayLedger,
-            TieredKeyHandle::AxtHandleBudget(_) => TieredSegment::AxtHandleBudgetLedger,
-            TieredKeyHandle::Nft(_) => TieredSegment::Nfts,
-            TieredKeyHandle::Rwa(_) => TieredSegment::Rwas,
-            TieredKeyHandle::Role(_) => TieredSegment::Roles,
-            TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
-            TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
-            TieredKeyHandle::TxSequence(_) => TieredSegment::TxSequences,
-            TieredKeyHandle::VerifyingKey(_) => TieredSegment::VerifyingKeys,
-            TieredKeyHandle::RuntimeUpgrade(_) => TieredSegment::RuntimeUpgrades,
-            TieredKeyHandle::PrivacyActivation(_) => TieredSegment::PrivacyActivations,
-            TieredKeyHandle::PrivacyPgcAccount(_) => TieredSegment::PrivacyPgcAccounts,
-            TieredKeyHandle::PrivacyPgcPoolInvariant(_) => TieredSegment::PrivacyPgcPoolInvariants,
-            TieredKeyHandle::PrivacyNullifier(_) => TieredSegment::PrivacyNullifiers,
-            TieredKeyHandle::PrivacyCommitment(_) => TieredSegment::PrivacyCommitments,
-            TieredKeyHandle::PrivacyRoot(_) => TieredSegment::PrivacyRoots,
-            TieredKeyHandle::PrivacyRootHead(_) => TieredSegment::PrivacyRootHeads,
-            TieredKeyHandle::PrivateSettlementGovernance(_) => {
-                TieredSegment::PrivateSettlementGovernance
-            }
-            TieredKeyHandle::PrivateSettlementPool(_) => TieredSegment::PrivateSettlementPools,
-            TieredKeyHandle::PrivateSettlementRoot(_) => TieredSegment::PrivateSettlementRoots,
-            TieredKeyHandle::PrivateSettlementNullifier(_) => {
-                TieredSegment::PrivateSettlementNullifiers
-            }
-            TieredKeyHandle::PrivateSettlementOutput(_) => TieredSegment::PrivateSettlementOutputs,
-            TieredKeyHandle::PrivateSettlementStagedLock(_) => {
-                TieredSegment::PrivateSettlementStagedLocks
-            }
-            TieredKeyHandle::PrivateSettlementReceipt(_) => {
-                TieredSegment::PrivateSettlementReceipts
-            }
-            TieredKeyHandle::PrivateSettlementAbort(_) => TieredSegment::PrivateSettlementAborts,
-            TieredKeyHandle::Proof(_) => TieredSegment::Proofs,
-            TieredKeyHandle::ProofTag(_) => TieredSegment::ProofTags,
-            TieredKeyHandle::ProofByTag(_) => TieredSegment::ProofsByTag,
-            TieredKeyHandle::ContractManifest(_) => TieredSegment::ContractManifests,
-            TieredKeyHandle::ContractCode(_) => TieredSegment::ContractCode,
-            TieredKeyHandle::ContractCodeUpload(_) => TieredSegment::ContractCodeUploads,
-            TieredKeyHandle::ContractCodeUploadChunk(_) => TieredSegment::ContractCodeUploadChunks,
-            TieredKeyHandle::ContractInstance(_) => TieredSegment::ContractInstances,
-            TieredKeyHandle::ContractSubjectBinding(_) => TieredSegment::ContractSubjectBindings,
-            TieredKeyHandle::ContractAliasBinding(_) => TieredSegment::ContractAliasBindings,
-            TieredKeyHandle::SmartContractState(_) => TieredSegment::SmartContractState,
-            TieredKeyHandle::ZkAsset(_) => TieredSegment::ZkAssets,
-            TieredKeyHandle::Election(_) => TieredSegment::Elections,
-            TieredKeyHandle::MinistryAgendaProposal(_) => TieredSegment::MinistryAgendaProposals,
-            TieredKeyHandle::GovernanceProposal(_) => TieredSegment::GovernanceProposals,
-            TieredKeyHandle::GovernanceReferendum(_) => TieredSegment::GovernanceReferenda,
-            TieredKeyHandle::GovernanceLock(_) => TieredSegment::GovernanceLocks,
-            TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
-            TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
-            TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
-            TieredKeyHandle::TleKeySessionRoster(_) => TieredSegment::TleKeySessionRosters,
-            TieredKeyHandle::TleKeySessionLifecycle(_) => TieredSegment::TleKeySessionLifecycles,
-            TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
-            TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
-            TieredKeyHandle::ValidatorCandidateKeys(_) => TieredSegment::ValidatorCandidateKeys,
-            TieredKeyHandle::ValidatorCommitteeTransition(_) => {
-                TieredSegment::ValidatorCommitteeTransitions
-            }
-            TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
-            TieredKeyHandle::GlobalBeaconKeySession(_) => TieredSegment::GlobalBeaconKeySessions,
-            TieredKeyHandle::GlobalBeaconActiveSession(_) => {
-                TieredSegment::GlobalBeaconActiveSession
-            }
-            TieredKeyHandle::GlobalBeaconLatestPulse(_) => TieredSegment::GlobalBeaconLatestPulse,
-            TieredKeyHandle::GlobalBeaconPulse(_) => TieredSegment::GlobalBeaconPulses,
-            TieredKeyHandle::KagemushaReservePool(_) => TieredSegment::KagemushaReservePools,
-            TieredKeyHandle::KagemushaReserveOperation(_) => {
-                TieredSegment::KagemushaReserveOperations
-            }
-            TieredKeyHandle::KagemushaMintCreditOperation(_) => {
-                TieredSegment::KagemushaMintCreditOperations
-            }
-            TieredKeyHandle::KagemushaIssuanceOperation(_) => {
-                TieredSegment::KagemushaIssuanceOperations
-            }
-            TieredKeyHandle::KagemushaRedemptionIdOperation(_) => {
-                TieredSegment::KagemushaRedemptionIdOperations
-            }
-            TieredKeyHandle::KagemushaTerminalNullifierOperation(_) => {
-                TieredSegment::KagemushaTerminalNullifierOperations
-            }
+        macro_rules! handle_segments {
+            ($($segment:ident, $handle:ident, $dir:literal, $field:ident;)*) => {
+                match self {
+                    $(TieredKeyHandle::$handle(_) => TieredSegment::$segment,)*
+                }
+            };
         }
+        tiered_segment_table!(handle_segments)
     }
     fn encode_key(&self) -> Result<Vec<u8>> {
         match self {
@@ -4570,146 +4421,14 @@ impl TieredKeyHandle {
                 Ok(Some((value_hash, value_size_bytes)))
             }};
         }
-        match self {
-            TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
-            TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
-            TieredKeyHandle::AccountRekey(id) => fetch!(world.account_rekey_records, id),
-            TieredKeyHandle::AccountRecoveryPolicy(id) => {
-                fetch!(world.account_recovery_policies, id)
-            }
-            TieredKeyHandle::AccountRecoveryRequest(id) => {
-                fetch!(world.account_recovery_requests, id)
-            }
-            TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
-            TieredKeyHandle::AssetDefinitionAliasBinding(id) => {
-                fetch!(world.asset_definition_alias_bindings, id)
-            }
-            TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
-            TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
-            TieredKeyHandle::AxtPolicy(id) => fetch!(world.axt_policies, id),
-            TieredKeyHandle::AxtHandleCounter(id) => fetch!(world.axt_handle_counters, id),
-            TieredKeyHandle::AxtAssetIncarnation(id) => {
-                fetch!(world.axt_asset_incarnations, id)
-            }
-            TieredKeyHandle::AxtReplay(id) => fetch!(world.axt_replay_ledger, id),
-            TieredKeyHandle::AxtHandleBudget(id) => {
-                fetch!(world.axt_handle_budget_ledger, id)
-            }
-            TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
-            TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
-            TieredKeyHandle::Role(id) => fetch!(world.roles, id),
-            TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
-            TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
-            TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
-            TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
-            TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
-            TieredKeyHandle::PrivacyActivation(id) => fetch!(world.privacy_activations, id),
-            TieredKeyHandle::PrivacyPgcAccount(id) => fetch!(world.privacy_pgc_accounts, id),
-            TieredKeyHandle::PrivacyPgcPoolInvariant(id) => {
-                fetch!(world.privacy_pgc_pool_invariants, id)
-            }
-            TieredKeyHandle::PrivacyNullifier(id) => fetch!(world.privacy_nullifiers, id),
-            TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
-            TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
-            TieredKeyHandle::PrivacyRootHead(id) => fetch!(world.privacy_root_heads, id),
-            TieredKeyHandle::PrivateSettlementGovernance(id) => {
-                fetch!(world.private_settlement_governance, id)
-            }
-            TieredKeyHandle::PrivateSettlementPool(id) => {
-                fetch!(world.private_settlement_pools, id)
-            }
-            TieredKeyHandle::PrivateSettlementRoot(id) => {
-                fetch!(world.private_settlement_roots, id)
-            }
-            TieredKeyHandle::PrivateSettlementNullifier(id) => {
-                fetch!(world.private_settlement_nullifiers, id)
-            }
-            TieredKeyHandle::PrivateSettlementOutput(id) => {
-                fetch!(world.private_settlement_outputs, id)
-            }
-            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
-                fetch!(world.private_settlement_staged_locks, id)
-            }
-            TieredKeyHandle::PrivateSettlementReceipt(id) => {
-                fetch!(world.private_settlement_receipts, id)
-            }
-            TieredKeyHandle::PrivateSettlementAbort(id) => {
-                fetch!(world.private_settlement_aborts, id)
-            }
-            TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
-            TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
-            TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
-            TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
-            TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
-            TieredKeyHandle::ContractCodeUpload(key) => fetch!(world.contract_code_uploads, key),
-            TieredKeyHandle::ContractCodeUploadChunk(key) => {
-                fetch!(world.contract_code_upload_chunks, key)
-            }
-            TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
-            TieredKeyHandle::ContractSubjectBinding(key) => {
-                fetch!(world.contract_subject_bindings, key)
-            }
-            TieredKeyHandle::ContractAliasBinding(key) => {
-                fetch!(world.contract_alias_bindings, key)
-            }
-            TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
-            TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
-            TieredKeyHandle::Election(id) => fetch!(world.elections, id),
-            TieredKeyHandle::MinistryAgendaProposal(id) => {
-                fetch!(world.ministry_agenda_proposals, id)
-            }
-            TieredKeyHandle::GovernanceProposal(id) => fetch!(world.governance_proposals, id),
-            TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
-            TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
-            TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
-            TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
-            TieredKeyHandle::TleKeySessionRoster(id) => {
-                fetch!(world.tle_key_session_rosters, id)
-            }
-            TieredKeyHandle::TleKeySessionLifecycle(id) => {
-                fetch!(world.tle_key_session_lifecycles, id)
-            }
-            TieredKeyHandle::TleActiveKeySession(id) => {
-                fetch!(world.tle_active_key_session, id)
-            }
-            TieredKeyHandle::TimedOvnEvidence(id) => fetch!(world.timed_ovn_evidence, id),
-            TieredKeyHandle::ValidatorCandidateKeys(id) => {
-                fetch!(world.validator_candidate_keys, id)
-            }
-            TieredKeyHandle::ValidatorCommitteeTransition(id) => {
-                fetch!(world.validator_committee_transitions, id)
-            }
-            TieredKeyHandle::GlobalBeaconDkg(id) => fetch!(world.global_beacon_dkg, id),
-            TieredKeyHandle::GlobalBeaconKeySession(id) => {
-                fetch!(world.global_beacon_key_sessions, id)
-            }
-            TieredKeyHandle::GlobalBeaconActiveSession(id) => {
-                fetch!(world.global_beacon_active_session, id)
-            }
-            TieredKeyHandle::GlobalBeaconLatestPulse(id) => {
-                fetch!(world.global_beacon_latest_pulse, id)
-            }
-            TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReservePool(id) => {
-                fetch!(world.kagemusha_reserve_pools, id)
-            }
-            TieredKeyHandle::KagemushaReserveOperation(id) => {
-                fetch!(world.kagemusha_reserve_operations, id)
-            }
-            TieredKeyHandle::KagemushaMintCreditOperation(id) => {
-                fetch!(world.kagemusha_mint_credit_operations, id)
-            }
-            TieredKeyHandle::KagemushaIssuanceOperation(id) => {
-                fetch!(world.kagemusha_issuance_operations, id)
-            }
-            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => {
-                fetch!(world.kagemusha_redemption_id_operations, id)
-            }
-            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => {
-                fetch!(world.kagemusha_terminal_nullifier_operations, id)
-            }
+        macro_rules! fetch_segment_value {
+            ($($segment:ident, $handle:ident, $dir:literal, $field:ident;)*) => {
+                match self {
+                    $(TieredKeyHandle::$handle(key) => fetch!(world.$field, key),)*
+                }
+            };
         }
+        tiered_segment_table!(fetch_segment_value)
     }
     #[cfg(test)]
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
@@ -4725,146 +4444,14 @@ impl TieredKeyHandle {
                 Ok(bytes)
             }};
         }
-        match self {
-            TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
-            TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
-            TieredKeyHandle::AccountRekey(id) => fetch!(world.account_rekey_records, id),
-            TieredKeyHandle::AccountRecoveryPolicy(id) => {
-                fetch!(world.account_recovery_policies, id)
-            }
-            TieredKeyHandle::AccountRecoveryRequest(id) => {
-                fetch!(world.account_recovery_requests, id)
-            }
-            TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
-            TieredKeyHandle::AssetDefinitionAliasBinding(id) => {
-                fetch!(world.asset_definition_alias_bindings, id)
-            }
-            TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
-            TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
-            TieredKeyHandle::AxtPolicy(id) => fetch!(world.axt_policies, id),
-            TieredKeyHandle::AxtHandleCounter(id) => fetch!(world.axt_handle_counters, id),
-            TieredKeyHandle::AxtAssetIncarnation(id) => {
-                fetch!(world.axt_asset_incarnations, id)
-            }
-            TieredKeyHandle::AxtReplay(id) => fetch!(world.axt_replay_ledger, id),
-            TieredKeyHandle::AxtHandleBudget(id) => {
-                fetch!(world.axt_handle_budget_ledger, id)
-            }
-            TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
-            TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
-            TieredKeyHandle::Role(id) => fetch!(world.roles, id),
-            TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
-            TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
-            TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
-            TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
-            TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
-            TieredKeyHandle::PrivacyActivation(id) => fetch!(world.privacy_activations, id),
-            TieredKeyHandle::PrivacyPgcAccount(id) => fetch!(world.privacy_pgc_accounts, id),
-            TieredKeyHandle::PrivacyPgcPoolInvariant(id) => {
-                fetch!(world.privacy_pgc_pool_invariants, id)
-            }
-            TieredKeyHandle::PrivacyNullifier(id) => fetch!(world.privacy_nullifiers, id),
-            TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
-            TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
-            TieredKeyHandle::PrivacyRootHead(id) => fetch!(world.privacy_root_heads, id),
-            TieredKeyHandle::PrivateSettlementGovernance(id) => {
-                fetch!(world.private_settlement_governance, id)
-            }
-            TieredKeyHandle::PrivateSettlementPool(id) => {
-                fetch!(world.private_settlement_pools, id)
-            }
-            TieredKeyHandle::PrivateSettlementRoot(id) => {
-                fetch!(world.private_settlement_roots, id)
-            }
-            TieredKeyHandle::PrivateSettlementNullifier(id) => {
-                fetch!(world.private_settlement_nullifiers, id)
-            }
-            TieredKeyHandle::PrivateSettlementOutput(id) => {
-                fetch!(world.private_settlement_outputs, id)
-            }
-            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
-                fetch!(world.private_settlement_staged_locks, id)
-            }
-            TieredKeyHandle::PrivateSettlementReceipt(id) => {
-                fetch!(world.private_settlement_receipts, id)
-            }
-            TieredKeyHandle::PrivateSettlementAbort(id) => {
-                fetch!(world.private_settlement_aborts, id)
-            }
-            TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
-            TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
-            TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
-            TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
-            TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
-            TieredKeyHandle::ContractCodeUpload(key) => fetch!(world.contract_code_uploads, key),
-            TieredKeyHandle::ContractCodeUploadChunk(key) => {
-                fetch!(world.contract_code_upload_chunks, key)
-            }
-            TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
-            TieredKeyHandle::ContractSubjectBinding(key) => {
-                fetch!(world.contract_subject_bindings, key)
-            }
-            TieredKeyHandle::ContractAliasBinding(key) => {
-                fetch!(world.contract_alias_bindings, key)
-            }
-            TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
-            TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
-            TieredKeyHandle::Election(id) => fetch!(world.elections, id),
-            TieredKeyHandle::MinistryAgendaProposal(id) => {
-                fetch!(world.ministry_agenda_proposals, id)
-            }
-            TieredKeyHandle::GovernanceProposal(id) => fetch!(world.governance_proposals, id),
-            TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
-            TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
-            TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
-            TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
-            TieredKeyHandle::TleKeySessionRoster(id) => {
-                fetch!(world.tle_key_session_rosters, id)
-            }
-            TieredKeyHandle::TleKeySessionLifecycle(id) => {
-                fetch!(world.tle_key_session_lifecycles, id)
-            }
-            TieredKeyHandle::TleActiveKeySession(id) => {
-                fetch!(world.tle_active_key_session, id)
-            }
-            TieredKeyHandle::TimedOvnEvidence(id) => fetch!(world.timed_ovn_evidence, id),
-            TieredKeyHandle::ValidatorCandidateKeys(id) => {
-                fetch!(world.validator_candidate_keys, id)
-            }
-            TieredKeyHandle::ValidatorCommitteeTransition(id) => {
-                fetch!(world.validator_committee_transitions, id)
-            }
-            TieredKeyHandle::GlobalBeaconDkg(id) => fetch!(world.global_beacon_dkg, id),
-            TieredKeyHandle::GlobalBeaconKeySession(id) => {
-                fetch!(world.global_beacon_key_sessions, id)
-            }
-            TieredKeyHandle::GlobalBeaconActiveSession(id) => {
-                fetch!(world.global_beacon_active_session, id)
-            }
-            TieredKeyHandle::GlobalBeaconLatestPulse(id) => {
-                fetch!(world.global_beacon_latest_pulse, id)
-            }
-            TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReservePool(id) => {
-                fetch!(world.kagemusha_reserve_pools, id)
-            }
-            TieredKeyHandle::KagemushaReserveOperation(id) => {
-                fetch!(world.kagemusha_reserve_operations, id)
-            }
-            TieredKeyHandle::KagemushaMintCreditOperation(id) => {
-                fetch!(world.kagemusha_mint_credit_operations, id)
-            }
-            TieredKeyHandle::KagemushaIssuanceOperation(id) => {
-                fetch!(world.kagemusha_issuance_operations, id)
-            }
-            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => {
-                fetch!(world.kagemusha_redemption_id_operations, id)
-            }
-            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => {
-                fetch!(world.kagemusha_terminal_nullifier_operations, id)
-            }
+        macro_rules! fetch_segment_value {
+            ($($segment:ident, $handle:ident, $dir:literal, $field:ident;)*) => {
+                match self {
+                    $(TieredKeyHandle::$handle(key) => fetch!(world.$field, key),)*
+                }
+            };
         }
+        tiered_segment_table!(fetch_segment_value)
     }
 }
 impl fmt::Display for TieredKeyHandle {

@@ -57,7 +57,7 @@ impl Core {
         validate_local(&local, &initial)?;
         // SPEC: §9.4 leaves the chain-parameter rules to the application; the core also checks
         // the transport-independent ones for the initial configurations, so a genesis with
-        // `empty_after_views = 0` (every block `EMPTY`) or `block_time > idle_block_interval`
+        // a zero retry interval or `block_time > payload_retry_interval`
         // is refused at startup (Appendix E, E38).
         for config in &initial {
             validate_chain(&config.params, u64::MAX)?;

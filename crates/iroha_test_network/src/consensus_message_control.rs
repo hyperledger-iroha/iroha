@@ -508,30 +508,6 @@ impl ConsensusMessageControlRule {
             action,
         }
     }
-    /// Construct an exact relayed payload-chunk rule, binding both its semantic
-    /// sender and the P2P identity that authenticated the controlled copy.
-    pub fn relayed_payload_chunk(
-        sender: PeerId,
-        authenticated_via: PeerId,
-        manifest_hash: HashOf<PayloadManifest>,
-        chunk_index: u32,
-        action: ConsensusMessageControlAction,
-    ) -> Self {
-        Self {
-            sender,
-            authenticated_via,
-            kind: ConsensusMessageControlKind::PayloadChunk,
-            height: 0,
-            view: 0,
-            native_instance_id: None,
-            block_hash: None,
-            manifest_hash: Some(manifest_hash),
-            chunk_index: Some(chunk_index),
-            proposal_height: None,
-            proposal_view: None,
-            action,
-        }
-    }
     /// Construct a direct height-only commit-certificate request rule.
     pub fn commit_certificate_request(
         sender: PeerId,
@@ -603,12 +579,6 @@ impl ConsensusMessageControlRule {
                 action,
             )
         }
-    }
-    /// Further restrict this rule to one exact proposal block hash.
-    #[must_use]
-    pub fn with_block_hash(mut self, block_hash: HashOf<BlockHeader>) -> Self {
-        self.block_hash = Some(block_hash);
-        self
     }
 
     fn has_valid_coordinates(&self) -> bool {
@@ -1220,13 +1190,6 @@ impl ConsensusMessageControl {
             sha256,
             canonical_bytes,
         })
-    }
-    /// Read and authenticate the latest durable APS route acknowledgement.
-    pub fn read_private_settlement_route_control_ack(
-        &self,
-    ) -> Result<PrivateSettlementRouteControlAck> {
-        let (_, ack) = self.read_private_settlement_route_control_ack_bytes()?;
-        Ok(ack)
     }
     /// Return the exact acknowledgement bytes together with their parsed shape.
     pub fn read_private_settlement_route_control_ack_bytes(

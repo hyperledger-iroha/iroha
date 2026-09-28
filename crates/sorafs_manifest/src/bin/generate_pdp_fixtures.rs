@@ -24,9 +24,12 @@ use std::{
     env,
     error::Error,
     ffi::OsString,
-    fs::{self, File},
+    fs,
     path::{Component, Path, PathBuf},
 };
+#[path = "common/fixture_fs.rs"]
+mod fixture_fs;
+use fixture_fs::{BoundDirectory, require_real_directory_ancestry};
 const VALIDATION_GENERATED_AT: u64 = 123;
 const DEFAULT_FIXTURE_DIR: &str = "fixtures/sorafs_manifest/pdp";
 const MAX_OUTPUT_PATH_BYTES: usize = 4 << 10;
@@ -35,83 +38,6 @@ const MAX_OUTPUT_PATH_COMPONENTS: usize = 64;
 struct Args {
     fixture_dir: PathBuf,
     help: bool,
-}
-struct BoundOutputDirectory {
-    display_path: PathBuf,
-    canonical_path: PathBuf,
-    handle: File,
-}
-impl BoundOutputDirectory {
-    fn open(path: &Path, label: &str) -> Result<Self, Box<dyn Error>> {
-        require_real_directory_ancestry(path, label)?;
-        let before = fs::symlink_metadata(path)
-            .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
-        if before.file_type().is_symlink() || !before.is_dir() {
-            return Err(format!("{label} must be an existing non-symlink directory").into());
-        }
-        let handle = File::open(path)
-            .map_err(|error| format!("failed to open {label} `{}`: {error}", path.display()))?;
-        let opened = handle.metadata().map_err(|error| {
-            format!(
-                "failed to inspect opened {label} `{}`: {error}",
-                path.display()
-            )
-        })?;
-        let after = fs::symlink_metadata(path).map_err(|error| {
-            format!(
-                "failed to reinspect {label} `{}` after opening: {error}",
-                path.display()
-            )
-        })?;
-        require_real_directory_ancestry(path, label)?;
-        if after.file_type().is_symlink()
-            || !after.is_dir()
-            || !same_directory_identity(&before, &opened)
-            || !same_directory_identity(&before, &after)
-        {
-            return Err(format!("{label} changed identity while it was bound").into());
-        }
-        let canonical_path = fs::canonicalize(path).map_err(|error| {
-            format!(
-                "failed to canonicalize {label} `{}`: {error}",
-                path.display()
-            )
-        })?;
-        Ok(Self {
-            display_path: path.to_path_buf(),
-            canonical_path,
-            handle,
-        })
-    }
-    fn verify(&self, label: &str) -> Result<(), Box<dyn Error>> {
-        require_real_directory_ancestry(&self.display_path, label)?;
-        let lexical = fs::symlink_metadata(&self.display_path).map_err(|error| {
-            format!(
-                "failed to reinspect {label} `{}`: {error}",
-                self.display_path.display()
-            )
-        })?;
-        let opened = self.handle.metadata().map_err(|error| {
-            format!(
-                "failed to reinspect bound {label} `{}`: {error}",
-                self.display_path.display()
-            )
-        })?;
-        let canonical = fs::canonicalize(&self.display_path).map_err(|error| {
-            format!(
-                "failed to recanonicalize {label} `{}`: {error}",
-                self.display_path.display()
-            )
-        })?;
-        if lexical.file_type().is_symlink()
-            || !lexical.is_dir()
-            || !same_directory_identity(&lexical, &opened)
-            || canonical != self.canonical_path
-        {
-            return Err(format!("{label} changed identity during fixture generation").into());
-        }
-        Ok(())
-    }
 }
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn Error>> {
     const USAGE: &str = "usage: generate_pdp_fixtures [--output-dir PATH]";
@@ -212,51 +138,6 @@ fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        env::current_dir()
-            .map_err(|error| format!("failed to resolve current directory: {error}"))?
-            .join(path)
-    };
-    let mut current = PathBuf::new();
-    for component in absolute.components() {
-        current.push(component);
-        let metadata = fs::symlink_metadata(&current).map_err(|error| {
-            format!(
-                "failed to inspect {label} ancestry `{}`: {error}",
-                current.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "{label} ancestry must not contain a symbolic link: {}",
-                current.display()
-            )
-            .into());
-        }
-        if !metadata.is_dir() {
-            return Err(format!(
-                "{label} ancestry must contain directories only: {}",
-                current.display()
-            )
-            .into());
-        }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_dir() && right.is_dir() && left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(not(unix))]
-fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_dir()
-        && right.is_dir()
-        && left.created().ok() == right.created().ok()
-        && left.modified().ok() == right.modified().ok()
-}
 fn print_usage() {
     println!(
         "Usage: generate_pdp_fixtures [--output-dir PATH]\n\
@@ -272,12 +153,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         print_usage();
         return Ok(());
     }
-    let fixture_binding =
-        BoundOutputDirectory::open(&args.fixture_dir, "PDP fixture output directory")?;
+    let fixture_binding = BoundDirectory::bind(&args.fixture_dir, "PDP fixture output directory")?;
     let fixture_dir = fixture_binding.display_path.clone();
     let negative_dir = fixture_dir.join("negative");
     let negative_binding =
-        BoundOutputDirectory::open(&negative_dir, "negative PDP fixture output directory")?;
+        BoundDirectory::bind(&negative_dir, "negative PDP fixture output directory")?;
     let manifest_digest = [0x42; 32];
     let provider_id = [0x10; 32];
     let chunk_profile = chunk_profile()?;

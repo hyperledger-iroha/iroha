@@ -534,6 +534,54 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         self.check_certificate(self.committed(height)?)
     }
 
+    /// The exact authenticated committee and its proofs of possession for a portable proof.
+    ///
+    /// Genesis uses the registrations in its signed block; other heights require the
+    /// lag-2 committed committee digest to match a retained candidate. This never returns
+    /// an unverified current roster for a historical height.
+    ///
+    /// # Errors
+    /// The committee is not independently reconstructible from the retained chain.
+    pub fn proof_committee(
+        &self,
+        height: u64,
+    ) -> Result<Vec<(IrohaPublicKey, Vec<u8>)>, ChainReadError> {
+        let candidates = self.candidates()?;
+        let selected = if height == GENESIS_HEIGHT {
+            candidates.genesis
+        } else {
+            let committee =
+                self.committee_of(height)?
+                    .ok_or_else(|| ChainReadError::Committee {
+                        height,
+                        reason: "historical committee is not independently reconstructible"
+                            .to_owned(),
+                    })?;
+            digest(committee)
+        };
+        let members = &candidates
+            .by_digest
+            .get(&selected)
+            .ok_or_else(|| ChainReadError::Committee {
+                height,
+                reason: "authenticated committee candidate is missing".to_owned(),
+            })?
+            .members;
+        let mut ordered = members
+            .iter()
+            .map(|(key, pop)| {
+                super::crypto::core_key(key)
+                    .map(|core| (core, (key.clone(), pop.clone())))
+                    .map_err(|error| ChainReadError::Committee {
+                        height,
+                        reason: error.to_string(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        ordered.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(ordered.into_iter().map(|(_, member)| member).collect())
+    }
+
     /// The certified blocks `from..=to`, oldest first, each checked to extend the previous one.
     /// The iterator stops after the first error.
     pub fn walk(

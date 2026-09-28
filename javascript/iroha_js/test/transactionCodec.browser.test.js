@@ -452,23 +452,28 @@ test("browser payload pins canonical TransactionDomain::Network wire and rejects
   );
 });
 
-test("browser payload requires signature-bound QueuePlan admission", () => {
+test("browser payload requires signature-bound Ordinary admission", () => {
   const payload = buildBrowserTransferPayload(sampleInput());
   let offset = 0;
   for (let index = 0; index <= 7; index += 1) {
     const fieldValue = readField(payload, offset);
     offset = fieldValue.next;
     if (index === 7) {
-      assert.deepEqual(fieldValue.value, u32(1));
+      assert.deepEqual(fieldValue.value, u32(0));
     }
   }
+
+  const { hashHex, signature } = signPayload(payload);
+  assert.equal(ed25519.verify(signature, Buffer.from(hashHex, "hex"), PUBLIC_KEY), true);
+  const retiredPayload = replacePayloadField(payload, 7, u32(1));
+  assert.equal(ed25519.verify(signature, Buffer.from(browserTransactionPayloadHashHex(retiredPayload, 753), "hex"), PUBLIC_KEY), false);
 
   expectCodecError(
     () =>
       validateBrowserTransferSignable({
         networkPrefix: 753,
         networkId: NETWORK_ID,
-        payloadBytes: replacePayloadField(payload, 7, u32(0)),
+        payloadBytes: replacePayloadField(payload, 7, u32(1)),
         authority: AUTHORITY,
         signingPublicKey: PUBLIC_KEY,
       }),
@@ -530,7 +535,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   );
 });
 
-test("shared compact Android/native golden stays generic while browser rejects ordinary admission", () => {
+test("shared compact Android/native golden and browser agree on Ordinary admission", () => {
   const fixture = properties(FIXTURE_PATH);
   assert.equal(fixture["schema.version"], "2");
   assert.equal(fixture["source.fixture"], "transfer_asset");
@@ -565,11 +570,7 @@ test("shared compact Android/native golden stays generic while browser rejects o
   const directHash = Buffer.from(blake2b256(canonical));
   directHash[directHash.length - 1] |= 1;
   assert.equal(directHash.toString("hex"), fixture["canonical.hash"]);
-  expectCodecError(
-    () => browserSignedTransactionHashHex(versioned, 753),
-    "malformed_signed_transaction",
-    "ordinary-admission shared fixture",
-  );
+  assert.equal(browserSignedTransactionHashHex(versioned, 753), fixture["canonical.hash"]);
   assert.equal(
     Buffer.from(getNativeBinding().hashSignedTransaction(versioned)).toString("hex"),
     fixture["canonical.hash"],

@@ -413,11 +413,6 @@ impl MockWorldStateView {
         base.state_overlay = DurableStateOverlay::with_persist_path(path)?;
         Ok(base)
     }
-    /// Reconfigure the contract-state persistence path after construction.
-    pub fn set_state_store_path(&mut self, path: PathBuf) -> Result<(), VMError> {
-        self.state_overlay = DurableStateOverlay::with_persist_path(path)?;
-        Ok(())
-    }
     /// Override the logical wall-clock timestamp (milliseconds since epoch).
     ///
     /// Tests should set this to exercise election time windows deterministically.
@@ -528,9 +523,6 @@ impl MockWorldStateView {
         }
         out
     }
-    pub fn sc_keys(&self) -> Vec<StatePath> {
-        self.state_overlay.keys().cloned().collect()
-    }
     pub fn sc_set<P: AsRef<str>>(&mut self, path: P, value: Vec<u8>) -> Result<(), VMError> {
         let path: StatePath = path.as_ref().parse().map_err(|_| VMError::NoritoInvalid)?;
         if crate::dev_env::decode_trace_enabled() {
@@ -550,14 +542,6 @@ impl MockWorldStateView {
     }
     pub fn sc_flush(&self) -> Result<(), VMError> {
         self.state_overlay.flush()
-    }
-    /// Record a manifest keyed by the supplied `code_hash`.
-    pub fn insert_contract_manifest(&mut self, code_hash: CryptoHash) {
-        self.contract_manifests.insert(code_hash);
-    }
-    /// Store contract bytecode for tests that exercise removal flows.
-    pub fn insert_contract_code(&mut self, code_hash: CryptoHash, code: Vec<u8>) {
-        self.contract_code.insert(code_hash, code);
     }
     /// Bind a contract instance in the mock registry.
     pub fn bind_contract_instance(
@@ -772,38 +756,6 @@ impl MockWorldStateView {
             .entry(domain)
             .or_default()
             .insert(subject)
-    }
-    /// Unlink an account subject from a specific domain.
-    ///
-    /// If this is the final domain link for the subject, non-zero balances and
-    /// NFT ownership still prevent unlinking so resources are not orphaned.
-    /// Subject-level account state is otherwise preserved.
-    pub fn unlink_subject_from_domain(&mut self, subject: &AccountId, domain: &DomainId) -> bool {
-        let Some(subjects) = self.domain_accounts.get_mut(domain) else {
-            return false;
-        };
-        if !subjects.remove(subject) {
-            return false;
-        }
-        if subjects.is_empty() {
-            self.domain_accounts.remove(domain);
-        }
-        if self.subject_has_any_domain(subject) {
-            return true;
-        }
-        let has_bal = self
-            .balances
-            .iter()
-            .any(|((acc, _), amount)| acc == subject && !amount.is_zero());
-        let has_nfts = self.nfts.values().any(|rec| rec.owner == *subject);
-        if has_bal || has_nfts {
-            self.domain_accounts
-                .entry(domain.clone())
-                .or_default()
-                .insert(subject.clone());
-            return false;
-        }
-        true
     }
     fn canonical_account_id_for_subject(&self, subject: &AccountId) -> Option<AccountId> {
         (self.accounts.contains_key(subject) || self.subject_has_any_domain(subject))
@@ -1564,7 +1516,6 @@ pub struct WsvHost {
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
     sm_enabled: bool,
-    allow_contract_runtime_asset_transfer_bypass: bool,
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
@@ -1588,7 +1539,6 @@ struct WsvHostSnapshot {
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
     sm_enabled: bool,
-    allow_contract_runtime_asset_transfer_bypass: bool,
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
@@ -1706,7 +1656,6 @@ impl WsvHost {
             axt_policy: policy,
             axt_policy_overridden: false,
             sm_enabled: false,
-            allow_contract_runtime_asset_transfer_bypass: false,
             contract_runtime_invoker: None,
             contract_runtime_address: None,
             contract_runtime_entrypoint: None,
@@ -1773,8 +1722,6 @@ impl WsvHost {
             axt_policy: Arc::clone(&self.axt_policy),
             axt_policy_overridden: self.axt_policy_overridden,
             sm_enabled: self.sm_enabled,
-            allow_contract_runtime_asset_transfer_bypass: self
-                .allow_contract_runtime_asset_transfer_bypass,
             contract_runtime_invoker: self.contract_runtime_invoker.clone(),
             contract_runtime_address: self.contract_runtime_address.clone(),
             contract_runtime_entrypoint: self.contract_runtime_entrypoint.clone(),
@@ -1797,8 +1744,6 @@ impl WsvHost {
         self.axt_policy = Arc::clone(&snapshot.axt_policy);
         self.axt_policy_overridden = snapshot.axt_policy_overridden;
         self.sm_enabled = snapshot.sm_enabled;
-        self.allow_contract_runtime_asset_transfer_bypass =
-            snapshot.allow_contract_runtime_asset_transfer_bypass;
         self.contract_runtime_invoker = snapshot.contract_runtime_invoker.clone();
         self.contract_runtime_address = snapshot.contract_runtime_address.clone();
         self.contract_runtime_entrypoint = snapshot.contract_runtime_entrypoint.clone();
@@ -1874,11 +1819,6 @@ impl WsvHost {
         self.set_axt_target_lane(dsid, lane);
         self
     }
-    /// Builder-style helper to set the current slot for expiry checks.
-    pub fn with_axt_current_slot(mut self, slot: u64) -> Self {
-        self.set_axt_current_slot(slot);
-        self
-    }
     /// Builder-style helper to set the exact active handle era.
     pub fn with_axt_active_handle_era(mut self, dsid: DataSpaceId, era: u64) -> Self {
         self.set_axt_active_handle_era(dsid, era);
@@ -1893,14 +1833,6 @@ impl WsvHost {
     pub fn set_current_time_ms(&mut self, ts: u64) {
         self.wsv.set_current_time_ms(ts);
         self.refresh_axt_policy();
-    }
-    /// Attach a schema registry implementation.
-    pub fn with_schema_registry(
-        mut self,
-        reg: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
-    ) -> Self {
-        self.schema = reg;
-        self
     }
     fn log_read_key(&mut self, key: &str) {
         self.actual_access.read_keys.insert(key.to_string());
@@ -2054,14 +1986,6 @@ impl WsvHost {
     pub fn set_sm_enabled(&mut self, enabled: bool) {
         self.sm_enabled = enabled;
     }
-    /// Opt-in test-host bypass that mirrors executor-scoped contract transfer authorization.
-    pub fn set_allow_contract_runtime_asset_transfer_bypass(&mut self, enabled: bool) {
-        self.allow_contract_runtime_asset_transfer_bypass = enabled;
-    }
-    /// Bind the immutable contract address used by contract-scoped permission builtins.
-    pub fn set_contract_runtime_address(&mut self, contract: ContractAddress) {
-        self.contract_runtime_address = Some(contract);
-    }
     /// Bind a deployed-contract invocation while keeping the invoking authority distinct from
     /// the immutable account which authorizes ledger effects.
     pub fn bind_contract_runtime_context(
@@ -2193,10 +2117,6 @@ impl WsvHost {
             return Err(VMError::PermissionDenied);
         }
         Ok(scope)
-    }
-    #[must_use]
-    pub fn contract_runtime_asset_transfer_bypass_enabled(&self) -> bool {
-        self.allow_contract_runtime_asset_transfer_bypass
     }
     fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), VMError> {
         crate::host::validate_state_value_payload_len(stored.len())?;
@@ -2346,13 +2266,12 @@ impl WsvHost {
             return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
         }
         for (from, to, asset, amount) in entries {
-            if !self.wsv.transfer_with_permission_bypass(
+            if !self.wsv.transfer(
                 &self.caller,
                 from.clone(),
                 to.clone(),
                 asset.clone(),
                 amount,
-                self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
             }
@@ -2377,13 +2296,12 @@ impl WsvHost {
         for entry in batch.entries() {
             let from = Self::materialize_subject_account(&mut self.wsv, entry.from());
             let to = Self::materialize_subject_account(&mut self.wsv, entry.to());
-            if !self.wsv.transfer_with_permission_bypass(
+            if !self.wsv.transfer(
                 &self.caller,
                 from,
                 to,
                 entry.asset_definition().clone(),
                 entry.amount().clone(),
-                self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
             }
@@ -4398,9 +4316,7 @@ impl IVMHost for WsvHost {
                 let dataspace_id = self.decode_dataspace_reg(vm, 14)?;
                 let transfers_external_bucket = MockWorldStateView::account_subject(&from_id)
                     != MockWorldStateView::account_subject(&self.caller);
-                let permission_checked_bypass = if transfers_external_bucket
-                    && !self.allow_contract_runtime_asset_transfer_bypass
-                {
+                if transfers_external_bucket {
                     let exact = PermissionToken::TransferAssetBucket(AssetId::with_scope(
                         asset_id.clone(),
                         from_id.clone(),
@@ -4412,17 +4328,15 @@ impl IVMHost for WsvHost {
                     {
                         return Err(VMError::PermissionDenied);
                     }
-                    true
-                } else {
-                    self.allow_contract_runtime_asset_transfer_bypass
-                };
+                }
+                // The bucket permission checked above authorizes an external-bucket transfer.
                 if self.wsv.transfer_with_permission_bypass(
                     &self.caller,
                     from_id,
                     to_id,
                     asset_id,
                     amount,
-                    permission_checked_bypass,
+                    transfers_external_bucket,
                 ) {
                     Ok(Self::mutation_gas(0))
                 } else {
@@ -4577,9 +4491,6 @@ impl IVMHost for WsvHost {
         Self: 'static,
     {
         self
-    }
-    fn supports_concurrent_blocks(&self) -> bool {
-        false
     }
     fn begin_tx(&mut self, _declared: &crate::parallel::StateAccessSet) -> Result<(), VMError> {
         self.actual_access.read_keys.clear();

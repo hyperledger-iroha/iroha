@@ -11,16 +11,22 @@ use crate::vega::sponge::Keccak256;
 
 use super::resource::ZkAmsMkheResourceCertificateV1;
 
+#[cfg(test)]
 const WIRE_EVIDENCE_TAG_V1: [u8; 4] = *b"ZAMW";
+#[cfg(test)]
 const RESOURCE_EVIDENCE_TAG_V1: [u8; 4] = *b"ZAMR";
+#[cfg(test)]
 const RELEASE_KAT_EVIDENCE_TAG_V1: [u8; 4] = *b"ZAMK";
 const REQUIRED_WIRE_CODEC_COUNT_V1: u16 = 7;
 
 /// Exact canonical bytes in one wire-validation evidence record.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_WIRE_EVIDENCE_BYTES_V1: usize = 185;
 /// Exact canonical bytes in one measured-resource evidence record.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RESOURCE_EVIDENCE_BYTES_V1: usize = 261;
 /// Exact canonical bytes in one release-KAT evidence record.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RELEASE_KAT_EVIDENCE_BYTES_V1: usize = 249;
 
 /// Canonical positive/negative coverage evidence for all MKHE wire codecs.
@@ -52,6 +58,7 @@ pub struct ZkAmsMkheWireEvidenceV1 {
 
 impl ZkAmsMkheWireEvidenceV1 {
     /// Recompute the profile binding and evidence digest.
+    #[cfg(test)]
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_for_profile(&super::manifest::release_profile_v1())
     }
@@ -70,6 +77,7 @@ impl ZkAmsMkheWireEvidenceV1 {
     }
 
     /// Encode the sole fixed-width canonical evidence representation.
+    #[cfg(test)]
     pub fn to_canonical_bytes_v1(
         self,
     ) -> Result<[u8; ZK_AMS_MKHE_WIRE_EVIDENCE_BYTES_V1], ZkAmsMkheErrorV1> {
@@ -113,6 +121,7 @@ impl ZkAmsMkheWireEvidenceV1 {
     }
 
     /// Decode and validate exactly one canonical evidence record.
+    #[cfg(test)]
     pub fn from_canonical_bytes_exact_v1(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
         if bytes.len() != ZK_AMS_MKHE_WIRE_EVIDENCE_BYTES_V1 {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -182,11 +191,13 @@ pub struct ZkAmsMkheResourceEvidenceV1 {
 
 impl ZkAmsMkheResourceEvidenceV1 {
     /// Recompute the profile binding and evidence digest.
+    #[cfg(test)]
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_for_profile(&super::manifest::release_profile_v1())
     }
 
     /// Encode the sole fixed-width canonical evidence representation.
+    #[cfg(test)]
     pub fn to_canonical_bytes_v1(
         self,
     ) -> Result<[u8; ZK_AMS_MKHE_RESOURCE_EVIDENCE_BYTES_V1], ZkAmsMkheErrorV1> {
@@ -219,6 +230,7 @@ impl ZkAmsMkheResourceEvidenceV1 {
     }
 
     /// Decode and validate exactly one canonical evidence record.
+    #[cfg(test)]
     pub fn from_canonical_bytes_exact_v1(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
         if bytes.len() != ZK_AMS_MKHE_RESOURCE_EVIDENCE_BYTES_V1 {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -309,11 +321,13 @@ pub struct ZkAmsMkheReleaseKatEvidenceV1 {
 
 impl ZkAmsMkheReleaseKatEvidenceV1 {
     /// Recompute the profile binding and evidence digest.
+    #[cfg(test)]
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_for_profile(&super::manifest::release_profile_v1())
     }
 
     /// Encode the sole fixed-width canonical evidence representation.
+    #[cfg(test)]
     pub fn to_canonical_bytes_v1(
         self,
     ) -> Result<[u8; ZK_AMS_MKHE_RELEASE_KAT_EVIDENCE_BYTES_V1], ZkAmsMkheErrorV1> {
@@ -346,6 +360,7 @@ impl ZkAmsMkheReleaseKatEvidenceV1 {
     }
 
     /// Decode and validate exactly one canonical evidence record.
+    #[cfg(test)]
     pub fn from_canonical_bytes_exact_v1(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
         if bytes.len() != ZK_AMS_MKHE_RELEASE_KAT_EVIDENCE_BYTES_V1 {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -528,6 +543,7 @@ fn release_kat_evidence_digest_v1(evidence: ZkAmsMkheReleaseKatEvidenceV1) -> [u
     hash.finalize()
 }
 
+#[cfg(test)]
 fn write<const N: usize>(
     destination: &mut [u8; N],
     cursor: &mut usize,
@@ -544,6 +560,7 @@ fn write<const N: usize>(
     Ok(())
 }
 
+#[cfg(test)]
 fn finish_encode(cursor: usize, expected: usize) -> Result<(), ZkAmsMkheErrorV1> {
     if cursor != expected {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -551,11 +568,13 @@ fn finish_encode(cursor: usize, expected: usize) -> Result<(), ZkAmsMkheErrorV1>
     Ok(())
 }
 
+#[cfg(test)]
 struct EvidenceDecoder<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> EvidenceDecoder<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }

@@ -28,21 +28,24 @@
 //! complete identities are retained only in the post-verification output
 //! binding, avoiding a Fiat-Shamir fixed-point cycle.
 
+#[cfg(test)]
 use core::marker::PhantomData;
 
 use super::{
-    rns_native_comparator_range_carry_product::{
-        RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1,
-        RnsNativeComparatorRangeCarryPrerequisiteV1,
-    },
-    rns_native_cross_field_inventory::SmallSourceProductCommitmentsV1,
-    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
+    rns_native_comparator_range_carry_product::RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
     },
+};
+#[cfg(test)]
+use super::{
+    rns_native_comparator_range_carry_product::RnsNativeComparatorRangeCarryPrerequisiteV1,
+    rns_native_cross_field_inventory::SmallSourceProductCommitmentsV1,
+    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
     rns_native_proof_hash::RnsNativeDigestIdentityV1 as DigestIdentityV1,
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
 };
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
@@ -55,9 +58,13 @@ use crate::{
     },
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
+#[cfg(test)]
 const FLAGS_V1: u8 = 0;
+#[cfg(test)]
 const MAGIC_V1: [u8; 4] = *b"ZSP8";
+#[cfg(test)]
 const STATEMENT_V1: u8 = 8;
 const DIGEST_BYTES_V1: usize = 32;
 const POINT_BYTES_V1: usize = 33;
@@ -98,23 +105,35 @@ pub(super) const RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1: usize
         - RECORD_SET_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const CIRCUIT_LANGUAGE_V1: &[u8] = b"statement=8;owners=1032;coordinates=16384;four-owner-core;owner-major-coordinate-fast-gate-order;commitments-per-owner=(C_plus=C_signed+C_negative,C_negative);constraints-per-gate=(aL=plus-owner-coordinate,aR=negative-owner-coordinate,aO=0);gates=4*16384=65536;constraints=3*65536;no-kappa-aggregate;no-residual-q8";
+#[cfg(test)]
 const FIELD_SOUNDNESS_LANGUAGE_V1: &[u8] = b"T256-is-a-field;direct-product-zero-implies-plus=0-or-negative=0;integer-sign-interpretation-is-deliberately-deferred-until-both-factors-have-global-lookup-membership-in-[0,32768);no-unverified-range-is-promoted";
+#[cfg(test)]
 const REMAINING_BOUNDARY_V1: &[u8] = b"not-yet-verified:comparator-difference-digit-membership-and-linear-radix-relations,small-positive-and-negative-15-bit-membership,small-inverse-lookup,q-mask-radix-and-complement,source-and-packing-same-opening,global-lookup";
+#[cfg(test)]
 const TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.transcript";
+#[cfg(test)]
 const TRANSCRIPT_SCHEMA_V1: &[u8] = b"ZSP8/direct-four-owner/transcript/v1";
+#[cfg(test)]
 const CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.challenge";
+#[cfg(test)]
 const CIRCUIT_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.circuit-manifest";
+#[cfg(test)]
 const PROOF_SET_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.proof-set-root";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.residual";
+#[cfg(test)]
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.codec";
+#[cfg(test)]
 const VERIFIED_TRANSCRIPTS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.verified-transcripts";
+#[cfg(test)]
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-small-sign-disjointness.prerequisite";
 
@@ -153,6 +172,7 @@ const _: () = {
 };
 
 /// Failure while decoding or verifying small-sign product statement 8.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeSmallSignDisjointnessErrorV1 {
     ProofCapExceeded,
@@ -166,20 +186,24 @@ pub(super) enum RnsNativeSmallSignDisjointnessErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeSmallSignDisjointnessErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeSmallSignDisjointnessErrorV1 {}
 
+#[cfg(test)]
 impl From<GeneralizedBulletproofErrorV1> for RnsNativeSmallSignDisjointnessErrorV1 {
     fn from(_: GeneralizedBulletproofErrorV1) -> Self {
         Self::Algebra
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct UpstreamBindingV1 {
     pub(super) prior_context_digest: [u8; DIGEST_BYTES_V1],
@@ -190,6 +214,7 @@ pub(super) struct UpstreamBindingV1 {
     pub(super) statement5_verified_transcript_root: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl UpstreamBindingV1 {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeComparatorRangeCarryPrerequisiteV1<'_, '_, S>,
@@ -219,12 +244,14 @@ impl UpstreamBindingV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct SmallSignCoreCommitmentsV1 {
     owners: [SmallSourceProductCommitmentsV1; BLOCKS_PER_CORE_V1],
     points: [Point; COMMITMENTS_PER_CORE_V1],
 }
 
+#[cfg(test)]
 impl SmallSignCoreCommitmentsV1 {
     fn new_v1(
         owners: [SmallSourceProductCommitmentsV1; BLOCKS_PER_CORE_V1],
@@ -250,6 +277,7 @@ impl SmallSignCoreCommitmentsV1 {
     }
 }
 
+#[cfg(test)]
 fn core_commitments_v1<F>(
     core: usize,
     commitment_at: &mut F,
@@ -277,11 +305,13 @@ where
     SmallSignCoreCommitmentsV1::new_v1(owners)
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -322,11 +352,13 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ExactCoreViewV1<'a> {
     bytes: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> ExactCoreViewV1<'a> {
     fn parse_v1(bytes: &'a [u8]) -> Result<Self, RnsNativeSmallSignDisjointnessErrorV1> {
         if bytes.len() != CORE_BYTES_V1 {
@@ -356,6 +388,7 @@ impl<'a> ExactCoreViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct SmallSignProofSetViewV1<'a> {
     records: &'a [u8],
@@ -365,6 +398,7 @@ struct SmallSignProofSetViewV1<'a> {
     codec_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> SmallSignProofSetViewV1<'a> {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeComparatorRangeCarryPrerequisiteV1<'_, 'a, S>,
@@ -490,6 +524,7 @@ impl<'a> SmallSignProofSetViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn record_at_v1(
     records: &[u8],
     core: usize,
@@ -522,6 +557,7 @@ fn record_at_v1(
     Ok(&record[RECORD_HEADER_BYTES_V1..])
 }
 
+#[cfg(test)]
 fn encode_point_v1(
     point: Point,
 ) -> Result<[u8; POINT_BYTES_V1], RnsNativeSmallSignDisjointnessErrorV1> {
@@ -532,6 +568,7 @@ fn encode_point_v1(
     Ok(encoded)
 }
 
+#[cfg(test)]
 fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     for digest in [
         upstream.prior_context_digest,
@@ -545,6 +582,7 @@ fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     }
 }
 
+#[cfg(test)]
 fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CIRCUIT_MANIFEST_DOMAIN_V1);
@@ -574,6 +612,7 @@ fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn absorb_owner_commitments_v1(
     hash: &mut Keccak256,
     owner: usize,
@@ -594,6 +633,7 @@ fn absorb_owner_commitments_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn canonical_proof_set_root_v1<F>(
     upstream: UpstreamBindingV1,
     records: &[u8],
@@ -628,6 +668,7 @@ where
     Ok(digest)
 }
 
+#[cfg(test)]
 pub(super) fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     proof_set_root: [u8; DIGEST_BYTES_V1],
@@ -654,6 +695,7 @@ pub(super) fn canonical_residual_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
@@ -662,6 +704,7 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn small_sign_constraints_v1(
     coordinates: usize,
     padded_gates: usize,
@@ -710,6 +753,7 @@ fn small_sign_constraints_v1(
     Ok(constraints)
 }
 
+#[cfg(test)]
 fn build_small_sign_statement_v1<S>(
     coordinates: usize,
     padded_gates: usize,
@@ -726,6 +770,7 @@ where
     )?)
 }
 
+#[cfg(test)]
 fn append_frame_v1(
     state: &mut Vec<u8>,
     value: &[u8],
@@ -739,6 +784,7 @@ fn append_frame_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn initial_transcript_state_v1(
     upstream: UpstreamBindingV1,
     core: usize,
@@ -792,12 +838,14 @@ fn initial_transcript_state_v1(
     Ok(state)
 }
 
+#[cfg(test)]
 fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(bytes);
     hash.finalize()
 }
 
+#[cfg(test)]
 fn derive_challenge_v1(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -830,6 +878,7 @@ fn derive_challenge_v1(
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
 
+#[cfg(test)]
 struct SmallSignVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -841,6 +890,7 @@ where
     suite: PhantomData<S>,
 }
 
+#[cfg(test)]
 impl<'a, S> SmallSignVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -894,6 +944,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<S> VerifierTranscript<S> for SmallSignVerifierTranscriptV1<'_, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -927,6 +978,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeComparatorRangeCarryPrerequisiteV1<'_, '_, S>,
     view: SmallSignProofSetViewV1<'_>,
@@ -985,6 +1037,7 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 ///
 /// The residual is not authenticated as a later proof schema by this token and
 /// confers no receipt, release, or authorization capability.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the statement-5 owner and unverified residual must advance exactly once"
@@ -1002,6 +1055,7 @@ pub(super) struct RnsNativeSmallSignDisjointnessPrerequisiteV1<
     _binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeSmallSignDisjointnessPrerequisiteV1<'source, 'proof, S>
 {
@@ -1047,6 +1101,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
 /// Consume statement 5 and verify all 258 bounded statement-8 cores
 /// sequentially.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the sound private statement-8 entry awaits comparator linear/range, q-mask, and global-lookup consumers"

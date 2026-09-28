@@ -28,7 +28,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
     println!("cargo:rerun-if-env-changed=SDKROOT");
     println!("cargo:rerun-if-env-changed=TOOLCHAINS");
-    println!("cargo:rerun-if-env-changed=PATH");
     println!("cargo:rerun-if-changed=cuda/fastpq_cuda.cu");
     println!("cargo:rerun-if-changed=metal/include/params.h");
     println!("cargo:rerun-if-changed=metal/kernels/field.metal");
@@ -55,6 +54,11 @@ fn main() {
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;
     }
+    // Only CUDA discovery resolves tools through PATH (Metal uses xcrun with the
+    // DEVELOPER_DIR/SDKROOT/TOOLCHAINS selectors above). Tracking PATH on Metal
+    // targets would rebuild fastpq_prover and every dependent whenever a shell,
+    // IDE or virtualenv changes PATH.
+    println!("cargo:rerun-if-env-changed=PATH");
     if skip_gpu_build {
         println!("cargo:warning=FASTPQ_SKIP_GPU_BUILD set; CUDA backend disabled.");
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");

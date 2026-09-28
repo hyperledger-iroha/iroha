@@ -11,14 +11,12 @@ pub mod role {
             /// [`FindRoles`] Iroha Query finds all `Role`s presented.
             #[derive(Copy, Display)]
             #[display("Find all roles")]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             #[norito_schema(name = "iroha_data_model::query::role::model::FindRoles")]
             pub struct FindRoles;
             /// [`FindRoleIds`] Iroha Query finds `RoleId`s of
             /// all `Role`s presented.
             #[derive(Copy, Display)]
             #[display("Find all role ids")]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             #[norito_schema(name = "iroha_data_model::query::role::model::FindRoleIds")]
             pub struct FindRoleIds;
             /// [`FindRolesByAccountId`] Iroha Query finds all `Role`s for a specified account.
@@ -27,7 +25,6 @@ pub mod role {
             #[repr(transparent)]
             // SAFETY: `FindRolesByAccountId` has no trap representation in `AccountId`
     /// Query for roles associated with a given account.
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
             #[norito_schema(name = "iroha_data_model::query::role::model::FindRolesByAccountId")]
             pub struct FindRolesByAccountId {
                 /// `Id` of an account to find.
@@ -61,7 +58,6 @@ pub mod permission {
             #[repr(transparent)]
             // SAFETY: `FindPermissionsByAccountId` has no trap representation in `AccountId`
     /// Query for permissions associated with a given account.
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
             #[norito_schema(name = "iroha_data_model::query::permission::model::FindPermissionsByAccountId")]
             pub struct FindPermissionsByAccountId {
                 /// `Id` of an account to find.
@@ -132,7 +128,6 @@ pub mod account {
             /// [`FindAccountById`] Iroha Query finds an `Account` by its identifier.
             #[derive(Display)]
             #[display("Find account `{id}`")]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountById")]
             pub struct FindAccountById {
                 /// Domainless account identifier to resolve.
@@ -142,7 +137,6 @@ pub mod account {
             #[derive(Display)]
             #[display("Find account by alias `{alias:?}`")]
             #[repr(transparent)]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountByAlias")]
             pub struct FindAccountByAlias {
                 /// Stable account alias whose bound account should be resolved.
@@ -151,13 +145,11 @@ pub mod account {
             /// [`FindAccounts`] Iroha Query finds all `Account`s presented.
             #[derive(Copy, Display)]
             #[display("Find all accounts")]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAccounts")]
             pub struct FindAccounts;
             /// [`FindAccountIds`] Iroha Query finds identifiers of all `Account`s presented.
             #[derive(Copy, Display)]
             #[display("Find all account ids")]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountIds")]
             pub struct FindAccountIds;
             /// [`FindAccountsWithAsset`] Iroha Query gets [`crate::asset::definition::AssetDefinition`] ids as input and
@@ -167,7 +159,6 @@ pub mod account {
             #[repr(transparent)]
             // SAFETY: `FindAccountsWithAsset` has no trap representation in `AssetDefinitionId`
     /// Query for accounts that hold a specific asset.
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountsWithAsset")]
             pub struct FindAccountsWithAsset {
                 /// `Id` of the definition of the asset which should be stored in founded accounts.
@@ -176,7 +167,6 @@ pub mod account {
             /// [`FindAliasesByAccountId`] query lists aliases bound to the account subject.
             #[derive(Display)]
             #[display("Find aliases bound to account `{id}`")]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAliasesByAccountId")]
             pub struct FindAliasesByAccountId {
                 /// Domainless account identifier whose alias bindings should be resolved.
@@ -192,7 +182,6 @@ pub mod account {
             #[derive(Display)]
             #[display("Find recovery policy for alias `{alias:?}`")]
             #[repr(transparent)]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountRecoveryPolicyByAlias")]
             pub struct FindAccountRecoveryPolicyByAlias {
                 /// Stable account alias whose recovery policy should be loaded.
@@ -202,7 +191,6 @@ pub mod account {
             #[derive(Display)]
             #[display("Find recovery request for alias `{alias:?}`")]
             #[repr(transparent)]
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
             #[norito_schema(name = "iroha_data_model::query::account::model::FindAccountRecoveryRequestByAlias")]
             pub struct FindAccountRecoveryRequestByAlias {
                 /// Stable account alias whose recovery request should be loaded.
@@ -278,20 +266,17 @@ pub mod asset {
         /// [`FindAssets`] Iroha Query finds all `Asset`s presented.
         #[derive(Copy, Display)]
         #[display("Find all assets")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssets")]
         pub struct FindAssets;
         /// [`FindAssetsDefinitions`] Iroha Query finds all `AssetDefinition`s presented.
         #[derive(Copy, Display)]
         #[display("Find all asset definitions")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetsDefinitions")]
         pub struct FindAssetsDefinitions;
         /// [`FindAssetsByAccountId`] Iroha Query finds all `Asset`s owned by an account.
         #[derive(Display)]
         #[display("Find assets owned by `{id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetsByAccountId")]
         pub struct FindAssetsByAccountId {
             /// Identifier of the account that owns the assets.
@@ -301,7 +286,6 @@ pub mod asset {
         #[derive(Display)]
         #[display("Find asset `{id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetById")]
         pub struct FindAssetById {
             /// Identifier of the asset to look up.
@@ -311,7 +295,6 @@ pub mod asset {
         #[derive(Display)]
         #[display("Find asset definition `{id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetDefinitionById")]
         pub struct FindAssetDefinitionById {
             /// Identifier of the asset definition to look up.
@@ -353,7 +336,6 @@ pub mod repo {
         /// [`FindRepoAgreements`] Iroha Query finds all repo agreements stored on-chain.
         #[derive(Copy, Display)]
         #[display("Find all repo agreements")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::repo::model::FindRepoAgreements")]
         pub struct FindRepoAgreements;
     }
@@ -373,7 +355,6 @@ pub mod escrow {
         /// Find all native asset escrow records.
         #[derive(Copy, Display)]
         #[display("Find all asset escrows")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::escrow::model::FindAssetEscrows")]
         pub struct FindAssetEscrows;
         /// Find a native asset escrow by identifier.
@@ -435,14 +416,12 @@ pub mod oracle {
         /// Find all registered oracle feeds.
         #[derive(Copy, Display)]
         #[display("Find oracle feeds")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleFeeds")]
         pub struct FindOracleFeeds;
         /// Find a registered oracle feed by id.
         #[derive(Display)]
         #[display("Find oracle feed `{feed_id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleFeedById")]
         pub struct FindOracleFeedById {
             /// Feed identifier to look up.
@@ -452,7 +431,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find oracle history for feed `{feed_id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleHistoryByFeedId")]
         pub struct FindOracleHistoryByFeedId {
             /// Feed identifier whose history should be returned.
@@ -462,7 +440,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find oracle provider stats for feed `{feed_id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleProviderStatsByFeedId")]
         pub struct FindOracleProviderStatsByFeedId {
             /// Feed identifier whose provider stats should be returned.
@@ -472,7 +449,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find oracle provider stats `{key:?}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleProviderStatsByKey")]
         pub struct FindOracleProviderStatsByKey {
             /// Provider statistics key.
@@ -481,14 +457,12 @@ pub mod oracle {
         /// Find all oracle disputes.
         #[derive(Copy, Display)]
         #[display("Find oracle disputes")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleDisputes")]
         pub struct FindOracleDisputes;
         /// Find an oracle dispute by id.
         #[derive(Display)]
         #[display("Find oracle dispute `{dispute_id:?}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleDisputeById")]
         pub struct FindOracleDisputeById {
             /// Dispute identifier to look up.
@@ -498,7 +472,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find oracle disputes for feed `{feed_id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleDisputesByFeedId")]
         pub struct FindOracleDisputesByFeedId {
             /// Feed identifier whose disputes should be returned.
@@ -507,14 +480,12 @@ pub mod oracle {
         /// Find all oracle change proposals.
         #[derive(Copy, Display)]
         #[display("Find oracle changes")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleChanges")]
         pub struct FindOracleChanges;
         /// Find an oracle change proposal by id.
         #[derive(Display)]
         #[display("Find oracle change `{change_id:?}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindOracleChangeById")]
         pub struct FindOracleChangeById {
             /// Oracle change identifier to look up.
@@ -524,7 +495,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find twitter bindings for `{uaid:?}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindTwitterBindingsByUaid")]
         pub struct FindTwitterBindingsByUaid {
             /// Universal account id to look up.
@@ -534,7 +504,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find twitter binding `{binding_hash:?}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindTwitterBindingByHash")]
         pub struct FindTwitterBindingByHash {
             /// Pseudonymous keyed hash used to look up the binding.
@@ -544,7 +513,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find DeFi oracle attestations for `{key:?}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindDefiOracleAttestationsByKey")]
         pub struct FindDefiOracleAttestationsByKey {
             /// Domain and subject id key.
@@ -554,7 +522,6 @@ pub mod oracle {
         #[derive(Display)]
         #[display("Find latest DeFi oracle attestation for `{key:?}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::oracle::model::FindLatestDefiOracleAttestation")]
         pub struct FindLatestDefiOracleAttestation {
             /// Domain and subject id key.
@@ -735,7 +702,6 @@ pub mod nft {
         #[derive(Display)]
         #[display("Find NFT `{id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::nft::model::FindNftById")]
         pub struct FindNftById {
             /// Canonical identifier of the NFT to find.
@@ -744,14 +710,12 @@ pub mod nft {
         /// [`FindNfts`] Iroha Query finds all `Nft`s presented.
         #[derive(Copy, Display)]
         #[display("Find all NFTs")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::nft::model::FindNfts")]
         pub struct FindNfts;
         /// [`FindNftsByAccountId`] Iroha Query finds all `Nft`s owned by an account.
         #[derive(Display)]
         #[display("Find NFTs owned by `{id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::nft::model::FindNftsByAccountId")]
         pub struct FindNftsByAccountId {
             /// Identifier of the account that owns the NFTs.
@@ -785,7 +749,6 @@ pub mod rwa {
         /// [`FindRwas`] finds all registered RWA lots.
         #[derive(Copy, Display)]
         #[display("Find all RWAs")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::rwa::model::FindRwas")]
         pub struct FindRwas;
     }
@@ -807,7 +770,6 @@ pub mod domain {
         #[derive(Display)]
         #[display("Find domain `{id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomainById")]
         pub struct FindDomainById {
             /// Fully qualified domain identifier to resolve.
@@ -816,14 +778,12 @@ pub mod domain {
         /// [`FindDomains`] Iroha Query finds all `Domain`s presented.
         #[derive(Copy, Display)]
         #[display("Find all domains")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomains")]
         pub struct FindDomains;
         /// [`FindDomainsByAccountId`] Iroha Query finds all `Domain`s owned by an account.
         #[derive(Display)]
         #[display("Find domains owned by `{id}`")]
         #[repr(transparent)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
         #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomainsByAccountId")]
         pub struct FindDomainsByAccountId {
             /// Identifier of the account that owns the domains.
@@ -897,7 +857,6 @@ pub mod peer {
         /// [`FindPeers`] Iroha Query finds all trusted peers presented.
         #[derive(Copy, Display)]
         #[display("Find all peers")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::peer::model::FindPeers")]
         pub struct FindPeers;
     }
@@ -916,13 +875,11 @@ pub mod executor {
         /// [`FindExecutorDataModel`] Iroha Query finds the data model of the current executor.
         #[derive(Copy, Display)]
         #[display("Find executor data model")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::executor::model::FindExecutorDataModel")]
         pub struct FindExecutorDataModel;
         /// [`FindParameters`] Iroha Query finds all defined executor configuration parameters.
         #[derive(Copy, Display)]
         #[display("Find all peers parameters")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::executor::model::FindParameters")]
         pub struct FindParameters;
     }
@@ -940,7 +897,6 @@ pub mod runtime {
         /// Find the active ABI version.
         #[derive(Copy, Display)]
         #[display("Find active ABI version")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[norito_schema(name = "iroha_data_model::query::runtime::model::FindAbiVersion")]
         pub struct FindAbiVersion;
     }

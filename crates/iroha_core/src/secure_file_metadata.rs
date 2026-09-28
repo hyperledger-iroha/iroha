@@ -141,3 +141,22 @@ mod windows {
 
 #[cfg(windows)]
 pub(crate) use windows::{SecureMetadata, from_file, from_path};
+
+/// Whether the file has exactly one hard link. Platforms without a stable link count fail closed.
+#[inline]
+pub(crate) fn is_single_link(metadata: &SecureMetadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        metadata.nlink() == 1
+    }
+    #[cfg(windows)]
+    {
+        metadata.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        false
+    }
+}

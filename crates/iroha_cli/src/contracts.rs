@@ -975,9 +975,6 @@ where
     {
         self
     }
-    fn supports_concurrent_blocks(&self) -> bool {
-        self.inner.supports_concurrent_blocks()
-    }
     fn begin_tx(&mut self, declared: &ivm::parallel::StateAccessSet) -> Result<(), ivm::VMError> {
         self.inner.begin_tx(declared)
     }

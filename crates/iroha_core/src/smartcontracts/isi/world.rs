@@ -24,6 +24,7 @@ pub mod isi {
         ParliamentDecisionModeV1, canonical_governance_attempt_ids_v1,
         parliament_attempt_policy_v1, validate_parliament_randomness_redraw_lineage_v1,
     };
+    use crate::smartcontracts::isi::helpers::verify_signature_for_signer;
     use base64::engine::Engine as _;
     use core::{
         convert::{TryFrom, TryInto},
@@ -11011,22 +11012,6 @@ pub mod isi {
             reason.as_label()
         )))
     }
-    fn verify_signature_for_signer(
-        signature: &Signature,
-        signer: &PublicKey,
-        payload: &[u8],
-    ) -> Result<(), iroha_crypto::Error> {
-        match signer.try_algorithm() {
-            Ok(Algorithm::Ed25519) => {
-                iroha_crypto::ed25519_parse_signature(signature.payload())?;
-            }
-            Ok(Algorithm::MlDsa) => {
-                iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-            }
-            _ => {}
-        }
-        signature.verify(signer, payload)
-    }
     fn validate_runtime_upgrade_provenance(
         manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
         state_transaction: &StateTransaction<'_, '_>,
@@ -18600,6 +18585,19 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Sumeragi(change) = self.inner() {
+                if !state_transaction._curr_block.is_genesis()
+                    && let iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                        epoch,
+                    ) = change
+                    && state_transaction
+                        .world
+                        .sumeragi_npos_parameters()
+                        .is_some_and(|npos| npos.epoch_length_blocks() != *epoch)
+                {
+                    return Err(invalid_smart_contract_parameter(
+                        "NPoS epoch_length_blocks must equal the signed Sumeragi epoch_length_blocks",
+                    ));
+                }
                 // Sumeragi chain parameters take effect at `h + 2` through the consensus
                 // schedule; the demotion window is a genesis constant (`specs/sumeragi.md` §10.1).
                 crate::sumeragi::schedule::validate_parameter_change(
@@ -18927,11 +18925,10 @@ pub mod isi {
             }
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-                Sumeragi(sumeragi.idle_block_interval_ms) => SumeragiParameter::IdleBlockIntervalMs,
+                Sumeragi(sumeragi.payload_retry_interval_ms) => SumeragiParameter::PayloadRetryIntervalMs,
                 Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
                 Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
                 Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
-                Sumeragi(sumeragi.empty_after_views) => SumeragiParameter::EmptyAfterViews,
                 Sumeragi(sumeragi.epoch_length_blocks) => SumeragiParameter::EpochLengthBlocks,
                 Sumeragi(sumeragi.demotion_window) => SumeragiParameter::DemotionWindow,
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
@@ -32737,20 +32734,20 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let idle = |ms: u64| {
-                SetParameter(Parameter::Sumeragi(SumeragiParameter::IdleBlockIntervalMs(
+                SetParameter(Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
                     NonZeroU64::new(ms).expect("non-zero"),
                 )))
             };
             idle(7_000).expect_execute(&ALICE_ID, &mut stx, "a valid chain parameter change");
             assert_eq!(
-                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                stx.world.parameters.get().sumeragi().payload_retry_interval_ms.get(),
                 7_000
             );
             // Below the block time: §9.4 validation fails and nothing changes.
             let error = idle(999).expect_execute_err(&ALICE_ID, &mut stx, "idle below block time");
             assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
             assert_eq!(
-                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                stx.world.parameters.get().sumeragi().payload_retry_interval_ms.get(),
                 7_000
             );
             // The demotion window is a genesis constant.
@@ -33360,6 +33357,26 @@ seiyaku GovernanceLifecycle {
                     .expect("idempotently reinstalled NPoS parameters decode"),
                 parameters
             );
+        });
+        world_test!(set_parameter_rejects_consensus_epoch_that_conflicts_with_npos {
+            let state = blank_state();
+            {
+                let mut world = state.world.block();
+                world.parameters.get_mut().set_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ));
+                world.commit();
+            }
+            let block = new_dummy_block_at_height(NonZeroU64::new(2).unwrap());
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let previous = stx.world.parameters.get().sumeragi().epoch_length_blocks;
+            let error = SetParameter::new(Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                NonZeroU64::new(previous.get() + 1).unwrap(),
+            )))
+            .expect_execute_err(&ALICE_ID, &mut stx, "conflicting scheduled epoch cannot commit");
+            assert_contains!(format!("{error:?}"), "must equal the signed Sumeragi epoch_length_blocks");
+            assert_eq!(stx.world.parameters.get().sumeragi().epoch_length_blocks, previous);
         });
         world_test!(set_parameter_keeps_npos_epoch_length_immutable {
             blank_state_transaction!(state, block, state_block, stx);
@@ -35094,6 +35111,9 @@ seiyaku GovernanceLifecycle {
     /// Query module provides `IrohaQuery` Peer related implementations.
     pub mod query {
         use super::*;
+        use crate::smartcontracts::isi::query::json_predicate::{
+            intersect_candidate_ids, predicate_matches_with_aliases,
+        };
         use crate::{
             smartcontracts::ValidQuery,
             state::{StateReadOnly, WorldReadOnly},
@@ -35114,21 +35134,11 @@ seiyaku GovernanceLifecycle {
         fn role_id_from_value(value: &Value) -> Option<RoleId> {
             norito::json::from_value(value.clone()).ok()
         }
-        fn intersect_role_candidate_ids(
-            best: &mut Option<BTreeSet<RoleId>>,
-            candidates: BTreeSet<RoleId>,
-        ) {
-            let Some(current) = best.take() else {
-                *best = Some(candidates);
-                return;
-            };
-            *best = Some(current.intersection(&candidates).cloned().collect());
-        }
         fn role_candidate_ids(predicate: &PredicateJson) -> Option<BTreeSet<RoleId>> {
             let mut best = None;
             for cond in &predicate.equals {
                 if cond.field == "id" {
-                    intersect_role_candidate_ids(
+                    intersect_candidate_ids(
                         &mut best,
                         role_id_from_value(&cond.value).into_iter().collect(),
                     );
@@ -35136,7 +35146,7 @@ seiyaku GovernanceLifecycle {
             }
             for cond in &predicate.r#in {
                 if cond.field == "id" {
-                    intersect_role_candidate_ids(
+                    intersect_candidate_ids(
                         &mut best,
                         cond.values.iter().filter_map(role_id_from_value).collect(),
                     );
@@ -35154,11 +35164,11 @@ seiyaku GovernanceLifecycle {
                 let writer_id: RoleId = "intersect_writer".parse().unwrap();
                 let reader_id: RoleId = "intersect_reader".parse().unwrap();
                 let mut candidates = None;
-                intersect_role_candidate_ids(
+                intersect_candidate_ids(
                     &mut candidates,
                     BTreeSet::from([admin_id.clone(), writer_id]),
                 );
-                intersect_role_candidate_ids(
+                intersect_candidate_ids(
                     &mut candidates,
                     BTreeSet::from([admin_id.clone(), reader_id]),
                 );
@@ -35171,95 +35181,8 @@ seiyaku GovernanceLifecycle {
                 _ => Vec::new(),
             }
         }
-        fn role_id_predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-            if path.is_empty() {
-                return None;
-            }
-            let mut current = value;
-            for segment in path.split('.') {
-                if segment.is_empty() {
-                    return None;
-                }
-                match current {
-                    Value::Object(map) => current = map.get(segment)?,
-                    _ => return None,
-                }
-            }
-            Some(current)
-        }
-        fn role_id_predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-            matches!(value, Value::String(raw) if raw == expected)
-        }
-        fn role_id_predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-            values
-                .iter()
-                .any(|value| matches!(value, Value::String(raw) if raw == expected))
-        }
-        fn role_id_json_value<'a>(cache: &'a mut Option<Value>, id: &RoleId) -> Option<&'a Value> {
-            if cache.is_none() {
-                *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(id);
-            }
-            cache.as_ref()
-        }
         fn predicate_matches_role_id(predicate: &PredicateJson, id: &RoleId) -> bool {
-            let mut id_json = None;
-            for cond in &predicate.equals {
-                let aliases = role_id_alias_values(id, &cond.field);
-                if !aliases.is_empty() {
-                    if !aliases
-                        .iter()
-                        .any(|alias| role_id_predicate_value_equals_str(&cond.value, alias))
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                let Some(value) = role_id_json_value(&mut id_json, id) else {
-                    continue;
-                };
-                let Some(actual) = role_id_predicate_value_at_path(value, &cond.field) else {
-                    return false;
-                };
-                if actual != &cond.value {
-                    return false;
-                }
-            }
-            for cond in &predicate.r#in {
-                let aliases = role_id_alias_values(id, &cond.field);
-                if !aliases.is_empty() {
-                    if !aliases
-                        .iter()
-                        .any(|alias| role_id_predicate_values_contain_str(&cond.values, alias))
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                let Some(value) = role_id_json_value(&mut id_json, id) else {
-                    continue;
-                };
-                let Some(actual) = role_id_predicate_value_at_path(value, &cond.field) else {
-                    return false;
-                };
-                if !cond.values.iter().any(|candidate| candidate == actual) {
-                    return false;
-                }
-            }
-            for field in &predicate.exists {
-                if !role_id_alias_values(id, field).is_empty() {
-                    continue;
-                }
-                let Some(value) = role_id_json_value(&mut id_json, id) else {
-                    continue;
-                };
-                let Some(actual) = role_id_predicate_value_at_path(value, field) else {
-                    return false;
-                };
-                if actual.is_null() {
-                    return false;
-                }
-            }
-            true
+            predicate_matches_with_aliases(predicate, id, role_id_alias_values)
         }
         impl ValidQuery for FindRoles {
             #[metrics(+"find_roles")]
@@ -35672,16 +35595,6 @@ seiyaku GovernanceLifecycle {
                 ProofStatus::Rejected => "Rejected",
             }
         }
-        fn intersect_proof_candidate_ids(
-            selected: &mut Option<BTreeSet<ProofId>>,
-            candidates: BTreeSet<ProofId>,
-        ) {
-            if let Some(selected) = selected {
-                selected.retain(|proof_id| candidates.contains(proof_id));
-            } else {
-                *selected = Some(candidates);
-            }
-        }
         fn proof_ids_for_backends(
             world: &impl WorldReadOnly,
             backends: impl IntoIterator<Item = String>,
@@ -35717,15 +35630,15 @@ seiyaku GovernanceLifecycle {
             let mut best = None;
             for cond in &predicate.equals {
                 match cond.field.as_str() {
-                    "id" => intersect_proof_candidate_ids(
+                    "id" => intersect_candidate_ids(
                         &mut best,
                         proof_id_from_value(&cond.value).into_iter().collect(),
                     ),
-                    "backend" | "id.backend" => intersect_proof_candidate_ids(
+                    "backend" | "id.backend" => intersect_candidate_ids(
                         &mut best,
                         proof_ids_for_backends(world, proof_backend_from_value(&cond.value)),
                     ),
-                    "status" => intersect_proof_candidate_ids(
+                    "status" => intersect_candidate_ids(
                         &mut best,
                         proof_ids_for_statuses(world, proof_status_from_value(&cond.value)),
                     ),
@@ -35734,18 +35647,18 @@ seiyaku GovernanceLifecycle {
             }
             for cond in &predicate.r#in {
                 match cond.field.as_str() {
-                    "id" => intersect_proof_candidate_ids(
+                    "id" => intersect_candidate_ids(
                         &mut best,
                         cond.values.iter().filter_map(proof_id_from_value).collect(),
                     ),
-                    "backend" | "id.backend" => intersect_proof_candidate_ids(
+                    "backend" | "id.backend" => intersect_candidate_ids(
                         &mut best,
                         proof_ids_for_backends(
                             world,
                             cond.values.iter().filter_map(proof_backend_from_value),
                         ),
                     ),
-                    "status" => intersect_proof_candidate_ids(
+                    "status" => intersect_candidate_ids(
                         &mut best,
                         proof_ids_for_statuses(
                             world,

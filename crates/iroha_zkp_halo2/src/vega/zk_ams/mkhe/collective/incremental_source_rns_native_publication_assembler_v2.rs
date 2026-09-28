@@ -11,7 +11,9 @@
 
 #![allow(dead_code)]
 
+#[cfg(test)]
 use core::{convert::Infallible, fmt};
+#[cfg(test)]
 use std::collections::BTreeSet;
 
 pub(super) const RNS_NATIVE_LEGACY_LIMB_COUNT_V2: usize = 38;
@@ -24,7 +26,9 @@ pub(super) const RNS_NATIVE_KEY_TAIL_RECEIPT_COUNT_V2: usize = 4;
 pub(super) const RNS_NATIVE_CIPHERTEXT_TAIL_RECEIPT_COUNT_V2: usize = 172;
 pub(super) const RNS_NATIVE_TAIL_RECEIPT_COUNT_V2: usize = 176;
 pub(super) const RNS_NATIVE_CANONICAL_DESCRIPTOR_COUNT_V2: usize = 3_520;
+#[cfg(test)]
 pub(super) const RNS_NATIVE_OBJECT_COEFFICIENT_COUNT_V2: usize = 131_072;
+#[cfg(test)]
 pub(super) const RNS_NATIVE_OBJECT_ENCODED_BYTE_COUNT_V2: usize =
     4 + 8 * RNS_NATIVE_OBJECT_COEFFICIENT_COUNT_V2;
 
@@ -41,23 +45,34 @@ const _: [(); RNS_NATIVE_TAIL_RECEIPT_COUNT_V2] = [(); 176];
 const _: [(); RNS_NATIVE_CANONICAL_DESCRIPTOR_COUNT_V2] =
     [(); RNS_NATIVE_PREFIX_RECEIPT_COUNT_V2 + RNS_NATIVE_TAIL_RECEIPT_COUNT_V2];
 
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_CONTRACT_IMPLEMENTED_V2: bool = true;
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_LIVE_OWNER_INTEGRATED_V2: bool = false;
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_PRODUCTION_ADAPTER_AVAILABLE_V2: bool = false;
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_READER_INTEGRATED_V2: bool = false;
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_READINESS_V2: bool = false;
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_RELEASE_AUTHORIZED_V2: bool = false;
 
+#[cfg(test)]
 const COMPOSITE_PROVIDER_DOMAIN_V2: &[u8] =
     b"iroha.zk_ams.rns_native.publication.composite_provider.v2";
+#[cfg(test)]
 const CANONICAL_MANIFEST_DOMAIN_V2: &[u8] =
     b"iroha.zk_ams.rns_native.publication.canonical_manifest.v2";
+#[cfg(test)]
 const READER_HANDOFF_DOMAIN_V2: &[u8] = b"iroha.zk_ams.rns_native.publication.reader_handoff.v2";
 
 /// A digest value is evidence data, not an authority token, and may therefore be copied.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct RnsNativeContractDigestV2([u8; 32]);
 
+#[cfg(test)]
 impl RnsNativeContractDigestV2 {
     const ZERO: Self = Self([0_u8; 32]);
 
@@ -70,6 +85,7 @@ impl RnsNativeContractDigestV2 {
     }
 }
 
+#[cfg(test)]
 impl fmt::Debug for RnsNativeContractDigestV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("RnsNativeContractDigestV2(")?;
@@ -82,6 +98,7 @@ impl fmt::Debug for RnsNativeContractDigestV2 {
 
 /// Production must implement this with the crate's approved transcript hash.
 /// The contract supplies no non-cryptographic production fallback.
+#[cfg(test)]
 #[allow(private_bounds)]
 pub(super) trait RnsNativePublicationDigestEngineV2:
     sealed::PublicationDigestEngineV2
@@ -89,6 +106,7 @@ pub(super) trait RnsNativePublicationDigestEngineV2:
     fn digest_v2(&mut self, domain: &'static [u8], transcript: &[u8]) -> RnsNativeContractDigestV2;
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(super) enum RnsNativePublicPolynomialRoleV2 {
@@ -98,6 +116,7 @@ pub(super) enum RnsNativePublicPolynomialRoleV2 {
     C1 = 3,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct RnsNativeCanonicalPositionV2 {
     role: RnsNativePublicPolynomialRoleV2,
@@ -105,6 +124,7 @@ pub(super) struct RnsNativeCanonicalPositionV2 {
     limb_ordinal: usize,
 }
 
+#[cfg(test)]
 impl RnsNativeCanonicalPositionV2 {
     fn canonical_ordinal_v2(self) -> Option<usize> {
         if self.limb_ordinal >= RNS_NATIVE_TARGET_LIMB_COUNT_V2 {
@@ -195,6 +215,7 @@ impl RnsNativeCanonicalPositionV2 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(super) enum RnsNativeProviderRouteV2 {
@@ -202,6 +223,7 @@ pub(super) enum RnsNativeProviderRouteV2 {
     Ciphertext = 1,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativeProviderSnapshotReadbackV2 {
     provider_identity: RnsNativeContractDigestV2,
@@ -209,6 +231,7 @@ pub(super) struct RnsNativeProviderSnapshotReadbackV2 {
     readback_identity: RnsNativeContractDigestV2,
 }
 
+#[cfg(test)]
 impl RnsNativeProviderSnapshotReadbackV2 {
     fn validate_v2(
         self,
@@ -226,6 +249,7 @@ impl RnsNativeProviderSnapshotReadbackV2 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativeCompositeProviderIdentityV2 {
     collective_key: RnsNativeProviderSnapshotReadbackV2,
@@ -233,6 +257,7 @@ pub(super) struct RnsNativeCompositeProviderIdentityV2 {
     composite_identity: RnsNativeContractDigestV2,
 }
 
+#[cfg(test)]
 impl RnsNativeCompositeProviderIdentityV2 {
     fn append_to_v2(self, transcript: &mut Vec<u8>) {
         self.collective_key.append_to_v2(transcript);
@@ -241,6 +266,7 @@ impl RnsNativeCompositeProviderIdentityV2 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativeFinalizedStreamingAuthorityIdentityV2 {
     governed_context_digest: RnsNativeContractDigestV2,
@@ -249,6 +275,7 @@ pub(super) struct RnsNativeFinalizedStreamingAuthorityIdentityV2 {
     authority_digest: RnsNativeContractDigestV2,
 }
 
+#[cfg(test)]
 impl RnsNativeFinalizedStreamingAuthorityIdentityV2 {
     fn validate_v2(self) -> Result<(), RnsNativePublicationAssemblyErrorV2> {
         ensure_nonzero_v2(
@@ -289,6 +316,7 @@ impl RnsNativeFinalizedStreamingAuthorityIdentityV2 {
 ///
 /// This type is intentionally non-`Clone` outside tests.  The containing evidence owners
 /// retain it; the canonical manifest merely borrows it through an ordinal locator.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 enum RnsNativeExactFinalizedV1AuthorityOwnerV2 {
@@ -299,6 +327,7 @@ enum RnsNativeExactFinalizedV1AuthorityOwnerV2 {
     Production(Infallible),
 }
 
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 enum RnsNativeExactV1CiphertextManifestOwnerV2 {
@@ -309,6 +338,7 @@ enum RnsNativeExactV1CiphertextManifestOwnerV2 {
     Production(Infallible),
 }
 
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 enum RnsNativeExactBasisExtensionLifecycleOwnerV2 {
@@ -333,6 +363,7 @@ impl Drop for RnsNativeTestOwnerDropProbeV2 {
     }
 }
 
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 struct RnsNativeObjectPublicationEvidenceV2 {
@@ -348,6 +379,7 @@ struct RnsNativeObjectPublicationEvidenceV2 {
     encoded_byte_count: usize,
 }
 
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 struct RnsNativeV1CiphertextManifestEvidenceV2 {
@@ -362,6 +394,7 @@ struct RnsNativeV1CiphertextManifestEvidenceV2 {
 }
 
 /// Owns the exact finalized V1 authority evidence and all 3,344 prefix receipts.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 struct RnsNativeFinalizedV1PublicationEvidenceV2 {
@@ -374,6 +407,7 @@ struct RnsNativeFinalizedV1PublicationEvidenceV2 {
     ciphertext_manifests: Box<[RnsNativeV1CiphertextManifestEvidenceV2]>,
 }
 
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 struct RnsNativeV2TailRecordEvidenceV2 {
@@ -387,6 +421,7 @@ struct RnsNativeV2TailRecordEvidenceV2 {
 }
 
 /// Owns the exact four key tails and 172 record-local ciphertext tails.
+#[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 struct RnsNativeBasisExtensionTailLifecycleEvidenceV2 {
@@ -401,6 +436,7 @@ struct RnsNativeBasisExtensionTailLifecycleEvidenceV2 {
     records: Box<[RnsNativeV2TailRecordEvidenceV2]>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativePublicPolynomialDescriptorContractV2 {
     position: RnsNativeCanonicalPositionV2,
@@ -411,6 +447,7 @@ pub(super) struct RnsNativePublicPolynomialDescriptorContractV2 {
     read_receipt_digest: RnsNativeContractDigestV2,
 }
 
+#[cfg(test)]
 impl RnsNativePublicPolynomialDescriptorContractV2 {
     fn from_receipt_v2(receipt: &RnsNativeObjectPublicationEvidenceV2) -> Self {
         Self {
@@ -433,6 +470,7 @@ impl RnsNativePublicPolynomialDescriptorContractV2 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativePublicationAssemblyErrorV2 {
     Count {
@@ -514,11 +552,13 @@ pub(super) enum RnsNativePublicationAssemblyErrorV2 {
 
 /// Consuming assembler: failed validation drops both move-only evidence owners and mints
 /// neither a canonical manifest nor a reader handoff.
+#[cfg(test)]
 pub(super) struct RnsNativePublicPolynomialPublicationAssemblerV2 {
     v1: RnsNativeFinalizedV1PublicationEvidenceV2,
     tails: RnsNativeBasisExtensionTailLifecycleEvidenceV2,
 }
 
+#[cfg(test)]
 impl RnsNativePublicPolynomialPublicationAssemblerV2 {
     fn from_contract_evidence_v2(
         v1: RnsNativeFinalizedV1PublicationEvidenceV2,
@@ -615,6 +655,7 @@ impl RnsNativePublicPolynomialPublicationAssemblerV2 {
 }
 
 /// Move-only owner of all original receipts plus their canonical descriptor view.
+#[cfg(test)]
 pub(super) struct RnsNativePublicPolynomialPublishedSetV2 {
     v1: RnsNativeFinalizedV1PublicationEvidenceV2,
     tails: RnsNativeBasisExtensionTailLifecycleEvidenceV2,
@@ -624,6 +665,7 @@ pub(super) struct RnsNativePublicPolynomialPublishedSetV2 {
     reader_handoff_digest: RnsNativeContractDigestV2,
 }
 
+#[cfg(test)]
 impl RnsNativePublicPolynomialPublishedSetV2 {
     pub(super) fn descriptors_v2(&self) -> &[RnsNativePublicPolynomialDescriptorContractV2] {
         &self.descriptors
@@ -666,6 +708,7 @@ impl RnsNativePublicPolynomialPublishedSetV2 {
 
 /// The future composite provider routes A/B to the collective-key provider and C0/C1 to
 /// the ciphertext provider.  Its identity must bind both immutable snapshots/readbacks.
+#[cfg(test)]
 #[allow(private_bounds)]
 pub(super) trait RnsNativeCompositeReadProviderV2: sealed::CompositeReadProviderV2 {
     type Error;
@@ -682,12 +725,14 @@ pub(super) trait RnsNativeCompositeReadProviderV2: sealed::CompositeReadProvider
 }
 
 /// A failed handoff owns and destroys both inputs; it deliberately offers no recovery API.
+#[cfg(test)]
 pub(super) struct RnsNativeReaderHandoffFailureV2<P> {
     error: RnsNativePublicationAssemblyErrorV2,
     published: Box<RnsNativePublicPolynomialPublishedSetV2>,
     provider: P,
 }
 
+#[cfg(test)]
 impl<P> RnsNativeReaderHandoffFailureV2<P> {
     pub(super) fn error_v2(&self) -> RnsNativePublicationAssemblyErrorV2 {
         self.error
@@ -695,11 +740,13 @@ impl<P> RnsNativeReaderHandoffFailureV2<P> {
 }
 
 /// Move-only capability presented to the existing reader adapter.
+#[cfg(test)]
 pub(super) struct RnsNativePublicPolynomialReaderHandoffV2<P> {
     published: RnsNativePublicPolynomialPublishedSetV2,
     provider: P,
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeExistingReaderBuildRequestV2<'a> {
     descriptors: &'a [RnsNativePublicPolynomialDescriptorContractV2],
     receipt_locator: RnsNativeCanonicalReceiptLocatorV2<'a>,
@@ -709,14 +756,18 @@ pub(super) struct RnsNativeExistingReaderBuildRequestV2<'a> {
 }
 
 mod sealed {
+    #[cfg(test)]
     pub trait PublicationDigestEngineV2 {}
+    #[cfg(test)]
     pub trait CompositeReadProviderV2 {}
+    #[cfg(test)]
     pub trait ExistingReaderAdapterV2 {}
 }
 
 /// A live implementation must construct the existing reader from exactly this descriptor
 /// slice and move the provider into it.  On error it must return the provider so the
 /// fail-closed owner can destroy all evidence together.
+#[cfg(test)]
 #[allow(private_bounds)]
 pub(super) trait RnsNativeExistingPublicReaderAdapterV2<P>:
     sealed::ExistingReaderAdapterV2
@@ -731,11 +782,13 @@ pub(super) trait RnsNativeExistingPublicReaderAdapterV2<P>:
     ) -> Result<Self::Reader, (Self::Error, P)>;
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeIntegratedPublicReaderCapabilityV2<R> {
     reader: R,
     published: RnsNativePublicPolynomialPublishedSetV2,
 }
 
+#[cfg(test)]
 impl<R> RnsNativeIntegratedPublicReaderCapabilityV2<R> {
     pub(super) fn reader_mut_v2(&mut self) -> &mut R {
         &mut self.reader
@@ -746,12 +799,14 @@ impl<R> RnsNativeIntegratedPublicReaderCapabilityV2<R> {
     }
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeExistingReaderBuildFailureV2<E, P> {
     error: E,
     published: Box<RnsNativePublicPolynomialPublishedSetV2>,
     provider: P,
 }
 
+#[cfg(test)]
 impl<P> RnsNativePublicPolynomialReaderHandoffV2<P> {
     pub(super) fn try_into_existing_reader_v2<A>(
         self,
@@ -788,12 +843,14 @@ impl<P> RnsNativePublicPolynomialReaderHandoffV2<P> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct RnsNativeCanonicalReceiptLocatorV2<'a> {
     v1: &'a RnsNativeFinalizedV1PublicationEvidenceV2,
     tails: &'a RnsNativeBasisExtensionTailLifecycleEvidenceV2,
 }
 
+#[cfg(test)]
 impl<'a> RnsNativeCanonicalReceiptLocatorV2<'a> {
     fn receipt_at_v2(
         self,
@@ -804,6 +861,7 @@ impl<'a> RnsNativeCanonicalReceiptLocatorV2<'a> {
     }
 }
 
+#[cfg(test)]
 fn validate_owner_shapes_v2(
     v1: &RnsNativeFinalizedV1PublicationEvidenceV2,
     tails: &RnsNativeBasisExtensionTailLifecycleEvidenceV2,
@@ -967,6 +1025,7 @@ fn validate_owner_shapes_v2(
     Ok(())
 }
 
+#[cfg(test)]
 fn receipt_and_origin_at_v2<'a>(
     v1: &'a RnsNativeFinalizedV1PublicationEvidenceV2,
     tails: &'a RnsNativeBasisExtensionTailLifecycleEvidenceV2,
@@ -1043,6 +1102,7 @@ fn receipt_and_origin_at_v2<'a>(
     }
 }
 
+#[cfg(test)]
 fn validate_receipt_v2(
     receipt: &RnsNativeObjectPublicationEvidenceV2,
     expected_position: RnsNativeCanonicalPositionV2,
@@ -1123,6 +1183,7 @@ fn validate_receipt_v2(
     Ok(())
 }
 
+#[cfg(test)]
 fn composite_provider_identity_v2<H: RnsNativePublicationDigestEngineV2>(
     collective_key: RnsNativeProviderSnapshotReadbackV2,
     ciphertext: RnsNativeProviderSnapshotReadbackV2,
@@ -1149,6 +1210,7 @@ fn composite_provider_identity_v2<H: RnsNativePublicationDigestEngineV2>(
     })
 }
 
+#[cfg(test)]
 struct RnsNativeCanonicalManifestInputsV2<'a> {
     authority: RnsNativeFinalizedStreamingAuthorityIdentityV2,
     key_tail_owner_digest: RnsNativeContractDigestV2,
@@ -1159,6 +1221,7 @@ struct RnsNativeCanonicalManifestInputsV2<'a> {
     descriptors: &'a [RnsNativePublicPolynomialDescriptorContractV2],
 }
 
+#[cfg(test)]
 fn canonical_manifest_digest_v2<H: RnsNativePublicationDigestEngineV2>(
     inputs: RnsNativeCanonicalManifestInputsV2<'_>,
     digest_engine: &mut H,
@@ -1209,6 +1272,7 @@ fn canonical_manifest_digest_v2<H: RnsNativePublicationDigestEngineV2>(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn reader_handoff_digest_v2<H: RnsNativePublicationDigestEngineV2>(
     canonical_manifest_digest: RnsNativeContractDigestV2,
     composite_provider: RnsNativeCompositeProviderIdentityV2,
@@ -1233,6 +1297,7 @@ fn reader_handoff_digest_v2<H: RnsNativePublicationDigestEngineV2>(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn ensure_count_v2(
     component: &'static str,
     expected: usize,
@@ -1249,6 +1314,7 @@ fn ensure_count_v2(
     }
 }
 
+#[cfg(test)]
 fn ensure_nonzero_v2(
     digest: RnsNativeContractDigestV2,
     component: &'static str,
@@ -1266,32 +1332,39 @@ fn ensure_nonzero_v2(
     }
 }
 
+#[cfg(test)]
 fn append_u64_v2(transcript: &mut Vec<u8>, value: u64) {
     transcript.extend_from_slice(&value.to_be_bytes());
 }
 
 /// These adapters cannot be constructed.  Replacing each with a consuming live adapter is
 /// an explicit integration step and must not be inferred from digest equality.
+#[cfg(test)]
 pub(super) struct RnsNativeFinalizedV1ProductionAdapterV2 {
     never: Infallible,
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeBasisExtensionLifecycleProductionAdapterV2 {
     never: Infallible,
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeCompositeProviderProductionAdapterV2 {
     never: Infallible,
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeExistingReaderProductionAdapterV2 {
     never: Infallible,
 }
 
+#[cfg(test)]
 pub(super) struct RnsNativeApprovedDigestProductionAdapterV2 {
     never: Infallible,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativePublicationAssemblerBlockerV2 {
     code: &'static str,
@@ -1299,6 +1372,7 @@ pub(super) struct RnsNativePublicationAssemblerBlockerV2 {
 }
 
 /// Exact minimal live-tree deltas required after this contract is reviewed.
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_BLOCKERS_V2:
     &[RnsNativePublicationAssemblerBlockerV2] = &[
     RnsNativePublicationAssemblerBlockerV2 {

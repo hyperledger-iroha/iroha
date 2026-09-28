@@ -42,7 +42,7 @@ use iroha::{
         account::{AccountId, address::ChainDiscriminantGuard},
         alias_setup::AccountAliasName,
         asset::AssetDefinitionId,
-        block::{BlockHeader, consensus_v2::SumeragiV2Status},
+        block::BlockHeader,
         nexus::FeeSponsorProgramId,
         prelude::SignedTransaction,
         soracloud::{
@@ -15892,9 +15892,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     }
 
     fn convergence(&mut self, timeout_secs: u64, wave: usize, recovery_only: bool) -> Result<()> {
-        let final_wave = self
-            .admitted
-            .inventory
+        use crate::taira_dataspace_deploy::{AuthenticatedHeightObserverV1, HeightObservationV1};
+        let inventory = &self.admitted.inventory;
+        let final_wave = inventory
             .qualification_scope
             .restart_validator_indices()
             .len();
@@ -15911,13 +15911,31 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         if !recovery_only {
             require_forward_lease_budget(self.admitted, timeout_secs)?;
         }
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        let first = &inventory.validators[0];
+        let mut wire = self.closure.stream_file(&first.slug, "genesis")?;
+        wire.rewind()?;
+        let mut genesis_wire = Vec::new();
+        wire.take(32 * 1024 * 1024 + 1)
+            .read_to_end(&mut genesis_wire)?;
+        if genesis_wire.len() > 32 * 1024 * 1024
+            || sha256_hex(&genesis_wire) != artifact(&first.artifacts, "genesis")?.sha256
+        {
+            return Err(eyre!(
+                "convergence genesis differs from its signed artifact"
+            ));
+        }
+        let genesis = beacon::plan_genesis(inventory, &genesis_wire)?;
+        let peers = beacon::peers(inventory)?;
+        let mut observer = AuthenticatedHeightObserverV1::new(&genesis, peers)?;
+        let clients = self.beacon_clients(deadline)?;
         let receipt_name = format!("convergence-wave-{wave}.json");
         let previous = if wave == 0 {
             None
         } else {
-            let previous_name = format!("convergence-wave-{}.json", wave - 1);
+            let name = format!("convergence-wave-{}.json", wave - 1);
             let receipt = classify_inrou_restart_receipt_read(
-                self.read_local_receipt(&previous_name),
+                self.read_local_receipt(&name),
                 recovery_only,
                 "inrou_restart_convergence_evidence",
             )?;
@@ -15928,12 +15946,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "inrou_restart_convergence_evidence",
             )?;
             Some(classify_inrou_restart_semantic_result(
-                validate_convergence_wave(&value, wave - 1, &self.admitted.inventory),
+                validate_convergence_wave(&value, wave - 1, inventory, &genesis),
                 recovery_only,
                 "inrou_restart_convergence_evidence",
             )?)
         };
-        let retained_receipt = require_retained_restart_wave_before_frontier(
+        let retained = require_retained_restart_wave_before_frontier(
             classify_inrou_restart_receipt_read(
                 self.read_local_receipt(&receipt_name),
                 recovery_only,
@@ -15944,9 +15962,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             final_wave,
             "inrou_restart_convergence_evidence",
         )?;
-        let had_prior_receipt = if let Some(value) = retained_receipt {
+        let had_prior_receipt = if let Some(value) = retained {
             let checkpoint = classify_inrou_restart_semantic_result(
-                validate_convergence_wave(&value, wave, &self.admitted.inventory),
+                validate_convergence_wave(&value, wave, inventory, &genesis),
                 recovery_only,
                 "inrou_restart_convergence_evidence",
             )?;
@@ -15959,121 +15977,49 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         } else {
             false
         };
-        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-        let mut last_observations = vec!["not yet sampled".to_owned(); 4];
+        let mut observations = vec!["awaiting current challenged finality".to_owned(); 4];
         loop {
-            let mut reports = Vec::with_capacity(4);
-            let mut common = None;
-            let mut agrees = true;
-            for index in 0..self.runtime.validator_client_configs.len() {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(convergence_deadline_error(
-                        &self.admitted.inventory.validators,
-                        &last_observations,
-                    ));
-                }
-                let (config_args, inherited_files, _candidate_custody) =
-                    inherited_candidate_operator_status_args(
-                        &self.runtime.validator_client_configs[index],
-                        self.runtime.validator_operator_key.as_ref(),
-                        &self.admitted.inventory,
-                        &self.admitted.inventory.validator_clients[index].probe_origin,
-                    )?;
-                let poll_deadline = Instant::now()
-                    .checked_add(Duration::from_secs(10))
-                    .ok_or_else(|| eyre!("convergence poll deadline overflow"))?
-                    .min(deadline);
-                let output = self.run_local_cli_until(
-                    config_args,
-                    inherited_files,
-                    timeout_secs,
-                    poll_deadline,
-                    recovery_only,
-                    "operator-signed validator convergence status",
-                );
-                revalidate_pinned(
-                    self.runtime
-                        .validator_operator_key
-                        .as_ref()
-                        .ok_or_else(|| {
-                            eyre!("validator convergence lost its retained operator key")
-                        })?,
-                    "validator operator key",
-                )?;
-                let output = output?;
-                let value = parse_json_report(&output, "validator convergence status")?;
-                let observed =
-                    observe_convergence_status(&value, &self.admitted.inventory.validators[index])
-                        .wrap_err_with(|| {
-                            format!(
-                                "validator {} convergence status rejected",
-                                self.admitted.inventory.validators[index].slug,
-                            )
-                        })?;
-                last_observations[index] = observed.progress;
-                match observed.checkpoint {
-                    Some(observed) => match &common {
-                        Some(expected) if !same_convergence_checkpoint(expected, &observed)? => {
-                            agrees = false;
-                        }
-                        None => common = Some(observed),
-                        Some(_) => {}
-                    },
-                    None => agrees = false,
-                }
-                reports.push(value);
-            }
-            if agrees {
-                let checkpoint = common.expect("four reports yield a checkpoint");
-                if require_successor_checkpoint(previous.as_ref(), &checkpoint).is_ok() {
-                    let mut report = norito::json::Map::new();
-                    report.insert(
-                        "schema".to_owned(),
-                        norito::json::Value::from("iroha.taira.public-reset.convergence-wave.v1"),
-                    );
-                    report.insert(
-                        "wave".to_owned(),
-                        norito::json::Value::from(u64::try_from(wave).expect("bounded wave")),
-                    );
-                    report.insert("height".to_owned(), norito::json::Value::from(checkpoint.0));
-                    report.insert(
-                        "height_context_id".to_owned(),
-                        norito::json::Value::from(checkpoint.1.clone()),
-                    );
-                    report.insert(
-                        "block_hash".to_owned(),
-                        norito::json::Value::from(checkpoint.2.clone()),
-                    );
-                    report.insert(
-                        "last_commit_qc".to_owned(),
-                        json::from_str(&checkpoint.3)
-                            .wrap_err("failed to retain canonical commit-QC evidence")?,
-                    );
-                    report.insert(
-                        "validator_reports".to_owned(),
-                        norito::json::Value::Array(reports),
-                    );
-                    if !had_prior_receipt {
-                        self.publish_local_receipt(
-                            &receipt_name,
-                            &norito::json::Value::Object(report),
-                        )?;
-                    }
-                    return Ok(());
-                }
-            }
             if Instant::now() >= deadline {
                 return Err(convergence_deadline_error(
-                    &self.admitted.inventory.validators,
-                    &last_observations,
+                    &inventory.validators,
+                    &observations,
                 ));
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                continue;
+            let observed = observer.observe(&clients, inventory.chain_discriminant, deadline)?;
+            revalidate_pinned(
+                self.runtime
+                    .validator_operator_key
+                    .as_ref()
+                    .ok_or_else(|| eyre!("convergence lost its retained operator key"))?,
+                "validator operator key",
+            )?;
+            revalidate_pinned(
+                &self.runtime.client_config,
+                "convergence runtime client config",
+            )?;
+            match observed {
+                HeightObservationV1::Verified(evidence) => {
+                    let checkpoint = (
+                        evidence.committed_height().get(),
+                        evidence.block_hash().to_string(),
+                    );
+                    observations.fill(format!("authenticated committed height {}", checkpoint.0));
+                    if require_successor_checkpoint(previous.as_ref(), &checkpoint).is_ok() {
+                        let report = norito::json!({
+                            "schema": "iroha.taira.public-reset.convergence-wave.v1", "wave": (wave as u64),
+                            "height": (checkpoint.0), "block_hash": (evidence.block_hash()), "evidence": evidence,
+                        });
+                        if !had_prior_receipt {
+                            self.publish_local_receipt(&receipt_name, &report)?;
+                        }
+                        return Ok(());
+                    }
+                }
+                HeightObservationV1::Pending => {}
             }
-            std::thread::sleep(Duration::from_millis(250).min(remaining));
+            std::thread::sleep(
+                Duration::from_millis(100).min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
     }
 
@@ -18358,12 +18304,6 @@ fn validate_exact_inrou_check_report_with_scope(
     Ok(evidence)
 }
 
-#[derive(Debug)]
-struct ConvergenceStatusObservation {
-    checkpoint: Option<(u64, String, String, String)>,
-    progress: String,
-}
-
 fn convergence_deadline_error(validators: &[ValidatorV1], observations: &[String]) -> eyre::Report {
     let progress = validators
         .iter()
@@ -18376,177 +18316,13 @@ fn convergence_deadline_error(validators: &[ValidatorV1], observations: &[String
     )
 }
 
-/// Validate identity immediately while allowing the exact pre-first-commit startup state.
-fn observe_convergence_status(
-    value: &norito::json::Value,
-    expected: &ValidatorV1,
-) -> Result<ConvergenceStatusObservation> {
-    let status: SumeragiV2Status = json::from_value(value.clone())
-        .wrap_err("Sumeragi status is not exact canonical V1 JSON")?;
-    if status.protocol_version != 4 {
-        return Err(eyre!(
-            "Sumeragi status protocol_version differs: expected 4, observed {}",
-            status.protocol_version,
-        ));
-    }
-    status
-        .validate()
-        .map_err(|error| eyre!("Sumeragi status invariants failed: {error:?}"))?;
-    let progress = format!(
-        "height={}, view={}, phase={:?}, body_state={:?}, last_committed_height={}, pending_persistence_id={:?}",
-        status.height,
-        status.view,
-        status.phase,
-        status.body_state,
-        status.last_committed_height,
-        status.pending_persistence_id,
-    );
-    if status.restart_required {
-        return Err(eyre!(
-            "Sumeragi status restart_required is true; {progress}"
-        ));
-    }
-    let expected_node = expected
-        .node_fingerprint
-        .parse::<iroha_crypto::Hash>()
-        .wrap_err("signed node fingerprint is invalid")?;
-    let expected_build = expected
-        .build_fingerprint
-        .parse::<iroha_crypto::Hash>()
-        .wrap_err("signed build fingerprint is invalid")?;
-    let expected_config = expected
-        .config_fingerprint
-        .parse::<iroha_crypto::Hash>()
-        .wrap_err("signed config fingerprint is invalid")?;
-    for (field, actual, expected) in [
-        ("node_fingerprint", status.node_fingerprint, expected_node),
-        (
-            "build_fingerprint",
-            status.build_fingerprint,
-            expected_build,
-        ),
-        (
-            "config_fingerprint",
-            status.config_fingerprint,
-            expected_config,
-        ),
-    ] {
-        if actual != expected {
-            return Err(eyre!(
-                "Sumeragi status {field} differs: expected {expected}, observed {actual}; {progress}"
-            ));
-        }
-    }
-    for (field, actual, expected) in [
-        (
-            "height_context.validator_count",
-            u64::from(status.height_context.validator_count),
-            4,
-        ),
-        (
-            "height_context.quorum.min_signers",
-            u64::from(status.height_context.quorum.min_signers),
-            3,
-        ),
-        (
-            "height_context.quorum.total_power",
-            status.height_context.quorum.total_power,
-            4,
-        ),
-    ] {
-        if actual != expected {
-            return Err(eyre!(
-                "Sumeragi status {field} differs: expected {expected}, observed {actual}; {progress}"
-            ));
-        }
-    }
-    // The typed validator already proves a zero frontier has neither a subject
-    // nor a CommitQC. This is normal before genesis commits, and must be polled
-    // within the existing convergence deadline rather than reported as drift.
-    if status.last_committed_height == 0 {
-        return Ok(ConvergenceStatusObservation {
-            checkpoint: None,
-            progress,
-        });
-    }
-    let subject = status
-        .last_committed_subject
-        .ok_or_else(|| eyre!("Sumeragi status omits its committed block subject"))?;
-    let commit = status
-        .last_commit_qc
-        .ok_or_else(|| eyre!("Sumeragi status omits its authenticated CommitQC"))?;
-    if commit.validator_count != 4
-        || commit.signer_count != 3
-        || commit.min_signers != 3
-        || commit.signed_power != 3
-        || commit.total_power != 4
-        || commit.certificate.subject != subject
-        || commit.certificate.round.height != status.last_committed_height
-        || commit.certificate.proposal_round.context_id != commit.certificate.round.context_id
-    {
-        return Err(eyre!(
-            "Sumeragi CommitQC is not the exact authenticated 3-of-4 committed checkpoint"
-        ));
-    }
-    // A decision and even the adapter's Applied body can precede durable Kura
-    // publication. A successor context proves the committed world-state anchor
-    // is available to onboarding, faucet and the subsequent application checks.
-    if status.height == status.last_committed_height {
-        return Ok(ConvergenceStatusObservation {
-            checkpoint: None,
-            progress,
-        });
-    }
-    let context = json::to_value(&commit.certificate.round.context_id.0)?
-        .as_str()
-        .ok_or_else(|| eyre!("CommitQC context identifier is not canonical JSON"))?
-        .to_owned();
-    let block = json::to_value(&subject.block_hash)?
-        .as_str()
-        .ok_or_else(|| eyre!("committed block hash is not canonical JSON"))?
-        .to_owned();
-    let commit = json::to_json(&commit).wrap_err("failed to canonicalize CommitQC evidence")?;
-    Ok(ConvergenceStatusObservation {
-        checkpoint: Some((status.last_committed_height, context, block, commit)),
-        progress,
-    })
-}
-
-/// Require a completed checkpoint for retained proof, including every nullable field.
-fn validate_convergence_status(
-    value: &norito::json::Value,
-    expected: &ValidatorV1,
-) -> Result<(u64, String, String, String)> {
-    let observed = observe_convergence_status(value, expected)?;
-    observed.checkpoint.ok_or_else(|| {
-        eyre!(
-            "Sumeragi status is awaiting an applied authenticated checkpoint; {}",
-            observed.progress,
-        )
-    })
-}
-
-/// Compare independently validated decisions without equating their certificate rounds.
-fn same_convergence_checkpoint(
-    left: &(u64, String, String, String),
-    right: &(u64, String, String, String),
-) -> Result<bool> {
-    if left.0 != right.0 || left.1 != right.1 || left.2 != right.2 {
-        return Ok(false);
-    }
-    let left: iroha::data_model::block::consensus_v2::SumeragiV2CommitQcStatus =
-        json::from_str(&left.3).wrap_err("validated left convergence CommitQC is not canonical")?;
-    let right: iroha::data_model::block::consensus_v2::SumeragiV2CommitQcStatus =
-        json::from_str(&right.3)
-            .wrap_err("validated right convergence CommitQC is not canonical")?;
-    Ok(left.certificate.same_commit_decision(right.certificate))
-}
-
+/// Reauthenticate retained challenged evidence under the exact current signed genesis.
 fn validate_convergence_wave(
     value: &norito::json::Value,
     expected_wave: usize,
     inventory: &InventoryV1,
-) -> Result<(u64, String, String, String)> {
+    genesis: &iroha_genesis::ValidatedGenesisBundle,
+) -> Result<(u64, String)> {
     if expected_wave
         > inventory
             .qualification_scope
@@ -18562,66 +18338,47 @@ fn validate_convergence_wave(
         .ok_or_else(|| eyre!("convergence-wave receipt must be an object"))?;
     require_exact_json_fields(
         object,
-        &[
-            "schema",
-            "wave",
-            "height",
-            "height_context_id",
-            "block_hash",
-            "last_commit_qc",
-            "validator_reports",
-        ],
+        &["schema", "wave", "height", "block_hash", "evidence"],
         "convergence-wave receipt",
     )?;
     if object.get("schema").and_then(norito::json::Value::as_str)
         != Some("iroha.taira.public-reset.convergence-wave.v1")
-        || object.get("wave").and_then(norito::json::Value::as_u64)
-            != Some(u64::try_from(expected_wave).expect("bounded wave"))
+        || object.get("wave").and_then(norito::json::Value::as_u64) != Some(expected_wave as u64)
+        || genesis.expected_hash().to_string() != inventory.next_genesis_hash
     {
         return Err(eyre!("convergence-wave receipt identity is not exact"));
     }
-    let reports = object
-        .get("validator_reports")
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("convergence-wave receipt omits validator reports"))?;
-    if reports.len() != 4 {
-        return Err(eyre!("convergence-wave receipt must contain four reports"));
-    }
-    let mut common = None;
-    for (report, validator) in reports.iter().zip(&inventory.validators) {
-        let observed = validate_convergence_status(report, validator)?;
-        match &common {
-            None => common = Some(observed),
-            Some(expected) if same_convergence_checkpoint(expected, &observed)? => {}
-            Some(_) => return Err(eyre!("convergence-wave validator reports disagree")),
-        }
-    }
-    let checkpoint = common.expect("four reports yield a checkpoint");
-    // Typed serialization and a parsed JSON object may order fields differently.
-    // Preserve every first-report QC field without treating object key order as evidence.
-    let expected_commit_qc: norito::json::Value = json::from_str(&checkpoint.3)
-        .wrap_err("validated convergence CommitQC is not canonical JSON")?;
-    if object.get("height").and_then(norito::json::Value::as_u64) != Some(checkpoint.0)
-        || object
-            .get("height_context_id")
-            .and_then(norito::json::Value::as_str)
-            != Some(checkpoint.1.as_str())
-        || object
+    let evidence = crate::taira_dataspace_deploy::VerifiedCommittedHeightV1::validate_retained(
+        genesis,
+        beacon::peers(inventory)?,
+        object
+            .get("evidence")
+            .cloned()
+            .ok_or_else(|| eyre!("missing convergence evidence"))?,
+    )?;
+    let checkpoint = (
+        evidence.committed_height().get(),
+        evidence.block_hash().to_string(),
+    );
+    let recorded_hash: HashOf<iroha_data_model::block::BlockHeader> = norito::json::from_value(
+        object
             .get("block_hash")
-            .and_then(norito::json::Value::as_str)
-            != Some(checkpoint.2.as_str())
-        || object.get("last_commit_qc") != Some(&expected_commit_qc)
+            .cloned()
+            .ok_or_else(|| eyre!("missing convergence-wave block hash"))?,
+    )?;
+    if object.get("height").and_then(norito::json::Value::as_u64) != Some(checkpoint.0)
+        || recorded_hash != evidence.block_hash()
     {
         return Err(eyre!(
-            "convergence-wave summary differs from its four reports"
+            "convergence-wave summary differs from authenticated evidence"
         ));
     }
     Ok(checkpoint)
 }
 
 fn require_successor_checkpoint(
-    previous: Option<&(u64, String, String, String)>,
-    current: &(u64, String, String, String),
+    previous: Option<&(u64, String)>,
+    current: &(u64, String),
 ) -> Result<()> {
     if current.0 == 0 || previous.is_some_and(|previous| current.0 <= previous.0) {
         return Err(eyre!(
@@ -20288,10 +20045,15 @@ mod tests {
             "initial convergence must still have durable evidence"
         );
         assert!(
-            validate_convergence_wave(&norito::json::Value::Null, 2, &inventory)
-                .expect_err("an unselected wave cannot supply core convergence evidence")
-                .to_string()
-                .contains("outside the signed qualification plan")
+            validate_convergence_wave(
+                &norito::json::Value::Null,
+                2,
+                &inventory,
+                &crate::taira_public_reset::deployment_validated_genesis_fixture()
+            )
+            .expect_err("an unselected wave cannot supply core convergence evidence")
+            .to_string()
+            .contains("outside the signed qualification plan")
         );
     }
 
@@ -20791,489 +20553,164 @@ mod tests {
             .expect_err("the current Inrou stage must never be deleted");
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture constructs one complete authenticated status graph so every nested nullable field is exercised by the public-reset decoder"
-    )]
-    fn canonical_convergence_status_fixture() -> (ValidatorV1, norito::json::Value) {
-        use iroha::data_model::block::consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-            GlobalPhase, HeightContext, HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef,
-            SumeragiV2BodyState, SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus,
-            SumeragiV2LivenessStatus, SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
-            SumeragiV2OutboundIntentStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
-            SumeragiV2StatusPhase,
-        };
-
-        let validator = progress_admission().inventory.validators[0].clone();
-        let current_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-            Hash::new(b"public reset current status context"),
-        ));
-        let committed_context_id =
-            HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
-                b"public reset committed status context",
-            )));
-        let committed_round = ConsensusRound {
-            context_id: committed_context_id,
-            height: 7,
-            view: 1,
-        };
-        let committed_subject = BlockSubject {
-            parent_block_hash: Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"public reset committed parent",
-            ))),
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"public reset committed block",
-            )),
-            payload_hash: Hash::new(b"public reset committed payload"),
-        };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"public reset parent state"),
-            Hash::new(b"public reset post state"),
-            Hash::new(b"public reset writes"),
-            1,
-            Hash::new(b"public reset executed block"),
-        );
-        let certificate = QuorumCertificateRef {
-            round: committed_round,
-            proposal_round: committed_round,
-            phase: GlobalPhase::Commit,
-            subject: committed_subject,
-            execution_commitment,
-        };
-        let active_round = ConsensusRound {
-            context_id: current_context_id,
-            height: 8,
-            view: 0,
-        };
-        let status = SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: validator
-                .node_fingerprint
-                .parse()
-                .expect("fixture node fingerprint"),
-            build_fingerprint: validator
-                .build_fingerprint
-                .parse()
-                .expect("fixture build fingerprint"),
-            config_fingerprint: validator
-                .config_fingerprint
-                .parse()
-                .expect("fixture config fingerprint"),
-            restart_required: false,
-            height_context_id: current_context_id,
-            height: 8,
-            view: 0,
-            phase: SumeragiV2StatusPhase::AwaitingProposal,
-            leader: 0,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Missing,
-            pending_persistence_id: None,
-            last_committed_height: 7,
-            last_committed_subject: Some(committed_subject),
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: 1,
-                epoch_end_height: 100,
-                mode: ConsensusMode::Permissioned,
-                epoch_seed: [0x71; 32],
-                validator_count: 4,
-                quorum: DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: Some(SumeragiV2CommitQcStatus {
-                certificate,
-                validator_count: 4,
-                signer_count: 3,
-                min_signers: 3,
-                signed_power: 3,
-                total_power: 4,
-            }),
-            liveness: SumeragiV2LivenessStatus {
-                outbound_intents: vec![SumeragiV2OutboundIntentStatus {
-                    kind: SumeragiV2OutboundIntentKind::TimeoutVote,
-                    round: active_round,
-                    proposal_round: None,
-                    subject: None,
-                    execution_commitment: None,
-                    stage: SumeragiV2OutboundIntentStage::Retained,
-                }],
-                queues: vec![SumeragiV2QueueStatus {
-                    queue: SumeragiV2QueueKind::RuntimeProgress,
-                    depth: 0,
-                    capacity: 1,
-                    oldest_age_ms: None,
-                    service_debt: 0,
-                }],
-                ..SumeragiV2LivenessStatus::default()
-            },
-            beacon_horizon: None,
-        };
-        status.validate().expect("canonical convergence status");
-        (
-            validator,
-            json::to_value(&status).expect("canonical convergence status JSON"),
-        )
-    }
-
-    fn assert_missing_convergence_field_rejected(
-        value: norito::json::Value,
-        validator: &ValidatorV1,
-        field: &str,
+    fn current_convergence_wave_fixture(
+        height: u64,
+    ) -> (
+        InventoryV1,
+        iroha_genesis::ValidatedGenesisBundle,
+        norito::json::Value,
     ) {
-        let error = validate_convergence_status(&value, validator)
-            .expect_err("sparse convergence status must reject");
-        let diagnostic = format!("{error:?}");
-        assert!(
-            diagnostic.contains("Sumeragi status is not exact canonical V1 JSON")
-                && diagnostic.contains(&format!("missing field `{field}`")),
-            "unexpected sparse-status error for `{field}`: {diagnostic}"
-        );
-    }
-
-    fn startup_convergence_status_fixture() -> (ValidatorV1, norito::json::Value) {
-        let (validator, canonical) = canonical_convergence_status_fixture();
-        let mut status: SumeragiV2Status = json::from_value(canonical).expect("typed fixture");
-        status.height = 1;
-        status.last_committed_height = 0;
-        status.last_committed_subject = None;
-        status.last_commit_qc = None;
-        status.liveness = Default::default();
-        status
-            .validate()
-            .expect("authoritative startup state is valid");
-        (validator, json::to_value(&status).expect("startup status"))
+        let (genesis, peers, evidence) =
+            crate::taira_dataspace_deploy::VerifiedCommittedHeightV1::convergence_evidence_fixture(
+                height,
+            );
+        let mut inventory = progress_admission().inventory;
+        inventory.next_genesis_hash = genesis.expected_hash().to_string();
+        for ((validator, client), peer) in inventory
+            .validators
+            .iter_mut()
+            .zip(&mut inventory.validator_clients)
+            .zip(peers)
+        {
+            validator.node_fingerprint = peer.node_fingerprint.to_string();
+            validator.build_fingerprint = peer.build_fingerprint.to_string();
+            validator.config_fingerprint = peer.config_fingerprint.to_string();
+            client.probe_origin = peer.torii_origin;
+            client.peer_id = peer.peer_id.to_string();
+        }
+        let wave = norito::json!({"schema": "iroha.taira.public-reset.convergence-wave.v1", "wave": 0,
+            "height": height, "block_hash": (evidence.get("block_hash").unwrap().clone()), "evidence": evidence});
+        (inventory, genesis, wave)
     }
 
     #[test]
     fn public_reset_convergence_waits_for_first_commit_without_accepting_pending_proof() {
-        let (validator, startup) = startup_convergence_status_fixture();
-        let (_, committed) = canonical_convergence_status_fixture();
-        let observations = [&startup, &committed]
-            .into_iter()
-            .map(|value| observe_convergence_status(value, &validator))
-            .collect::<Result<Vec<_>>>()
-            .expect("valid startup must allow sampling the subsequent committed checkpoint");
-        assert!(observations[0].checkpoint.is_none());
-        assert_eq!(observations[1].checkpoint.as_ref().unwrap().0, 7);
-        let error = validate_convergence_status(&startup, &validator)
-            .expect_err("pending observation is never retained convergence proof");
-        assert!(format!("{error:#}").contains("awaiting an applied authenticated checkpoint"));
-        validate_convergence_status(&committed, &validator).expect("strict committed proof");
-
-        let mut impossible = committed.clone();
-        *impossible.get_mut("last_committed_height").unwrap() = 0_u64.into();
+        let (inventory, genesis, mut wave) = current_convergence_wave_fixture(1);
+        validate_convergence_wave(&wave, 0, &inventory, &genesis)
+            .expect("four challenged genesis tips");
+        *wave.pointer_mut("/evidence/committed_height").unwrap() = norito::json::Value::from(0_u64);
+        assert!(validate_convergence_wave(&wave, 0, &inventory, &genesis).is_err());
         assert!(
-            observe_convergence_status(&impossible, &validator).is_err(),
-            "a zero frontier carrying a QC cannot become a pending observation"
-        );
-        let mut unauthenticated = startup;
-        *unauthenticated.get_mut("height").unwrap() = 2_u64.into();
-        *unauthenticated.get_mut("last_committed_height").unwrap() = 1_u64.into();
-        assert!(
-            observe_convergence_status(&unauthenticated, &validator).is_err(),
-            "only the zero startup frontier may wait without its authenticated QC"
+            validate_convergence_wave(
+                &norito::json!({"committed_height": 1}),
+                0,
+                &inventory,
+                &genesis
+            )
+            .is_err(),
+            "unsigned current status can never authorize readiness"
         );
     }
 
     #[test]
     fn public_reset_convergence_rejects_fatal_identity_during_startup() {
-        let (validator, startup) = startup_convergence_status_fixture();
-        for (field, replacement) in [
-            ("protocol_version", norito::json::Value::from(3_u64)),
-            ("restart_required", true.into()),
-            (
-                "node_fingerprint",
-                json::to_value(&Hash::new(b"wrong public node")).unwrap(),
-            ),
-            (
-                "build_fingerprint",
-                json::to_value(&Hash::new(b"wrong public build")).unwrap(),
-            ),
-            (
-                "config_fingerprint",
-                json::to_value(&Hash::new(b"wrong public config")).unwrap(),
-            ),
+        let (inventory, genesis, wave) = current_convergence_wave_fixture(1);
+        for field in [
+            "node_fingerprint",
+            "build_fingerprint",
+            "config_fingerprint",
         ] {
-            let mut changed = startup.clone();
-            *changed.get_mut(field).unwrap() = replacement;
-            let error = observe_convergence_status(&changed, &validator)
-                .expect_err("fatal identity cannot be retried as startup");
+            let mut changed = wave.clone();
+            *changed
+                .pointer_mut(&format!("/evidence/peers/0/before/body/{field}"))
+                .unwrap() = norito::json::to_value(&Hash::new(b"foreign identity")).unwrap();
             assert!(
-                format!("{error:#}").contains(field),
-                "missing diagnostic for {field}: {error:#}"
+                validate_convergence_wave(&changed, 0, &inventory, &genesis).is_err(),
+                "{field}"
             );
         }
-        let mut wrong_roster = startup;
-        *wrong_roster
-            .pointer_mut("/height_context/validator_count")
-            .unwrap() = 7_u64.into();
-        *wrong_roster
-            .pointer_mut("/height_context/quorum/min_signers")
-            .unwrap() = 5_u64.into();
-        *wrong_roster
-            .pointer_mut("/height_context/quorum/total_power")
-            .unwrap() = 7_u64.into();
-        let error = observe_convergence_status(&wrong_roster, &validator)
-            .expect_err("another valid committee remains fatal before first commit");
-        assert!(
-            format!("{error:#}")
-                .contains("height_context.validator_count differs: expected 4, observed 7")
-        );
     }
 
     #[test]
     fn public_reset_convergence_deadline_reports_last_public_progress() {
-        let (validator, startup) = startup_convergence_status_fixture();
-        let observation = observe_convergence_status(&startup, &validator).expect("startup");
-        let error = convergence_deadline_error(&[validator.clone()], &[observation.progress]);
-        let diagnostic = format!("{error:#}");
-        for field in [
-            validator.slug.as_str(),
-            "height=1",
-            "view=0",
-            "phase=AwaitingProposal",
-            "body_state=Missing",
-            "last_committed_height=0",
-            "pending_persistence_id=None",
-        ] {
-            assert!(
-                diagnostic.contains(field),
-                "missing retained diagnostic {field}"
-            );
+        let inventory = progress_admission().inventory;
+        let observations = vec!["awaiting challenged finality".to_owned(); 4];
+        let error = convergence_deadline_error(&inventory.validators, &observations).to_string();
+        for validator in inventory.validators {
+            assert!(error.contains(&validator.slug));
         }
+        assert!(error.contains("awaiting challenged finality"));
     }
 
     #[test]
     fn public_reset_convergence_waits_for_applied_successor_before_canary() {
-        use iroha::data_model::block::consensus_v2::{SumeragiV2BodyState, SumeragiV2StatusPhase};
-        let (inventory, applied_wave) = reproposed_convergence_wave_fixture();
-        for body_state in [
-            SumeragiV2BodyState::PendingApply,
-            SumeragiV2BodyState::Applied,
-        ] {
-            let mut wave = applied_wave.clone();
-            let reports = wave
-                .get_mut("validator_reports")
-                .unwrap()
-                .as_array_mut()
-                .unwrap();
-            for (report, validator) in reports.iter_mut().zip(&inventory.validators) {
-                let mut status: SumeragiV2Status = json::from_value(report.clone()).unwrap();
-                let commit = status.last_commit_qc.as_ref().unwrap();
-                status.height_context_id = commit.certificate.round.context_id;
-                status.height = status.last_committed_height;
-                status.view = commit.certificate.round.view;
-                status.phase = SumeragiV2StatusPhase::PendingApply;
-                status.body_state = body_state;
-                status.pending_persistence_id = None;
-                status.liveness = Default::default();
-                status
-                    .validate()
-                    .expect("actual decision-before-application status is valid");
-                *report = json::to_value(&status).unwrap();
-                assert!(
-                    observe_convergence_status(report, validator)
-                        .unwrap()
-                        .checkpoint
-                        .is_none(),
-                    "a decided or PendingKura block is not application readiness"
-                );
-            }
-            assert!(
-                validate_convergence_wave(&wave, 0, &inventory).is_err(),
-                "four matching pre-activation QCs must not be retained as canary readiness"
-            );
-        }
-        validate_convergence_wave(&applied_wave, 0, &inventory)
-            .expect("successor activation exposes the committed application state");
-    }
-
-    fn reproposed_convergence_wave_fixture() -> (InventoryV1, norito::json::Value) {
-        let inventory = progress_admission().inventory;
-        let (_, canonical) = canonical_convergence_status_fixture();
-        let original: SumeragiV2Status = json::from_value(canonical).expect("canonical status");
-        let reports = inventory
-            .validators
-            .iter()
-            .enumerate()
-            .map(|(index, validator)| {
-                let mut status = original.clone();
-                status.node_fingerprint = validator.node_fingerprint.parse().unwrap();
-                status.build_fingerprint = validator.build_fingerprint.parse().unwrap();
-                status.config_fingerprint = validator.config_fingerprint.parse().unwrap();
-                let commit = status.last_commit_qc.as_mut().unwrap();
-                commit.certificate.round.view += u64::try_from(index).unwrap();
-                commit.certificate.proposal_round = commit.certificate.round;
-                status
-                    .validate()
-                    .expect("independent re-proposal certificate is valid");
-                json::to_value(&status).expect("re-proposal status")
-            })
-            .collect::<Vec<_>>();
-        let first = validate_convergence_status(&reports[0], &inventory.validators[0])
-            .expect("first checkpoint");
-        let wave = norito::json!({
-            "schema": "iroha.taira.public-reset.convergence-wave.v1",
-            "wave": 0,
-            "height": (first.0),
-            "height_context_id": (first.1),
-            "block_hash": (first.2),
-            "last_commit_qc": (json::from_str::<norito::json::Value>(&first.3).unwrap()),
-            "validator_reports": reports,
-        });
-        (inventory, wave)
+        let (inventory, genesis, mut wave) = current_convergence_wave_fixture(2);
+        *wave
+            .pointer_mut("/evidence/peers/0/after/body/status/applied_height")
+            .unwrap() = norito::json::Value::from(1_u64);
+        assert!(
+            validate_convergence_wave(&wave, 0, &inventory, &genesis).is_err(),
+            "unapplied tip cannot authorize canary"
+        );
+        assert!(
+            require_successor_checkpoint(Some(&(2, "same".into())), &(2, "same".into())).is_err()
+        );
+        require_successor_checkpoint(Some(&(2, "old".into())), &(3, "next".into())).unwrap();
     }
 
     #[test]
     fn public_reset_convergence_accepts_same_decision_across_certificate_rounds() {
-        let (inventory, wave) = reproposed_convergence_wave_fixture();
-        let reports = wave.get("validator_reports").unwrap().as_array().unwrap();
-        let first = validate_convergence_status(&reports[0], &inventory.validators[0]).unwrap();
-        let second = validate_convergence_status(&reports[1], &inventory.validators[1]).unwrap();
+        let (inventory, genesis, wave) = current_convergence_wave_fixture(2);
+        let peers = wave.pointer("/evidence/peers").unwrap().as_array().unwrap();
         assert_ne!(
-            first.3, second.3,
-            "the actual certificates retain different rounds"
+            peers[0].pointer("/before/body/finality_proof/block_wire"),
+            peers[1].pointer("/before/body/finality_proof/block_wire"),
+            "fixture uses different valid QC witnesses"
         );
-        assert!(same_convergence_checkpoint(&first, &second).unwrap());
-        assert_eq!(
-            validate_convergence_wave(&wave, 0, &inventory).unwrap(),
-            first
-        );
+        let checkpoint = validate_convergence_wave(&wave, 0, &inventory, &genesis).unwrap();
+        assert_eq!(checkpoint.0, 2);
+        let mut noncanonical = wave;
+        *noncanonical.pointer_mut("/block_hash").unwrap() = norito::json::Value::from(checkpoint.1);
         assert!(
-            require_successor_checkpoint(Some(&first), &second).is_err(),
-            "a different certificate round at the same height is not restart progress"
-        );
-        let second_qc = reports[1].get("last_commit_qc").unwrap().clone();
-        let mut changed_summary = wave;
-        *changed_summary.get_mut("last_commit_qc").unwrap() = second_qc;
-        assert!(
-            validate_convergence_wave(&changed_summary, 0, &inventory).is_err(),
-            "the summary must preserve the exact first report certificate"
+            validate_convergence_wave(&noncanonical, 0, &inventory, &genesis).is_err(),
+            "human display hashes are not canonical JSON hash literals"
         );
     }
 
     #[test]
     fn public_reset_convergence_rejects_changed_execution_or_subject_at_same_height() {
-        let (inventory, original) = reproposed_convergence_wave_fixture();
-        let first = validate_convergence_status(
-            original.pointer("/validator_reports/0").unwrap(),
-            &inventory.validators[0],
-        )
-        .unwrap();
-        for changed_field in ["execution", "subject"] {
-            let mut wave = original.clone();
-            let mut status: SumeragiV2Status =
-                json::from_value(wave.pointer("/validator_reports/1").unwrap().clone()).unwrap();
-            let different = Hash::new(changed_field.as_bytes());
-            let commit = status.last_commit_qc.as_mut().unwrap();
-            if changed_field == "execution" {
-                commit.certificate.execution_commitment.post_state_root = different;
-            } else {
-                commit.certificate.subject.payload_hash = different;
-                status.last_committed_subject.as_mut().unwrap().payload_hash = different;
-            }
-            status
-                .validate()
-                .expect("each different decision is structurally valid");
-            let report = json::to_value(&status).unwrap();
-            let changed = validate_convergence_status(&report, &inventory.validators[1]).unwrap();
-            assert_eq!(
-                (&first.0, &first.1, &first.2),
-                (&changed.0, &changed.1, &changed.2)
-            );
+        let (inventory, genesis, wave) = current_convergence_wave_fixture(2);
+        for path in [
+            "/block_hash",
+            "/evidence/block_hash",
+            "/evidence/peers/0/after/body/genesis_block_hash",
+        ] {
+            let mut changed = wave.clone();
+            *changed.pointer_mut(path).unwrap() =
+                norito::json::to_value(&Hash::new(b"different decision")).unwrap();
             assert!(
-                !same_convergence_checkpoint(&first, &changed).unwrap(),
-                "height, context and block hash must not hide changed {changed_field}"
-            );
-            *wave.pointer_mut("/validator_reports/1").unwrap() = report;
-            assert!(
-                validate_convergence_wave(&wave, 0, &inventory).is_err(),
-                "retained proof must reject changed {changed_field}"
+                validate_convergence_wave(&changed, 0, &inventory, &genesis).is_err(),
+                "{path}"
             );
         }
     }
 
     #[test]
     fn public_reset_convergence_rejects_omitted_nullable_status_fields() {
-        let (validator, canonical) = canonical_convergence_status_fixture();
-        validate_convergence_status(&canonical, &validator)
-            .expect("complete first-release convergence status");
-
-        for field in [
-            "locked_prepare_qc",
-            "highest_prepare_qc",
-            "last_timeout_certificate",
-            "pending_persistence_id",
-            "last_committed_subject",
-            "last_commit_qc",
-        ] {
-            let mut missing = canonical.clone();
-            missing
+        let (inventory, genesis, wave) = current_convergence_wave_fixture(2);
+        for field in ["leader", "proxy_tail", "high_qc_view", "signer", "halted"] {
+            let mut changed = wave.clone();
+            changed
+                .pointer_mut("/evidence/peers/0/before/body/status")
+                .unwrap()
                 .as_object_mut()
-                .expect("status object")
+                .unwrap()
                 .remove(field);
-            assert_missing_convergence_field_rejected(missing, &validator, field);
+            assert!(
+                validate_convergence_wave(&changed, 0, &inventory, &genesis).is_err(),
+                "{field}"
+            );
         }
-        for field in ["last_progress", "blocker"] {
-            let mut missing = canonical.clone();
-            missing
-                .as_object_mut()
-                .and_then(|status| status.get_mut("liveness"))
-                .and_then(norito::json::Value::as_object_mut)
-                .expect("liveness object")
-                .remove(field);
-            assert_missing_convergence_field_rejected(missing, &validator, field);
-        }
-        for field in ["proposal_round", "subject", "execution_commitment"] {
-            let mut missing = canonical.clone();
-            missing
-                .as_object_mut()
-                .and_then(|status| status.get_mut("liveness"))
-                .and_then(norito::json::Value::as_object_mut)
-                .and_then(|liveness| liveness.get_mut("outbound_intents"))
-                .and_then(norito::json::Value::as_array_mut)
-                .and_then(|intents| intents.first_mut())
-                .and_then(norito::json::Value::as_object_mut)
-                .expect("outbound intent object")
-                .remove(field);
-            assert_missing_convergence_field_rejected(missing, &validator, field);
-        }
-        let mut missing = canonical;
-        missing
-            .as_object_mut()
-            .and_then(|status| status.get_mut("liveness"))
-            .and_then(norito::json::Value::as_object_mut)
-            .and_then(|liveness| liveness.get_mut("queues"))
-            .and_then(norito::json::Value::as_array_mut)
-            .and_then(|queues| queues.first_mut())
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("queue status object")
-            .remove("oldest_age_ms");
-        assert_missing_convergence_field_rejected(missing, &validator, "oldest_age_ms");
     }
 
     #[test]
     fn convergence_wave_receipt_rejects_unknown_first_release_fields() {
-        let value = norito::json!({
-            "schema": "iroha.taira.public-reset.convergence-wave.v1",
-            "wave": 0,
-            "height": 1,
-            "height_context_id": "context",
-            "block_hash": "block",
-            "last_commit_qc": {},
-            "validator_reports": [],
-            "retired_v0": true,
-        });
-        let error = validate_convergence_wave(&value, 0, &progress_admission().inventory)
-            .expect_err("unknown convergence receipt fields must fail closed");
-        assert!(
-            error.to_string().contains("retired_v0"),
-            "unexpected exact-field error: {error:#}"
-        );
+        let (inventory, genesis, mut wave) = current_convergence_wave_fixture(1);
+        wave.as_object_mut()
+            .unwrap()
+            .insert("retired_v0".into(), norito::json::Value::Bool(true));
+        let error = validate_convergence_wave(&wave, 0, &inventory, &genesis).unwrap_err();
+        assert!(error.to_string().contains("retired_v0"));
     }
 
     fn sample_request() -> HostRequestV1 {

@@ -13,17 +13,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use base64::{
-    Engine as _,
-    engine::general_purpose::{
-        STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
-    },
-};
-use iroha_core::soracloud_runtime::{
-    SoracloudApartmentExecutionRequest, SoracloudLocalReadKind, authoritative_soracloud_sequence,
-};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_core::soracloud_runtime::{SoracloudLocalReadKind, authoritative_soracloud_sequence};
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 #[cfg(test)]
 use iroha_data_model::soracloud::SoraServiceExactCurrentRevisionPreconditionV1;
 use iroha_data_model::{
@@ -42,35 +35,31 @@ use iroha_data_model::{
         SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
         SoraAgentRuntimeStatusV1, SoraAppInfraAuditEventV1, SoraAppInfraManifestV1,
         SoraAppInfraMutationPreconditionV1, SoraAppInfraStateV1, SoraCertifiedResponsePolicyV1,
-        SoraConfigExportV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
-        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
-        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraInrouHostCapabilityRecordV1,
-        SoraLeaseVolumeBindingV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
+        SoraConfigExportV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+        SoraHfSourceRecordV1, SoraInrouHostCapabilityRecordV1, SoraLeaseVolumeBindingV1,
         SoraModelArtifactRecordV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
-        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraNetworkPolicyV1, SoraRolloutStageV1, SoraRuntimeDeterministicValidatorHostV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
-        SoraServiceConfigMutationV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
-        SoraServiceHandlerClassV1, SoraServiceLeaseReportingEpochRolloverV1,
-        SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
-        SoraServiceLifecycleActionV1, SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1,
-        SoraServiceSecretEntryV1, SoraServiceSecretMutationV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraTlsModeV1,
-        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
-        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheInputAdmissionProofV1,
-        SoracloudFhePolicyReferenceV1, SoracloudFhePublicKeyProofV1,
-        SoracloudMutationDraftResponse, SoracloudTxInstruction, derive_hf_shared_lease_pool_id_v1,
-        derive_hf_source_id_v1, encode_agent_artifact_allow_provenance_payload,
-        encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
+        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraRolloutStageV1,
+        SoraRuntimeDeterministicValidatorHostV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceConfigEntryV1, SoraServiceConfigMutationV1, SoraServiceDeploymentStateV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
+        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
+        SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1, SoraServiceLifecycleActionV1,
+        SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1, SoraServiceSecretEntryV1,
+        SoraServiceSecretMutationV1, SoraStateBindingV1, SoraStateEncryptionV1,
+        SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraTlsModeV1,
+        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBundleV1,
+        SoracloudFheBootstrapKeyProofV1, SoracloudFheFullBootstrapExecutionProofV1,
+        SoracloudFheInputAdmissionProofV1, SoracloudFhePolicyReferenceV1,
+        SoracloudFhePublicKeyProofV1, SoracloudMutationDraftResponse, SoracloudTxInstruction,
+        derive_hf_shared_lease_pool_id_v1, derive_hf_source_id_v1,
+        encode_agent_artifact_allow_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
         encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
         encode_agent_wallet_approve_provenance_payload,
         encode_agent_wallet_spend_provenance_payload, encode_app_infra_provenance_payload,
-        encode_bundle_provenance_payload, encode_ciphertext_query_provenance_payload,
-        encode_decryption_request_provenance_payload,
+        encode_ciphertext_query_provenance_payload, encode_decryption_request_provenance_payload,
         encode_delete_service_config_provenance_payload,
         encode_delete_service_secret_provenance_payload, encode_fhe_job_run_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
@@ -89,9 +78,7 @@ use iroha_data_model::{
         is_canonical_hf_commit_oid_v1, is_canonical_hf_repo_id_v1,
     },
     sorafs::pin_registry::{
-        ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderStatus,
-        SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1, StorageClass,
-        derive_sorafs_auto_replication_order_id_v1,
+        ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, StorageClass,
     },
 };
 use iroha_model_base::name::Name;
@@ -104,12 +91,8 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
-    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
-#[cfg(test)]
-use tokio::sync::RwLock;
 mod bounded_public_response;
 const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
@@ -117,7 +100,6 @@ const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
 pub(crate) const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const DEFAULT_AUDIT_LIMIT: usize = 20;
 const MAX_AUDIT_LIMIT: usize = 500;
-const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 1_000;
 const AGENT_AUTONOMY_RECENT_RUN_LIMIT: usize = 20;
 const CIPHERTEXT_QUERY_PROOF_SCHEME_V1: &str = "soracloud.audit_anchor.v1";
 const HEALTH_COMPLIANCE_REPORT_VERSION_V1: u16 = 1;
@@ -170,34 +152,6 @@ pub(crate) enum SoracloudAction {
     Rollout,
     LeaseUsage,
     LeaseReportingEpochRollover,
-}
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::soracloud::AgentApartmentAction")]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-)]
-#[norito(tag = "action", content = "value")]
-#[norito(deny_unknown_fields)]
-pub(crate) enum AgentApartmentAction {
-    Deploy,
-    LeaseRenew,
-    Restart,
-    WalletSpendRequested,
-    WalletSpendApproved,
-    PolicyRevoked,
-    MessageEnqueued,
-    MessageAcknowledged,
-    ArtifactAllowed,
-    AutonomyRunApproved,
-    AutonomyRunExecuted,
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::soracloud::AgentRuntimeStatus")]
@@ -1632,23 +1586,6 @@ pub(crate) struct AgentRuntimeReceiptRecord {
     #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub(crate) struct AgentRuntimeWorkflowStepSummary {
-    pub step_index: u32,
-    #[norito(required)]
-    pub step_id: Option<String>,
-    pub request_commitment: Hash,
-    pub result_commitment: Hash,
-    #[norito(required)]
-    pub runtime_receipt: Option<AgentRuntimeReceiptRecord>,
-    #[norito(required)]
-    pub content_type: Option<String>,
-    #[norito(required)]
-    pub response_json: Option<norito::json::Value>,
-    #[norito(required)]
-    pub response_text: Option<String>,
-}
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::soracloud::AgentAutonomyExecutionAuditRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1671,81 +1608,6 @@ pub(crate) struct AgentAutonomyExecutionAuditRecord {
     pub checkpoint_artifact_hash: Option<Hash>,
     #[norito(required)]
     pub reason: Option<String>,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub(crate) struct AgentRuntimeExecutionSummary {
-    pub apartment_name: String,
-    pub run_id: String,
-    #[norito(required)]
-    pub service_name: Option<String>,
-    #[norito(required)]
-    pub service_version: Option<String>,
-    #[norito(required)]
-    pub handler_name: Option<String>,
-    pub succeeded: bool,
-    pub result_commitment: Hash,
-    pub journal_artifact_hash: Hash,
-    #[norito(required)]
-    pub checkpoint_artifact_hash: Option<Hash>,
-    #[norito(required)]
-    pub runtime_receipt: Option<AgentRuntimeReceiptRecord>,
-    pub workflow_steps: Vec<AgentRuntimeWorkflowStepSummary>,
-    #[norito(required)]
-    pub content_type: Option<String>,
-    #[norito(required)]
-    pub response_json: Option<norito::json::Value>,
-    #[norito(required)]
-    pub response_text: Option<String>,
-    #[norito(required)]
-    pub error: Option<String>,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub(crate) struct AgentAutonomyMutationResponse {
-    pub action: AgentApartmentAction,
-    pub apartment_name: String,
-    pub sequence: u64,
-    pub status: AgentRuntimeStatus,
-    pub lease_expires_height: u64,
-    pub lease_remaining_blocks: u64,
-    pub manifest_hash: Hash,
-    pub artifact_hash: String,
-    #[norito(required)]
-    pub provenance_hash: Option<String>,
-    #[norito(required)]
-    pub run_id: Option<String>,
-    #[norito(required)]
-    pub run_label: Option<String>,
-    #[norito(required)]
-    pub workflow_input_json: Option<String>,
-    #[norito(required)]
-    pub budget_units: Option<u64>,
-    pub budget_remaining_units: u64,
-    pub allowlist_count: u32,
-    pub run_count: u32,
-    pub process_generation: u64,
-    pub process_started_sequence: u64,
-    pub last_active_sequence: u64,
-    #[norito(required)]
-    pub last_checkpoint_sequence: Option<u64>,
-    pub checkpoint_count: u32,
-    pub persistent_state_total_bytes: u64,
-    pub persistent_state_key_count: u32,
-    pub audit_event_count: u32,
-    pub signed_by: String,
-    #[norito(required)]
-    pub runtime_execution: Option<AgentRuntimeExecutionSummary>,
-    #[norito(required)]
-    pub runtime_execution_error: Option<String>,
-    #[norito(required)]
-    pub authoritative_runtime_receipt: Option<AgentRuntimeReceiptRecord>,
-    #[norito(required)]
-    pub authoritative_runtime_receipt_error: Option<String>,
-    #[norito(required)]
-    pub authoritative_execution_audit: Option<AgentAutonomyExecutionAuditRecord>,
-    #[norito(required)]
-    pub authoritative_execution_audit_error: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -1805,7 +1667,6 @@ enum SoracloudErrorKind {
     Unauthorized,
     NotFound,
     Conflict,
-    Unavailable,
     Internal,
 }
 #[derive(Debug, JsonSerialize)]
@@ -1843,12 +1704,6 @@ impl SoracloudError {
             message: message.into(),
         }
     }
-    fn unavailable(message: impl Into<String>) -> Self {
-        Self {
-            kind: SoracloudErrorKind::Unavailable,
-            message: message.into(),
-        }
-    }
     fn internal(message: impl Into<String>) -> Self {
         Self {
             kind: SoracloudErrorKind::Internal,
@@ -1861,7 +1716,6 @@ impl SoracloudError {
             SoracloudErrorKind::Unauthorized => "invalid_signature",
             SoracloudErrorKind::NotFound => "not_found",
             SoracloudErrorKind::Conflict => "conflict",
-            SoracloudErrorKind::Unavailable => "unavailable",
             SoracloudErrorKind::Internal => "internal",
         }
     }
@@ -1871,7 +1725,6 @@ impl SoracloudError {
             SoracloudErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
             SoracloudErrorKind::NotFound => StatusCode::NOT_FOUND,
             SoracloudErrorKind::Conflict => StatusCode::CONFLICT,
-            SoracloudErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             SoracloudErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -2217,20 +2070,6 @@ fn hf_shared_lease_pool_id(
     derive_hf_shared_lease_pool_id_v1(source_id, storage_class, lease_term_ms)
         .map_err(|error| SoracloudError::bad_request(error.to_string()))
 }
-fn verify_auxiliary_provenance_payload(
-    signer: &SoracloudMutationSigner,
-    provenance: &ManifestProvenance,
-    payload: Vec<u8>,
-    signer_error: &'static str,
-    signature_error: &'static str,
-) -> Result<(), SoracloudError> {
-    if provenance.signer != signer.request_signer {
-        return Err(SoracloudError::unauthorized(signer_error));
-    }
-    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
-        .map_err(|_| SoracloudError::bad_request(signature_error))?;
-    Ok(())
-}
 fn verify_signature_for_signer(
     signature: &Signature,
     signer: &PublicKey,
@@ -2398,12 +2237,6 @@ fn authoritative_model_artifact_status_entry(
         consumed_by_version: artifact.consumed_by_version.clone(),
         chunk_manifest_root: artifact.chunk_manifest_root,
     }
-}
-fn wallet_day_bucket(block_timestamp_ms: u64) -> u64 {
-    block_timestamp_ms / 86_400_000
-}
-fn rollout_handle(service_name: &str, sequence: u64) -> String {
-    format!("{service_name}:rollout:{sequence}")
 }
 fn derive_state_key_digest(service_name: &str, binding_name: &str, state_key: &str) -> Hash {
     Hash::new(Encode::encode(&(
@@ -3593,16 +3426,6 @@ fn require_soracloud_mutation_signer(
         request_signer: provenance.signer.clone(),
     })
 }
-fn require_soracloud_request_signer(
-    headers: &HeaderMap,
-) -> Result<SoracloudMutationSigner, SoracloudError> {
-    let (authority, request_signer, _verified_signers) =
-        verified_soracloud_request_identity(headers)?;
-    Ok(SoracloudMutationSigner {
-        authority,
-        request_signer,
-    })
-}
 fn soracloud_draft_response(
     signer: &SoracloudMutationSigner,
     instructions: Vec<InstructionBox>,
@@ -4177,31 +4000,6 @@ fn authoritative_hf_shared_lease_event_count(world: &impl WorldReadOnly, pool_id
     )
     .unwrap_or(u32::MAX)
 }
-fn authoritative_agent_action(action: SoraAgentApartmentActionV1) -> AgentApartmentAction {
-    match action {
-        SoraAgentApartmentActionV1::Deploy => AgentApartmentAction::Deploy,
-        SoraAgentApartmentActionV1::LeaseRenew => AgentApartmentAction::LeaseRenew,
-        SoraAgentApartmentActionV1::Restart => AgentApartmentAction::Restart,
-        SoraAgentApartmentActionV1::WalletSpendRequested => {
-            AgentApartmentAction::WalletSpendRequested
-        }
-        SoraAgentApartmentActionV1::WalletSpendApproved => {
-            AgentApartmentAction::WalletSpendApproved
-        }
-        SoraAgentApartmentActionV1::PolicyRevoked => AgentApartmentAction::PolicyRevoked,
-        SoraAgentApartmentActionV1::MessageEnqueued => AgentApartmentAction::MessageEnqueued,
-        SoraAgentApartmentActionV1::MessageAcknowledged => {
-            AgentApartmentAction::MessageAcknowledged
-        }
-        SoraAgentApartmentActionV1::ArtifactAllowed => AgentApartmentAction::ArtifactAllowed,
-        SoraAgentApartmentActionV1::AutonomyRunApproved => {
-            AgentApartmentAction::AutonomyRunApproved
-        }
-        SoraAgentApartmentActionV1::AutonomyRunExecuted => {
-            AgentApartmentAction::AutonomyRunExecuted
-        }
-    }
-}
 fn authoritative_service_deployment_bundle(
     world: &impl WorldReadOnly,
     service_name: &str,
@@ -4741,137 +4539,6 @@ fn bundle_healthcheck_url(bundle: &SoraDeploymentBundleV1) -> Option<String> {
     url.set_query(None);
     url.set_fragment(None);
     Some(url.to_string())
-}
-fn authoritative_binding_runtime_summary(
-    world: &impl WorldReadOnly,
-    service_name: &str,
-    binding_name: &str,
-) -> (u64, u32) {
-    let (total_bytes, key_count) = world
-        .soracloud_service_state_entries()
-        .iter()
-        .filter(|((stored_service, stored_binding, _state_key), _entry)| {
-            stored_service == service_name && stored_binding == binding_name
-        })
-        .fold((0_u64, 0_u32), |(bytes, count), (_key, entry)| {
-            (
-                bytes.saturating_add(entry.payload_bytes.get()),
-                count.saturating_add(1),
-            )
-        });
-    (total_bytes, key_count)
-}
-fn authoritative_service_event_count(world: &impl WorldReadOnly, service_name: &str) -> u32 {
-    u32::try_from(
-        world
-            .soracloud_service_audit_events()
-            .iter()
-            .filter(|(_sequence, event)| event.service_name.as_ref() == service_name)
-            .count(),
-    )
-    .unwrap_or(u32::MAX)
-}
-fn authoritative_training_job_event_count(
-    world: &impl WorldReadOnly,
-    service_name: &str,
-    job_id: &str,
-) -> u32 {
-    u32::try_from(
-        world
-            .soracloud_training_job_audit_events()
-            .iter()
-            .filter(|(_sequence, event)| {
-                event.service_name.as_ref() == service_name && event.job_id == job_id
-            })
-            .count(),
-    )
-    .unwrap_or(u32::MAX)
-}
-fn authoritative_model_event_count(
-    world: &impl WorldReadOnly,
-    service_name: &str,
-    model_name: &str,
-) -> u32 {
-    u32::try_from(
-        world
-            .soracloud_model_weight_audit_events()
-            .iter()
-            .filter(|(_sequence, event)| {
-                event.service_name.as_ref() == service_name && event.model_name == model_name
-            })
-            .count(),
-    )
-    .unwrap_or(u32::MAX)
-}
-fn authoritative_agent_current_height(app: &SharedAppState) -> u64 {
-    u64::try_from(app.state.view().height()).unwrap_or(u64::MAX)
-}
-
-fn authoritative_agent_autonomy_mutation_response(
-    app: &SharedAppState,
-    record: &SoraAgentApartmentRecordV1,
-    event: &SoraAgentApartmentAuditEventV1,
-) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
-    let current_height = authoritative_agent_current_height(app);
-    let state_view = app.state.view();
-    let world = state_view.world();
-    let artifact_hash = event.artifact_hash.clone().ok_or_else(|| {
-        SoracloudError::conflict(format!(
-            "agent autonomy audit event for apartment `{}` is missing artifact hash",
-            record.manifest.apartment_name
-        ))
-    })?;
-    let approved_run = event.run_id.as_ref().and_then(|run_id| {
-        record
-            .autonomy_run_history
-            .iter()
-            .find(|run| &run.run_id == run_id)
-    });
-    let workflow_input_json = approved_run.and_then(|run| run.workflow_input_json.clone());
-    let authoritative_runtime_receipt =
-        approved_run.and_then(|run| authoritative_agent_runtime_receipt_for_run(world, run));
-    let authoritative_execution_audit = match approved_run {
-        Some(run) => authoritative_agent_execution_audit_for_run(
-            world,
-            record.manifest.apartment_name.as_ref(),
-            run,
-        )?,
-        None => None,
-    };
-    Ok(AgentAutonomyMutationResponse {
-        action: authoritative_agent_action(event.action),
-        apartment_name: record.manifest.apartment_name.to_string(),
-        sequence: event.sequence,
-        status: authoritative_agent_runtime_status_in_current_view(record, current_height),
-        lease_expires_height: record.lease_expires_height,
-        lease_remaining_blocks: record.lease_expires_height.saturating_sub(current_height),
-        manifest_hash: record.manifest_hash,
-        artifact_hash,
-        provenance_hash: event.provenance_hash.clone(),
-        run_id: event.run_id.clone(),
-        run_label: event.run_label.clone(),
-        workflow_input_json,
-        budget_units: event.budget_units,
-        budget_remaining_units: record.autonomy_budget_remaining_units,
-        allowlist_count: u32::try_from(record.artifact_allowlist.len()).unwrap_or(u32::MAX),
-        run_count: u32::try_from(record.autonomy_run_history.len()).unwrap_or(u32::MAX),
-        process_generation: record.process_generation,
-        process_started_sequence: record.process_started_sequence,
-        last_active_sequence: record.last_active_sequence,
-        last_checkpoint_sequence: record.last_checkpoint_sequence,
-        checkpoint_count: record.checkpoint_count,
-        persistent_state_total_bytes: record.persistent_state.total_bytes,
-        persistent_state_key_count: u32::try_from(record.persistent_state.key_sizes.len())
-            .unwrap_or(u32::MAX),
-        audit_event_count: 0,
-        signed_by: event.signer.to_string(),
-        runtime_execution: None,
-        runtime_execution_error: None,
-        authoritative_runtime_receipt,
-        authoritative_runtime_receipt_error: None,
-        authoritative_execution_audit,
-        authoritative_execution_audit_error: None,
-    })
 }
 
 fn service_secret_status_entry(entry: &SoraServiceSecretEntryV1) -> ServiceSecretStatusEntry {
@@ -5879,6 +5546,7 @@ fn deployment_bundle_to_control_plane_revision(
         signed_by: latest_audit.signer.to_string(),
     })
 }
+#[cfg(test)]
 pub(crate) fn resolve_public_local_read_route(
     app: &SharedAppState,
     host: &str,
@@ -8320,140 +7988,6 @@ pub(crate) async fn handle_agent_autonomy_allow(
         )],
     )
 }
-fn build_authoritative_agent_runtime_receipt_instruction(
-    app: &SharedAppState,
-    runtime_execution: &AgentRuntimeExecutionSummary,
-) -> Result<Option<InstructionBox>, String> {
-    let Some(runtime_receipt) = runtime_execution.runtime_receipt.as_ref() else {
-        return Ok(None);
-    };
-    {
-        let state_view = app.state.view();
-        if state_view
-            .world()
-            .soracloud_runtime_receipts()
-            .get(&runtime_receipt.receipt_id)
-            .is_some()
-        {
-            return Ok(None);
-        }
-    }
-    let service_name =
-        parse_service_name(&runtime_receipt.service_name).map_err(|error| error.message)?;
-    let service_version = parse_exact_nonempty_text(
-        "runtime receipt service_version",
-        &runtime_receipt.service_version,
-    )
-    .map_err(|error| error.message)?;
-    let handler_name = parse_exact_name_identifier(
-        "runtime receipt handler_name",
-        &runtime_receipt.handler_name,
-    )
-    .map_err(|error| error.message)?;
-    Ok(Some(InstructionBox::from(
-        isi::soracloud::RecordSoracloudRuntimeReceipt {
-            receipt: SoraRuntimeReceiptV1 {
-                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-                receipt_id: runtime_receipt.receipt_id,
-                service_name,
-                service_version,
-                handler_name,
-                handler_class: runtime_receipt.handler_class,
-                request_commitment: runtime_receipt.request_commitment,
-                result_commitment: runtime_receipt.result_commitment,
-                certified_by: runtime_receipt.certified_by,
-                emitted_sequence: 0,
-                execution_host: runtime_receipt.execution_host.clone(),
-                mailbox_message_id: None,
-                journal_artifact_hash: runtime_receipt.journal_artifact_hash,
-                checkpoint_artifact_hash: runtime_receipt.checkpoint_artifact_hash,
-            },
-        },
-    )))
-}
-fn build_authoritative_agent_autonomy_execution_audit_instruction(
-    app: &SharedAppState,
-    apartment_name: &str,
-    process_generation: u64,
-    runtime_execution: &AgentRuntimeExecutionSummary,
-    runtime_receipt_id: Option<Hash>,
-) -> Result<Option<InstructionBox>, String> {
-    {
-        let state_view = app.state.view();
-        if let Some(event) = state_view
-            .world()
-            .soracloud_agent_apartment_audit_events()
-            .iter()
-            .filter_map(|(_sequence, event)| {
-                (event.action == SoraAgentApartmentActionV1::AutonomyRunExecuted
-                    && event.apartment_name.as_ref() == apartment_name
-                    && event.run_id.as_deref() == Some(runtime_execution.run_id.as_str()))
-                .then_some(event)
-            })
-            .max_by_key(|event| event.sequence)
-        {
-            let expected_receipt_id = runtime_receipt_id.or_else(|| {
-                runtime_execution
-                    .runtime_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.receipt_id)
-            });
-            if event.succeeded == Some(runtime_execution.succeeded)
-                && event.result_commitment == Some(runtime_execution.result_commitment)
-                && event.service_name == runtime_execution.service_name
-                && event.service_version == runtime_execution.service_version
-                && event.handler_name == runtime_execution.handler_name
-                && event.runtime_receipt_id == expected_receipt_id
-                && event.journal_artifact_hash == Some(runtime_execution.journal_artifact_hash)
-                && event.checkpoint_artifact_hash == runtime_execution.checkpoint_artifact_hash
-                && event.reason == runtime_execution.error
-            {
-                return Ok(None);
-            }
-            return Err(format!(
-                "autonomy run `{}` already has a different authoritative execution outcome",
-                runtime_execution.run_id
-            ));
-        }
-    }
-    Ok(Some(InstructionBox::from(
-        isi::soracloud::RecordSoracloudAgentAutonomyExecution {
-            apartment_name: parse_agent_apartment_identifier(
-                "apartment execution audit apartment_name",
-                apartment_name,
-            )
-            .map_err(|error| error.message)?,
-            run_id: runtime_execution.run_id.clone(),
-            process_generation,
-            succeeded: runtime_execution.succeeded,
-            result_commitment: runtime_execution.result_commitment,
-            service_name: runtime_execution
-                .service_name
-                .as_deref()
-                .map(parse_service_name)
-                .transpose()
-                .map_err(|error| error.message)?,
-            service_version: runtime_execution.service_version.clone(),
-            handler_name: runtime_execution
-                .handler_name
-                .as_deref()
-                .map(|name| {
-                    parse_exact_name_identifier("apartment execution audit handler_name", name)
-                })
-                .transpose()
-                .map_err(|error| error.message)?,
-            runtime_receipt_id: runtime_receipt_id.or_else(|| {
-                runtime_execution
-                    .runtime_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.receipt_id)
-            }),
-            journal_artifact_hash: Some(runtime_execution.journal_artifact_hash),
-            checkpoint_artifact_hash: runtime_execution.checkpoint_artifact_hash,
-            error: runtime_execution.error.clone(),
-        },
-    )))
-}
 pub(crate) async fn handle_agent_autonomy_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -8517,16 +8051,7 @@ pub(crate) async fn handle_health_compliance_report(
 mod tests {
     use super::*;
     const TEST_HF_COMMIT_OID: &str = "0123456789abcdef0123456789abcdef01234567";
-    use crate::tests_runtime_handlers::{
-        mk_app_state_for_tests, mk_app_state_for_tests_with_world,
-    };
-    use iroha_core::soracloud_runtime::{
-        SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
-        SoracloudLocalReadRequest, SoracloudLocalReadResponse,
-        SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
-        SoracloudRuntime, SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
-        SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
-    };
+    use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         Encode,
@@ -8538,15 +8063,12 @@ mod tests {
         prelude::Register,
         sns::{NameControllerV1, NameRecordV1},
         soracloud::{
-            AgentApartmentManifestV1, CiphertextQueryMetadataLevelV1, CiphertextQuerySpecV1,
-            DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
-            SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-            SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_HF_SOURCE_RECORD_VERSION_V1,
-            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
-            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-            SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1, SecretEnvelopeEncryptionV1,
-            SecretEnvelopeV1, SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
+            AgentApartmentManifestV1, CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1,
+            DecryptionRequestV1, FheJobSpecV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+            SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+            SORA_HF_SOURCE_RECORD_VERSION_V1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
+            SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
             SoraAgentAutonomyRunRecordV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
             SoraContainerManifestV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
             SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
@@ -8606,34 +8128,6 @@ mod tests {
             reason: None,
         }
     }
-    fn agent_runtime_execution_summary_json_fixture() -> AgentRuntimeExecutionSummary {
-        AgentRuntimeExecutionSummary {
-            apartment_name: "ops_agent".to_owned(),
-            run_id: "ops_agent:autonomy:9".to_owned(),
-            service_name: None,
-            service_version: None,
-            handler_name: None,
-            succeeded: true,
-            result_commitment: Hash::new(b"agent autonomy result"),
-            journal_artifact_hash: Hash::new(b"agent autonomy journal"),
-            checkpoint_artifact_hash: None,
-            runtime_receipt: Some(agent_runtime_receipt_json_fixture()),
-            workflow_steps: vec![AgentRuntimeWorkflowStepSummary {
-                step_index: 0,
-                step_id: None,
-                request_commitment: Hash::new(b"agent workflow request"),
-                result_commitment: Hash::new(b"agent workflow result"),
-                runtime_receipt: None,
-                content_type: None,
-                response_json: None,
-                response_text: None,
-            }],
-            content_type: None,
-            response_json: None,
-            response_text: None,
-            error: None,
-        }
-    }
     fn json_object_at_mut<'a>(
         value: &'a mut norito::json::Value,
         pointer: &str,
@@ -8646,119 +8140,6 @@ mod tests {
         target
             .as_object_mut()
             .expect("JSON pointer names an object")
-    }
-    #[test]
-    fn agent_autonomy_mutation_json_graph_requires_exact_v1_fields() {
-        let canonical = AgentAutonomyMutationResponse {
-            action: AgentApartmentAction::AutonomyRunExecuted,
-            apartment_name: "ops_agent".to_owned(),
-            sequence: 10,
-            status: AgentRuntimeStatus::Running,
-            lease_expires_height: 100,
-            lease_remaining_blocks: 90,
-            manifest_hash: Hash::new(b"agent manifest"),
-            artifact_hash: "hash:agent#1".to_owned(),
-            provenance_hash: None,
-            run_id: Some("ops_agent:autonomy:9".to_owned()),
-            run_label: None,
-            workflow_input_json: None,
-            budget_units: Some(10),
-            budget_remaining_units: 90,
-            allowlist_count: 1,
-            run_count: 1,
-            process_generation: 3,
-            process_started_sequence: 1,
-            last_active_sequence: 10,
-            last_checkpoint_sequence: None,
-            checkpoint_count: 1,
-            persistent_state_total_bytes: 64,
-            persistent_state_key_count: 1,
-            audit_event_count: 2,
-            signed_by: "signer".to_owned(),
-            runtime_execution: Some(agent_runtime_execution_summary_json_fixture()),
-            runtime_execution_error: None,
-            authoritative_runtime_receipt: Some(agent_runtime_receipt_json_fixture()),
-            authoritative_runtime_receipt_error: None,
-            authoritative_execution_audit: Some(agent_autonomy_execution_audit_json_fixture()),
-            authoritative_execution_audit_error: None,
-        };
-        let canonical_value =
-            norito::json::to_value(&canonical).expect("encode canonical agent autonomy mutation");
-        norito::json::from_value::<AgentAutonomyMutationResponse>(canonical_value.clone())
-            .expect("decode canonical agent autonomy mutation");
-        for (pointer, required_field) in [
-            ("", "provenance_hash"),
-            ("", "run_id"),
-            ("", "run_label"),
-            ("", "workflow_input_json"),
-            ("", "budget_units"),
-            ("", "last_checkpoint_sequence"),
-            ("", "runtime_execution"),
-            ("", "runtime_execution_error"),
-            ("", "authoritative_runtime_receipt"),
-            ("", "authoritative_runtime_receipt_error"),
-            ("", "authoritative_execution_audit"),
-            ("", "authoritative_execution_audit_error"),
-            ("/runtime_execution", "service_name"),
-            ("/runtime_execution", "service_version"),
-            ("/runtime_execution", "handler_name"),
-            ("/runtime_execution", "checkpoint_artifact_hash"),
-            ("/runtime_execution", "runtime_receipt"),
-            ("/runtime_execution", "workflow_steps"),
-            ("/runtime_execution", "content_type"),
-            ("/runtime_execution", "response_json"),
-            ("/runtime_execution", "response_text"),
-            ("/runtime_execution", "error"),
-            ("/runtime_execution/runtime_receipt", "execution_host"),
-            ("/runtime_execution/runtime_receipt", "mailbox_message_id"),
-            (
-                "/runtime_execution/runtime_receipt",
-                "journal_artifact_hash",
-            ),
-            (
-                "/runtime_execution/runtime_receipt",
-                "checkpoint_artifact_hash",
-            ),
-            ("/runtime_execution/workflow_steps/0", "step_id"),
-            ("/runtime_execution/workflow_steps/0", "runtime_receipt"),
-            ("/runtime_execution/workflow_steps/0", "content_type"),
-            ("/runtime_execution/workflow_steps/0", "response_json"),
-            ("/runtime_execution/workflow_steps/0", "response_text"),
-            ("/authoritative_execution_audit", "service_name"),
-            ("/authoritative_execution_audit", "service_version"),
-            ("/authoritative_execution_audit", "handler_name"),
-            ("/authoritative_execution_audit", "runtime_receipt_id"),
-            ("/authoritative_execution_audit", "journal_artifact_hash"),
-            ("/authoritative_execution_audit", "checkpoint_artifact_hash"),
-            ("/authoritative_execution_audit", "reason"),
-        ] {
-            let mut missing = canonical_value.clone();
-            assert!(
-                json_object_at_mut(&mut missing, pointer)
-                    .remove(required_field)
-                    .is_some(),
-                "fixture must contain {pointer}/{required_field}"
-            );
-            assert!(
-                norito::json::from_value::<AgentAutonomyMutationResponse>(missing).is_err(),
-                "agent autonomy graph must require {pointer}/{required_field}"
-            );
-        }
-        for pointer in [
-            "",
-            "/runtime_execution",
-            "/runtime_execution/runtime_receipt",
-            "/runtime_execution/workflow_steps/0",
-            "/authoritative_execution_audit",
-        ] {
-            let mut unknown = canonical_value.clone();
-            json_object_at_mut(&mut unknown, pointer)
-                .insert("legacy_field".to_owned(), norito::json::Value::Null);
-            assert!(
-                norito::json::from_value::<AgentAutonomyMutationResponse>(unknown).is_err(),
-                "agent autonomy graph must reject unknown fields at {pointer}"
-            );
-        }
     }
     #[test]
     fn agent_autonomy_status_json_graph_requires_exact_v1_fields() {
@@ -8845,9 +8226,6 @@ mod tests {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-    }
-    fn required_test_runtime(message: &str) -> tokio::runtime::Runtime {
-        test_runtime().expect(message)
     }
     #[test]
     fn fhe_policy_lifecycle_actions_keep_distinct_control_plane_identity() {
@@ -8949,48 +8327,6 @@ mod tests {
                 iroha_crypto::Error::BadSignature,
                 "{label} Soracloud ML-DSA signature length was not rejected"
             );
-        }
-    }
-    struct TestSoracloudRuntimeHandle {
-        snapshot: SoracloudRuntimeSnapshot,
-        state_dir: PathBuf,
-    }
-    impl SoracloudRuntimeReadHandle for TestSoracloudRuntimeHandle {
-        fn snapshot(&self) -> SoracloudRuntimeSnapshot {
-            self.snapshot.clone()
-        }
-        fn state_dir(&self) -> PathBuf {
-            self.state_dir.clone()
-        }
-    }
-    impl SoracloudRuntime for TestSoracloudRuntimeHandle {
-        fn execute_local_read(
-            &self,
-            _request: SoracloudLocalReadRequest,
-        ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
-            Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "test runtime handle exposes only the runtime snapshot",
-            ))
-        }
-        fn execute_ordered_mailbox(
-            &self,
-            _request: SoracloudOrderedMailboxExecutionRequest,
-        ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError>
-        {
-            Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "test runtime handle exposes only the runtime snapshot",
-            ))
-        }
-        fn execute_apartment(
-            &self,
-            _request: SoracloudApartmentExecutionRequest,
-        ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError> {
-            Err(SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "test runtime handle exposes only the runtime snapshot",
-            ))
         }
     }
     fn workspace_fixture(path: &str) -> PathBuf {
@@ -9261,29 +8597,6 @@ mod tests {
             "fixtures/soracloud/decryption_request_v1.json",
         ))
     }
-    fn fixture_private_decryption_audit_event(
-        bundle: &SoraDeploymentBundleV1,
-        record: &SoraDecryptionRequestRecordV1,
-    ) -> SoraServiceAuditEventV1 {
-        let mut event = fixture_service_deploy_audit_event(bundle);
-        event.sequence = record.sequence;
-        event.block_height = 1;
-        event.block_timestamp_ms = 1;
-        event.action = SoraServiceLifecycleActionV1::DecryptionRequest;
-        event.from_version = None;
-        event.to_version = record.service_version.clone();
-        event.governance_tx_hash = Some(record.request.governance_tx_hash);
-        event.binding_name = Some(record.request.binding_name.clone());
-        event.state_key = Some(record.request.state_key.clone());
-        event.policy_name = Some(record.request.policy_name.clone());
-        event.policy_snapshot_hash = Some(record.policy_snapshot_hash());
-        event.jurisdiction_tag = Some(record.request.jurisdiction_tag.clone());
-        event.consent_evidence_hash = record.request.consent_evidence_hash;
-        event.break_glass = Some(record.request.break_glass);
-        event.break_glass_reason = record.request.break_glass_reason.clone();
-        event.signer = record.signer.clone();
-        event
-    }
     fn fixture_ciphertext_query_spec() -> CiphertextQuerySpecV1 {
         load_json(&workspace_fixture(
             "fixtures/soracloud/ciphertext_query_spec_v1.json",
@@ -9409,12 +8722,6 @@ mod tests {
         );
         headers
     }
-    fn test_soracloud_mutation_signer(key_pair: &KeyPair) -> SoracloudMutationSigner {
-        SoracloudMutationSigner {
-            authority: AccountId::new(key_pair.public_key().clone()),
-            request_signer: key_pair.public_key().clone(),
-        }
-    }
 
     fn fixture_agent_run_record(
         apartment_name: &str,
@@ -9448,41 +8755,6 @@ mod tests {
             approved_process_generation: process_generation,
             request_commitment,
             approved_sequence,
-        }
-    }
-    fn fixture_agent_apartment_record(
-        manifest: AgentApartmentManifestV1,
-        run: SoraAgentAutonomyRunRecordV1,
-        process_generation: u64,
-    ) -> SoraAgentApartmentRecordV1 {
-        SoraAgentApartmentRecordV1 {
-            schema_version: iroha_data_model::soracloud::SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            manifest_hash: Hash::new(Encode::encode(&manifest)),
-            manifest,
-            deployed_sequence: 1,
-            lease_started_height: 1,
-            lease_expires_height: 100,
-            last_renewed_height: 1,
-            restart_count: 0,
-            last_restart_sequence: None,
-            last_restart_reason: None,
-            process_generation,
-            process_started_sequence: 1,
-            last_active_sequence: run.approved_sequence,
-            last_checkpoint_sequence: None,
-            checkpoint_count: 0,
-            persistent_state: SoraAgentPersistentStateV1 {
-                total_bytes: 0,
-                key_sizes: BTreeMap::new(),
-            },
-            revoked_policy_capabilities: BTreeSet::new(),
-            pending_wallet_requests: BTreeMap::new(),
-            wallet_daily_spend: BTreeMap::new(),
-            mailbox_queue: Vec::new(),
-            autonomy_budget_ceiling_units: 100,
-            autonomy_budget_remaining_units: 75,
-            artifact_allowlist: BTreeMap::new(),
-            autonomy_run_history: vec![run],
         }
     }
     fn fixture_autonomy_approval_event(
@@ -9550,14 +8822,6 @@ mod tests {
             .expect_err("missing authoritative result commitment must fail closed");
         assert_eq!(error.kind, SoracloudErrorKind::Internal);
         assert!(error.message.contains("missing `result_commitment`"));
-    }
-    fn attach_test_runtime(app: &mut SharedAppState, state_dir: PathBuf) {
-        Arc::get_mut(app)
-            .expect("unique app state")
-            .soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
-            snapshot: SoracloudRuntimeSnapshot::default(),
-            state_dir,
-        }));
     }
     fn seed_domain_name_lease(
         world: &mut iroha_core::state::World,
@@ -10260,7 +9524,6 @@ mod tests {
         }
 
         assert_unknown_rejected!(
-            AgentApartmentAction,
             AgentRuntimeStatus,
             TrainingJobStatus,
             AppInfraStatusQuery,
@@ -10852,6 +10115,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
+                global_beacon_pulse_hash: None,
                 execution_context_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
@@ -13148,77 +12412,6 @@ mod tests {
         record.root_cid = root_cid;
         record
     }
-    fn insert_uploaded_model_finalization_projection(
-        world: &mut iroha_core::state::World,
-        payload: &UploadedModelRegisterPayload,
-        service_version: &str,
-    ) {
-        let source_provenance = Some(SoraModelProvenanceRefV1 {
-            kind: SoraModelProvenanceKindV1::UserUpload,
-            id: payload.bundle.model_id.clone(),
-        });
-        let weight = SoraModelWeightVersionRecordV1 {
-            schema_version:
-                iroha_data_model::soracloud::SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
-            service_name: payload.bundle.service_name.clone(),
-            service_version: service_version.to_owned(),
-            model_name: payload.model_name.clone(),
-            weight_version: payload.bundle.weight_version.clone(),
-            parent_version: None,
-            training_job_id: String::new(),
-            source_provenance: source_provenance.clone(),
-            weight_artifact_hash: payload.weight_artifact_hash,
-            dataset_ref: payload.dataset_ref.clone(),
-            training_config_hash: payload.training_config_hash,
-            reproducibility_hash: payload.reproducibility_hash,
-            provenance_attestation_hash: payload.provenance_attestation_hash,
-            registered_sequence: 7,
-            promoted_sequence: None,
-            gate_report_hash: None,
-            promoted_by: None,
-        };
-        weight
-            .validate()
-            .expect("valid uploaded-model weight fixture");
-        world
-            .soracloud_model_weight_versions_mut_for_testing()
-            .insert(
-                (
-                    payload.bundle.service_name.as_ref().to_owned(),
-                    payload.model_name.clone(),
-                    payload.bundle.weight_version.clone(),
-                ),
-                weight,
-            );
-        let artifact = SoraModelArtifactRecordV1 {
-            schema_version: iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
-            service_name: payload.bundle.service_name.clone(),
-            service_version: service_version.to_owned(),
-            model_name: payload.model_name.clone(),
-            artifact_id: payload.artifact_id.clone(),
-            training_job_id: payload.artifact_id.clone(),
-            weight_version: Some(payload.bundle.weight_version.clone()),
-            source_provenance,
-            weight_artifact_hash: payload.weight_artifact_hash,
-            dataset_ref: payload.dataset_ref.clone(),
-            training_config_hash: payload.training_config_hash,
-            reproducibility_hash: payload.reproducibility_hash,
-            provenance_attestation_hash: payload.provenance_attestation_hash,
-            registered_sequence: 8,
-            consumed_by_version: Some(payload.bundle.weight_version.clone()),
-            chunk_manifest_root: Some(payload.bundle.chunk_manifest_root),
-        };
-        artifact
-            .validate()
-            .expect("valid uploaded-model artifact fixture");
-        world.soracloud_model_artifacts_mut_for_testing().insert(
-            (
-                payload.bundle.service_name.as_ref().to_owned(),
-                payload.artifact_id.clone(),
-            ),
-            artifact,
-        );
-    }
     fn signed_uploaded_model_register_request(
         payload: UploadedModelRegisterPayload,
         key_pair: &KeyPair,
@@ -14724,172 +13917,6 @@ mod tests {
             .expect_err("empty successful draft must fail closed");
         assert_eq!(error.kind, SoracloudErrorKind::Conflict);
         assert!(error.message.contains("no transaction instructions"));
-    }
-    #[test]
-    fn build_authoritative_agent_runtime_receipt_instruction_is_idempotent()
-    -> Result<(), eyre::Report> {
-        use iroha_core::state::World;
-        let runtime = test_runtime()?;
-        runtime.block_on(async move {
-            let receipt_id = Hash::new(b"ops-agent-runtime-receipt");
-            let request_commitment = Hash::new(b"ops-agent-runtime-request");
-            let result_commitment = Hash::new(b"ops-agent-runtime-result");
-            let journal_artifact_hash = Hash::new(b"ops-agent-runtime-journal");
-            let checkpoint_artifact_hash = Hash::new(b"ops-agent-runtime-checkpoint");
-            let mut world = World::default();
-            world.soracloud_runtime_receipts_mut_for_testing().insert(
-                receipt_id,
-                SoraRuntimeReceiptV1 {
-                    schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-                    receipt_id,
-                    service_name: "agent_workflow_service"
-                        .parse()
-                        .expect("valid service name"),
-                    service_version: "workflow.v1".to_owned(),
-                    handler_name: "workflow".parse().expect("valid handler name"),
-                    handler_class: SoraServiceHandlerClassV1::Query,
-                    request_commitment,
-                    result_commitment,
-                    certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
-                    emitted_sequence: 77,
-                    mailbox_message_id: None,
-                    journal_artifact_hash: Some(journal_artifact_hash),
-                    checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
-                    execution_host: None,
-                },
-            );
-            let app = mk_app_state_for_tests_with_world(world);
-            let summary = AgentRuntimeExecutionSummary {
-                apartment_name: "ops_agent".to_owned(),
-                run_id: "ops_agent:autonomy:runtime".to_owned(),
-                service_name: Some("agent_workflow_service".to_owned()),
-                service_version: Some("workflow.v1".to_owned()),
-                handler_name: Some("workflow".to_owned()),
-                succeeded: true,
-                result_commitment,
-                journal_artifact_hash,
-                checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
-                runtime_receipt: Some(AgentRuntimeReceiptRecord {
-                    receipt_id,
-                    service_name: "agent_workflow_service".to_owned(),
-                    service_version: "workflow.v1".to_owned(),
-                    handler_name: "workflow".to_owned(),
-                    handler_class: SoraServiceHandlerClassV1::Query,
-                    request_commitment,
-                    result_commitment,
-                    certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
-                    emitted_sequence: 77,
-                    execution_host: None,
-                    mailbox_message_id: None,
-                    journal_artifact_hash: Some(journal_artifact_hash),
-                    checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
-                }),
-                workflow_steps: Vec::new(),
-                content_type: None,
-                response_json: None,
-                response_text: None,
-                error: None,
-            };
-            let instruction = build_authoritative_agent_runtime_receipt_instruction(&app, &summary)
-                .expect("idempotent receipt helper should succeed");
-            assert!(instruction.is_none());
-            Ok(())
-        })
-    }
-    #[test]
-    fn build_authoritative_agent_autonomy_execution_audit_instruction_is_idempotent()
-    -> Result<(), eyre::Report> {
-        use iroha_core::state::World;
-        let runtime = test_runtime()?;
-        runtime.block_on(async move {
-            let result_commitment = Hash::new(b"ops-agent-executed-result");
-            let runtime_receipt_id = Hash::new(b"ops-agent-executed-receipt");
-            let journal_artifact_hash = Hash::new(b"ops-agent-executed-journal");
-            let checkpoint_artifact_hash = Hash::new(b"ops-agent-executed-checkpoint");
-            let mut world = World::default();
-            world
-                .soracloud_agent_apartment_audit_events_mut_for_testing()
-                .insert(
-                    88,
-                    SoraAgentApartmentAuditEventV1 {
-                        schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
-                        sequence: 88,
-                        block_height: 88,
-                        block_timestamp_ms: 88,
-                        action: SoraAgentApartmentActionV1::AutonomyRunExecuted,
-                        apartment_name: "ops_agent".parse().expect("valid apartment name"),
-                        status: SoraAgentRuntimeStatusV1::Running,
-                        lease_expires_height: 100,
-                        manifest_hash: Hash::new(b"agent-manifest"),
-                        restart_count: 0,
-                        signer: checked_test_keypair(0xB3).public_key().clone(),
-                        request_id: Some("ops_agent:autonomy:executed".to_owned()),
-                        asset_definition: None,
-                        amount: None,
-                        capability: None,
-                        reason: None,
-                        from_apartment: None,
-                        to_apartment: None,
-                        channel: None,
-                        payload_hash: None,
-                        artifact_hash: Some("hash:artifact#1".to_owned()),
-                        provenance_hash: Some("hash:prov#1".to_owned()),
-                        run_id: Some("ops_agent:autonomy:executed".to_owned()),
-                        run_label: Some("nightly".to_owned()),
-                        budget_units: Some(25),
-                        service_name: Some("agent_workflow_service".to_owned()),
-                        service_version: Some("workflow.v1".to_owned()),
-                        handler_name: Some("workflow".to_owned()),
-                        result_commitment: Some(result_commitment),
-                        runtime_receipt_id: Some(runtime_receipt_id),
-                        journal_artifact_hash: Some(journal_artifact_hash),
-                        checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
-                        succeeded: Some(true),
-                    },
-                );
-            let app = mk_app_state_for_tests_with_world(world);
-            let summary = AgentRuntimeExecutionSummary {
-                apartment_name: "ops_agent".to_owned(),
-                run_id: "ops_agent:autonomy:executed".to_owned(),
-                service_name: Some("agent_workflow_service".to_owned()),
-                service_version: Some("workflow.v1".to_owned()),
-                handler_name: Some("workflow".to_owned()),
-                succeeded: true,
-                result_commitment,
-                journal_artifact_hash,
-                checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
-                runtime_receipt: Some(AgentRuntimeReceiptRecord {
-                    receipt_id: runtime_receipt_id,
-                    service_name: "agent_workflow_service".to_owned(),
-                    service_version: "workflow.v1".to_owned(),
-                    handler_name: "workflow".to_owned(),
-                    handler_class: SoraServiceHandlerClassV1::Query,
-                    request_commitment: Hash::new(b"ops-agent-executed-request"),
-                    result_commitment,
-                    certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
-                    emitted_sequence: 88,
-                    execution_host: None,
-                    mailbox_message_id: None,
-                    journal_artifact_hash: Some(journal_artifact_hash),
-                    checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
-                }),
-                workflow_steps: Vec::new(),
-                content_type: None,
-                response_json: None,
-                response_text: None,
-                error: None,
-            };
-            let instruction = build_authoritative_agent_autonomy_execution_audit_instruction(
-                &app,
-                "ops_agent",
-                1,
-                &summary,
-                Some(runtime_receipt_id),
-            )
-            .expect("idempotent audit helper should succeed");
-            assert!(instruction.is_none());
-            Ok(())
-        })
     }
     include!("soracloud/tests/agent_runtime_status.rs");
 }

@@ -7,21 +7,30 @@
 //! This module is internal and accessed from execution/merge paths and the actor.
 //! The sparse Merkle tree ([`smt`]) and the witness-to-root projections
 //! ([`roots`]) that turn a drained witness into state roots live alongside it.
+#[cfg(test)]
 use crate::state::{StateBlock, WorldReadOnly};
+#[cfg(test)]
 use core::str::FromStr as _;
 use iroha_crypto::Hash;
+#[cfg(test)]
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    block::consensus::{ExecKv, ExecWitness},
     execution_witness::ExecutionWitnessKeyTagV1,
-    fastpq::{TransferTranscript, TransferTranscriptBundle},
-    isi::KagemushaReserveReceiptV1,
     nft::NftId,
 };
+use iroha_data_model::{
+    block::consensus::{ExecKv, ExecWitness},
+    fastpq::{TransferTranscript, TransferTranscriptBundle},
+    isi::KagemushaReserveReceiptV1,
+};
+#[cfg(test)]
 use iroha_model_base::domain::DomainId;
+#[cfg(test)]
 use iroha_model_base::name::Name;
+#[cfg(test)]
 use iroha_primitives::{json::Json, numeric::Quantity};
+#[cfg(test)]
 use mv::storage::StorageReadOnly;
 use std::{
     cell::{Cell, RefCell},
@@ -591,9 +600,11 @@ fn map_ref_to_bundles(
         })
         .collect()
 }
+#[cfg(test)]
 fn key_sep() -> u8 {
     0x1F // Unit Separator
 }
+#[cfg(test)]
 fn enc_key_prefix(tag: ExecutionWitnessKeyTagV1, a: &str, b: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + a.len() + 1 + b.len());
     out.push(tag as u8);
@@ -602,6 +613,7 @@ fn enc_key_prefix(tag: ExecutionWitnessKeyTagV1, a: &str, b: &str) -> Vec<u8> {
     out.extend_from_slice(b.as_bytes());
     out
 }
+#[cfg(test)]
 fn key_account_kv(id: &AccountId, key: &Name) -> Vec<u8> {
     enc_key_prefix(
         ExecutionWitnessKeyTagV1::AccountMetadata,
@@ -609,6 +621,7 @@ fn key_account_kv(id: &AccountId, key: &Name) -> Vec<u8> {
         key.as_ref(),
     )
 }
+#[cfg(test)]
 fn key_domain_kv(id: &DomainId, key: &Name) -> Vec<u8> {
     enc_key_prefix(
         ExecutionWitnessKeyTagV1::DomainMetadata,
@@ -616,6 +629,7 @@ fn key_domain_kv(id: &DomainId, key: &Name) -> Vec<u8> {
         key.as_ref(),
     )
 }
+#[cfg(test)]
 fn key_nft_kv(id: &NftId, key: &Name) -> Vec<u8> {
     enc_key_prefix(
         ExecutionWitnessKeyTagV1::NftMetadata,
@@ -623,6 +637,7 @@ fn key_nft_kv(id: &NftId, key: &Name) -> Vec<u8> {
         key.as_ref(),
     )
 }
+#[cfg(test)]
 fn key_asset_def_kv(id: &AssetDefinitionId, key: &Name) -> Vec<u8> {
     enc_key_prefix(
         ExecutionWitnessKeyTagV1::AssetDefinitionMetadata,
@@ -630,21 +645,25 @@ fn key_asset_def_kv(id: &AssetDefinitionId, key: &Name) -> Vec<u8> {
         key.as_ref(),
     )
 }
+#[cfg(test)]
 fn key_asset_balance(id: &AssetId) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + id.to_string().len());
     out.push(ExecutionWitnessKeyTagV1::AssetBalance as u8);
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
+#[cfg(test)]
 fn key_asset_def_total(id: &AssetDefinitionId) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + id.to_string().len());
     out.push(ExecutionWitnessKeyTagV1::AssetDefinitionTotalSupply as u8);
     out.extend_from_slice(id.to_string().as_bytes());
     out
 }
+#[cfg(test)]
 fn bytes_from_json(j: &iroha_primitives::json::Json) -> Vec<u8> {
     j.get().as_bytes().to_vec()
 }
+#[cfg(test)]
 /// Record a read (pre-value) of account metadata.
 pub fn record_read_account_kv(
     id: &AccountId,
@@ -657,6 +676,7 @@ pub fn record_read_account_kv(
         g.reads.entry(k).or_insert(v);
     });
 }
+#[cfg(test)]
 /// Record a write (post-value) of account metadata.
 pub fn record_write_account_kv(id: &AccountId, key: &Name, val: &iroha_primitives::json::Json) {
     let k = key_account_kv(id, key);
@@ -665,6 +685,7 @@ pub fn record_write_account_kv(id: &AccountId, key: &Name, val: &iroha_primitive
         g.writes.insert(k, v);
     });
 }
+#[cfg(test)]
 /// Record a delete (post empty) of account metadata, with read pre-value supplied.
 pub fn record_delete_account_kv(id: &AccountId, key: &Name, pre: &iroha_primitives::json::Json) {
     let k = key_account_kv(id, key);
@@ -675,6 +696,7 @@ pub fn record_delete_account_kv(id: &AccountId, key: &Name, pre: &iroha_primitiv
         g.writes.insert(k, Vec::new());
     });
 }
+#[cfg(test)]
 /// Record a read (pre-value) of domain metadata.
 pub fn record_read_domain_kv(
     id: &DomainId,
@@ -687,24 +709,7 @@ pub fn record_read_domain_kv(
         g.reads.entry(k).or_insert(v);
     });
 }
-/// Record a write (post-value) of domain metadata.
-pub fn record_write_domain_kv(id: &DomainId, key: &Name, val: &iroha_primitives::json::Json) {
-    let k = key_domain_kv(id, key);
-    let v = bytes_from_json(val);
-    with_active_slot(|g| {
-        g.writes.insert(k, v);
-    });
-}
-/// Record a delete (post empty) of domain metadata, with read pre-value supplied.
-pub fn record_delete_domain_kv(id: &DomainId, key: &Name, pre: &iroha_primitives::json::Json) {
-    let k = key_domain_kv(id, key);
-    with_active_slot(|g| {
-        g.reads
-            .entry(k.clone())
-            .or_insert_with(|| bytes_from_json(pre));
-        g.writes.insert(k, Vec::new());
-    });
-}
+#[cfg(test)]
 /// Record a read (pre-value) of NFT metadata.
 pub fn record_read_nft_kv(id: &NftId, key: &Name, val: Option<&iroha_primitives::json::Json>) {
     let k = key_nft_kv(id, key);
@@ -713,24 +718,7 @@ pub fn record_read_nft_kv(id: &NftId, key: &Name, val: Option<&iroha_primitives:
         g.reads.entry(k).or_insert(v);
     });
 }
-/// Record a write (post-value) of NFT metadata.
-pub fn record_write_nft_kv(id: &NftId, key: &Name, val: &iroha_primitives::json::Json) {
-    let k = key_nft_kv(id, key);
-    let v = bytes_from_json(val);
-    with_active_slot(|g| {
-        g.writes.insert(k, v);
-    });
-}
-/// Record a delete (post empty) of NFT metadata, with read pre-value supplied.
-pub fn record_delete_nft_kv(id: &NftId, key: &Name, pre: &iroha_primitives::json::Json) {
-    let k = key_nft_kv(id, key);
-    with_active_slot(|g| {
-        g.reads
-            .entry(k.clone())
-            .or_insert_with(|| bytes_from_json(pre));
-        g.writes.insert(k, Vec::new());
-    });
-}
+#[cfg(test)]
 /// Record asset balance read (pre-value) for an asset.
 pub fn record_read_asset(id: &AssetId, val: Option<&Quantity>) {
     let k = key_asset_balance(id);
@@ -741,6 +729,7 @@ pub fn record_read_asset(id: &AssetId, val: Option<&Quantity>) {
         g.reads.entry(k).or_insert(v);
     });
 }
+#[cfg(test)]
 /// Record asset balance write (post-value) for an asset.
 pub fn record_write_asset(id: &AssetId, val: &Quantity) {
     let k = key_asset_balance(id);
@@ -749,6 +738,7 @@ pub fn record_write_asset(id: &AssetId, val: &Quantity) {
         g.writes.insert(k, v);
     });
 }
+#[cfg(test)]
 /// Record asset definition total supply read (pre-value).
 pub fn record_read_asset_def_total(id: &AssetDefinitionId, val: Option<&Quantity>) {
     let k = key_asset_def_total(id);
@@ -759,6 +749,7 @@ pub fn record_read_asset_def_total(id: &AssetDefinitionId, val: Option<&Quantity
         g.reads.entry(k).or_insert(v);
     });
 }
+#[cfg(test)]
 /// Record asset definition total supply write (post-value).
 pub fn record_write_asset_def_total(id: &AssetDefinitionId, val: &Quantity) {
     let k = key_asset_def_total(id);
@@ -837,6 +828,7 @@ pub(crate) fn synchronize_fastpq_transcripts(finalized: &BTreeMap<Hash, Vec<Tran
         witness.fastpq_transcripts.clone_from(finalized);
     }
 }
+#[cfg(test)]
 /// Record a read (pre-value) of asset-definition metadata.
 pub fn record_read_asset_def_kv(
     id: &AssetDefinitionId,
@@ -849,32 +841,7 @@ pub fn record_read_asset_def_kv(
         g.reads.entry(k).or_insert(v);
     });
 }
-/// Record a write (post-value) of asset-definition metadata.
-pub fn record_write_asset_def_kv(
-    id: &AssetDefinitionId,
-    key: &Name,
-    val: &iroha_primitives::json::Json,
-) {
-    let k = key_asset_def_kv(id, key);
-    let v = bytes_from_json(val);
-    with_active_slot(|g| {
-        g.writes.insert(k, v);
-    });
-}
-/// Record a delete (post empty) of asset-definition metadata, with read pre-value supplied.
-pub fn record_delete_asset_def_kv(
-    id: &AssetDefinitionId,
-    key: &Name,
-    pre: &iroha_primitives::json::Json,
-) {
-    let k = key_asset_def_kv(id, key);
-    with_active_slot(|g| {
-        g.reads
-            .entry(k.clone())
-            .or_insert_with(|| bytes_from_json(pre));
-        g.writes.insert(k, Vec::new());
-    });
-}
+#[cfg(test)]
 /// Parse an access key string and record a pure read (if supported).
 /// Currently supports only metadata detail keys:
 /// - `account.detail:{account_id}:{key}`

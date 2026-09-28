@@ -3,20 +3,22 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+#[cfg(test)]
+use iroha_core::kiso::KisoHandle;
 use iroha_core::{
-    kiso::KisoHandle,
     smartcontracts::isi::vpn::vpn_lease_custody_account_id,
     state::{VPN_SETTLED_RECEIPT_HISTORY_LIMIT as MAX_RECEIPTS_PER_ACCOUNT, WorldReadOnly},
 };
+#[cfg(test)]
+use iroha_crypto::Hash;
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey,
+    Algorithm, HashOf, KeyPair, PrivateKey, PublicKey,
     soranet::{certificate::select_vpn_endpoint, directory::GuardDirectorySnapshotV2},
 };
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::SignedBlock,
     isi::{InstructionBox, OpenVpnLeaseEscrow, SettleVpnLease},
     permission::Permission,
     query::error::QueryExecutionFail,
@@ -428,6 +430,7 @@ pub(crate) struct VpnSessionRecord {
     pub relay_tls_spki_sha256: [u8; 32],
     pub relay_certificate_sha256: [u8; 32],
     pub directory_snapshot_digest: [u8; 32],
+    #[cfg(test)]
     pub relay_trust_valid_until_ms: u64,
     pub metering_public_key: PublicKey,
     pub route_pushes: Vec<String>,
@@ -820,9 +823,6 @@ fn build_quote_id(
     hasher.update(&current_ms.to_be_bytes());
     *hasher.finalize().as_bytes()
 }
-fn default_lease_id_hex(record: &VpnSessionRecord) -> String {
-    hex::encode(record.lease_id)
-}
 fn tx_instr_from_box(boxed: InstructionBox) -> VpnTxInstructionDto {
     let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(&boxed)
         .expect("instruction must have a canonical V1 wire identifier and Norito frame");
@@ -838,9 +838,6 @@ fn settle_lease_instruction(
 ) -> VpnTxInstructionDto {
     let instruction: InstructionBox = SettleVpnLease::new(lease_id, relay_receipt, voucher).into();
     tx_instr_from_box(instruction)
-}
-fn quote_policy_from_record(record: &VpnQuoteRecord) -> VpnQuotePolicyV1 {
-    record.signed_quote.body.policy.clone()
 }
 fn validate_quote_record_projection(
     record: &VpnQuoteRecord,
@@ -1265,6 +1262,7 @@ fn build_pending_settlement_receipt_record(
         )),
     })
 }
+#[cfg(test)]
 fn store_receipt(app: &SharedAppState, receipt: VpnReceiptRecord) {
     let key = receipt.account_id.clone();
     let mut entry = app.vpn_receipts.entry(key).or_default();
@@ -1278,6 +1276,7 @@ fn lock_vpn_runtime(app: &SharedAppState) -> std::sync::MutexGuard<'_, VpnRuntim
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+#[cfg(test)]
 fn remove_session_by_id_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -2017,6 +2016,7 @@ fn session_record_from_lease(record: &VpnLeaseRecordV1) -> Result<VpnSessionReco
         relay_tls_spki_sha256: policy.relay_tls_spki_sha256,
         relay_certificate_sha256: policy.relay_certificate_sha256,
         directory_snapshot_digest: policy.directory_snapshot_digest,
+        #[cfg(test)]
         relay_trust_valid_until_ms: policy.relay_trust_valid_until_ms,
         metering_public_key: record.metering_public_key.clone(),
         route_pushes: policy.route_pushes.clone(),

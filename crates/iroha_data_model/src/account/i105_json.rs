@@ -442,22 +442,9 @@ fn expand_base105_limb(mut limb: u64, digits: &mut [u8; I105_LIMB_DIGITS], pad: 
     }
 }
 fn write_i105_symbol(digit: u8, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
-    const ASCII: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    const KANA: [&str; 47] = [
-        "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ",
-        "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ",
-        "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-    ];
-    if let Some(&symbol) = ASCII.get(usize::from(digit)) {
-        output.push(char::from(symbol))
-    } else if let Some(symbol) = digit
-        .checked_sub(58)
-        .and_then(|index| KANA.get(usize::from(index)))
-    {
-        output.push_str(symbol)
-    } else {
-        Err(BoundedJsonError::Unsupported)
-    }
+    super::address::i105_symbol(digit)
+        .ok_or(BoundedJsonError::Unsupported)
+        .and_then(|symbol| output.push_str(symbol))
 }
 #[cfg(test)]
 mod tests {

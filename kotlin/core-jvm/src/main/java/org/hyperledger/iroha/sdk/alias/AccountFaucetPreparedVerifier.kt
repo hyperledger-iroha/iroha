@@ -75,8 +75,8 @@ object AccountFaucetPreparedVerifier {
             "prepared faucet transaction hash differs from the envelope"
         }
         val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload())
-        require(payload.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
-            "prepared faucet transaction must use QueuePlanSynced admission"
+        require(payload.admissionIntent == TransactionAdmissionIntent.ORDINARY) {
+            "prepared faucet transaction must use Ordinary admission"
         }
         requirePreparedOperationLifetime(payload, binding)
         require(

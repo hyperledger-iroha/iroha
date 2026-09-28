@@ -523,6 +523,7 @@ pub mod isi {
 /// NFT-related query implementations.
 pub mod query {
     use super::*;
+    use crate::smartcontracts::isi::query::json_predicate::predicate_matches_with_aliases;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::{StateReadOnly, WorldReadOnly},
@@ -641,30 +642,6 @@ pub mod query {
             )
         }
     }
-    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-        if path.is_empty() {
-            return None;
-        }
-        let mut current = value;
-        for segment in path.split('.') {
-            if segment.is_empty() {
-                return None;
-            }
-            match current {
-                Value::Object(map) => current = map.get(segment)?,
-                _ => return None,
-            }
-        }
-        Some(current)
-    }
-    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-        matches!(value, Value::String(raw) if raw == expected)
-    }
-    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-        values
-            .iter()
-            .any(|value| matches!(value, Value::String(raw) if raw == expected))
-    }
     fn nft_alias_values(nft: &Nft, field: &str) -> Vec<String> {
         match field {
             "id" | "nft" | "nft_id" => vec![nft.id().to_string()],
@@ -673,71 +650,8 @@ pub mod query {
             _ => Vec::new(),
         }
     }
-    fn nft_json_value<'a>(cache: &'a mut Option<Value>, nft: &Nft) -> Option<&'a Value> {
-        if cache.is_none() {
-            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(nft);
-        }
-        cache.as_ref()
-    }
     fn predicate_matches_nft(predicate: &PredicateJson, nft: &Nft) -> bool {
-        let mut nft_json = None;
-        for cond in &predicate.equals {
-            let aliases = nft_alias_values(nft, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = nft_json_value(&mut nft_json, nft) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if actual != &cond.value {
-                return false;
-            }
-        }
-        for cond in &predicate.r#in {
-            let aliases = nft_alias_values(nft, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = nft_json_value(&mut nft_json, nft) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if !cond.values.iter().any(|candidate| candidate == actual) {
-                return false;
-            }
-        }
-        for field in &predicate.exists {
-            if !nft_alias_values(nft, field).is_empty() {
-                continue;
-            }
-            let Some(value) = nft_json_value(&mut nft_json, nft) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, field) else {
-                return false;
-            };
-            if actual.is_null() {
-                return false;
-            }
-        }
-        true
+        predicate_matches_with_aliases(predicate, nft, nft_alias_values)
     }
     impl ValidQuery for FindNfts {
         #[metrics(+"find_nfts")]

@@ -1,13 +1,24 @@
 //! Closed prover/verifier constraint source for exact small coefficients.
 
+#[cfg(test)]
 use super::{
-    ArithmeticCircuitStatement, ArithmeticCircuitWitness, GeneralizedBulletproofErrorV1,
-    ProofGeneratorView, ProofRandomSource, ProofScalar, ProofSuite, ProverTranscript, ScalarVector,
-    SecretScalar, VerifierConstraintSourceV1, VerifierTranscript, try_exact_capacity_vec_v1,
+    ArithmeticCircuitStatement, ProofGeneratorView, ProofRandomSource, ProverTranscript,
+    VerifierConstraintSourceV1, VerifierTranscript, try_exact_capacity_vec_v1,
+};
+use super::{
+    ArithmeticCircuitWitness, GeneralizedBulletproofErrorV1, ProofScalar, ProofSuite, ScalarVector,
+    SecretScalar,
 };
 
 /// Exact coefficient set represented by the closed constraint source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the test-only T256 membership prover selects a coefficient bound"
+    )
+)]
 pub(crate) enum ExactSmallCoefficientBoundV1 {
     /// Coefficients are in `{-1, 0, 1}`.
     One,
@@ -23,6 +34,7 @@ impl ExactSmallCoefficientBoundV1 {
         }
     }
 
+    #[cfg(test)]
     const fn constraints_per_coefficient(self) -> usize {
         match self {
             Self::One => 5,
@@ -41,6 +53,7 @@ pub(crate) struct ExactSmallCoefficientConstraintSourceV1 {
 }
 
 impl ExactSmallCoefficientConstraintSourceV1 {
+    #[cfg(test)]
     /// Construct the unique canonical circuit shape for `coefficient_count`.
     pub(crate) fn new(
         coefficient_count: usize,
@@ -72,6 +85,7 @@ impl ExactSmallCoefficientConstraintSourceV1 {
         })
     }
 
+    #[cfg(test)]
     fn validate_statement_shape(
         self,
         generator_count: usize,
@@ -207,11 +221,13 @@ fn validate_boolean_gate<S: ProofSuite>(
     Ok(())
 }
 
+#[cfg(test)]
 /// Validated prover statement which cannot select an arbitrary row source.
 pub(crate) struct ExactSmallCoefficientProverStatementV1<'a, S: ProofSuite> {
     statement: ArithmeticCircuitStatement<'a, S>,
 }
 
+#[cfg(test)]
 impl<'a, S: ProofSuite> ExactSmallCoefficientProverStatementV1<'a, S> {
     /// Validate the canonical basis, sole commitment, and exact source shape.
     pub(crate) fn new(
@@ -251,12 +267,14 @@ impl<'a, S: ProofSuite> ExactSmallCoefficientProverStatementV1<'a, S> {
     }
 }
 
+#[cfg(test)]
 /// Validated verifier statement which cannot select an arbitrary row source.
 pub(crate) struct ExactSmallCoefficientVerifierStatementV1<'a, S: ProofSuite> {
     statement: ArithmeticCircuitStatement<'a, S>,
     source: ExactSmallCoefficientConstraintSourceV1,
 }
 
+#[cfg(test)]
 impl<'a, S: ProofSuite> ExactSmallCoefficientVerifierStatementV1<'a, S> {
     /// Validate the canonical basis, sole commitment, and exact source shape.
     pub(crate) fn new(

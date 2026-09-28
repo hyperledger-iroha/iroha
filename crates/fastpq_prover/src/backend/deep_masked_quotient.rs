@@ -232,6 +232,7 @@ impl<'a> DeepQuotientPlan<'a> {
             .apply(quotient.coefficients(), replay.quotient_mask())?;
         Ok(DeepMaskedQuotient {
             chunks,
+            #[cfg(test)]
             degree_bounds: self.pair.degree_bounds(),
         })
     }
@@ -240,12 +241,14 @@ impl<'a> DeepQuotientPlan<'a> {
 /// Exact blinded quotient chunks; all owned coefficients retain clearing storage.
 pub(super) struct DeepMaskedQuotient {
     chunks: [SecretPolynomial<F>; 2],
+    #[cfg(test)]
     degree_bounds: [usize; 2],
 }
 impl DeepMaskedQuotient {
     pub(super) fn chunks(&self) -> [&[F]; 2] {
         [&self.chunks[0], &self.chunks[1]]
     }
+    #[cfg(test)]
     pub(super) fn degree_bounds(&self) -> [usize; 2] {
         self.degree_bounds
     }

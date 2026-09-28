@@ -330,12 +330,13 @@ def _source(trial):
         _require(ready.peer_id == role.peer_id == f'peer{index}' and ready.node_id == role.node_public_key
                  and ready.process == loaded.peers[index]
                  and ready.process.executable_sha256 == daemon
-                 and (ready.genesis_hash, ready.context_id, ready.network_id)
-                 == (gen.genesis_hash, gen.context_id, gen.network_id)
+                 and (ready.genesis_hash, ready.network_id) == (gen.genesis_hash, gen.network_id)
+                 and ready.consensus_instance == result.readiness[0].consensus_instance
+                 and ready.genesis_execution_hash == result.readiness[0].genesis_execution_hash
                  and ready.anchors_sha256 == gen.anchors_sha256
                  and ready.client_config_sha256 == role.client_config_sha256
                  and ready.cli_sha256 == cli)
-        _digest(ready.challenge); _digest(ready.report_sha256)
+        _digest(ready.challenge); _digest(ready.report_sha256); _digest(ready.consensus_instance); _digest(ready.genesis_execution_hash)
         terminal(trial._readiness._commands, ready.peer_id, ready.cli_process)
     terminal(trial._generator._commands, 'generator', gen.process)
     terminal(trial._load._commands, 'native-load', loaded.process)

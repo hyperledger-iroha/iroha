@@ -11,13 +11,12 @@ daemon_packages = ["irohad"]
 description = "Foundational codecs, primitives, derives, schemas, and support libraries."
 packages = [
   "build-support",
+  "concread",
   "iroha_audio",
   "iroha_config_base",
   "iroha_crypto",
   "iroha_derive",
   "iroha_derive_primitives",
-  "iroha_ffi",
-  "iroha_ffi_proc_macro",
   "iroha_file_mmap",
   "iroha_i18n",
   "iroha_macro",
@@ -30,7 +29,6 @@ packages = [
   "iroha_telemetry",
   "iroha_telemetry_derive",
   "iroha_version",
-  "iroha_version_derive",
   "mv",
   "norito",
   "norito_derive",
@@ -51,9 +49,8 @@ packages = [
   "iroha_smart_contract_codec",
   "iroha_smart_contract_derive",
   "iroha_smart_contract_utils",
-  "iroha_trigger",
-  "iroha_trigger_derive",
   "iroha_zkp_halo2",
+  "iroha_zkp_poseidon",
   "ivm",
   "ivm_abi",
   "ivm_artifact_admission",
@@ -68,18 +65,22 @@ packages = [
   "iroha",
   "iroha_cli",
   "iroha_config",
+  "iroha_contract_deploy",
   "iroha_core",
+  "iroha_deploy",
   "iroha_futures",
   "iroha_genesis",
   "iroha_kagami",
   "iroha_logger",
   "iroha_monitor",
   "iroha_p2p",
+  "iroha_sumeragi",
   "iroha_swarm",
   "iroha_test_network",
   "iroha_test_samples",
   "iroha_torii",
   "iroha_torii_shared",
+  "iroha_wallet",
   "irohad",
 ]
 
@@ -87,6 +88,7 @@ packages = [
 description = "SoraFS, SoraNet, bridge, binding, settlement, and application services."
 packages = [
   "connect_norito_bridge",
+  "iroha_js_codec",
   "iroha_js_host",
   "iroha_musubi_service",
   "iroha_sccp",
@@ -116,7 +118,6 @@ packages = [
 [lanes.tooling]
 description = "Code generators, developer tools, samples, benchmarks, and Python bindings."
 packages = [
-  "enum_trait_bench",
   "executor_custom_data_model",
   "iroha_python_rs",
   "iroha_schema_gen",

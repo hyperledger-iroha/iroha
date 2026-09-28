@@ -146,10 +146,13 @@ pub struct SumeragiStatus {
     /// Routing stage of the round (0, 1 or 2, §5.2).
     pub stage: u8,
     /// Leader of the current round (`None` while awaiting the next configuration).
+    #[norito(required)]
     pub leader: Option<PublicKey>,
     /// Proxy tail of the current round (`None` while awaiting the next configuration).
+    #[norito(required)]
     pub proxy_tail: Option<PublicKey>,
     /// View of the lock (`high_pqc`) at the current height, if any.
+    #[norito(required)]
     pub high_qc_view: Option<u64>,
     /// Pacemaker level of the current view (§9.1).
     pub level: u32,
@@ -164,12 +167,14 @@ pub struct SumeragiStatus {
     /// Committed, but waiting for the next height's configuration.
     pub awaiting: bool,
     /// Key signing at this height (`None`: the node is an observer here).
+    #[norito(required)]
     pub signer: Option<PublicKey>,
     /// Some key is unanchored (§7.4 R2): the node probes and signs nothing with it.
     pub unanchored: bool,
     /// The node is not a signing member at its height; for liveness it counts as faulty there.
     pub abstaining: bool,
     /// Halt reason, if the instance halted.
+    #[norito(required)]
     pub halted: Option<SumeragiHaltReason>,
     /// Memory footprint counters.
     pub footprint: SumeragiFootprint,
@@ -276,6 +281,20 @@ mod tests {
         let json = norito::json::to_json(&observer).expect("json");
         let parsed: SumeragiStatus = norito::json::from_str(&json).expect("parse");
         assert_eq!(parsed, observer);
+        let encoded = norito::json::to_value(&observer).expect("status value");
+        for field in ["leader", "proxy_tail", "high_qc_view", "signer", "halted"] {
+            let mut omitted = encoded.clone();
+            assert!(omitted.as_object_mut().unwrap().remove(field).is_some());
+            assert!(
+                norito::json::from_value::<SumeragiStatus>(omitted.clone()).is_err(),
+                "missing nullable status field {field} must not default to null"
+            );
+            assert!(
+                norito::json::from_str::<SumeragiStatus>(&norito::json::to_json(&omitted).unwrap())
+                    .is_err(),
+                "streaming decode must require nullable status field {field}"
+            );
+        }
     }
 
     #[test]

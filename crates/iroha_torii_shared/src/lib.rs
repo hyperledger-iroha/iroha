@@ -19,10 +19,14 @@ pub mod aliases;
 pub mod bridge_attestation;
 /// Exact progress bindings for challenge-bound finality attestation reads.
 pub mod bridge_finality;
+/// Byte-exact canonical query form shared by canonical-request signers and verifiers.
+pub mod canonical_request_form;
 /// Canonical bounded signing preimage shared by request-witness signers and verifiers.
 pub mod canonical_request_witness;
 /// Canonical node configuration snapshots and operator update records.
 pub mod configuration;
+/// File-extension media types shared by the content publisher, Torii, and the SoraFS site gateway.
+pub mod content_mime;
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
@@ -476,8 +480,6 @@ pub mod uri {
     pub const SUBSCRIPTION: &str = "/v1/events/ws";
     /// URI for inspecting proof retention state and pruning candidates.
     pub const PROOF_RETENTION_STATUS: &str = "/v1/proofs/retention";
-    /// URI used to fetch FASTPQ proof sidecars for a committed block height.
-    pub const PIPELINE_FASTPQ_PROOFS: &str = "/v1/pipeline/recovery/{height}/fastpq-proofs";
     /// URI used to list historical trigger completion records from committed blocks.
     pub const TRIGGER_COMPLETIONS: &str = "/v1/triggers/completed";
     /// The web socket uri used to subscribe to blocks stream.
@@ -512,14 +514,6 @@ pub mod uri {
     pub const API_VERSION: &str = "/v1/api/version";
     /// URI for getting cpu profile
     pub const PROFILE: &str = "/debug/pprof/profile";
-    /// Base path for governance API endpoints
-    pub const GOV_BASE: &str = "/v1/gov";
-    /// Base path for Ministry API endpoints.
-    pub const MINISTRY_BASE: &str = "/v1/ministry";
-    /// Ministry: build a draft agenda proposal transaction for local signing.
-    pub const MINISTRY_AGENDA_PROPOSAL_DRAFT: &str = "/v1/ministry/agenda/proposals/draft";
-    /// Ministry: fetch a submitted agenda proposal by proposal id.
-    pub const MINISTRY_AGENDA_PROPOSAL_GET: &str = "/v1/ministry/agenda/proposals/{proposal_id}";
     /// Governance: create a proposal to deploy IVM bytecode (.to)
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
     /// Draft one closed SCCP route-governance proposal.
@@ -538,8 +532,6 @@ pub mod uri {
     pub const GOV_REFERENDUM_GET: &str = "/v1/gov/referenda/{id}";
     /// Governance: get a current tally snapshot by referendum id
     pub const GOV_TALLY_GET: &str = "/v1/gov/tally/{id}";
-    /// Governance: convenience endpoint to apply protected namespaces parameter
-    pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
     /// Governance: read the active binding for a canonical contract address
     pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
     /// Accounts: public bootstrap network identity and explicit signing default.
@@ -548,28 +540,12 @@ pub mod uri {
     pub const ACCOUNTS_FAUCET_POLICY: &str = "/v1/accounts/faucet/policy";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
-    /// Node: latest persisted query projection checkpoint descriptor
-    pub const NODE_QUERY_PROJECTION_CHECKPOINT: &str = "/v1/node/query/projection/checkpoint";
-    /// Node: enumerate the canonical live query projection shard catalog for one resource family
-    pub const NODE_QUERY_PROJECTION_SHARD_CATALOG: &str =
-        "/v1/node/query/projection/catalog/{resource}";
-    /// Node: export one canonical query projection shard archive
-    pub const NODE_QUERY_PROJECTION_SHARD_EXPORT: &str =
-        "/v1/node/query/projection/shards/{resource}/{partition_id}";
     /// Runtime: get the active ABI version
     pub const RUNTIME_ABI_ACTIVE: &str = "/v1/runtime/abi/active";
     /// Runtime: get canonical ABI hash for the node's active policy
     pub const RUNTIME_ABI_HASH: &str = "/v1/runtime/abi/hash";
-    /// Runtime: list proposed/activated runtime upgrades
-    pub const RUNTIME_UPGRADES_LIST: &str = "/v1/runtime/upgrades";
     /// Runtime: expose runtime metrics (JSON summary)
     pub const RUNTIME_METRICS: &str = "/v1/runtime/metrics";
-    /// Runtime: propose a runtime upgrade (manifest body)
-    pub const RUNTIME_UPGRADES_PROPOSE: &str = "/v1/runtime/upgrades/propose";
-    /// Runtime: activate a runtime upgrade by id (hex)
-    pub const RUNTIME_UPGRADES_ACTIVATE: &str = "/v1/runtime/upgrades/activate/{id}";
-    /// Runtime: cancel a runtime upgrade by id (hex)
-    pub const RUNTIME_UPGRADES_CANCEL: &str = "/v1/runtime/upgrades/cancel/{id}";
 }
 /// Queue pressure snapshot returned with transaction queue rejections.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
@@ -1062,8 +1038,8 @@ pub struct TriggerCompletionRecord {
     pub entrypoint_index: Option<u64>,
     /// Compact completion payload.
     pub completion: TriggerCompletionSummary,
-    /// Evidence source: `block_result` for persisted completion events or `reconstructed_result`
-    /// for legacy blocks reconstructed from transaction results.
+    /// Evidence source. Always `execution_output`: completions are read only from the
+    /// block's persisted execution outputs.
     pub source: String,
 }
 /// Historical trigger completion query response.

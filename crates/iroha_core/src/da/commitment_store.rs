@@ -151,6 +151,7 @@ impl DaCommitmentStore {
     pub fn get_by_manifest(&self, digest: &ManifestDigest) -> Option<&DaCommitmentWithLocation> {
         self.by_manifest.get(digest)
     }
+    #[cfg(test)]
     /// Lookup by storage ticket.
     #[must_use]
     pub fn get_by_storage_ticket(
@@ -190,6 +191,7 @@ impl DaCommitmentStore {
     ) -> Option<&DaCommitmentWithLocation> {
         self.committed_by_ticket.get(ticket)
     }
+    #[cfg(test)]
     /// Return whether a record collides with any committed commitment identity.
     #[must_use]
     pub fn contains_record_identity(&self, record: &DaCommitmentRecord) -> bool {
@@ -202,6 +204,7 @@ impl DaCommitmentStore {
                 .get_committed_by_storage_ticket(&record.storage_ticket)
                 .is_some()
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return all commitments ordered by `(lane_id, epoch, sequence)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &DaCommitmentWithLocation> {
         self.by_lane_epoch.values()

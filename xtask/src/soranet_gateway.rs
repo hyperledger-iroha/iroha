@@ -1,5 +1,6 @@
 //! M0 gateway baseline pack for the SoraGlobal Gateway CDN (SNNet-15M0). Generates H3 edge config,
 //! trustless verifier skeleton, and WAF/rate policies so early PoPs can run consistent drills.
+use crate::soranet_common::sanitize_label;
 use eyre::{Result, WrapErr};
 use norito::{derive::JsonSerialize, json};
 use std::{
@@ -193,15 +194,4 @@ rules:\n\
     notes: \"False-positive harness kept in the pack so rollbacks are validated automatically\"\n\
 "
     .to_string()
-}
-fn sanitize_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_string()
 }

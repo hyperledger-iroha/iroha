@@ -1,0 +1,16 @@
+[package]
+name = "iroha_zkp_poseidon"
+version.workspace = true
+edition = "2024"
+license = "Apache-2.0"
+description = "Canonical BN254 Poseidon2 helpers and Vega wire-shape constants shared by the data model, IVM and the Halo2 engine"
+repository = "https://github.com/hyperledger-iroha/iroha"
+categories = ["cryptography"]
+
+# Leaf crate: the data model needs only these primitives, so keeping them out of
+# `iroha_zkp_halo2` stops Halo2 engine edits and feature splits from rebuilding
+# `iroha_data_model` and everything above it.
+[dependencies]
+halo2curves = { workspace = true }
+once_cell = { workspace = true }
+poseidon-primitives = "0.2.0"

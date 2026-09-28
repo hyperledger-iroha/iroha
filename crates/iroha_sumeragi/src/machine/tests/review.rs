@@ -387,9 +387,9 @@ fn review_far_future_evidence_cannot_crowd_out_other_evidence() {
     );
 }
 
-/// §9.4 (E38): chain parameters with `empty_after_views = 0` are refused at startup.
+/// Rebuild polling cannot use a zero interval.
 #[test]
-fn review_empty_after_views_zero_refused_at_start() {
+fn review_zero_payload_retry_refused_at_start() {
     let h = H::new(4, pick::leader(0));
     let key = h.signers[0].public_key().clone();
     let records = vec![(
@@ -399,7 +399,8 @@ fn review_empty_after_views_zero_refused_at_start() {
     )];
     let mut init = h.init(records);
     for (_, config) in &mut init.configs {
-        config.params.empty_after_views = 0;
+        config.params.payload_retry_interval = 0;
+        config.params.block_time = 0;
     }
     let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
     let started = Core::new(
@@ -410,21 +411,21 @@ fn review_empty_after_views_zero_refused_at_start() {
         crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
         0,
     );
-    assert!(matches!(started, Err(ConfigError::EmptyAfterViewsZero)));
+    assert!(matches!(
+        started,
+        Err(ConfigError::PayloadRetryIntervalZero)
+    ));
 }
 
-/// E38: a leader that gets `empty_after_views = 0` from a committed configuration (it is not
-/// re-checked at runtime) proposes `EMPTY` from view 0 on, as the voters' fresh-block rule
-/// (§6.2 step 6) demands, instead of a payload every voter reports as a signed defect.
+/// Every view retains real work and no application setting can force an empty fallback.
 #[test]
-fn review_leader_applies_empty_after_views_at_view_0() {
+fn review_leader_preserves_nonempty_payload_at_view_0() {
     let mut h = H::new(4, pick::leader(0));
-    h.core.cfg.params.empty_after_views = 0;
     h.run_until(h.now + 1_100);
     let out = h.built(b"tx");
     let sent = proposals(&out);
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].payload.as_deref(), Some(&[][..]), "EMPTY");
+    assert_eq!(sent[0].payload.as_deref(), Some(&b"tx"[..]));
 }
 
 /// E22: a zero `build_timeout` is refused (it answered every build with `EMPTY` before the

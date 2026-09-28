@@ -8194,7 +8194,7 @@ mod tests {
         );
     }
     #[test]
-    fn transaction_builder_uses_queue_plan_admission_and_instruction_carrier_by_default() {
+    fn transaction_builder_signs_ordinary_admission_and_preserves_instruction_carriers() {
         ensure_python();
         let authority = canonical_i105_from_seed(0x42);
         let mut instruction_builder = TransactionBuilder::new(
@@ -8209,7 +8209,7 @@ mod tests {
         let instruction_model = instruction_builder.to_model_builder();
         assert_eq!(
             instruction_model.payload().admission_intent(),
-            TransactionAdmissionIntent::QueuePlanSynced
+            TransactionAdmissionIntent::Ordinary
         );
         let instruction_executable = &instruction_model.payload().instructions;
         assert!(matches!(
@@ -8220,6 +8220,20 @@ mod tests {
             &norito::codec::Encode::encode(instruction_executable)[..4],
             &0_u32.to_le_bytes()
         );
+        let expected_payload = instruction_model.encode_payload();
+        let envelope = instruction_builder
+            .sign(&[0x42; 32])
+            .expect("ordinary instruction signs");
+        let signed = decode_canonical_signed_transaction_v1(&envelope.signed_transaction_versioned)
+            .expect("exact signed instruction wire");
+        signed
+            .verify_signature()
+            .expect("ordinary instruction signature");
+        assert_eq!(
+            signed.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
+        assert_eq!(codec::encode_adaptive(signed.payload()), expected_payload);
         let mut explicit = TransactionBuilder::new(
             &python_test_network_id(),
             &authority,
@@ -8231,8 +8245,23 @@ mod tests {
             .add_instruction(&batch_test_instruction("explicit"))
             .expect("instruction");
         explicit.validate_executable().expect("non-empty batch");
-        let explicit_model = explicit.to_model_builder();
-        let explicit_executable = &explicit_model.payload().instructions;
+        let expected_batch = explicit.to_model_builder().encode_payload();
+        let batch_envelope = explicit.sign(&[0x42; 32]).expect("ordinary batch signs");
+        let batch_signed =
+            decode_canonical_signed_transaction_v1(&batch_envelope.signed_transaction_versioned)
+                .expect("exact signed batch wire");
+        batch_signed
+            .verify_signature()
+            .expect("ordinary batch signature");
+        assert_eq!(
+            batch_signed.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
+        assert_eq!(
+            codec::encode_adaptive(batch_signed.payload()),
+            expected_batch
+        );
+        let explicit_executable = batch_signed.instructions();
         assert!(matches!(explicit_executable, Executable::Batch(_)));
         assert_eq!(
             &norito::codec::Encode::encode(explicit_executable)[..4],
@@ -10926,7 +10955,7 @@ impl TransactionBuilder {
             self.authority.clone(),
             self.fee_payment.clone(),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary);
         if let Some(creation_time) = self.creation_time {
             builder.set_creation_time(creation_time);
         }
@@ -13385,9 +13414,9 @@ fn verify_prepared_transaction_context_v1_py(
     signed.verify_signature().map_err(|_| {
         PyValueError::new_err("prepared transaction has an invalid authority signature")
     })?;
-    if signed.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+    if signed.admission_intent() != TransactionAdmissionIntent::Ordinary {
         return Err(PyValueError::new_err(
-            "prepared transaction requires QueuePlanSynced admission",
+            "prepared transaction requires Ordinary admission",
         ));
     }
     if signed.network_id() != Some(network_id.as_inner())

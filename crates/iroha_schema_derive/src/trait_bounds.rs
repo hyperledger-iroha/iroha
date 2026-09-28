@@ -103,28 +103,13 @@ pub fn add(
     input_ident: &Ident,
     generics: &mut Generics,
     data: &IntoSchemaData,
-    // custom_trait_bound: Option<CustomTraitBound<N>>,
     codec_bound: &syn::Path,
     codec_skip_bound: Option<&syn::Path>,
     dumb_trait_bounds: bool,
     crate_path: &syn::Path,
 ) {
-    let skip_type_params = Vec::<Ident>::new();
-    // NOTE: not implementing custom trait bounds for now
-    // can be implemented later if needed
-    // = match custom_trait_bound {
-    //     Some(CustomTraitBound::SpecifiedBounds { bounds, .. }) => {
-    //         generics.make_where_clause().predicates.extend(bounds);
-    //         return;
-    //     }
-    //     Some(CustomTraitBound::SkipTypeParams { type_names, .. }) => {
-    //         type_names.into_iter().collect::<Vec<_>>()
-    //     }
-    //     None => Vec::new(),
-    // };
     let ty_params = generics
         .type_params()
-        .filter(|tp| skip_type_params.iter().all(|skip| skip != &tp.ident))
         .map(|tp| tp.ident.clone())
         .collect::<Vec<_>>();
     if ty_params.is_empty() {

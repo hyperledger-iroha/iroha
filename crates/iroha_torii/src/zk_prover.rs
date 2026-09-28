@@ -28,6 +28,10 @@
 //! The worker verifies `ProofAttachment` payloads (single or list, Norito or JSON)
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
 #[cfg(test)]
+use crate::zk_attachments::ATTACHMENT_ID_HEX_LEN;
+#[cfg(test)]
+use crate::zk_attachments::TENANT_KEY_HEX_LEN;
+#[cfg(test)]
 use crate::zk_attachments::{load_prover_processing_receipt, prover_processing_decision};
 use crate::{
     routing::MaybeTelemetry,
@@ -35,9 +39,10 @@ use crate::{
         ProverProcessingDecision, ProverProcessingReceipt, ZK_PROVER_PROCESSING_STATE_VERSION,
         attachment_pair_exists, ensure_prover_processing_reference, open_attachment_regular_file,
         persist_prover_processing_receipt_if_referenced, read_bounded_attachment_regular_file,
-        reconcile_prover_processing_receipt_if_referenced, try_load_meta_for_tenant_key,
-        try_load_prover_processing_receipt, try_prover_processing_decision,
-        validate_attachment_body_contract, validate_attachment_metadata_contract,
+        reconcile_prover_processing_receipt_if_referenced, sanitize_attachment_id,
+        sanitize_tenant_key, try_load_meta_for_tenant_key, try_load_prover_processing_receipt,
+        try_prover_processing_decision, validate_attachment_body_contract,
+        validate_attachment_metadata_contract,
     },
     zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
 };
@@ -61,6 +66,7 @@ use iroha_data_model::proof::{
 use iroha_data_model::zk::BackendTag;
 use iroha_futures::supervisor::ShutdownSignal;
 use mv::storage::StorageReadOnly;
+#[cfg(test)]
 use norito::json;
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest as _, Sha256};
@@ -68,24 +74,26 @@ use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+#[cfg(test)]
+use std::thread;
 use std::{
     collections::{BinaryHeap, HashSet},
     fs,
-    io::Read as _,
-    io::{Error as IoError, ErrorKind as IoErrorKind},
+    io::{Error as IoError, ErrorKind as IoErrorKind, Read as _},
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
-use tokio::{
-    runtime::{Handle, RuntimeFlavor},
-    sync::Semaphore,
-    task::{self, JoinSet},
-};
+#[cfg(test)]
+use tokio::runtime::Handle;
+#[cfg(test)]
+use tokio::runtime::RuntimeFlavor;
+#[cfg(test)]
+use tokio::task;
+use tokio::{sync::Semaphore, task::JoinSet};
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::zk_prover::ProverReportProcessing")]
 #[derive(
@@ -412,14 +420,6 @@ pub(crate) fn init_persistence() -> std::io::Result<()> {
     ensure_dirs()?;
     recover_prover_writer_temps()
 }
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-const ATTACHMENT_ID_HEX_LEN: usize = 64;
-const TENANT_KEY_HEX_LEN: usize = 64;
 const PROOF_ATTACHMENT_BODY_MAX_BYTES_V1: u64 =
     iroha_config::parameters::defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1;
 const REPORT_FILE_MAX_BYTES: u64 =
@@ -1001,6 +1001,7 @@ fn retry_pending_attachment_locations(locations: Vec<AttachmentLocation>) {
     canonicalize_attachment_locations(&mut state.retry_locations);
     state.retry_locations.truncate(hard_cap);
 }
+#[cfg(test)]
 fn find_attachment_location(id: &str) -> std::io::Result<Option<AttachmentLocation>> {
     let clean = sanitize_attachment_id(id)
         .filter(|clean| clean == id)
@@ -1441,13 +1442,14 @@ fn record_prover_metrics(report: &ProverReport) {
 /// # Errors
 ///
 /// Returns a persistence error rather than reporting a false successful no-op.
+#[cfg(test)]
 pub fn gc_reports_once() -> std::io::Result<usize> {
     try_gc_reports_once()
 }
 fn try_gc_reports_once() -> std::io::Result<usize> {
     ensure_dirs()?;
     let ttl = Duration::from_secs(cfg_reports_ttl_secs());
-    let now = now_ms();
+    let now = crate::utils::unix_now_ms();
     let ttl_ms = ttl.as_millis() as u64;
     let mut deleted = 0usize;
     let _guard = report_summary_lock().lock();
@@ -1995,6 +1997,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
 ///
 /// Returns a persistence error when attachment discovery, receipt recovery, or
 /// durable report publication cannot be completed safely.
+#[cfg(test)]
 pub fn process_attachment_once(id: &str) -> std::io::Result<Option<ProverReport>> {
     let clean = sanitize_attachment_id(id)
         .filter(|clean| clean == id)
@@ -2005,7 +2008,7 @@ pub fn process_attachment_once(id: &str) -> std::io::Result<Option<ProverReport>
     process_attachment_once_at(&loc)
 }
 fn processing_retry_count(id: &str) -> std::io::Result<Option<u32>> {
-    let now_ms = now_ms();
+    let now_ms = crate::utils::unix_now_ms();
     let report_decision = || committed_report_processing_decision(id, now_ms);
     match try_prover_processing_decision(id, now_ms)? {
         ProverProcessingDecision::Suppress => {
@@ -2088,7 +2091,7 @@ fn checkpoint_completed_proofs(
     let receipt = ProverProcessingReceipt {
         version: ZK_PROVER_PROCESSING_STATE_VERSION,
         id: loc.id.clone(),
-        processed_ms: now_ms(),
+        processed_ms: crate::utils::unix_now_ms(),
         terminal: false,
         retry_not_before_ms: Some(retry_not_before_ms),
         retry_count,
@@ -2105,6 +2108,7 @@ fn checkpoint_completed_proofs(
         Ok(())
     }
 }
+#[cfg(test)]
 fn process_attachment_once_at(loc: &AttachmentLocation) -> std::io::Result<Option<ProverReport>> {
     ensure_prover_processing_reference(&loc.tenant_key, &loc.id)?;
     if processing_retry_count(&loc.id)?.is_none() {
@@ -2170,7 +2174,7 @@ fn process_attachment_snapshot_at(
     };
     let previous_completed_proofs = completed_proof_cache_for_retry(&loc.id)?;
     let retry_count = previous_retry_count.saturating_add(1);
-    let attempt_started_ms = now_ms();
+    let attempt_started_ms = crate::utils::unix_now_ms();
     let provisional_retry_not_before_ms =
         attempt_started_ms.saturating_add(processing_retry_delay_ms(retry_count));
     let provisional_receipt = ProverProcessingReceipt {
@@ -2325,7 +2329,7 @@ fn process_attachment_snapshot_at(
             std::thread::sleep(Duration::from_millis(delay));
         }
     }
-    let processed_ms = now_ms();
+    let processed_ms = crate::utils::unix_now_ms();
     let latency_ms = processed_ms.saturating_sub(meta.created_ms);
     let processing = ProverReportProcessing {
         terminal: !retryable,
@@ -2374,7 +2378,9 @@ fn process_attachment_snapshot_at(
 struct ScanStats {
     processed_reports: usize,
     bytes_processed: u64,
+    #[cfg(test)]
     duration_ms: u64,
+    #[cfg(test)]
     remaining_pending: u64,
     budget_exhausted: Option<&'static str>,
 }
@@ -2642,11 +2648,14 @@ async fn run_budgeted_scan_with_shutdown(
     Ok(BudgetedScanOutcome::Completed(ScanStats {
         processed_reports,
         bytes_processed,
+        #[cfg(test)]
         duration_ms: start.elapsed().as_millis() as u64,
+        #[cfg(test)]
         remaining_pending: remaining,
         budget_exhausted: budget_reason,
     }))
 }
+#[cfg(test)]
 async fn run_budgeted_scan() -> std::io::Result<ScanStats> {
     match run_budgeted_scan_with_shutdown(None).await? {
         BudgetedScanOutcome::Completed(stats) => Ok(stats),
@@ -2655,6 +2664,7 @@ async fn run_budgeted_scan() -> std::io::Result<ScanStats> {
         }
     }
 }
+#[cfg(test)]
 fn block_on_scan() -> std::io::Result<ScanStats> {
     Handle::try_current().map_or_else(
         |_| {
@@ -2695,6 +2705,7 @@ fn block_on_scan() -> std::io::Result<ScanStats> {
 ///
 /// Returns a storage error when the attachment or prover persistence tree
 /// cannot be enumerated or updated safely.
+#[cfg(test)]
 pub fn scan_once() -> std::io::Result<usize> {
     Ok(block_on_scan()?.processed_reports)
 }
@@ -4007,8 +4018,8 @@ mod tests {
             error: None,
             content_type: "application/x-norito".to_string(),
             size: 128,
-            created_ms: now_ms(),
-            processed_ms: now_ms(),
+            created_ms: crate::utils::unix_now_ms(),
+            processed_ms: crate::utils::unix_now_ms(),
             latency_ms: 0,
             zk1_tags: Some(vec!["PROF".to_string()]),
             backend: Some("halo2/ipa".to_string()),
@@ -4041,7 +4052,13 @@ mod tests {
     fn report_summary_upserts_touch_only_the_matching_shard() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let first = sample_report("a1".repeat(32), true, None, "application/json", now_ms());
+        let first = sample_report(
+            "a1".repeat(32),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         let second = sample_report(
             "a2".repeat(32),
             false,
@@ -4066,7 +4083,13 @@ mod tests {
     }
     #[test]
     fn report_summary_bounds_untrusted_variable_length_fields() {
-        let mut report = sample_report("a3".repeat(32), false, None, "application/json", now_ms());
+        let mut report = sample_report(
+            "a3".repeat(32),
+            false,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         report.error = Some("é".repeat(REPORT_SUMMARY_ERROR_MAX_BYTES));
         report.content_type = "x".repeat(REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES + 1);
         report.zk1_tags = Some(
@@ -4175,7 +4198,7 @@ mod tests {
             ok: true,
             error: None,
             content_type: "application/json".to_string(),
-            processed_ms: now_ms(),
+            processed_ms: crate::utils::unix_now_ms(),
             zk1_tags: None,
         }])
         .expect("persist stale index");
@@ -4187,7 +4210,13 @@ mod tests {
     fn delete_report_files_rejects_invalid_id_and_preserves_existing_reports() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let report = sample_report("f2".repeat(32), true, None, "application/json", now_ms());
+        let report = sample_report(
+            "f2".repeat(32),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         save_report(&report).expect("save report");
         assert_eq!(
             delete_report_files("../bad")
@@ -4207,7 +4236,13 @@ mod tests {
     fn remove_report_summary_ignores_invalid_and_missing_ids() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let report = sample_report("f3".repeat(32), true, None, "application/json", now_ms());
+        let report = sample_report(
+            "f3".repeat(32),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         save_report(&report).expect("save report");
         remove_report_summary("../bad");
         remove_report_summary(&"f4".repeat(32));
@@ -4311,7 +4346,13 @@ mod tests {
     fn load_report_summaries_rebuilds_when_report_summary_is_malformed() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let report = sample_report("bb".repeat(32), true, None, "application/json", now_ms());
+        let report = sample_report(
+            "bb".repeat(32),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         save_report(&report).expect("save report");
         corrupt_report_summary(&report.id);
         let summaries = load_report_summaries();
@@ -4336,7 +4377,13 @@ mod tests {
         init_test_cfg();
         let keep_id = "33".repeat(32);
         let missing_id = "44".repeat(32);
-        let keep = sample_report(keep_id.clone(), true, None, "application/json", now_ms());
+        let keep = sample_report(
+            keep_id.clone(),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         save_report(&keep).expect("save kept report");
         persist_report_summaries_locked(&[
             report_summary_from_report(&keep),
@@ -4362,7 +4409,13 @@ mod tests {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
         let id = "45".repeat(32);
-        let report = sample_report(id.clone(), true, None, "application/json", now_ms());
+        let report = sample_report(
+            id.clone(),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         save_report(&report).expect("save report");
         persist_report_summaries_locked(&[
             ProverReportSummary {
@@ -4406,7 +4459,13 @@ mod tests {
     fn save_report_recovers_when_existing_summary_is_malformed() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let first = sample_report("d1".repeat(32), true, None, "application/json", now_ms());
+        let first = sample_report(
+            "d1".repeat(32),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         let second = sample_report(
             "d2".repeat(32),
             false,
@@ -4433,7 +4492,7 @@ mod tests {
             true,
             None,
             "application/json",
-            now_ms(),
+            crate::utils::unix_now_ms(),
         );
         fs::write(
             report_path_from_sanitized(&id),
@@ -4456,7 +4515,7 @@ mod tests {
             true,
             None,
             "application/json",
-            now_ms(),
+            crate::utils::unix_now_ms(),
         ))
         .expect_err("invalid report id should be rejected");
         assert_eq!(err.kind(), IoErrorKind::InvalidInput);
@@ -4466,7 +4525,13 @@ mod tests {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
         let id = "ca".repeat(32);
-        let first = sample_report(id.clone(), true, None, "application/json", now_ms());
+        let first = sample_report(
+            id.clone(),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         let mut updated = sample_report(
             id.clone(),
             false,
@@ -4511,7 +4576,7 @@ mod tests {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
         let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
-        let now = now_ms();
+        let now = crate::utils::unix_now_ms();
         let fresh_processed_ms = now.saturating_sub(ttl_ms.saturating_div(2));
         let expired = sample_report(
             "10".repeat(32),
@@ -4553,7 +4618,7 @@ mod tests {
             true,
             None,
             "application/json",
-            now_ms().saturating_sub(ttl_ms.saturating_div(2)),
+            crate::utils::unix_now_ms().saturating_sub(ttl_ms.saturating_div(2)),
         );
         save_report(&fresh).expect("save fresh report");
         let deleted = gc_reports_once().expect("garbage collect prover reports");
@@ -4570,7 +4635,13 @@ mod tests {
     fn gc_reports_once_rebuilds_when_report_summary_is_malformed() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
-        let fresh = sample_report("31".repeat(32), true, None, "application/json", now_ms());
+        let fresh = sample_report(
+            "31".repeat(32),
+            true,
+            None,
+            "application/json",
+            crate::utils::unix_now_ms(),
+        );
         save_report(&fresh).expect("save fresh report");
         corrupt_report_summary(&fresh.id);
         let deleted = gc_reports_once().expect("garbage collect prover reports");
@@ -4593,7 +4664,7 @@ mod tests {
             ok: false,
             error: Some("expired".to_string()),
             content_type: "application/x-zk1".to_string(),
-            processed_ms: now_ms().saturating_sub(ttl_ms.saturating_add(10)),
+            processed_ms: crate::utils::unix_now_ms().saturating_sub(ttl_ms.saturating_add(10)),
             zk1_tags: Some(vec!["PROF".to_string()]),
         }])
         .expect("persist stale index");

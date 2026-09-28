@@ -193,7 +193,7 @@ async fn enforce_app_routed_read_http_admission(
     // listener's bounded HTTP-head envelope. Reject an over-P target before a
     // fanout permit can overlap it; for an accepted target, the decoded values
     // only shrink and share the outer P phase with the exact body destination.
-    let reservation = match try_acquire_new_query_fanout_memory(&app) {
+    let reservation = match acquire_app_routed_read_http_memory(&app, accepts_body).await {
         Ok(reservation) => reservation,
         Err(response) => return response,
     };

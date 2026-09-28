@@ -1,32 +1,52 @@
+#[cfg(test)]
 use super::super::super::super::super::{
     ZkAmsMkheErrorV1, global_lookup_statement_v1::global_lookup_topology_digest_v1,
 };
 use super::super::{
     PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1,
-    PHASE23_SIGNED_BLOCKS_PER_WITNESS_V1, phase23_record_position_v1,
-    radix_range_v2::RadixWitnessMaterializationSealV2,
+    PHASE23_SIGNED_BLOCKS_PER_WITNESS_V1,
 };
+#[cfg(test)]
+use super::super::{phase23_record_position_v1, radix_range_v2::RadixWitnessMaterializationSealV2};
+#[cfg(test)]
 use super::{
     Phase23SourceAlgebraPrerequisiteV2, RadixHyraxProofSealV2, validate_prerequisite_record_v2,
 };
+#[cfg(test)]
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
+#[cfg(test)]
 use core::convert::Infallible;
+#[cfg(test)]
 use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
+#[cfg(test)]
 use std::path::PathBuf;
+#[cfg(test)]
 #[path = "global_lookup_source_replay_v1/radix_source_cursor_v2.rs"]
 mod radix_source_cursor_v2;
+#[cfg(test)]
 pub(in super::super) use radix_source_cursor_v2::Phase23GlobalLookupRadixSourceCursorV2;
 #[path = "global_lookup_source_replay_v1/source_openings_v1.rs"]
 mod source_openings_v1;
+#[cfg(test)]
+pub(in super::super) use source_openings_v1::GlobalLookupProofSessionEntropySealV1;
+#[cfg(test)]
+pub(in super::super) use source_openings_v1::QMaskComplementOpeningsV1;
+#[cfg(test)]
+pub(in super::super) use source_openings_v1::source_opening_commitment_for_suite_v1;
+#[cfg(test)]
 pub(in super::super) use source_openings_v1::{
-    CompleteQMaskSOpeningsV1, GlobalLookupProofSessionEntropySealV1, PreparedPlaneOpeningTailV1,
-    QMaskComplementOpeningsV1, QMaskFirstBlockMemoryV1, QMaskSBlockAdmissionV1, QMaskSErrorV1,
-    QMaskSOpeningStreamV1, SampledQMaskSBlockV1, source_opening_commitment_for_suite_v1,
+    CompleteQMaskSOpeningsV1, QMaskSBlockAdmissionV1, QMaskSOpeningStreamV1,
 };
+#[cfg(test)]
 use source_openings_v1::{GlobalLookupSourceOpeningMaterialV1, SourceOpeningAssemblyV1};
+#[cfg(test)]
+pub(in super::super) use source_openings_v1::{
+    PreparedPlaneOpeningTailV1, QMaskFirstBlockMemoryV1, QMaskSErrorV1, SampledQMaskSBlockV1,
+};
+#[cfg(test)]
 const SOURCE_REPLAY_VERSION_V1: u8 = 1;
 const SIGNED_SOURCE_ROLES_V1: usize = 3;
 const SIGNED_SOURCE_COEFFICIENTS_PER_BLOCK_V1: usize = 1_024;
@@ -56,18 +76,25 @@ const COMPACT_SPOOL_PLAINTEXT_BYTES_V1: u64 =
     COMPACT_PLANE_COUNT_V1 as u64 * COMPACT_PLANE_BYTES_V1;
 const TOTAL_REPLAY_IO_BYTES_V1: u64 =
     SOURCE_AUTHENTICATED_READ_BYTES_V1 + COMPACT_SPOOL_WRITE_AND_SEAL_READ_BYTES_V1;
+#[cfg(test)]
 const GLOBAL_LOOKUP_TOPOLOGY_KAT_V1: [u8; 32] = [
     0xe4, 0x31, 0xe5, 0x05, 0x23, 0x17, 0x4f, 0x94, 0x1a, 0x04, 0x04, 0xdf, 0x07, 0x47, 0xf1, 0x8e,
     0x7f, 0x86, 0xfe, 0x84, 0x56, 0xba, 0xdb, 0x8f, 0x8a, 0x7a, 0x70, 0x9e, 0x37, 0x3c, 0x8a, 0x3f,
 ];
+#[cfg(test)]
 const MAPPING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.source-replay.mapping\0";
+#[cfg(test)]
 const CONTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-replay.spool-context\0";
+#[cfg(test)]
 const AUTHENTICATED_READ_SCHEDULE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-replay.authenticated-read-schedule\0";
+#[cfg(test)]
 const RECEIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.source-replay.receipt\0";
+#[cfg(test)]
 const COMPACT_ENCODING_V1: &[u8] =
     b"twos-complement-i8;source-i64-be-high-seven-bytes-exact-sign-extension";
+#[cfg(test)]
 const PLANE_ORDER_V1: &[u8] =
     b"slot=((record*3+role-index)*8+plane);role=r,e0,e1;16-source-blocks-per-plane";
 const AUTHENTICATED_SOURCE_REPLAY_COMPLETE_V1: bool = true;
@@ -99,12 +126,14 @@ const _: () = {
     assert!(!RELEASE_READY_V1);
     assert!(!RELEASE_COMPLETE_V1);
 };
+#[cfg(test)]
 #[repr(u8)]
 enum CompactSourceRoleV1 {
     Ephemeral = 1,
     ErrorZero = 2,
     ErrorOne = 3,
 }
+#[cfg(test)]
 impl CompactSourceRoleV1 {
     const ALL: [Self; SIGNED_SOURCE_ROLES_V1] = [Self::Ephemeral, Self::ErrorZero, Self::ErrorOne];
     const fn index_v1(&self) -> usize {
@@ -124,6 +153,7 @@ impl CompactSourceRoleV1 {
         }
     }
 }
+#[cfg(test)]
 struct CompactPlaneCoordinateV1 {
     slot: u16,
     record: u16,
@@ -131,6 +161,7 @@ struct CompactPlaneCoordinateV1 {
     plane: u8,
     first_source_block: u16,
 }
+#[cfg(test)]
 fn compact_plane_coordinate_v1(slot: usize) -> Result<CompactPlaneCoordinateV1, ZkAmsMkheErrorV1> {
     if slot >= COMPACT_PLANE_COUNT_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -153,6 +184,7 @@ fn compact_plane_coordinate_v1(slot: usize) -> Result<CompactPlaneCoordinateV1, 
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
     })
 }
+#[cfg(test)]
 fn mapping_digest_for_plane_order_v1(order: &[u16]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     if order.len() != COMPACT_PLANE_COUNT_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -223,10 +255,12 @@ fn mapping_digest_for_plane_order_v1(order: &[u16]) -> Result<[u8; 32], ZkAmsMkh
     }
     require_nonzero_v1(hash.finalize())
 }
+#[cfg(test)]
 fn exact_mapping_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let order: [u16; COMPACT_PLANE_COUNT_V1] = core::array::from_fn(|index| index as u16);
     mapping_digest_for_plane_order_v1(&order)
 }
+#[cfg(test)]
 struct SourceReplayContextAxesV1 {
     source_receipt_digest: [u8; 32],
     prerequisite_record_digest: [u8; 32],
@@ -238,6 +272,7 @@ struct SourceReplayContextAxesV1 {
     preflight_digest: [u8; 32],
     aggregate_schedule_digest: [u8; 32],
 }
+#[cfg(test)]
 fn spool_context_digest_v1(
     axes: SourceReplayContextAxesV1,
     plane_mapping_digest: [u8; 32],
@@ -266,6 +301,7 @@ fn spool_context_digest_v1(
     }
     require_nonzero_v1(hash.finalize())
 }
+#[cfg(test)]
 pub(in super::super) enum GlobalLookupSourceReplaySinkSealV1 {
     Production {
         confidential_spool_directory: Infallible,
@@ -273,6 +309,7 @@ pub(in super::super) enum GlobalLookupSourceReplaySinkSealV1 {
     #[cfg(test)]
     TestOnly(PathBuf),
 }
+#[cfg(test)]
 impl GlobalLookupSourceReplaySinkSealV1 {
     fn into_directory_v1(self) -> PathBuf {
         match self {
@@ -284,6 +321,7 @@ impl GlobalLookupSourceReplaySinkSealV1 {
         }
     }
 }
+#[cfg(test)]
 struct SourceReplayLiveV1<R, K, P> {
     prerequisite: Phase23SourceAlgebraPrerequisiteV2<R, K, P>,
     writer: ConfidentialSpoolWriterV1,
@@ -300,17 +338,22 @@ struct SourceReplayLiveV1<R, K, P> {
     next_plane: u8,
     next_output_slot: u16,
 }
+#[cfg(test)]
 struct SourceReplayAssemblyV1<R, K, P> {
     live: Option<SourceReplayLiveV1<R, K, P>>,
 }
+#[cfg(test)]
 struct SourceReplayIngressV1<R, K, P> {
     prerequisite: Option<Phase23SourceAlgebraPrerequisiteV2<R, K, P>>,
     sink: Option<GlobalLookupSourceReplaySinkSealV1>,
 }
+#[cfg(test)]
 #[path = "global_lookup_source_replay_v1/original_source_ingress_v1.rs"]
 mod original_source_ingress_v1;
+#[cfg(test)]
 #[path = "global_lookup_source_replay_v1/prepared_small_signed_source_v1.rs"]
 mod prepared_small_signed_source_v1;
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceReplayAssemblyV1<R, K, P> {
     fn authenticate_next_canonical_block_v1(
         &mut self,
@@ -516,6 +559,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceReplayAssemblyV1<R
         panic!("intentional source replay unwind test");
     }
 }
+#[cfg(test)]
 struct GlobalLookupSourceReplayRecordV1 {
     source_receipt_digest: [u8; 32],
     prerequisite_record_digest: [u8; 32],
@@ -543,6 +587,7 @@ struct GlobalLookupSourceReplayRecordV1 {
 }
 /// Opaque move-only evidence that exact authenticated source replay completed. It cannot enter the
 /// downstream source-opening path until the later radix/quotient/Hyrax authority consumes it.
+#[cfg(test)]
 #[must_use = "dropping this evidence closes the compact source and original prerequisite"]
 pub(in super::super) struct Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P> {
     prerequisite: Phase23SourceAlgebraPrerequisiteV2<R, K, P>,
@@ -550,6 +595,7 @@ pub(in super::super) struct Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P> {
     openings: GlobalLookupSourceOpeningMaterialV1<R>,
     record: GlobalLookupSourceReplayRecordV1,
 }
+#[cfg(test)]
 struct ReplayRadixHyraxBindingV2<R, K, P> {
     replay: Option<Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>>,
     materialization: Option<RadixWitnessMaterializationSealV2>,
@@ -558,6 +604,7 @@ struct ReplayRadixHyraxBindingV2<R, K, P> {
 
 /// Future internal binding requires successful compact materialization as well as replay Evidence
 /// and proof authority. No materialized-owner transition is exposed in this slice.
+#[cfg(test)]
 pub(in super::super) fn bind_radix_hyrax_replay_after_materialization_v2<
     R: crate::vega::MaskedRelaxedRandomSourceV1,
     K,
@@ -575,6 +622,7 @@ pub(in super::super) fn bind_radix_hyrax_replay_after_materialization_v2<
     .finish_radix_hyrax_binding_v2()
 }
 
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> ReplayRadixHyraxBindingV2<R, K, P> {
     fn finish_radix_hyrax_binding_v2(
         mut self,
@@ -624,6 +672,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> ReplayRadixHyraxBindingV
         panic!("intentional replay authority unwind test");
     }
 }
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>
 {
@@ -832,6 +881,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     }
 }
 
+#[cfg(test)]
 fn validate_replay_evidence_v1<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
     replay: &Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -873,6 +923,7 @@ fn validate_replay_evidence_v1<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P
     }
     Ok(())
 }
+#[cfg(test)]
 #[must_use = "dropping this owner closes the proof-bound replay and original prerequisite"]
 pub(in crate::vega::zk_ams::mkhe) struct Phase23GlobalLookupSourceReplayV1<R, K, P> {
     prerequisite: Phase23SourceAlgebraPrerequisiteV2<R, K, P>,
@@ -882,6 +933,7 @@ pub(in crate::vega::zk_ams::mkhe) struct Phase23GlobalLookupSourceReplayV1<R, K,
     _radix_witness_materialization: RadixWitnessMaterializationSealV2,
     _radix_hyrax_proof: RadixHyraxProofSealV2,
 }
+#[cfg(test)]
 fn replay_record_digest_v1(
     record: &GlobalLookupSourceReplayRecordV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -918,6 +970,7 @@ fn replay_record_digest_v1(
     ]);
     require_nonzero_v1(hash.finalize())
 }
+#[cfg(test)]
 fn validate_replay_record_v1(
     record: &GlobalLookupSourceReplayRecordV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -942,6 +995,7 @@ fn validate_replay_record_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_canonical_source_block_v1(bytes: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     if bytes.len() != PHASE23_MAIN_BLOCK_BYTES_V1
         || !bytes
@@ -955,6 +1009,7 @@ fn validate_canonical_source_block_v1(bytes: &[u8]) -> Result<(), ZkAmsMkheError
     }
     Ok(())
 }
+#[cfg(test)]
 fn narrow_signed_source_block_v1(
     role: &CompactSourceRoleV1,
     source: &[u8],
@@ -980,16 +1035,19 @@ fn narrow_signed_source_block_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn map_leaf_error_v1(
     _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
 ) -> ZkAmsMkheErrorV1 {
     ZkAmsMkheErrorV1::InvalidPhase23Fold
 }
+#[cfg(test)]
 fn require_nonzero_v1(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     (digest != [0; 32])
         .then_some(digest)
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
+#[cfg(test)]
 pub(super) fn replay_global_lookup_source_v1<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
     prerequisite: Phase23SourceAlgebraPrerequisiteV2<R, K, P>,
     sink: GlobalLookupSourceReplaySinkSealV1,

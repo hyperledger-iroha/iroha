@@ -42,9 +42,14 @@ struct SaltAnnouncementV1 {
     valid_after: i64,
     valid_until: i64,
     blinded_cid_salt_hex: String,
+    // The remaining fields belong to the exact announcement schema; they are
+    // decoded so malformed announcements are rejected, but not consulted.
+    #[allow(dead_code)]
     emergency_rotation: bool,
+    #[allow(dead_code)]
     #[norito(required)]
     notes: Option<String>,
+    #[allow(dead_code)]
     #[norito(required)]
     signature: Option<String>,
 }

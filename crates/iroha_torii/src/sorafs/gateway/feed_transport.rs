@@ -758,7 +758,7 @@ mod tests {
         header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
     };
     use rcgen::generate_simple_self_signed;
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
     use std::{
         collections::{BTreeMap, BTreeSet},
         io::Cursor,

@@ -17,7 +17,6 @@ default = ["application-model"]
 dev-tools = ["dep:tempfile", "dep:rustix"]
 # Public application model; node-only additions are requested by node crates.
 application-model = ["governance", "pqc", "bls", "gost", "sm"]
-bridge = []
 # Expose deterministic fixture constructors to non-shipping release tooling.
 test-fixtures = ["iroha_crypto/rand"]
 # Expose only the deterministic exact-12 privacy conformance generator and
@@ -29,11 +28,6 @@ bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]
 # Enable API for HTTP requests. Should be activated for HTTP clients
 http = []
-# Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
-#ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import", "iroha_crypto/ffi_import"]
-
-# Expose FFI API for dynamic linking (Internal use only)
-ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_export", "iroha_model_base/ffi_export"]
 # Expose API for mutating structures (Internal use only)
 transparent_api = ["iroha_data_model_derive/transparent_api", "iroha_model_base/transparent_api"]
 # Enable fault injection to simulate malicious data tampering during testing.
@@ -53,11 +47,9 @@ iroha_model_base = { workspace = true }
 iroha_primitives = { workspace = true, features = ["json"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "json"] }
 iroha_macro = { workspace = true }
-error-stack = { workspace = true }
-iroha_version = { workspace = true, features = ["derive", "json"] }
+iroha_version = { workspace = true }
 iroha_schema = { workspace = true }
-iroha_ffi = { workspace = true, optional = true }
-iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", default-features = false, features = ["model-primitives"] }
+iroha_zkp_poseidon = { workspace = true }
 hex = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 
@@ -70,7 +62,6 @@ thiserror = { workspace = true }
 regex = "1.11.0"
 displaydoc = { workspace = true, features = ["std"] }
 getset = { workspace = true }
-derive-where = { workspace = true }
 base64 = { workspace = true, features = ["alloc"] }
 bech32 = { workspace = true }
 nonzero_ext = { workspace = true }
@@ -80,6 +71,8 @@ blake3 = { workspace = true }
 bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
+# Portable current finality verifies the canonical consensus certificate directly.
+iroha_sumeragi = { path = "../iroha_sumeragi" }
 trybuild = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 
@@ -87,9 +80,6 @@ tempfile = { workspace = true, optional = true }
 rustix = { version = "1.1.4", features = ["fs", "process"], optional = true }
 
 [dev-dependencies]
-# Tests pin the on-chain Sumeragi chain-parameter defaults to the consensus core's; the library
-# itself never depends on the core (its finality proof is carried as opaque bytes).
-iroha_sumeragi = { path = "../iroha_sumeragi" }
 # Storage round-trip integration belongs to tests, not the model dependency graph.
 mv = { workspace = true }
 criterion = { workspace = true }
@@ -98,11 +88,6 @@ hex-literal = { workspace = true }
 ivm_abi = { path = "../ivm_abi" }
 
 tempfile = { workspace = true }
-
-#[build-dependencies]
-# NOTE: This crate's build.rs only copies a file and does not require syn.
-# Removing syn from build-dependencies avoids compiling a heavy crate during build
-# which significantly speeds up workspace builds.
 
 [[bench]]
 name = "time_event_filter"

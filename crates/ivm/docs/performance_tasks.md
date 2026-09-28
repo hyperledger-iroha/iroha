@@ -44,18 +44,10 @@ request.
   SHA‑NI/scalar fallback) via a single padded block, speeding up CPU paths and
   reducing the need to offload medium trees to GPU.
 
-## Scheduling and Parallel Execution
-
-- **Dynamic thread pool sizing** – the scheduler now tracks the average number
-  of tasks over the last few blocks. If the workload exceeds four times the
-  current pool size it doubles the number of threads up to a configurable
-  maximum. When the workload drops below half the pool size it scales back down
-  but never below the configured minimum.
-
 ## Benchmarking
 
-- Extend the Criterion benchmarks under `benches/` to cover vector helpers,
-  memory commits and scheduler throughput.
+- Extend the Criterion benchmarks under `benches/` to cover vector helpers
+  and memory commits.
 - Automate benchmark execution in CI and track results over time.
 
 ## Field Arithmetic Backends

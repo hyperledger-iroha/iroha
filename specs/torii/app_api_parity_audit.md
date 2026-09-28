@@ -113,7 +113,7 @@ must return a non-empty, non-zero detached signature no larger than the V1
 ### Endpoint Inventory
 
 #### Account permissions (`/v1/accounts/{id}/permissions`) — Covered
-- Handler: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
+- Handler: `handle_v1_account_permissions_with_visibility` (`crates/iroha_torii/src/routing.rs`).
 - DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
 - Tests: `crates/iroha_torii/tests/accounts_endpoints.rs:126` and `crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`.
@@ -204,7 +204,7 @@ must return a non-empty, non-zero detached signature no larger than the V1
 - Notes: Returns `503` when the bridge is disabled or credentials are missing; applies per-account rate limiting and enforces `max_topics_per_device`.
 
 #### Kaigi relay telemetry — Covered
-- Handlers: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
+- Handlers: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail_with_policy`,
   `handle_v1_kaigi_relays_health`, `handle_v1_kaigi_relays_sse`
   (`crates/iroha_torii/src/routing.rs:14510-14787`).
 - DTOs: `KaigiRelaySummaryDto`, `KaigiRelaySummaryListDto`,

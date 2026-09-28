@@ -5,7 +5,6 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use flate2::{Compression, write::GzEncoder};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    io::Write as _,
     sync::{
         Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering as TestAtomicOrdering},

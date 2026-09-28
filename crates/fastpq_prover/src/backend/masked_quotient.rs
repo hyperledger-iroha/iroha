@@ -12,25 +12,35 @@
 //! The quotient plan also accepts validated complete unmasked coefficients; both
 //! callers use the same full polynomial evaluation and exact division.
 
+//! Only the shared resource arithmetic ([`transform_work`], [`checked_add`] and
+//! [`checked_mul`]) is compiled into production builds; the masked trace and
+//! quotient plans stay test-only until a production proof registers them.
+
+#[cfg(test)]
 use rayon::prelude::*;
 
 #[cfg(test)]
-use super::coefficient_masking::{MaskingLimits, MaskingPlan, MaskingShape};
 use super::{
     air_degree::{AirDegreeBounds, SLOT_COUNT},
+    coefficient_masking::{MaskingLimits, MaskingPlan, MaskingShape},
     compact_transfer_air::{CompactTransferAir, PolynomialAirEvaluator, PreparedPolynomialAir},
     polynomial_division::{ExactQuotient, VanishingDivisionPlan},
     polynomial_field::PolynomialField,
     polynomial_transform::{PolynomialDomain, PolynomialLanes, reserved, validate_coefficients},
     secret_polynomial::SecretPolynomial,
 };
+#[cfg(test)]
 use crate::gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT};
-use crate::{Error, Result, field::GoldilocksFp4V1 as F};
+#[cfg(test)]
+use crate::field::GoldilocksFp4V1 as F;
+use crate::{Error, Result};
 
 /// Fixed contiguous job count; admission and output order do not depend on pool size.
+#[cfg(test)]
 pub(super) const NUMERATOR_JOBS: usize = 32;
 
 /// Explicit arithmetic resource policy; this has no production default or wire representation.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MaskedQuotientLimits {
     /// Simultaneous declared payload bytes, including borrowed inputs for the active phase.
@@ -40,10 +50,8 @@ pub(super) struct MaskedQuotientLimits {
     /// Maximum exact transform extent, also capped by the existing source root.
     pub(super) max_interpolation_rows: usize,
     /// Maximum exact private mask coefficient extent per column.
-    #[cfg(test)]
     pub(super) max_mask_coefficients: usize,
     /// Maximum exact masked coefficient extent per column, including supplied padding.
-    #[cfg(test)]
     pub(super) max_masked_coefficients: usize,
 }
 
@@ -167,12 +175,14 @@ impl PreparedMaskedTrace {
 }
 
 /// Complete validated coefficient view shared by masked and unmasked callers.
+#[cfg(test)]
 struct CoefficientTrace<'a> {
     columns: [&'a [F]; COLUMN_COUNT],
     degree_bounds: [usize; COLUMN_COUNT],
     coefficient_cells: usize,
 }
 
+#[cfg(test)]
 impl<'a> CoefficientTrace<'a> {
     fn new(columns: &[&'a [F]], degree_bounds: &[usize]) -> Result<Self> {
         let columns: [&[F]; COLUMN_COUNT] = columns
@@ -218,6 +228,7 @@ impl<'a> CoefficientTrace<'a> {
 }
 
 /// Borrow-bound shared full numerator plan, with no value-bearing Debug representation.
+#[cfg(test)]
 pub(super) struct MaskedQuotientPlan<'a> {
     air: &'a CompactTransferAir,
     trace: CoefficientTrace<'a>,
@@ -226,13 +237,12 @@ pub(super) struct MaskedQuotientPlan<'a> {
     degrees: AirDegreeBounds,
     division: VanishingDivisionPlan,
     payload_bytes: usize,
-    #[cfg(test)]
     work_units: usize,
 }
 
+#[cfg(test)]
 impl<'a> MaskedQuotientPlan<'a> {
     /// Bind actual AIR/trace owners and explicit arithmetic geometry before allocating LDEs.
-    #[cfg(test)]
     pub(super) fn new(
         air: &'a CompactTransferAir,
         trace: &'a PreparedMaskedTrace,
@@ -365,7 +375,6 @@ impl<'a> MaskedQuotientPlan<'a> {
             degrees,
             division,
             payload_bytes,
-            #[cfg(test)]
             work_units,
         })
     }
@@ -376,7 +385,6 @@ impl<'a> MaskedQuotientPlan<'a> {
     }
 
     /// Declared structural work including cleanup of private owned buffers.
-    #[cfg(test)]
     pub(super) const fn work_units(&self) -> usize {
         self.work_units
     }
@@ -438,22 +446,17 @@ impl<'a> MaskedQuotientPlan<'a> {
             "masked_full_numerator_coefficients",
         )?;
         let quotient = self.division.divide(&numerator)?;
-        // Production retains only the checked quotient; erase the full numerator now.
-        #[cfg(not(test))]
-        drop(numerator);
         Ok(MaskedAirQuotient {
-            #[cfg(test)]
             numerator,
             quotient,
-            #[cfg(test)]
             domain: self.domain,
-            #[cfg(test)]
             degrees: self.degrees,
         })
     }
 }
 
 /// Exact private buffers for one fixed contiguous numerator range.
+#[cfg(test)]
 struct NumeratorScratch<'cache, 'source> {
     evaluator: PolynomialAirEvaluator<'cache, 'source>,
     current: SecretPolynomial<F>,
@@ -461,6 +464,7 @@ struct NumeratorScratch<'cache, 'source> {
     residues: SecretPolynomial<F>,
 }
 
+#[cfg(test)]
 impl<'cache, 'source> NumeratorScratch<'cache, 'source> {
     fn new(prepared: &'cache PreparedPolynomialAir<'source>) -> Result<Self> {
         Ok(Self {
@@ -476,6 +480,7 @@ impl<'cache, 'source> NumeratorScratch<'cache, 'source> {
 /// Results are collected by range index, then checked serially, preserving the
 /// earliest row error independently of Rayon scheduling. All jobs join before
 /// returning; the caller's guarded output and scratch erase on any failure.
+#[cfg(test)]
 pub(super) fn evaluate_parallel_rows<S: Send>(
     values: &mut [F],
     workspaces: &mut [S],
@@ -506,26 +511,19 @@ pub(super) fn evaluate_parallel_rows<S: Send>(
     Ok(())
 }
 
-/// Owned exact quotient, with full numerator retained only for independent test checks.
+/// Owned exact quotient, with the full numerator retained for independent checks.
 /// Private storage has no Debug or unguarded raw buffer transfer.
+#[cfg(test)]
 pub(super) struct MaskedAirQuotient {
-    #[cfg(test)]
     numerator: SecretPolynomial<F>,
     quotient: ExactQuotient,
-    #[cfg(test)]
     domain: PolynomialDomain,
-    #[cfg(test)]
     degrees: AirDegreeBounds,
 }
 
+#[cfg(test)]
 impl MaskedAirQuotient {
-    /// Transfer the guarded exact quotient, dropping any test-only numerator.
-    pub(super) fn into_quotient(self) -> ExactQuotient {
-        self.quotient
-    }
-
     /// Borrow full numerator coefficients including required high zero padding.
-    #[cfg(test)]
     pub(super) fn numerator(&self) -> &[F] {
         &self.numerator
     }
@@ -534,12 +532,10 @@ impl MaskedAirQuotient {
         &self.quotient
     }
     /// Public arithmetic domain retained for reproducible independent checking.
-    #[cfg(test)]
     pub(super) const fn domain(&self) -> PolynomialDomain {
         self.domain
     }
     /// Source-derived full polynomial degree obligations, not a PCS proof.
-    #[cfg(test)]
     pub(super) fn degrees(&self) -> &AirDegreeBounds {
         &self.degrees
     }
@@ -564,6 +560,7 @@ pub(super) fn checked_mul(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right)
         .ok_or_else(|| invalid("masked quotient resource count overflow"))
 }
+#[cfg(test)]
 fn check_resources(limits: MaskedQuotientLimits, bytes: usize, work: usize) -> Result<()> {
     for (limit, actual, max) in [
         (

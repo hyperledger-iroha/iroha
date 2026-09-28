@@ -1,7 +1,7 @@
 use super::execution_context::BlockExecutionContextBundle;
 use crate::{
     confidential::{ConfidentialFeatureDigest, DEFAULT_CONFIDENTIAL_FEATURE_DIGEST},
-    consensus::NposConsensusEffects,
+    consensus::{FinalizedGlobalThresholdBeaconPulseV1, NposConsensusEffects},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -37,7 +37,6 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[norito(deny_unknown_fields)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::block::header::model::BlockHeader")]
@@ -84,6 +83,10 @@ mod model {
         #[getset(get_copy = "pub", set = "pub")]
         #[norito(required)]
         pub execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
+        /// Hash of the current threshold beacon pulse carried by this block.
+        #[getset(get_copy = "pub", set = "pub")]
+        #[norito(required)]
+        pub global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
     }
     /// The validator index and its corresponding signature on the block header.
     #[derive(
@@ -162,6 +165,8 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Confidential feature digest.
         pub Option<ConfidentialFeatureDigestWire>,
+        /// Current threshold beacon pulse hash.
+        pub Option<[u8; 32]>,
     );
     // This alias is the existing nested V1 payload tuple, not a new wire frame.
     type BlockHeaderPayloadTuple = (
@@ -177,6 +182,7 @@ pub mod wire {
             Option<[u8; 32]>,
             Option<[u8; 32]>,
             Option<ConfidentialFeatureDigestWire>,
+            Option<[u8; 32]>,
         ),
     );
     impl ncore::SerializePayload for BlockHeaderWire {
@@ -190,7 +196,7 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                (self.8, self.9, self.10),
+                (self.8, self.9, self.10, self.11),
             );
             <BlockHeaderPayloadTuple as ncore::SerializePayload>::serialize(&tuple, writer)
         }
@@ -204,7 +210,7 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                (self.8, self.9, self.10),
+                (self.8, self.9, self.10, self.11),
             );
             <BlockHeaderPayloadTuple as ncore::SerializePayload>::encoded_len_hint(&tuple)
         }
@@ -218,7 +224,7 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                (self.8, self.9, self.10),
+                (self.8, self.9, self.10, self.11),
             );
             <BlockHeaderPayloadTuple as ncore::SerializePayload>::encoded_len_exact(&tuple)
         }
@@ -231,7 +237,7 @@ pub mod wire {
                 );
             Self(
                 tuple.0, tuple.1, tuple.2, tuple.3, tuple.4, tuple.5, tuple.6, tuple.7, tuple.8.0,
-                tuple.8.1, tuple.8.2,
+                tuple.8.1, tuple.8.2, tuple.8.3,
             )
         }
     }
@@ -428,6 +434,7 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
             opt_hash_to_bytes(b.npos_effects_hash),
             opt_hash_to_bytes(b.execution_context_hash),
             digest_to_wire(b.confidential_features),
+            opt_hash_to_bytes(b.global_beacon_pulse_hash),
         )
     }
 }
@@ -454,6 +461,9 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
         header.set_npos_effects_hash(opt_hash_from_bytes::<NposConsensusEffects>(w.8));
         header.set_execution_context_hash(opt_hash_from_bytes::<BlockExecutionContextBundle>(w.9));
         header.set_confidential_features(digest_from_wire(w.10));
+        header.set_global_beacon_pulse_hash(opt_hash_from_bytes::<
+            FinalizedGlobalThresholdBeaconPulseV1,
+        >(w.11));
         header
     }
 }
@@ -494,6 +504,7 @@ struct BlockHeaderConsensusProjectionV1 {
     da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
     da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
     npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
+    global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
     execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     creation_time_ms: u64,
     view_change_index: u64,
@@ -512,6 +523,7 @@ impl From<&BlockHeader> for BlockHeaderConsensusProjectionV1 {
             da_commitments_hash,
             da_pin_intents_hash,
             npos_effects_hash,
+            global_beacon_pulse_hash,
             execution_context_hash,
             creation_time_ms,
             view_change_index,
@@ -526,6 +538,7 @@ impl From<&BlockHeader> for BlockHeaderConsensusProjectionV1 {
             da_commitments_hash,
             da_pin_intents_hash,
             npos_effects_hash,
+            global_beacon_pulse_hash,
             execution_context_hash,
             creation_time_ms,
             view_change_index,
@@ -551,6 +564,7 @@ impl BlockHeader {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
+            global_beacon_pulse_hash: None,
             execution_context_hash: None,
             creation_time_ms,
             view_change_index,
@@ -762,6 +776,7 @@ mod tests {
             "da_commitments_hash",
             "da_pin_intents_hash",
             "npos_effects_hash",
+            "global_beacon_pulse_hash",
             "confidential_features",
             "execution_context_hash",
         ];
@@ -800,6 +815,11 @@ mod tests {
         header.set_da_pin_intents_hash(Some(typed_hash::<DaPinIntentBundle>(0x66)));
         header.set_npos_effects_hash(Some(typed_hash::<NposConsensusEffects>(0x88)));
         header.set_execution_context_hash(Some(typed_hash::<BlockExecutionContextBundle>(0x99)));
+        let before_pulse = header.hash();
+        header.set_global_beacon_pulse_hash(Some(typed_hash::<
+            FinalizedGlobalThresholdBeaconPulseV1,
+        >(0xAA)));
+        assert_ne!(header.hash(), before_pulse);
 
         let decoded_wire = BlockHeader::from(wire::BlockHeaderWire::from(header));
         assert_eq!(decoded_wire, header);
@@ -1037,6 +1057,7 @@ mod tests {
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
+            global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -1049,6 +1070,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
+            global_beacon_pulse_hash: None,
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -1070,6 +1092,7 @@ mod tests {
             da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -1082,6 +1105,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            global_beacon_pulse_hash: None,
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -1108,6 +1132,7 @@ mod tests {
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             retired_roster_slot: Option<HashOf<RetiredLayoutTag>>,
             npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
+            global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -1125,6 +1150,7 @@ mod tests {
                 [0x91; Hash::LENGTH],
             ))),
             npos_effects_hash: None,
+            global_beacon_pulse_hash: None,
             creation_time_ms: 123,
             view_change_index: 2,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),

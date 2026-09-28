@@ -12,10 +12,7 @@ use crate::{
     json_macros::{JsonDeserialize, JsonSerialize},
     routing::DataspaceReadVisibility,
 };
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -25,16 +22,14 @@ use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     domain::Domain,
     isi::{
-        self, CustomInstruction, ExecuteTrigger, GrantBox, Instruction as IsiInstruction,
-        InstructionBox, Log, MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox,
-        RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
-        UnregisterBox, Upgrade,
+        self, CustomInstruction, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox,
+        RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox, SetAssetKeyValue,
+        SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox, UnregisterBox, Upgrade,
         kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         mint_burn::BurnBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
     nft::{NftEntry, NftId},
-    peer::Peer,
     rwa::RwaEntry,
     transaction::{
         error::TransactionRejectionReason,
@@ -784,6 +779,7 @@ pub(crate) struct ExplorerBlockDto {
     pub transactions_total: u32,
 }
 impl ExplorerBlockDto {
+    #[cfg(test)]
     pub(crate) fn from_block(block: &SignedBlock) -> Self {
         Self::from_block_with_visibility(block, |_| true)
     }
@@ -1088,6 +1084,7 @@ fn instruction_display_kind(instruction: &InstructionBox, kind: ExplorerInstruct
     }
     variant.to_string()
 }
+#[cfg(test)]
 pub(crate) fn instruction_dto_with_kind(
     tx: &SignedTransaction,
     block_height: u64,
@@ -1559,6 +1556,7 @@ fn ttl_to_dto(ttl: Option<Duration>) -> Option<ExplorerDurationDto> {
         ms: duration_ms(value),
     })
 }
+#[cfg(test)]
 pub(crate) fn transaction_summary_dto(
     tx: &SignedTransaction,
     block_height: u64,
@@ -1581,6 +1579,7 @@ pub(crate) fn transaction_summary_dto_with_hash(
         status: transaction_status_label(result).to_string(),
     }
 }
+#[cfg(test)]
 pub(crate) fn transaction_detail_dto(
     tx: &SignedTransaction,
     block_height: u64,
@@ -2592,7 +2591,7 @@ mod tests {
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
-    use std::{iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration};
+    use std::{iter, num::NonZeroU32, time::Duration as StdDuration};
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xA1; iroha_crypto::Hash::LENGTH]),

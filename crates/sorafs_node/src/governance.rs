@@ -7,6 +7,7 @@ use crate::{
     PdpRejectionReasonV1, PdpTerminalDecisionV1, PrivacyPublicationAuthorizationV1,
     governance_rooted_fs,
 };
+#[cfg(test)]
 use axum::http::{Request, Version, header, request::Parts};
 use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use hex::ToHex;
@@ -963,6 +964,7 @@ impl GovernanceDagCanonicalRequestV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GovernanceDagAuthenticationHeaderDispositionV1 {
     Reject,
+    #[cfg(test)]
     Retain,
 }
 /// Build one canonical outbound descriptor from a complete HTTP request.
@@ -1008,10 +1010,12 @@ pub fn canonicalize_governance_dag_outbound_http_request_v1<'a>(
 /// removes the public authentication-envelope headers. Its returned URI is the canonical
 /// origin-form path and query, so a backend cannot reinterpret a matching absolute-form authority.
 #[derive(Debug)]
+#[cfg(test)]
 pub struct GovernanceDagVerifiedHttpRequestV1<B> {
     request: Request<B>,
     descriptor: GovernanceDagCanonicalRequestV1,
 }
+#[cfg(test)]
 impl<B> GovernanceDagVerifiedHttpRequestV1<B> {
     /// Exact canonical descriptor authenticated for this request.
     #[must_use]
@@ -1042,12 +1046,14 @@ impl<B> GovernanceDagVerifiedHttpRequestV1<B> {
 /// qualified ingress set. The concrete process-local cache in this crate is suitable only for
 /// isolated validation and tests and cannot support a production ingress qualification.
 #[derive(Debug)]
+#[cfg(test)]
 pub struct GovernanceDagHttpRequestReceiverV1<'a> {
     endpoint: Url,
     binding: GovernanceDagRequestIngressBindingV1,
     policy: GovernanceDagRequestAuthenticationPolicyV1,
     replay_store: &'a mut dyn GovernanceDagRequestAuthenticationReplayStoreV1,
 }
+#[cfg(test)]
 impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
     /// Bind one exact endpoint policy and replay store.
     ///
@@ -1146,6 +1152,7 @@ impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
         })
     }
 }
+#[cfg(test)]
 fn canonical_governance_dag_request_url_from_parts_v1(
     endpoint: &Url,
     scope: GovernanceDagAuthenticationScope,
@@ -1224,6 +1231,7 @@ fn canonical_governance_dag_request_url_from_parts_v1(
     }
     Ok(canonical_url)
 }
+#[cfg(test)]
 fn governance_dag_request_authority_origin_v1(
     endpoint: &Url,
     authority: &str,
@@ -1719,7 +1727,7 @@ impl GovernanceDagRequestAuthenticationEnvelopeV1 {
     /// Construct one structurally canonical signed envelope.
     ///
     /// Freshness, pinned-key equality, request equality, replay, and signature verification are
-    /// enforced by [`verify_governance_dag_request_authentication_v1`].
+    /// enforced by `verify_governance_dag_request_authentication_v1`.
     ///
     /// # Errors
     ///
@@ -1857,7 +1865,7 @@ pub fn governance_dag_request_authentication_headers_v1(
 /// Ordinary HTTP headers are ignored. Every name using the Governance DAG authentication prefix is
 /// part of this hard-cut contract: aliases, extensions, case variants, duplicates, and missing
 /// fields are rejected. Parsing alone grants no authority; receivers must pass the result to
-/// [`verify_governance_dag_request_authentication_v1`] before dispatch.
+/// `verify_governance_dag_request_authentication_v1` before dispatch.
 ///
 /// # Errors
 ///
@@ -1930,6 +1938,7 @@ pub fn parse_governance_dag_request_authentication_headers_v1<'a>(
 ///
 /// Returns a stable, payload-free rejection and leaves the replay cache
 /// unchanged for every failure preceding nonce consumption.
+#[cfg(test)]
 pub fn verify_governance_dag_request_authentication_v1(
     request: &GovernanceDagCanonicalRequestV1,
     envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
@@ -1954,7 +1963,7 @@ pub fn verify_governance_dag_request_authentication_v1(
 /// Verify every request-auth property except receiver-side nonce consumption.
 ///
 /// This exists only for the outbound service's non-authoritative signer sanity check. An ingress
-/// receiver must call [`verify_governance_dag_request_authentication_v1`] so the shared sealed
+/// receiver must call `verify_governance_dag_request_authentication_v1` so the shared sealed
 /// replay store is atomically consumed before backend dispatch.
 pub(crate) fn verify_governance_dag_request_authentication_without_replay_v1(
     request: &GovernanceDagCanonicalRequestV1,

@@ -6,8 +6,10 @@
 //! (SM80+) to compile the kernels. When unavailable, all entry points return
 //! [`CudaBackendError::Unavailable`]. The explicit six-lane frame API propagates
 //! failure and never substitutes CPU execution.
-use crate::bn254::{self, BN254_LIMBS};
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(any(test, feature = "dev-tools"))]
+use crate::bn254;
+use crate::bn254::BN254_LIMBS;
+#[cfg(all(test, feature = "fastpq-gpu"))]
 use crate::trace::PoseidonColumnSlice;
 #[cfg(feature = "fastpq-gpu")]
 use crate::{
@@ -34,6 +36,17 @@ pub enum CudaBackendError {
         got: u32,
     },
     /// Underlying CUDA call returned an error code.
+    #[cfg_attr(
+        all(
+            not(test),
+            not(feature = "dev-tools"),
+            any(not(feature = "fastpq-gpu"), fastpq_cuda_unavailable)
+        ),
+        expect(
+            dead_code,
+            reason = "only the linked CUDA runtime reports raw error codes"
+        )
+    )]
     Cuda {
         /// Raw CUDA error code forwarded from the runtime.
         code: u32,
@@ -52,9 +65,9 @@ impl fmt::Display for CudaBackendError {
     }
 }
 impl std::error::Error for CudaBackendError {}
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 const POSEIDON_STATE_WIDTH: usize = 3;
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 const POSEIDON_RATE: usize = 2;
 #[cfg(feature = "fastpq-gpu")]
 #[repr(C)]
@@ -130,6 +143,7 @@ impl Drop for PendingCudaDispatch {
 mod native {
     use super::{Bn254PoseidonCudaSlice, CudaBackendError, Result};
     use crate::bn254::BN254_LIMBS;
+    #[cfg(test)]
     use crate::trace::PoseidonColumnSlice;
     use core::{ffi::c_void, ptr};
     #[link(name = "fastpq_cuda", kind = "static")]
@@ -166,6 +180,7 @@ mod native {
             out: *mut u64,
             out_handle: *mut *mut c_void,
         ) -> i32;
+        #[cfg(any(test, feature = "dev-tools"))]
         fn fastpq_bn254_fft_cuda(
             elements: *mut u64,
             column_count: usize,
@@ -173,6 +188,7 @@ mod native {
             stage_twiddles: *const u64,
             stage_twiddle_len: usize,
         ) -> i32;
+        #[cfg(any(test, feature = "dev-tools"))]
         fn fastpq_bn254_lde_cuda(
             coeffs: *const u64,
             column_count: usize,
@@ -193,6 +209,7 @@ mod native {
             output: *mut u64,
         ) -> i32;
         fn fastpq_poseidon_permute_cuda(states: *mut u64, state_count: usize) -> i32;
+        #[cfg(test)]
         fn fastpq_poseidon_hash_columns_cuda(
             payloads: *const u64,
             slices: *const PoseidonColumnSlice,
@@ -309,6 +326,7 @@ mod native {
         map_cuda(code)?;
         Ok(handle)
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub(super) fn bn254_fft(
         elements: &mut [u64],
         column_count: usize,
@@ -334,6 +352,7 @@ mod native {
         };
         map_cuda(code)
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub(super) fn bn254_lde(
         coeffs: &[u64],
         column_count: usize,
@@ -370,6 +389,7 @@ mod native {
         let code = unsafe { fastpq_poseidon_permute_cuda(states.as_mut_ptr(), state_count) };
         map_cuda(code)
     }
+    #[cfg(test)]
     pub(super) fn poseidon_hash_columns(
         payloads: &[u64],
         slices: &[PoseidonColumnSlice],
@@ -440,8 +460,9 @@ mod native {
     #[cfg(feature = "fastpq-gpu")]
     use super::Bn254PoseidonCudaSlice;
     use super::{CudaBackendError, Result};
+    #[cfg(any(test, feature = "dev-tools"))]
     use crate::bn254::BN254_LIMBS;
-    #[cfg(feature = "fastpq-gpu")]
+    #[cfg(all(test, feature = "fastpq-gpu"))]
     use crate::trace::PoseidonColumnSlice;
     #[cfg(feature = "fastpq-gpu")]
     use core::ffi::c_void;
@@ -491,6 +512,7 @@ mod native {
     ) -> Result<*mut c_void> {
         Err(CudaBackendError::Unavailable)
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub(super) fn bn254_fft(
         _elements: &mut [u64],
         _column_count: usize,
@@ -499,6 +521,7 @@ mod native {
     ) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub(super) fn bn254_lde(
         _coeffs: &[u64],
         _column_count: usize,
@@ -514,7 +537,7 @@ mod native {
     pub(super) fn poseidon_permute(_states: &mut [u64], _state_count: usize) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
-    #[cfg(feature = "fastpq-gpu")]
+    #[cfg(all(test, feature = "fastpq-gpu"))]
     pub(super) fn poseidon_hash_columns(
         _payloads: &[u64],
         _slices: &[PoseidonColumnSlice],
@@ -574,6 +597,7 @@ fn validate_dense(buffer_len: usize, column_count: usize, log_size: u32) -> Resu
     }
     Ok((extent, expected))
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn validate_bn254_dense(
     buffer_len: usize,
     column_count: usize,
@@ -662,6 +686,7 @@ pub(crate) fn fastpq_lde_submit(
         out.len(),
     )
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Safe wrapper for the BN254 forward FFT (column-major canonical limbs).
 ///
 /// # Errors
@@ -675,6 +700,7 @@ pub fn fastpq_bn254_fft(elements: &mut [u64], column_count: usize, log_size: u32
     let twiddles = bn254::stage_twiddles_limbs(log_size).map_err(CudaBackendError::InvalidInput)?;
     native::bn254_fft(elements, column_count, log_size, &twiddles)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 /// Safe wrapper for the BN254 coset LDE (column-major canonical limbs).
 ///
 /// # Errors
@@ -746,7 +772,7 @@ pub fn fastpq_poseidon_permute(states: &mut [u64]) -> Result<()> {
     let state_count = validate_poseidon_states(states.len())?;
     native::poseidon_permute(states, state_count)
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 fn checked_poseidon_slice_end(offset: usize, len: usize) -> Result<usize> {
     offset
         .checked_add(len)
@@ -754,7 +780,7 @@ fn checked_poseidon_slice_end(offset: usize, len: usize) -> Result<usize> {
             "Poseidon column slice range overflows",
         ))
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 fn validate_poseidon_column_layout(
     payload_len: usize,
     slices: &[PoseidonColumnSlice],
@@ -811,7 +837,7 @@ fn validate_poseidon_column_layout(
     }
     Ok(())
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 /// Validate and dispatch a flattened batch of domain-separated Poseidon columns.
 ///
 /// # Errors

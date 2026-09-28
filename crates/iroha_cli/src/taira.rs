@@ -4412,7 +4412,7 @@ fn prepare_final_canary_operation(
         executable,
         fee_payment.clone(),
         metadata,
-        TransactionAdmissionIntent::QueuePlanSynced,
+        TransactionAdmissionIntent::Ordinary,
         binding.execution_expires_at_unix_ms,
     )
     .wrap_err("failed to quote and sign exact Taira canary transaction")?;
@@ -4863,8 +4863,8 @@ fn validate_prepared_transaction_closure(
     }
     match operation {
         PreparedTransactionOperationV1::FinalCanary(operation) => {
-            if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-                eyre::bail!("prepared final canary requires QueuePlanSynced admission");
+            if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
+                eyre::bail!("prepared final canary requires Ordinary admission");
             }
             let expected_message = prepared_canary_message(&operation.binding)?;
             let expected_semantic = prepared_semantic_sha256(
@@ -9195,7 +9195,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_final_canary_requires_signed_queue_plan_admission() {
+    fn prepared_final_canary_requires_signed_current_admission() {
         use iroha::data_model::transaction::TransactionBuilder;
 
         let _chain = ChainDiscriminantGuard::enter(0x02f1);
@@ -9263,14 +9263,14 @@ mod tests {
                 &network_id,
                 transaction.authority(),
             );
-            if intent == TransactionAdmissionIntent::QueuePlanSynced {
+            if intent == TransactionAdmissionIntent::Ordinary {
                 assert_eq!(result.unwrap(), transaction);
             } else {
                 assert!(
                     result
                         .unwrap_err()
                         .to_string()
-                        .contains("QueuePlanSynced admission")
+                        .contains("Ordinary admission")
                 );
             }
         }

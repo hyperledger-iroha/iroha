@@ -22,7 +22,7 @@ iroha_derive = { workspace = true }
 syn = { workspace = true, features = ["default", "full", "visit"] }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
-manyhow = { workspace = true, features = ["darling"] }
+manyhow = { workspace = true }
 darling = { workspace = true }
 trybuild = { workspace = true, optional = true }
 

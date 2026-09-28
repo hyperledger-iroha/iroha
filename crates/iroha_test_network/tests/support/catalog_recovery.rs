@@ -19,6 +19,8 @@ pub(crate) struct CatalogFixture {
     pub peers: [CatalogPeer; 4],
     pub writer: Client,
     pub genesis: ValidatedGenesisBundle,
+    /// Independently selected chain label from the validated genesis manifest.
+    pub chain_id: String,
     /// Exact immutable configured dataspace catalog, before runtime additions.
     pub baseline_dataspaces: DataSpaceCatalog,
     /// Exact expected effective lane catalog at the beginning of this scenario.
@@ -120,28 +122,29 @@ fn finality_from_genesis(fixture: &CatalogFixture) -> Result<FixtureFinality> {
                     genesis_hash,
                     peer: peer.peer_id.clone(),
                     verifier: None,
-                    proofs: BTreeMap::new(),
+                    verified: BTreeMap::new(),
                 })),
             )
         })
         .collect();
-    let (roster, validator_pops) = validators
+    ensure!(
+        fixture.genesis.consensus_metadata().mode
+            == iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
+        "catalog fixture requires signed NPoS genesis authority"
+    );
+    let validators = validators
         .into_iter()
-        .map(|(validator, pop)| {
-            (
-                ValidatorPower {
-                    validator,
-                    power: 1,
-                },
-                pop,
-            )
+        .map(|(peer, proof_of_possession)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession,
         })
-        .unzip();
+        .collect();
     Ok(FixtureFinality {
         network_id,
         genesis_hash,
-        roster,
-        validator_pops,
+        trusted_genesis: fixture.genesis.block().clone(),
+        chain_id: fixture.chain_id.clone(),
+        validators,
         peers,
     })
 }
@@ -347,7 +350,7 @@ async fn submit_on_route(
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary),
     )?;
     let quote = account
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })

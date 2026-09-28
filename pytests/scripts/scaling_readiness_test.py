@@ -27,7 +27,9 @@ def test_fixed_four_peer_commands_original_descriptors_receipts_and_required_loa
             '--config-source-path', str(role.client_config), '--output-format', 'json',
             'bridge', 'genesis-readiness', '--challenge', receipt.challenge,
             '--node-public-key', role.node_public_key, '--genesis-hash', c.inputs.genesis_hash[5:69],
-            '--context-id', c.inputs.context_id[5:69], '--request-timeout-ms', '60000')
+            '--signed-genesis', str(c.inputs._directory / 'genesis.signed.nrt'),
+            '--genesis-manifest', str(c.inputs._directory / 'genesis.json'),
+            '--genesis-public-key', c.inputs.genesis_public_key, '--request-timeout-ms', '60000')
         assert kwargs == dict(stdin=command.subprocess.DEVNULL, stdout=command.subprocess.PIPE,
             stderr=command.subprocess.PIPE, cwd='/', env={}, close_fds=True, pass_fds=(fd,),
             shell=False, start_new_session=False, bufsize=0)
@@ -70,7 +72,7 @@ def test_readiness_step_must_match_original_trial_and_roles_before_spawn(ready_s
 @pytest.mark.parametrize('reason', ['consensus_uninitialized', 'genesis_uncommitted'])
 def test_only_typed_pending_retries_with_fresh_challenge_original_deadline(ready_setup, reason):
     c = ready_setup
-    c.commands.reports = [dict(state='pending', reason=reason, attestation_norito_base64=None)]
+    c.commands.reports = [dict(state='pending', reason=reason, attestation_norito_base64=None, genesis_execution_hash=None)]
     _, receipts = complete(c)
     assert len(c.commands.calls) == 5 and len(receipts) == 4
     assert [argv[-1] for argv, _ in c.commands.calls] == ['1000', '900', '900', '900', '900']
@@ -91,7 +93,7 @@ def test_only_typed_pending_retries_with_fresh_challenge_original_deadline(ready
     {'state': 'ready', 'attestation_norito_base64': ''},
     {'state': 'Ready'}, {'state': True}, {'version': True}, {'version': 2},
     {'challenge': 'a' * 64}, {'node_id': 'wrong-node'}, {'network_id': 'wrong-network'},
-    {'genesis_hash': 'wrong-genesis'}, {'context_id': 'wrong-context'}, {'extra': 'PRIVATE'},
+    {'genesis_hash': 'wrong-genesis'}, {'consensus_instance': 'wrong-instance'}, {'extra': 'PRIVATE'},
     {'attestation_norito_base64': '***'}, {'attestation_norito_base64': 'Zh=='},
     {'attestation_norito_base64': 'bmF0aXZlLXRlc3QtYnl0ZXM=\n'},
 ])
@@ -128,7 +130,7 @@ def test_bad_challenge_fails_before_cli_spawn(ready_setup, monkeypatch, nonce):
 def test_reused_pending_challenge_fails_before_second_cli_spawn(ready_setup, monkeypatch):
     c = ready_setup
     monkeypatch.setattr(readiness.secrets, 'token_hex', lambda _: '1' * 64)
-    c.commands.reports = [dict(state='pending', reason='genesis_uncommitted', attestation_norito_base64=None)]
+    c.commands.reports = [dict(state='pending', reason='genesis_uncommitted', attestation_norito_base64=None, genesis_execution_hash=None)]
     c.run.launch_owned()
     with pytest.raises(launcher.LauncherError): c.run.await_genesis_ready(c.step)
     assert len(c.commands.calls) == 1 and c.step._receipts == []
@@ -230,3 +232,12 @@ def test_runtime_callback_cannot_refresh_original_readiness_binding(ready_setup,
     c.step._verify_runtime = retarget
     with pytest.raises(launcher.LauncherError): c.run.await_genesis_ready(c.step)
     assert c.commands.calls == [] and c.step._receipts == []
+
+
+@pytest.mark.parametrize('field,value', [('consensus_instance', '22' * 32), ('genesis_execution_hash', '23' * 32)])
+def test_four_ready_nodes_must_agree_on_current_genesis_decision(ready_setup, field, value):
+    c = ready_setup
+    c.commands.reports = [{}, {field: value}]
+    with pytest.raises(launcher.LauncherError):
+        complete(c)
+    assert len(c.commands.calls) == 2

@@ -241,7 +241,7 @@ async fn ordinary_sealed_commitment_is_durable_and_requires_one_route() {
     assert!(
         super::ordinary_transaction_ingress::authenticate(&app, &entrypoint, &multi_route)
             .expect_err("sealed commitment must not bypass the single-route guard")
-            .contains("QueuePlanSynced")
+            .contains("multi-route transaction admission is unsupported")
     );
     let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
     let response = super::handler_post_transaction_entrypoint(
@@ -310,7 +310,7 @@ fn ordinary_sealed_reveal_authenticates_exact_lifecycle_certificate() {
 }
 
 #[tokio::test]
-async fn ordinary_multi_route_application_requires_certified_intent() {
+async fn ordinary_multi_route_application_is_explicitly_unsupported() {
     let (app, key, _, _, journal) = lifecycle_ordinary_fixture(true);
     let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
     let transaction = lifecycle_ordinary_transaction(
@@ -330,7 +330,7 @@ async fn ordinary_multi_route_application_requires_certified_intent() {
         &routing_plan,
     )
     .expect_err("multi-route ordinary ingress must refuse before durable custody");
-    assert!(error.contains("QueuePlanSynced"));
+    assert!(error.contains("multi-route transaction admission is unsupported"));
     assert_eq!(app.queue.active_len(), 0);
     assert_eq!(
         std::fs::read(journal.path().join("queue.norito")).unwrap(),

@@ -1,0 +1,336 @@
+fn owner_entrypoint_permission(address: &ContractAddress, selector: &str) -> Permission {
+    executor_permission::smart_contract::CanInvokeContractEntrypoint {
+        contract: address.clone(),
+        entrypoint: selector.to_owned(),
+    }
+    .into()
+}
+fn owner_permission_world(owner: &AccountId, recipient: &AccountId) -> (World, ContractAddress) {
+    let address = ContractAddress::derive(
+        &executor_test_network_id(b"owner delegation"),
+        owner,
+        41,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("contract address");
+    let mut world = World::with(
+        [],
+        [
+            Account::new(owner.clone()).build(owner),
+            Account::new(recipient.clone()).build(recipient),
+        ],
+        [],
+    );
+    bind_executor_test_contract(
+        &mut world,
+        &address,
+        owner,
+        Hash::new(b"owner delegation code"),
+    );
+    (world, address)
+}
+
+#[test]
+fn current_contract_owner_originates_and_revokes_exact_tokens_without_code_management() {
+    for executor in [
+        super::Executor::Initial,
+        bundled_default_user_provided_executor(),
+    ] {
+        let owner = checked_account_id();
+        let recipient = checked_account_id();
+        let (world, address) = owner_permission_world(&owner, &recipient);
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let mut tx = block.transaction();
+        let permission = owner_entrypoint_permission(&address, "write");
+        assert!(
+            !authority_has_permission(&tx.world, &owner, &contract_deployment_permission())
+                .unwrap()
+        );
+        assert!(!authority_has_permission(&tx.world, &owner, &permission).unwrap());
+        executor
+            .execute_instruction(
+                &mut tx,
+                &owner,
+                Grant::account_permission(permission.clone(), recipient.clone()).into(),
+            )
+            .expect("current lifecycle owner originates exact grant");
+        assert!(authority_has_permission(&tx.world, &recipient, &permission).unwrap());
+        executor
+            .execute_instruction(
+                &mut tx,
+                &owner,
+                Revoke::account_permission(permission.clone(), recipient.clone()).into(),
+            )
+            .expect("current lifecycle owner revokes exact grant without possessing it");
+        assert!(!authority_has_permission(&tx.world, &recipient, &permission).unwrap());
+        assert!(
+            !authority_has_permission(&tx.world, &owner, &contract_deployment_permission())
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_authority() {
+    use iroha_data_model::smart_contract::ContractLifecycleOwnerV1;
+    for scenario in 0..7 {
+        let owner = checked_account_id();
+        let foreign = checked_account_id();
+        let (mut world, address) = owner_permission_world(&owner, &foreign);
+        let authority = match scenario {
+            0 | 2 | 6 => foreign.clone(),
+            _ => owner.clone(),
+        };
+        let mut binding = world
+            .contract_subject_bindings
+            .view()
+            .get(&address)
+            .cloned()
+            .unwrap();
+        match scenario {
+            1 => binding.lifecycle.owner = ContractLifecycleOwnerV1::Account(foreign.clone()),
+            2 => {
+                binding.lifecycle.pending_owner =
+                    Some(ContractLifecycleOwnerV1::Account(foreign.clone()))
+            }
+            3 => binding.lifecycle.owner = ContractLifecycleOwnerV1::Parliament,
+            _ => {}
+        }
+        world
+            .contract_subject_bindings
+            .insert(address.clone(), binding);
+        let selector = if scenario == 5 { " write" } else { "write" };
+        let permission = owner_entrypoint_permission(&address, selector);
+        if scenario == 6 {
+            world.account_permissions.insert(
+                foreign.clone(),
+                BTreeSet::from([owner_entrypoint_permission(&address, "read")]),
+            );
+        }
+        let role_id: RoleId = "owner_scope_test".parse().unwrap();
+        world.roles.insert(
+            role_id.clone(),
+            Role::new(role_id.clone(), owner.clone())
+                .add_permission(permission.clone())
+                .build(&owner),
+        );
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let mut tx = block.transaction();
+        if scenario == 4 {
+            // Construct a valid State, then exercise the delegation boundary against a
+            // corrupted transactional view. State startup correctly rejects this binding.
+            tx.world
+                .contract_subject_bindings
+                .get_mut(&address)
+                .unwrap()
+                .lifecycle
+                .active_code_hash = Some(Hash::new(b"unmatched active index"));
+        }
+        let instructions: Vec<InstructionBox> = vec![
+            Grant::account_permission(permission.clone(), foreign.clone()).into(),
+            Revoke::account_permission(permission.clone(), foreign.clone()).into(),
+            Grant::role_permission(permission.clone(), role_id.clone()).into(),
+            Revoke::role_permission(permission.clone(), role_id.clone()).into(),
+            Grant::account_role(role_id.clone(), foreign.clone()).into(),
+            Revoke::account_role(role_id.clone(), foreign.clone()).into(),
+            Register::role(
+                Role::new("new_owner_scope_test".parse().unwrap(), authority.clone())
+                    .add_permission(permission.clone()),
+            )
+            .into(),
+            Unregister::role(role_id.clone()).into(),
+        ];
+        // Even an executor that approves everything cannot bypass this native invariant.
+        let permissive = super::Executor::UserProvided(
+            super::LoadedExecutor::load(data_model_executor::Executor::new(
+                IvmBytecode::from_compiled(generate_ok_program()),
+            ))
+            .expect("permissive test executor"),
+        );
+        for executor in [&super::Executor::Initial, &permissive] {
+            for instruction in &instructions {
+                assert!(
+                    executor
+                        .execute_instruction(&mut tx, &authority, instruction.clone())
+                        .is_err(),
+                    "scenario {scenario} accepted an owned permission mutation: {instruction:?}"
+                );
+                assert!(
+                    executor
+                        .execute_borrowed_overlay_instruction(
+                            &mut tx,
+                            &authority,
+                            instruction,
+                            None
+                        )
+                        .is_err(),
+                    "scenario {scenario} accepted a borrowed permission mutation: {instruction:?}"
+                );
+            }
+        }
+        assert!(!authority_has_permission(&tx.world, &foreign, &permission).unwrap());
+    }
+}
+
+#[test]
+fn ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it() {
+    let authority = ALICE_ID.clone();
+    let (program, manifest) = ivm::KotodamaCompiler::new()
+        .compile_source_with_manifest(
+            r#"
+seiyaku OwnerPermission {
+  state int owner_authorized;
+  hajimari() { owner_authorized = 0; }
+  kotoage fn write() authorize("CanInvokeContractEntrypoint") {
+    owner_authorized = 1;
+  }
+  kotoage fn touch_caller() authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("owner_authorized"),
+      value: Json::parse("{\"written\":true}")
+    );
+  }
+}
+"#,
+        )
+        .expect("compile guarded mutable entrypoint");
+    let code_hash = ivm::contract_code_hash(&program);
+    let address = ContractAddress::derive(
+        &executor_test_network_id(b"ordinary owner invocation"),
+        &authority,
+        73,
+        DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
+    let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+    world.contract_code.insert(code_hash, program);
+    world
+        .contract_manifests
+        .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+    bind_executor_test_contract(&mut world, &address, &authority, code_hash);
+    let state = state_for_testing(world);
+    let permission = owner_entrypoint_permission(&address, "write");
+    let call = TransactionBuilder::new(
+        state.network_id,
+        authority.clone(),
+        FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
+    )
+    .with_executable(Executable::ContractCall(ContractInvocation {
+        contract_address: address.clone(),
+        expected_code_hash: code_hash,
+        entrypoint: "write".to_owned(),
+        arguments: None,
+    }))
+    .sign(ALICE_KEYPAIR.private_key());
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+    let mut cache = IvmCache::new();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    assert!(
+        !authority_has_permission(&tx.world, &authority, &contract_deployment_permission())
+            .unwrap()
+    );
+    let denied = super::Executor::Initial
+        .execute_transaction(&mut tx, &authority, call.clone(), &mut cache)
+        .expect_err("ownership alone must not authorize invocation");
+    assert!(denied.to_string().contains("requires an exact"));
+    drop(tx);
+    let grant = TransactionBuilder::new(
+        state.network_id,
+        authority.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Grant::account_permission(
+        permission.clone(),
+        authority.clone(),
+    )])
+    .sign(ALICE_KEYPAIR.private_key());
+    assert_eq!(
+        grant.admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+    );
+    let mut tx = block.transaction_for_fastpq_testing(Hash::from(grant.hash_as_entrypoint()));
+    super::Executor::Initial
+        .execute_transaction(&mut tx, &authority, grant, &mut cache)
+        .expect("ordinary owner self-grant executes without global permission");
+    tx.apply();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    super::Executor::Initial
+        .execute_transaction(&mut tx, &authority, call.clone(), &mut cache)
+        .expect("exact self-grant authorizes guarded mutable call");
+    let state_key: StatePath = format!(
+        "sc/{}/owner_authorized",
+        hex::encode(Hash::new(address.to_string().as_bytes()).as_ref())
+    )
+    .parse()
+    .unwrap();
+    assert!(
+        tx.world.smart_contract_state.get(&state_key).is_some(),
+        "the guarded call must persist its own address-scoped state"
+    );
+    assert!(
+        tx.world
+            .account(&authority)
+            .unwrap()
+            .metadata()
+            .get(&"owner_authorized".parse::<Name>().unwrap())
+            .is_none()
+    );
+    tx.apply();
+    // Invocation permission does not authorize a contract subject to mutate its caller's
+    // account metadata. Keep this negative body unchanged from the original failure.
+    let mut tx = block.transaction();
+    super::Executor::Initial
+        .execute_instruction(
+            &mut tx,
+            &authority,
+            Grant::account_permission(
+                owner_entrypoint_permission(&address, "touch_caller"),
+                authority.clone(),
+            )
+            .into(),
+        )
+        .expect("owner may grant a second exact selector");
+    tx.apply();
+    let forbidden_body = TransactionBuilder::from_payload(call.payload().clone())
+        .unwrap()
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: address.clone(),
+            expected_code_hash: code_hash,
+            entrypoint: "touch_caller".to_owned(),
+            arguments: None,
+        }))
+        .sign(ALICE_KEYPAIR.private_key());
+    let mut tx =
+        block.transaction_for_fastpq_testing(Hash::from(forbidden_body.hash_as_entrypoint()));
+    let denied = super::Executor::Initial
+        .execute_transaction(&mut tx, &authority, forbidden_body, &mut cache)
+        .expect_err("scoped invocation does not grant caller metadata authority");
+    assert!(
+        denied
+            .to_string()
+            .contains("authority cannot modify this metadata")
+    );
+    drop(tx);
+    let mut tx = block.transaction();
+    super::Executor::Initial
+        .execute_instruction(
+            &mut tx,
+            &authority,
+            Revoke::account_permission(permission.clone(), authority.clone()).into(),
+        )
+        .expect("owner revokes exact invocation grant");
+    tx.apply();
+    let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    assert!(
+        super::Executor::Initial
+            .execute_transaction(&mut tx, &authority, call, &mut cache)
+            .is_err()
+    );
+    assert!(
+        !authority_has_permission(&tx.world, &authority, &contract_deployment_permission())
+            .unwrap()
+    );
+}

@@ -67,9 +67,9 @@ The following hotspots contain tight loops or field arithmetic that map well to 
 4. **Multi‑GPU Scheduling** – With eight devices available, tasks are striped across GPUs by a deterministic hash of the program counter and call depth. This ensures every node assigns work to the same GPU index for a given instruction sequence. Large batches (e.g., Merkle tree updates) are divided into equal chunks per device.
 5. **Fallback Paths** – If any GPU fails, or the `gpu` feature is disabled, the dispatcher reverts to the existing CPU/Metal paths. The opcode semantics are unchanged so consensus cannot diverge.
 
-## Scheduler Integration
+## Device Selection
 
-The [`Scheduler`](../src/parallel.rs) detects all available GPUs on start up using `GpuManager` and exposes `gpu_count()` as a hint for higher layers. GPU assignment is purely data-driven so each task always maps to the same device across nodes. Transactions with heavy vector or hashing workloads can thus run in parallel across up to eight GPUs while CPU threads handle the coordination.
+[`GpuManager`](../src/gpu_manager.rs) initializes a context for each detected CUDA device on first use and exposes `device_count()`. `gpu_for_task` maps each task ID to a device index by a deterministic hash, so GPU assignment is purely data-driven and every node maps the same task to the same device.
 Production runtime behaviour is sourced from the node's `[accel]`
 configuration. `enable_cuda` and `enable_metal` select backends, while
 `max_gpus` caps the number of devices (`0` means no cap). The corresponding
@@ -102,13 +102,13 @@ fall back to the scalar backend.
    - On macOS, the matching Metal helpers remain subject to the same deterministic fallback contract.
 2. Continue broader live-hardware validation on dedicated CUDA hosts.
    - The remaining work in this design slice is operator-side soak, benchmark, and parity reruns on real CUDA hardware rather than missing helper implementations in the current tree.
-3. Keep deterministic multi-GPU scheduling and failure handling aligned across the scheduler and public helper entry points as new CUDA consumers are added.
+3. Keep deterministic multi-GPU task assignment and failure handling aligned across the public helper entry points as new CUDA consumers are added.
 
 By restricting GPU code to deterministic integer operations and committing results in program order, offloading does not alter the VM’s observable behaviour. Nodes without GPUs simply fall back to the existing Rust implementations and produce identical outputs.
 
 ## Repository Implementation
 
-The `gpu` module exposes a `GpuManager` used by the scheduler to open CUDA contexts and assign tasks deterministically. Public CUDA helpers now derive a stable task ID from the operation shape (for example: digest count, column count, or block count) and install it as the ambient task scope before launching kernels, so helper traffic no longer collapses onto GPU 0 on multi-GPU hosts. GPU selection still depends only on the resolved task ID:
+The `gpu_manager` module exposes a `GpuManager` that the CUDA helpers use to open CUDA contexts and assign tasks deterministically. Public CUDA helpers now derive a stable task ID from the operation shape (for example: digest count, column count, or block count) and install it as the ambient task scope before launching kernels, so helper traffic no longer collapses onto GPU 0 on multi-GPU hosts. GPU selection still depends only on the resolved task ID:
 
 ```rust
 pub fn gpu_for_task(&self, task_id: u64) -> usize {

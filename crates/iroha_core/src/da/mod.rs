@@ -16,9 +16,17 @@ pub mod receipts;
 pub mod replay_cache;
 pub mod shard_cursor;
 use crate::da::pin_intents::{PinIntentDropReason, canonicalize_bundle};
+use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 pub use confidential::{ConfidentialComputeError, validate_confidential_compute_record};
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry, Nexus};
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::Hash;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_crypto::HashOf;
+#[cfg(test)]
+use iroha_data_model::nexus::{
+    AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
+    AUTOSCALE_META_MANAGED,
+};
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId},
@@ -29,10 +37,6 @@ use iroha_data_model::{
         },
         pin_intent::MAX_DA_PIN_INTENT_ALIAS_BYTES,
         prelude::DaProofPolicy,
-    },
-    nexus::{
-        AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED,
     },
 };
 use iroha_model_base::topology::LaneId;
@@ -492,6 +496,7 @@ pub enum DaPinIntentValidationError {
         kept_ticket: iroha_data_model::da::types::StorageTicketId,
     },
 }
+#[cfg(test)]
 /// Enforce that a commitment's proof scheme matches the configured lane policy.
 ///
 /// V1 defines only the Merkle proof scheme.
@@ -579,6 +584,7 @@ pub fn validate_committed_proof_policy_bundle(
     }
     Ok(())
 }
+#[cfg(test)]
 fn active_lane_config_entry<'a>(
     nexus: &'a Nexus,
     lane_id: LaneId,
@@ -662,6 +668,7 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
             proof_scheme: entry.proof_scheme,
         })
     }
+    #[cfg(test)]
     /// Require a lane to be active in this snapshot.
     ///
     /// # Errors
@@ -698,6 +705,7 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
         let entry = self.entry(record.lane_id, Some(block_height))?;
         enforce_record_proof_scheme(record, entry.proof_scheme)
     }
+    #[cfg(test)]
     /// Enforce a commitment against the active lane policy.
     ///
     /// # Errors
@@ -745,12 +753,6 @@ fn catalog_lane_is_da_active(
     }
     !inside_elastic_range
 }
-fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
-    lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
-        || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
-        || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
-        || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
-}
 fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> bool {
     if !nexus.autoscale.enabled {
         return false;
@@ -777,6 +779,7 @@ fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry
         && lhs.scheduler == rhs.scheduler
         && lhs.settlement_buffer == rhs.settlement_buffer
 }
+#[cfg(test)]
 /// Return the active DA proof policy for a catalog-backed lane.
 ///
 /// # Errors
@@ -816,34 +819,7 @@ pub fn active_lane_proof_policy_at_height(
         proof_scheme: entry.proof_scheme,
     })
 }
-/// Enforce that a commitment's proof policy matches an active catalog-backed lane.
-///
-/// # Errors
-///
-/// Returns [`DaProofPolicyError`] when the lane is inactive, the derived runtime geometry drifted
-/// from the authoritative catalog, or the commitment violates the active lane proof scheme.
-pub fn enforce_active_lane_proof_policy(
-    record: &DaCommitmentRecord,
-    nexus: &Nexus,
-) -> Result<(), DaProofPolicyError> {
-    active_lane_config_entry(nexus, record.lane_id)?;
-    enforce_lane_proof_policy(record, &nexus.lane_config)
-}
-/// Enforce that a commitment's proof policy matches an active lane at a block height.
-///
-/// # Errors
-///
-/// Returns [`DaProofPolicyError`] when the lane is inactive at `block_height`,
-/// the derived runtime geometry drifted from the authoritative catalog, or the
-/// commitment violates the active lane proof scheme.
-pub fn enforce_active_lane_proof_policy_at_height(
-    record: &DaCommitmentRecord,
-    nexus: &Nexus,
-    block_height: u64,
-) -> Result<(), DaProofPolicyError> {
-    active_lane_config_entry_at_height(nexus, record.lane_id, Some(block_height))?;
-    enforce_lane_proof_policy(record, &nexus.lane_config)
-}
+#[cfg(test)]
 /// Filter DA pin intents using the configured lane catalog.
 ///
 /// Returns `(kept, rejected)` where `kept` contains intents that passed validation
@@ -863,6 +839,7 @@ pub fn sanitize_pin_intents(
         account_exists,
     )
 }
+#[cfg(test)]
 /// Filter DA pin intents using the active Nexus lane catalog.
 ///
 /// Returns `(kept, rejected)` where `kept` contains intents that passed
@@ -1352,6 +1329,7 @@ pub(crate) fn signed_test_pin_intent(
     );
     iroha_data_model::da::pin_intent::DaPinIntent::new(authorization, scope_authorization)
 }
+#[cfg(test)]
 /// Validate a DA pin-intent bundle before accepting an inbound block.
 ///
 /// Unlike local spool ingestion, inbound block validation is fail-closed:
@@ -1383,6 +1361,7 @@ pub fn validate_pin_intent_bundle(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Validate a DA pin-intent bundle against active Nexus lane catalogs.
 ///
 /// # Errors
@@ -1454,6 +1433,7 @@ fn first_pin_intent_order_mismatch(
         .position(|(actual, canonical)| actual != canonical)
         .or_else(|| (actual.len() != canonical.len()).then_some(actual.len().min(canonical.len())))
 }
+#[cfg(test)]
 /// Validate commitment bundle invariants before embedding into a block.
 ///
 /// Enforces a representable bundle length, unique `(lane, epoch, sequence)`
@@ -1474,6 +1454,7 @@ pub fn validate_commitment_bundle(
         Ok(())
     })
 }
+#[cfg(test)]
 /// Validate commitment bundle invariants against active Nexus lane catalogs.
 ///
 /// # Errors
@@ -2239,6 +2220,7 @@ pub fn proof_policies(lane_config: &LaneConfig) -> Vec<DaProofPolicy> {
         })
         .collect()
 }
+#[cfg(test)]
 /// Snapshot active proof policies for catalog-backed Nexus lanes.
 #[must_use]
 pub fn active_proof_policies(nexus: &Nexus) -> Vec<DaProofPolicy> {
@@ -2265,6 +2247,7 @@ pub fn active_proof_policies_at_height(nexus: &Nexus, block_height: u64) -> Vec<
 pub fn proof_policy_bundle(lane_config: &LaneConfig) -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(proof_policies(lane_config))
 }
+#[cfg(test)]
 /// Snapshot active proof policies as a versioned bundle.
 #[must_use]
 pub fn active_proof_policy_bundle(nexus: &Nexus) -> DaProofPolicyBundle {
@@ -2278,18 +2261,21 @@ pub fn active_proof_policy_bundle_at_height(
 ) -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(active_proof_policies_at_height(nexus, block_height))
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Compute the hash for the current proof policy bundle.
 #[must_use]
 pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolicyBundle> {
     let bundle = proof_policy_bundle(lane_config);
     HashOf::new(&bundle)
 }
+#[cfg(test)]
 /// Compute the hash for the active proof policy bundle.
 #[must_use]
 pub fn active_proof_policy_bundle_hash(nexus: &Nexus) -> HashOf<DaProofPolicyBundle> {
     let bundle = active_proof_policy_bundle(nexus);
     HashOf::new(&bundle)
 }
+#[cfg(test)]
 /// Compute the hash for the active proof policy bundle at a block height.
 #[must_use]
 pub fn active_proof_policy_bundle_hash_at_height(

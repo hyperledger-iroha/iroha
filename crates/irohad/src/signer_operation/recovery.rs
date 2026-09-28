@@ -27,6 +27,7 @@ pub(in crate::signer_operation) struct RecoveredSignerOperationV1 {
     pub signatures: Vec<RecoveredSignerSignatureV1>,
 }
 
+#[cfg(test)]
 impl SignerOperationCoordinatorV1 {
     pub(in crate::signer_operation) fn recover_completed(
         &self,

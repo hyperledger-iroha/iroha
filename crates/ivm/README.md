@@ -43,7 +43,7 @@ ivm/                         # → Cargo workspace root (a single Rust library c
 **IVM** is a Rust library implementing the Iroha VM for executing Iroha smart contract bytecode. It implements the IVM instruction set (not RISC‑V) with a canonical 32‑bit wide instruction format, gas metering, and features for cryptography and zero‑knowledge proofs. Earlier drafts shared bit layouts with RISC‑V, but only the wide IVM encoding is supported in the first release.
 
 Note on Kotodama bytecode target: Kotodama smart contracts compile to IVM bytecode (`.to`) for execution by this virtual machine. They do not target “risc5”/RISC‑V as a standalone ISA. Earlier RISC‑V‑like encodings (e.g., 0x33/0x13 formats) are rejected by the VM loader and interpreter; they now exist only in regression tests that prove the trap path. Kotodama and the reference tooling emit IVM’s native wide helpers exclusively. Observable behavior and outputs are defined by IVM, not raw RISC‑V.
-For the latest architecture ideas including deterministic parallel execution and zero-knowledge capabilities, see [docs/architecture_spec.md](docs/architecture_spec.md).
+For the architecture specification, including host-owned transaction concurrency and zero-knowledge capabilities, see [docs/architecture_spec.md](docs/architecture_spec.md).
 
 ## Status
 
@@ -54,7 +54,7 @@ For the latest architecture ideas including deterministic parallel execution and
   - Syscall/host trait with a default host implementation.
   - Vector helpers with runtime SIMD detection (SSE/AVX/NEON) and scalar fallback; SHA-256 compression accelerated via Apple Metal when available.
   - AES, SHA-3, Poseidon helpers and BN254 utilities on CPU; Ed25519, ECDSA, and deterministic ML-DSA verification.
-  - Deterministic block scheduler with a declared-access dependency graph and ordered software commits.
+  - Declared state-access sets and transactional host checkpoints for host-side transaction scheduling.
   - OpenVerify IPA/Pasta proof-envelope verification in the host and bounded ZK trace logging (see `zk.rs` and `zk_verify.rs`).
 
 ### Gated test suites
@@ -113,14 +113,13 @@ High-level smart contract language targeting IVM bytecode:
 - **Apple Metal Acceleration:** On macOS the VM accelerates vector lanes (`vadd32`/`vadd64`/`vand`/`vxor`/`vor`/`vrot32`), SHA‑256 compression and tree reductions, Keccak‑f1600, AES rounds/batches, and non-opcode Ed25519 batch helpers via Metal when a compatible device is present. Production selection comes from the node's `[accel]` configuration; local embeddings may use `AccelerationPolicy::with_metal(true)`. Developer-only environment shims are ignored by release builds. CPU/SIMD fallbacks retain identical semantics. The consensus-visible `ED25519BATCHVERIFY` opcode always uses ordered strict CPU verification.
 - **Optional backends remain deterministic:** Metal/CUDA are best-effort accelerators; when features are disabled or hardware is unavailable, helpers fall back to scalar/SIMD paths so results stay identical across hosts.
 - **CUDA Acceleration:** The `cuda` feature enables CUDA bindings for the explicit helper surface covering vectors, SHA‑256/Merkle, Keccak‑f1600, Poseidon2/6, AES rounds/batches, BN254 arithmetic, non-opcode Ed25519 batch verification, and the scheduler bitonic-sort helper. `build.rs` uses checked-in PTX by default. `IVM_CUDA_PTX_MODE=generate` invokes `nvcc`, while `IVM_CUDA_PTX_MODE=check` regenerates every artifact and requires byte identity with the checked-in copy. `IVM_CUDA_NVCC`/`NVCC`, `IVM_CUDA_GENCODE`, and `IVM_CUDA_NVCC_EXTRA` configure those explicit build modes. Runtime enablement and device limits come from `[accel].enable_cuda` and `[accel].max_gpus`; developer-only disable shims are ignored by release builds. The required 11 PTX artifacts and signed provenance are still a release blocker documented in [`cuda/README.md`](cuda/README.md).
-- **Deterministic Parallel Transactions:** Conflict-free transactions can execute concurrently, while successful write sets commit through one ordered, software-owned state path on every host.
 - **Startup Jingle:** When built with the optional `beep` feature,
   `irohad` calls `IVM::beep_music()` and plays a short tune when the
   configuration enables it. Disable via `ivm.banner.beep = false` in your node
   config.
 - **Merkle‑Backed Memory:** Memory writes are batched until `commit()` recomputes a Merkle root over the entire image. The root calculation now hashes chunks in parallel with Rayon for faster commits. Authentication paths can be requested for proofs.
 - **Governed Heap Growth:** Hosts set a per-runtime heap ceiling. `SYSCALL_GROW_HEAP` may extend the active heap only up to that ceiling and never beyond the ABI address window.
-- **Declared-Conflict Scheduler:** Parallel execution derives dependencies directly from declared access sets; it does not predict from execution history.
+- **Declared Access Sets:** Hosts receive each transaction's declared state accesses and report observed accesses, so host schedulers derive conflicts from declarations rather than execution history.
 - **Full-width cryptography:** Register opcodes are limited to operations with coherent register-sized semantics. Full-width commitments, curve points, and pairing statements use typed syscall or proof-envelope boundaries instead of truncated register values.
 
 ## Memory Model
@@ -357,29 +356,14 @@ vector operations, zero‑knowledge assertions and the extensible syscall
 interface are fully supported.
 
 
-## Parallel Execution (Experimental)
+## Transaction Concurrency
 
-IVM can optionally execute independent instructions and even whole transactions in parallel.
-The goal is higher throughput on multi‑core machines without sacrificing deterministic
-results. The VM groups non‑conflicting operations in *cycles* and dispatches them to a
-thread pool. Operations that read or write the same registers or memory locations are not
-allowed in the same cycle. After all instructions in a cycle finish, their effects are
-committed in program order so the final state is identical to sequential execution.
+IVM executes each contract's instruction stream sequentially; it has no in-VM block scheduler.
+Transaction-level concurrency belongs to the host. The node pipeline derives deterministic access
+sets, runs non-conflicting transactions concurrently, and commits results in canonical block order,
+so every node computes the same state regardless of core count.
 
-At the transaction level the runtime may schedule distinct transactions concurrently when
-their declared state access sets do not overlap. Access lists are derived from ISI
-parameters so every node computes the same schedule.
-
-Gas is deducted before executing each cycle based on the sum of its instruction costs;
-this guarantees out‑of‑gas behaviour matches sequential semantics. In zero‑knowledge mode
-the proof circuit models a cycle as a single state transition encompassing its parallel
-instructions while enforcing the same dependency rules.
-
-Parallel execution is enabled by default and automatically utilises all physical CPU
-cores. This scales IVM across multi‑core machines while preserving strict determinism
-for consensus and ZK verification.
-
-See `docs/parallel_execution.md` for the full implementation specification.
+See `docs/parallel_execution.md` for the host-facing access-set and thread-limit contract.
 
 ## Validation Rules
 

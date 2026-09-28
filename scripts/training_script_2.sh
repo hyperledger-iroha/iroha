@@ -664,7 +664,7 @@ resolve_multisig_account_by_spec() {
   local expected_spec_json="$2"
   local accounts_json=""
   accounts_json="$(retry_list_json "multisig account discovery" 3 1 \
-    "$IROHA_BIN" --config "$cfg" ledger account list all --verbose)" || return 1
+    "$IROHA_BIN" --config "$cfg" account list all --verbose)" || return 1
   ACCOUNTS_PAYLOAD="$accounts_json" EXPECTED_SPEC_JSON="$expected_spec_json" python3 - <<'PY'
 import json
 import os
@@ -1175,7 +1175,7 @@ for run in $(seq 1 "$RUNS"); do
   fi
   recipient_account="$(public_key_to_i105 "$recipient_pub")"
   if ! retry_cmd_allow_existing "$reuse_existing_run" "recipient account register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$recipient_account"; then
+      "$IROHA_BIN" --config "$client_cfg" account register --id "$recipient_account"; then
     asset_ok=false
   elif ! wait_for_account "$client_cfg" "$recipient_account"; then
     asset_ok=false
@@ -1217,7 +1217,7 @@ for run in $(seq 1 "$RUNS"); do
 
   for acct in "$sig1_account" "$sig2_account" "$sig3_account"; do
     if ! retry_cmd_allow_existing "$reuse_existing_run" "signatory account register" 3 2 \
-        "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$acct"; then
+        "$IROHA_BIN" --config "$client_cfg" account register --id "$acct"; then
       multisig_ok=false
     elif ! wait_for_account "$client_cfg" "$acct"; then
       multisig_ok=false
@@ -1244,7 +1244,7 @@ for run in $(seq 1 "$RUNS"); do
   propose_output=""
   instructions_hash=""
   if propose_output="$(retry_cmd_output "multisig propose" 3 2 bash -c \
-    "echo '\"congratulations\"' | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" -o --output-format json ledger account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" --output-format text ledger multisig propose --account \"$multisig_account\"")"; then
+    "echo '\"congratulations\"' | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" -o --output-format json account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" --output-format text ledger multisig propose --account \"$multisig_account\"")"; then
     instructions_hash="$(printf '%s\n' "$propose_output" | sed -n 's/^instructions_hash: //p' | head -n 1)"
     if [[ -z "$instructions_hash" ]]; then
       echo "[run $run] failed to parse multisig instructions hash" >&2

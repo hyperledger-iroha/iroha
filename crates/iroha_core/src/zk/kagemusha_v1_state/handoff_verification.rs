@@ -4,23 +4,28 @@
 //! bindings. It never constructs a proof and therefore cannot by itself satisfy the real
 //! recursive-handoff qualification corridor.
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use std::collections::BTreeSet;
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+use iroha_data_model::kagemusha::kagemusha_prepared_transfer_digest_v1;
 use iroha_data_model::kagemusha::{
     KagemushaPairedProofV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
-    kagemusha_prepared_transfer_digest_v1,
 };
 
+use crate::zk::kagemusha_v1_recursion::KagemushaStateRelationPublicInputsV1;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use crate::zk::kagemusha_v1_recursion::{
     KagemushaOperationV1, KagemushaRecursionArtifactsV1, KagemushaRecursionErrorV1,
-    KagemushaRecursiveVerifierV1, KagemushaStateRelationPublicInputsV1,
-    kagemusha_incoming_proof_binding_digest_v1, verify_kagemusha_state_proof_v1,
+    KagemushaRecursiveVerifierV1, kagemusha_incoming_proof_binding_digest_v1,
+    verify_kagemusha_state_proof_v1,
 };
 
-use super::{
-    CREDIT_ENVELOPE_DOMAIN, KagemushaStateV1, ReceiveFoldCreditV1, ReceiveFoldV1,
-    canonical_sha256_digest,
-};
+use super::ReceiveFoldCreditV1;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+use super::ReceiveFoldV1;
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+use super::{CREDIT_ENVELOPE_DOMAIN, KagemushaStateV1, canonical_sha256_digest};
 
 /// One recorded positive-value device-to-device payment handoff.
 ///
@@ -45,6 +50,7 @@ pub struct KagemushaHandoffEvidenceV1<'a> {
     pub receiver_state_proof: &'a KagemushaPairedProofV1,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Canonical byte sizes whose equality is required across a verified handoff sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaHandoffEvidenceSizesV1 {
@@ -58,6 +64,7 @@ pub struct KagemushaHandoffEvidenceSizesV1 {
     pub receiver_state_proof_bytes: usize,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Result of verifying a history-length-independent handoff evidence sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaHandoffSequenceVerificationV1 {
@@ -67,6 +74,7 @@ pub struct KagemushaHandoffSequenceVerificationV1 {
     pub constant_sizes: KagemushaHandoffEvidenceSizesV1,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Verify one supplied positive-value `SendSplit -> PaymentV1 -> ReceiveFold` handoff.
 ///
 /// This function is deliberately non-generative: success means the configured governed backend
@@ -165,6 +173,7 @@ pub fn verify_kagemusha_handoff_evidence_v1<V: KagemushaRecursiveVerifierV1>(
     canonical_sizes(evidence)
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Verify an arbitrary-length chain of supplied handoff evidence with exact size invariance.
 ///
 /// Every handoff is independently terminally verified. For each later handoff, its sender
@@ -222,6 +231,7 @@ pub fn verify_kagemusha_handoff_evidence_sequence_v1<V: KagemushaRecursiveVerifi
     })
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn monetary_predecessor(
     public: &KagemushaStateRelationPublicInputsV1,
     expected_operation: KagemushaOperationV1,
@@ -245,6 +255,7 @@ fn monetary_predecessor(
         .ok_or_else(|| binding_error("monetary transition predecessor is absent"))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_send_transition(
     predecessor: &KagemushaStateV1,
     successor: &KagemushaStateV1,
@@ -263,6 +274,7 @@ fn validate_send_transition(
     Ok(())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_receive_transition(
     predecessor: &KagemushaStateV1,
     successor: &KagemushaStateV1,
@@ -281,6 +293,7 @@ fn validate_receive_transition(
     Ok(())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_unchanged_lane_context(
     predecessor: &KagemushaStateV1,
     successor: &KagemushaStateV1,
@@ -308,6 +321,7 @@ fn validate_unchanged_lane_context(
     Ok(())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_common_asset_context(
     sender: &KagemushaStateV1,
     receiver: &KagemushaStateV1,
@@ -328,6 +342,7 @@ fn validate_common_asset_context(
     Ok(())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_receiver_request_context(
     receiver: &KagemushaStateV1,
     request: &KagemushaPaymentRequestV1,
@@ -354,6 +369,7 @@ fn validate_receiver_request_context(
     Ok(())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn validate_artifact_bindings(
     artifacts: KagemushaRecursionArtifactsV1,
     sender: &KagemushaStateRelationPublicInputsV1,
@@ -387,6 +403,7 @@ fn validate_artifact_bindings(
     Ok(())
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn canonical_sizes(
     evidence: KagemushaHandoffEvidenceV1<'_>,
 ) -> Result<KagemushaHandoffEvidenceSizesV1, KagemushaRecursionErrorV1> {
@@ -405,6 +422,7 @@ fn canonical_sizes(
     })
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn binding_error(reason: &'static str) -> KagemushaRecursionErrorV1 {
     KagemushaRecursionErrorV1::TransportBinding(reason.to_owned())
 }

@@ -1,14 +1,18 @@
 //! Consuming recovery of the two descriptor-owned native journals as one untrusted bundle.
 
+#[cfg(test)]
 use super::{
     KagemushaAuthenticatedHistoryStoreV1, KagemushaCoordinatorOperationStoreV1,
     KagemushaCurrentRecoveryOwnerV1, KagemushaGuardBundleVerifierV1, KagemushaLaneIdV1,
     KagemushaRecursiveVerifierV1, KagemushaResponseEvidenceArchiveV1, KagemushaStateErrorV1,
     KagemushaStateMachineV1,
 };
+#[cfg(test)]
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
+#[cfg(test)]
 use std::path::Path;
 
+#[cfg(test)]
 /// Held coordinator and response journals that confer no monetary or device authority.
 ///
 /// Neither journal is exposed until both have been bound to the complete current Core
@@ -20,6 +24,7 @@ pub struct KagemushaPendingRecoveryJournalsV1 {
     responses: KagemushaResponseEvidenceArchiveV1,
 }
 
+#[cfg(test)]
 impl KagemushaPendingRecoveryJournalsV1 {
     /// Reopen and fully replay both retained journals while keeping their locks private.
     ///
@@ -113,6 +118,7 @@ impl KagemushaPendingRecoveryJournalsV1 {
     }
 }
 
+#[cfg(test)]
 fn material_error(error: impl std::fmt::Display) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::RecoveryMaterial(error.to_string())
 }

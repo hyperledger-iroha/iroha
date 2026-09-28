@@ -121,7 +121,7 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
     let max_validators = u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT).expect("validator bound");
     schema_shapes!(&schemas;
         "BridgeFinalityProof", "bridge.proof.required", None;
-        "BridgeFinalityAttestationV1", "bridge.attestation.required", None;
+        "SumeragiFinalityAttestation", "bridge.attestation.required", None;
         "SumeragiV2FinalityArtifact", "finality.artifact.required", None;
         "SumeragiV2HeightContext", "height.context.required", None;
         "SumeragiV2ValidatorPower", "validator.power.required", None;
@@ -134,7 +134,7 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         "SumeragiV2SnapshotBootstrapAnchor", "snapshot.bootstrap.required", None;
         "SumeragiV2FinalizedNextEpochSnapshot", "next.epoch.required", None;
         "BridgeCommitment", "bridge.commitment.required", None;
-        "BridgeFinalityBundle", "bridge.bundle.required", None;
+        "SumeragiFinalityBundle", "bridge.bundle.required", None;
         "BlockHeader", "block.header.required", None;
     );
     for (owner, inventory) in contract_rows! {
@@ -323,18 +323,18 @@ fn ledger_state_endpoints_expose_one_closed_authenticated_v2_schema() {
     member_contracts! { schemas; Absent => contract_strings("ledger.state_finality.retired_schemas"); }
 }
 #[test]
-fn bridge_finality_operations_describe_durable_v2_evidence() {
+fn bridge_finality_operations_describe_current_durable_evidence() {
     let document = generate_spec();
     for contract in response_rows! {
-        "/v1/bridge/finality/{height}", "get", "200", "#/components/schemas/BridgeFinalityProof";
-        "/v1/bridge/finality/attestation/{height}", "get", "200", "#/components/schemas/BridgeFinalityAttestationV1";
-        "/v1/bridge/finality/attestation/latest", "get", "200", "#/components/schemas/BridgeFinalityAttestationV1";
-        "/v1/bridge/finality/bundle/{height}", "get", "200", "#/components/schemas/BridgeFinalityBundle";
+        "/v1/bridge/finality/{height}", "get", "200", "#/components/schemas/SumeragiFinalityProof";
+        "/v1/bridge/finality/attestation/{height}", "get", "200", "#/components/schemas/SumeragiFinalityAttestation";
+        "/v1/bridge/finality/attestation/latest", "get", "200", "#/components/schemas/SumeragiFinalityAttestation";
+        "/v1/bridge/finality/bundle/{height}", "get", "200", "#/components/schemas/SumeragiFinalityBundle";
     } {
         let operation = openapi_operation(&document, contract.path, contract.method);
         let description = contract_text(operation.get("description"), "bridge description");
-        assert!(description.contains("Sumeragi-v2") && description.contains("durable"));
-        assert!(!description.contains("validator set signatures") && !description.contains("block header and commit certificate"));
+        assert!(description.contains("current") && description.contains("durable"));
+        assert!(!description.contains("Sumeragi-v2") && !description.contains("height-context id"));
         text_contracts! { operation_response_schema_ref(operation, "200", contract.path) => contract.schema_ref; }
         let norito = contract_object(response_content(operation, "200").get("application/x-norito").and_then(|media| media.get("schema")), "Norito response schema");
         scalar_contracts! { norito.get("type") => Text("string"); norito.get("format") => Text("binary"); }
@@ -358,27 +358,54 @@ fn bridge_finality_operations_describe_durable_v2_evidence() {
     assert_eq!(operation_responses(latest).keys().collect::<BTreeSet<_>>(), operation_responses(height).keys().collect::<BTreeSet<_>>(), "both selectors share one response contract");
 }
 #[test]
-fn signed_status_documents_the_native_beacon_horizon() {
-    use iroha_data_model::block::consensus_v2::BeaconHorizonStatusV1;
-    let schemas = openapi_schemas();
-    scalar_contracts! { contract_property(&schemas, "SumeragiStatusResponse", "beacon_horizon").get("$ref") => Text("#/components/schemas/SumeragiV2BeaconHorizonStatus"); }
-    let required = contract_array(contract_schema(&schemas, "SumeragiStatusResponse").get("required"), "status required");
-    string_members! { required; Absent => &["beacon_horizon"]; };
-    let horizon = BeaconHorizonStatusV1 {
-        epoch_length_blocks: 64,
-        next_required_pulse_height: Some(63),
-        active_session_id: Some([0xA5; 32]),
-        session_covers_next_pulse: true,
-        local_provider_ready: false,
+fn signed_status_documents_actual_driver_fields() {
+    use iroha_data_model::sumeragi::{SumeragiStatus, SumeragiFootprint, SumeragiHaltReason};
+    let status = SumeragiStatus {
+        instance: [7; 32], height: 2, view: 0, stage: 0, leader: None, proxy_tail: None,
+        high_qc_view: None, level: 0, start_level: 0, t_retx_ms: 500,
+        committed_height: 1, applied_height: 1, awaiting: false, signer: None,
+        unanchored: false, abstaining: true, halted: Some(SumeragiHaltReason::DriverAnomaly),
+        footprint: SumeragiFootprint::default(),
     };
-    let native = norito::json::to_value(&horizon).expect("native horizon JSON");
-    let native_fields = native.as_object().expect("horizon object").keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let schema = contract_schema(&schemas, "SumeragiV2BeaconHorizonStatus");
-    scalar_contracts! { schema.get("additionalProperties") => Flag(false); }
-    assert_eq!(object_field_set(contract_object(schema.get("properties"), "horizon properties")), native_fields);
-    assert_eq!(schema_string_field_set(schema, "required", "horizon"), contract_words("epoch_length_blocks session_covers_next_pulse local_provider_ready").into_iter().collect::<BTreeSet<_>>());
-    scalar_contracts! { contract_property(&schemas, "SumeragiV2BeaconHorizonStatus", "active_session_id").get("$ref") => Text("#/components/schemas/SumeragiV2Bytes32"); }
-    assert_eq!(native.get("active_session_id").and_then(Value::as_str), Some("A5".repeat(32).as_str()), "session identifiers use canonical uppercase hex");
+    let native = norito::json::to_value(&status).expect("current status JSON");
+    let schemas = openapi_schemas();
+    let schema = contract_schema(&schemas, "SumeragiStatusResponse");
+    let properties = contract_object(schema.get("properties"), "current status properties");
+    for field in native.as_object().unwrap().keys() {
+        assert!(properties.contains_key(field), "native field {field} is not documented");
+    }
+    for absent in contract_words("beacon_horizon protocol_version restart_required height_context last_committed_subject") {
+        assert!(!properties.contains_key(absent), "retired status field {absent}");
+    }
+    assert_eq!(native.get("instance").and_then(Value::as_str), Some("07".repeat(32).as_str()));
+    let footprint = native.get("footprint").and_then(Value::as_object).unwrap();
+    assert_eq!(object_field_set(footprint), object_field_set(contract_object(contract_schema(&schemas, "SumeragiFootprint").get("properties"), "footprint properties")));
+}
+
+#[test]
+fn current_finality_schemas_match_portable_wire_bounds() {
+    let schemas = openapi_schemas();
+    let header = contract_schema(&schemas, "BlockHeader");
+    assert!(schema_string_field_set(header, "required", "current block header").contains("global_beacon_pulse_hash"));
+    let pulse_hash = contract_property(&schemas, "BlockHeader", "global_beacon_pulse_hash");
+    assert!(pulse_hash.get("anyOf").and_then(Value::as_array).is_some_and(|alternatives|
+        alternatives.iter().any(|value| value.get("$ref").and_then(Value::as_str) == Some("#/components/schemas/Hash"))
+        && alternatives.iter().any(|value| value.get("type").and_then(Value::as_str) == Some("null"))));
+    let proof = contract_schema(&schemas, "SumeragiFinalityProof");
+    scalar_contracts! { proof.get("additionalProperties") => Flag(false); }
+    assert_eq!(schema_string_field_set(proof, "required", "proof"), contract_words("block_header block_wire committee").into_iter().collect());
+    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "block_wire").get("maxItems") => Unsigned(iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64); }
+    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_sumeragi::types::MAX_COMMITTEE_SIZE as u64); }
+    let body = contract_schema(&schemas, "SumeragiFinalityAttestationBody");
+    assert_eq!(schema_string_field_set(body, "required", "attestation body"), contract_words("challenge network_id node_id node_fingerprint build_fingerprint config_fingerprint genesis_block_hash genesis_finality_proof status finality_proof").into_iter().collect());
+    property_refs!(&schemas;
+        "SumeragiFinalityAttestation", "body", "#/components/schemas/SumeragiFinalityAttestationBody";
+        "SumeragiFinalityAttestationBody", "status", "#/components/schemas/SumeragiStatusResponse";
+        "SumeragiFinalityAttestationBody", "finality_proof", "#/components/schemas/SumeragiFinalityProof";
+    );
+    for retired in ["BridgeFinalityAttestationBodyV1", "BridgeFinalityAttestationV1", "BridgeFinalityBundle"] {
+        assert!(!schemas.contains_key(retired), "retired HTTP schema {retired}");
+    }
 }
 #[test]
 fn generated_spec_documents_read_only_nexus_lifecycle_status() {
@@ -403,10 +430,9 @@ fn generated_spec_documents_read_only_nexus_lifecycle_status() {
     scalar_contracts! { properties.get("incarnations").and_then(|property| property.get("items")).and_then(|items| items.get("$ref")) => Text("#/components/schemas/NexusLaneLifecycleIncarnationEntry"); }
 }
 #[test]
-fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
+fn generated_spec_documents_exact_current_sumeragi_status() {
     let document = generate_spec();
     let schemas = component_schemas(&document);
-    let max_validators = u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT).expect("validator bound");
     for (path, expected, label) in contract_rows! { "/v1/sumeragi/status", "#/components/schemas/SumeragiStatusResponse", "authoritative status"; "/v1/sumeragi/diagnostics", "#/components/schemas/SumeragiDiagnosticsResponse", "operator diagnostics"; } {
         let actual = document.get("paths").and_then(Value::as_object).and_then(|paths| paths.get(path)).and_then(Value::as_object).and_then(|item| item.get("get")).and_then(Value::as_object).map(|operation| operation_response_schema_ref(operation, "200", path));
         assert_eq!(actual, catalog_openapi_route_enabled(CatalogHttpMethod::Get, path).then_some(expected), "{label} catalog projection");
@@ -414,40 +440,13 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
     let status = contract_schema(schemas, "SumeragiStatusResponse");
     scalar_contracts! { status.get("additionalProperties") => Flag(false); }
     let properties = contract_object(status.get("properties"), "status properties");
-    scalar_contracts! { properties.get("protocol_version").and_then(|schema| schema.get("minimum")) => Unsigned(4); }
-    member_contracts! { properties; Present => contract_strings("status.present"); Absent => contract_strings("status.absent"); }
-    for field in contract_words("node_fingerprint build_fingerprint config_fingerprint") {
-        scalar_contracts! { properties.get(field).and_then(|schema| schema.get("$ref")) => Text("#/components/schemas/Hash"); }
+    for field in contract_words("instance height view stage leader proxy_tail high_qc_view level start_level t_retx_ms committed_height applied_height awaiting signer unanchored abstaining halted footprint") {
+        assert!(properties.contains_key(field), "current status field {field}");
     }
-    scalar_contracts! { properties.get("height_context_id").and_then(|schema| schema.get("$ref")) => Text("#/components/schemas/SumeragiV2HeightContextId"); }
-    for contract in [
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "phase", expected: "#/components/schemas/SumeragiV2StatusPhase" },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "body_state", expected: "#/components/schemas/SumeragiV2BodyState", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "locked_prepare_qc", expected: "#/components/schemas/SumeragiV2QuorumCertificateRef", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "highest_prepare_qc", expected: "#/components/schemas/SumeragiV2QuorumCertificateRef", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "last_timeout_certificate", expected: "#/components/schemas/SumeragiV2TimeoutCertificateRef", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "last_committed_subject", expected: "#/components/schemas/SumeragiV2BlockSubject", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "height_context", expected: "#/components/schemas/SumeragiV2HeightContextStatus", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "last_commit_qc", expected: "#/components/schemas/SumeragiV2CommitQcStatus", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "liveness", expected: "#/components/schemas/SumeragiV2LivenessStatus", },
-        PropertyRefContract { owner: "SumeragiStatusResponse", property: "beacon_horizon", expected: "#/components/schemas/SumeragiV2BeaconHorizonStatus", },
-    ] {
-        scalar_contracts! { contract_property(schemas, contract.owner, contract.property).get("$ref") => Text(contract.expected); }
+    for field in contract_words("protocol_version node_fingerprint config_fingerprint build_fingerprint phase height_context_id last_commit_qc beacon_horizon") {
+        assert!(!properties.contains_key(field), "retired status field {field}");
     }
-    let required = contract_array(status.get("required"), "status required");
-    for field in contract_words("restart_required height_context liveness") {
-        string_members! { required; Present => &[field]; };
-    }
-    string_members! { required; Absent => &["last_commit_qc"]; };
-    property_refs!(schemas;
-        "SumeragiV2HeightContextStatus", "mode", "#/components/schemas/SumeragiV2ConsensusMode";
-        "SumeragiV2HeightContextStatus", "quorum", "#/components/schemas/SumeragiV2DualQuorum";
-        "SumeragiV2CommitQcStatus", "certificate", "#/components/schemas/SumeragiV2QuorumCertificateRef";
-    );
-    scalar_contracts! { contract_property(schemas, "SumeragiV2HeightContextStatus", "validator_count").get("maximum") => Unsigned(max_validators); }
-    for field in contract_words("validator_count signer_count min_signers") {
-        scalar_contracts! { contract_property(schemas, "SumeragiV2CommitQcStatus", field).get("maximum") => Unsigned(max_validators); }
-    }
+    scalar_contracts! { properties.get("footprint").and_then(|schema| schema.get("$ref")) => Text("#/components/schemas/SumeragiFootprint"); }
     let diagnostics = contract_schema(schemas, "SumeragiDiagnosticsResponse");
     scalar_contracts! { diagnostics.get("additionalProperties") => Flag(false); }
     let diagnostics = contract_object(diagnostics.get("properties"), "diagnostics properties");

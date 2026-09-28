@@ -37,7 +37,7 @@ CORE_START = """    #[derive(Clone, Copy)]
     enum IterDispatchRankFixture"""
 CORE_END = """    #[tokio::test]
     async fn iter_dispatch_accounts_sort_ties_stable_by_id"""
-CORE_HASH = "e7bfa21691d5e61c969fc82adbe3f661f22bfe6fd5bdc1b8efdb9c4808f932a4"
+CORE_HASH = "0b70210d8ff9169531c27e25385b0d7e6bc9cc2c540464abba45a79548431cd7"
 
 DIRECT_TESTS = (
     "iter_dispatch_sorts_and_paginates_end_to_end",
@@ -316,7 +316,7 @@ def validate_first_release_dispatch(
     )
     if valid_request_source.count(parts) != 2:
         raise GuardError("stored and ephemeral dispatch must both use canonical parts")
-    if valid_request_source.count("macro_rules! run_exact") != 2:
+    if valid_request_source.count("macro_rules! run_query") != 2:
         raise GuardError("stored and ephemeral dispatch must each use one exact runner")
     if valid_request_source.count("match item {") != 2:
         raise GuardError("stored and ephemeral dispatch must each have one item-kind match")

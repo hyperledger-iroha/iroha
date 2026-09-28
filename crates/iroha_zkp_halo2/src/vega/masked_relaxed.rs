@@ -404,6 +404,7 @@ pub(super) fn prove_masked_relaxed_precomputation_v1(
 /// ordered cross-term commitments. Only the resulting instance is accepted by the terminal Spartan
 /// prover. That hard boundary prevents a malicious PBS from replacing the encrypted fold history
 /// with an independently satisfiable relaxed assignment.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prove_precomputed_masked_relaxed_v1(
     domain: &'static [u8],
@@ -832,6 +833,7 @@ fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
 }
 /// Construct the sole masked-Nova composition transcript used by plaintext,
 /// encrypted, prover, and verifier paths.
+#[cfg(test)]
 pub(super) fn masked_relaxed_composition_transcript_v1(
     domain: &'static [u8],
     context_frame: &[u8],

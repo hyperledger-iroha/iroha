@@ -19,8 +19,6 @@ use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-/// Maximum opaque proof bytes accepted before Norito decoding.
-pub const MAX_P256_ENGINE_PROOF_BYTES_V1: usize = 8 * 1024 * 1024;
 const TRANSCRIPT_VERSION_V1: u8 = 1;
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.privacy.transcript.v1";
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.privacy.challenge.p256.v1";

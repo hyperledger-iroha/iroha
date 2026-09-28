@@ -564,7 +564,7 @@ fn fixed_sizes_and_post_authentication_local_resource_ledger_are_exact_v2() {
     assert_eq!(QUOTIENT_OPENING_OWNERS_V2, 400);
     assert_eq!(QUOTIENT_OPENING_SCALARS_PER_OWNER_V2, 16_488);
     assert_eq!(QUOTIENT_OPENING_BYTES_PER_OWNER_V2, 527_616);
-    assert_eq!(QUOTIENT_OPENING_STREAM_SCALARS_V2, 6_755_200);
+    assert_eq!(QUOTIENT_OPENING_STREAM_SCALARS_V2, 6_595_200);
     assert_eq!(QUOTIENT_OPENING_STREAM_BYTES_V2, 211_046_400);
     assert_eq!(PUBLIC_EVALUATION_BYTES_V2, 704);
     assert_eq!(RETAINED_PUBLIC_EVALUATION_BYTES_V2, 140_800);

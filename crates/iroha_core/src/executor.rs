@@ -1576,6 +1576,50 @@ fn ensure_contract_deployment_permission_mutation_allowed(
     }
     Ok(())
 }
+/// Enforce exact entrypoint delegation before any executor can approve a mutation.
+/// This boundary also receives instructions emitted by IVM hosts and triggers.
+fn ensure_contract_entrypoint_permission_mutation_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+) -> Result<(), ValidationFail> {
+    let validate = |permission: &Permission| {
+        if permission.name() != "CanInvokeContractEntrypoint" {
+            return Ok(());
+        }
+        if contract_entrypoint_permission_delegation_allowed(
+            state_transaction,
+            authority,
+            permission,
+        )? {
+            return Ok(());
+        }
+        Err(ValidationFail::NotPermitted(
+            "only genesis, an exact holder, a smart-contract code manager, or the current account lifecycle owner may grant or revoke an exact contract entrypoint permission".to_owned(),
+        ))
+    };
+    if let Some(register) = extract_register_role(instruction) {
+        for permission in register.object().inner().permissions() {
+            validate(permission)?;
+        }
+    }
+    let role_id = match extract_permission_or_role_mutation(instruction) {
+        Some(
+            PermissionOrRoleMutation::AccountPermission { permission, .. }
+            | PermissionOrRoleMutation::RolePermission { permission, .. },
+        ) => return validate(permission),
+        Some(PermissionOrRoleMutation::AccountRole { role, .. }) => Some(role.clone()),
+        None => extract_unregister_role(instruction).map(|unregister| unregister.object().clone()),
+    };
+    if let Some(role_id) = role_id
+        && let Some(role) = state_transaction.world.roles().get(&role_id)
+    {
+        for permission in role.permissions() {
+            validate(permission)?;
+        }
+    }
+    Ok(())
+}
 fn ensure_contract_runtime_permission_mutation_allowed(
     authority: &AccountId,
     instruction: &InstructionBox,
@@ -5082,9 +5126,10 @@ impl Executor {
                 tech_account,
                 qty.clone(),
                 state_transaction.tx_call_hash.and_then(|entry| {
-                    transaction.fee_payment_intent().sponsor_program().map(
-                        |(_, revision)| (entry, Hash::from(transaction.hash()), revision),
-                    )
+                    transaction
+                        .fee_payment_intent()
+                        .sponsor_program()
+                        .map(|(_, revision)| (entry, Hash::from(transaction.hash()), revision))
                 }),
             );
             crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_charge(
@@ -5291,7 +5336,8 @@ impl Executor {
                 payer_asset,
                 fee.clone(),
                 state_transaction.tx_call_hash.and_then(|entry| {
-                    program_revision.map(|revision| (entry, Hash::from(transaction.hash()), revision))
+                    program_revision
+                        .map(|revision| (entry, Hash::from(transaction.hash()), revision))
                 }),
             );
             crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_charge(
@@ -7377,6 +7423,11 @@ impl Executor {
             authority,
             &instruction,
         )?;
+        ensure_contract_entrypoint_permission_mutation_allowed(
+            state_transaction,
+            authority,
+            &instruction,
+        )?;
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
             &instruction,
@@ -7422,6 +7473,11 @@ impl Executor {
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         ensure_contract_deployment_permission_mutation_allowed(
+            state_transaction,
+            authority,
+            instruction,
+        )?;
+        ensure_contract_entrypoint_permission_mutation_allowed(
             state_transaction,
             authority,
             instruction,
@@ -9737,6 +9793,7 @@ mod tests {
         }};
     }
     include!("executor_contract_deployment_tests.rs");
+    include!("executor_contract_owner_permission_tests.rs");
     #[test]
     fn initial_executor_genesis_rejects_unclassified_oracle_instruction() {
         let authority = checked_account_id();
@@ -12734,6 +12791,9 @@ mod tests {
             entrypoint: "main".to_owned(),
         }
         .into();
+        state_transaction
+            .world
+            .add_account_permission(&contract_subject, exact.clone());
         let error = executor
             .execute_instruction_with_contract_runtime_context(
                 &mut state_transaction,

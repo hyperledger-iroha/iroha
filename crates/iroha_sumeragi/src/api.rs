@@ -101,10 +101,10 @@ pub enum ConfigError {
     FetchRetryTooLong,
     /// A timer interval is zero.
     ZeroInterval(&'static str),
-    /// Chain parameters: `block_time > idle_block_interval`.
-    BlockTimeAboveIdle,
-    /// Chain parameters: `empty_after_views < 1`.
-    EmptyAfterViewsZero,
+    /// Chain parameters: `block_time > payload_retry_interval`.
+    BlockTimeAbovePayloadRetry,
+    /// Chain parameters: payload rebuild polling must not busy-loop.
+    PayloadRetryIntervalZero,
     /// `Init.demotion_window < 1` (`W` is a genesis constant, §9.4).
     DemotionWindowZero,
     /// Chain parameters: `max_block_bytes` above the transport frame limit.
@@ -200,7 +200,7 @@ pub enum Event {
         attest: bool,
     },
     /// After answering `BuildPayload{req}` with `EMPTY`: an includable transaction arrived (at
-    /// most once per `req`). It only ends the view-0 leader's heartbeat wait (§6.10).
+    /// most once per `req`). It ends an eligible leader's empty-build wait at any view (§6.10).
     PayloadReady {
         /// Request id of the `BuildPayload` answered with `EMPTY`.
         req: u64,

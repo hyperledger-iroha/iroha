@@ -74,21 +74,6 @@ pub mod payloads {
         /// Block currently being processed
         pub curr_block: BlockHeader,
     }
-    /// Context for trigger entrypoint
-    #[derive(Debug, Clone, Encode, Decode)]
-    #[norito(decode_from_slice)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::smart_contract::payloads::TriggerContext")]
-    pub struct TriggerContext {
-        /// Id of this trigger
-        pub id: TriggerId,
-        /// Account that registered the trigger
-        pub authority: AccountId,
-        /// Block currently being processed
-        pub curr_block: BlockHeader,
-        /// Event which triggered the execution
-        pub event: EventBox,
-    }
     /// Context for migrate entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
@@ -142,6 +127,7 @@ pub mod payloads {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
+                global_beacon_pulse_hash: None,
                 execution_context_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
@@ -206,14 +192,12 @@ mod model {
     /// Canonical contract alias: `name::namespace` or `name::dataspace.namespace`.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractAlias")]
     pub struct ContractAlias(pub(super) ConstString);
     /// Canonical Bech32m-encoded public contract address.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractAddress")]
     pub struct ContractAddress(pub(super) ConstString);
@@ -231,7 +215,6 @@ mod model {
         norito::NoritoSchema,
     )]
     #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractInstance")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractInstance {
         /// Canonical deployed contract address.
         pub contract_address: ContractAddress,
@@ -1439,14 +1422,6 @@ pub mod manifest {
     #[derive(DeriveFast, DeriveJsonSer, DeriveJsonDe)]
     #[norito(deny_unknown_fields)]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::smart_contract::manifest::ContractManifest")]
     pub struct ContractManifest {
@@ -1648,14 +1623,6 @@ pub mod manifest {
     )]
     #[norito(deny_unknown_fields)]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct ManifestProvenance {
         /// Public key that signed the manifest payload.
         pub signer: PublicKey,
@@ -1678,14 +1645,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct EntrypointDescriptor {
         /// Symbol name as declared in the Kotodama source file.
         pub name: String,
@@ -1743,14 +1702,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct EntrypointParamDescriptor {
         /// Stable parameter name as declared in the Kotodama source file.
         pub name: String,
@@ -1773,14 +1724,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct StateDescriptor {
         /// Stable state key as declared in Kotodama source.
         pub name: String,
@@ -1803,14 +1746,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json, deny_unknown_fields)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct ContractErrorVariantDescriptor {
         /// Symbolic variant name within its nominal error type.
         pub name: String,
@@ -1897,14 +1832,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct KotobaTranslation {
         /// Language tag, e.g. "en", "ja".
         pub lang: String,
@@ -1927,14 +1854,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct KotobaTranslationEntry {
         /// Stable message identifier.
         pub msg_id: String,
@@ -1957,14 +1876,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct TriggerCallback {
         /// Optional contract namespace for cross-contract callbacks.
         #[norito(default)]
@@ -1988,14 +1899,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub struct TriggerDescriptor {
         /// Trigger identifier.
         pub id: TriggerId,
@@ -2030,14 +1933,6 @@ pub mod manifest {
     )]
     #[norito(no_fast_from_json)]
     #[norito(tag = "kind", content = "value")]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     pub enum EntryPointKind {
         /// Transaction dispatcher entrypoint (`kotoage`/`言挙げ fn`).
         Kotoage,
@@ -2064,14 +1959,6 @@ pub mod manifest {
         DeriveJsonDe,
     )]
     #[norito(no_fast_from_json)]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        derive(iroha_ffi::FfiType)
-    )]
-    #[cfg_attr(
-        all(feature = "ffi_export", not(feature = "ffi_import")),
-        ffi_type(opaque)
-    )]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::smart_contract::manifest::ContractManifestSignaturePayload"

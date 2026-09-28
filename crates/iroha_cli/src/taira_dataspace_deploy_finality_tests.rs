@@ -12,8 +12,8 @@ fn deployment_trust_derives_exact_genesis_roster_and_network() {
         .expect("exact public genesis trust");
     assert_eq!(authority.network, network);
     assert_eq!(NetworkId::from_genesis_hash(authority.genesis), network);
-    assert_eq!(authority.roster.len(), 4);
-    assert_eq!(authority.pops.len(), 4);
+    assert_eq!(authority.validators.len(), 4);
+    assert_eq!(authority.trusted_genesis.hash(), authority.genesis);
     let mut expected = trust
         .peers
         .iter()
@@ -22,15 +22,14 @@ fn deployment_trust_derives_exact_genesis_roster_and_network() {
     expected.sort();
     assert_eq!(
         authority
-            .roster
+            .validators
             .iter()
-            .map(|member| member.validator.clone())
+            .map(|member| PeerId::new(member.public_key.clone()))
             .collect::<Vec<_>>(),
         expected
     );
-    for (member, pop) in authority.roster.iter().zip(&authority.pops) {
-        assert_eq!(member.power, 1);
-        iroha_crypto::bls_normal_pop_verify(member.validator.public_key(), pop)
+    for member in &authority.validators {
+        iroha_crypto::bls_normal_pop_verify(&member.public_key, &member.proof_of_possession)
             .expect("native PoP");
     }
     assert_eq!(
@@ -43,8 +42,8 @@ fn deployment_trust_derives_exact_genesis_roster_and_network() {
     let reordered = reordered
         .authority(network)
         .expect("explicit peer observation order");
-    assert_eq!(reordered.roster, authority.roster);
-    assert_eq!(reordered.pops, authority.pops);
+    assert_eq!(reordered.validators, authority.validators);
+    assert_eq!(reordered.trusted_genesis, authority.trusted_genesis);
 }
 
 #[test]

@@ -491,7 +491,7 @@ fn main_p256_log8_shared_central_source_matches_prover_and_verifier() {
     let first_registration =
         main_p256_scalar_registrations_v1(&layout).expect("five scalar registrations")[0];
     {
-        let mut base_view = MainP256ScalarTraceGroupSourceV1::for_base_v1(&layout, &central)
+        let base_view = MainP256ScalarTraceGroupSourceV1::for_base_v1(&layout, &central)
             .expect("borrowed pre-X5B1 scalar view");
         let column = base_view
             .native_base_column_v1(first_registration.main, 0)
@@ -776,7 +776,7 @@ fn main_p256_log5_central_trace_views_and_prover_are_end_to_end_closed() {
         .try_reserve_exact(P256_MAIN_LOG5_REGISTRATION_COUNT_V1)
         .expect("bounded base-parity fixture");
     {
-        let mut base_view = MainP256Log5TraceGroupSourceV1::for_base_v1(&layout, &base_source)
+        let base_view = MainP256Log5TraceGroupSourceV1::for_base_v1(&layout, &base_source)
             .expect("pre-X5B1 log-five view");
         for binding in bindings.iter().copied() {
             let mut column = base_view
@@ -812,7 +812,7 @@ fn main_p256_log5_central_trace_views_and_prover_are_end_to_end_closed() {
         .bind_v1(post_base)
         .expect("single central P-256 phase transition");
     {
-        let mut bound_view = MainP256Log5TraceGroupSourceV1::for_bound_v1(&layout, &bound)
+        let bound_view = MainP256Log5TraceGroupSourceV1::for_bound_v1(&layout, &bound)
             .expect("post-X5B1 log-five view");
         let prover = MainP256Log5ProverConstraintSourceV1::for_main_v1(&layout, &bound)
             .expect("bound log-five prover");
@@ -1381,9 +1381,8 @@ fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
                     );
                 }
                 {
-                    let mut base_view =
-                        MainP256Log16TraceGroupSourceV1::for_base_v1(&layout, &central)
-                            .expect("borrowed pre-X5B1 log-sixteen view");
+                    let base_view = MainP256Log16TraceGroupSourceV1::for_base_v1(&layout, &central)
+                        .expect("borrowed pre-X5B1 log-sixteen view");
                     for index in selected {
                         let binding = bindings[index];
                         base_parity.push((
@@ -1419,9 +1418,8 @@ fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
                     .bind_v1(post_base)
                     .expect("single opaque central P-256 phase transition");
                 {
-                    let mut bound_view =
-                        MainP256Log16TraceGroupSourceV1::for_bound_v1(&layout, &bound)
-                            .expect("borrowed bound log-sixteen view");
+                    let bound_view = MainP256Log16TraceGroupSourceV1::for_bound_v1(&layout, &bound)
+                        .expect("borrowed bound log-sixteen view");
                     for (registration, before) in &base_parity {
                         assert_eq!(
                             &*bound_view

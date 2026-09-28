@@ -1,5 +1,6 @@
 //! Authoritative SoraFS moderation commit/reveal ledger handlers.
 use super::*;
+use crate::smartcontracts::isi::helpers::instruction_error_as_query_failure as query_failure;
 use crate::{
     smartcontracts::ValidSingularQuery,
     smartcontracts::isi::sorafs_pop_registry::{
@@ -6210,12 +6211,6 @@ fn query_moderation_snapshot(
         )));
     }
     Ok(snapshot)
-}
-fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    match error {
-        InstructionExecutionError::Query(error) => error,
-        error => QueryExecutionFail::Conversion(error.to_string()),
-    }
 }
 impl ValidSingularQuery for FindSorafsModerationPolicy {
     fn execute(

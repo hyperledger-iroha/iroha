@@ -71,7 +71,7 @@ pub struct BlockHeader {
     /// `[L(h, x) for x in 0..min(origin_view, a_h)]`.
     pub skipped_leaders: Vec<PublicKey>,
     /// Application flag (§3.7): Commit votes for this block carry attestations. Set from the
-    /// payload builder, checked by execution; never set on `EMPTY` from `empty_after_views` on.
+    /// payload builder, checked by execution; proposals always carry nonempty work.
     pub attest: bool,
 }
 
@@ -794,10 +794,8 @@ pub enum Defect {
     Proposer,
     /// Fresh block with wrong `skipped_leaders`.
     SkippedLeaders,
-    /// Fresh block at `view ≥ empty_after_views(h)` with a non-empty payload.
-    NonEmptyPayload,
-    /// Fresh block at `view ≥ empty_after_views(h)` with the attestation flag (§3.7 A1).
-    FlaggedEmpty,
+    /// A block without work, forbidden in every view including re-proposals.
+    EmptyPayload,
 }
 
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
@@ -1114,7 +1112,7 @@ mod tests {
             Defect::OriginView,
             Defect::Proposer,
             Defect::SkippedLeaders,
-            Defect::NonEmptyPayload,
+            Defect::EmptyPayload,
         ];
         for defect in defects {
             round_trip(&Evidence::InvalidProposal {

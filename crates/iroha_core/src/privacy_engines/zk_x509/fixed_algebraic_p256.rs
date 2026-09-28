@@ -13,16 +13,20 @@
 #[cfg(test)]
 use super::fixed_algebraic::ZkX509FixedAlgebraicAtomV1;
 #[cfg(test)]
+use super::fixed_algebraic::ZkX509FixedAlgebraicOpeningsV1;
+#[cfg(test)]
 use super::p256_aggregate_adapter::P256_X5S1_SIGNATURES_V1;
+#[cfg(test)]
+use super::p256_aggregate_adapter::P256AggregateAdapterErrorV1;
 use super::{
     fixed_algebraic::{
-        ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1, ZkX509FixedAlgebraicOpeningsV1,
+        ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1,
         ZkX509FixedAlgebraicScheduleBuilderV1, ZkX509FixedAlgebraicScheduleV1,
     },
     p256_aggregate_adapter::{
         P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1, P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1, P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
-        P256AggregateAdapterErrorV1, P256MainAdapterV1, P256MainRegistrationV1,
+        P256MainAdapterV1, P256MainRegistrationV1,
     },
     p256_air::{
         P256_ARITHMETIC_ROWS_PER_OPERATION_V1, P256_ARITHMETIC_STARK_FIXED_WIDTH_V1,
@@ -243,6 +247,7 @@ fn map_external_error_v1(error: P256ExternalBindingErrorV1) -> ZkX509P256FixedAl
         _ => ZkX509P256FixedAlgebraicErrorV1::Topology,
     }
 }
+#[cfg(test)]
 fn map_adapter_error_v1(error: P256AggregateAdapterErrorV1) -> ZkX509P256FixedAlgebraicErrorV1 {
     match error {
         P256AggregateAdapterErrorV1::Resource => ZkX509P256FixedAlgebraicErrorV1::Resource,
@@ -343,6 +348,7 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_for_registration_v1(
         _ => Err(ZkX509P256FixedAlgebraicErrorV1::Topology),
     }
 }
+#[cfg(test)]
 /// Borrow one registration's fixed slice from a combined algebraic opening.
 pub(crate) fn zk_x509_p256_fixed_algebraic_row_for_registration_v1<'a>(
     combined: &'a [F],
@@ -2760,6 +2766,7 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
         }
         Ok(combined)
     }
+    #[cfg(test)]
     /// Evaluate and concatenate all six child openings in canonical order.
     pub(crate) fn evaluate_query_indices_v1(
         &self,

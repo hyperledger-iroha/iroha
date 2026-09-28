@@ -137,40 +137,6 @@ fn assert_cuda_disabled_surface_behaves() {
             0x11, 0x00,
         ],
     ];
-    let round_keys = [
-        [
-            0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf, 0x7f,
-            0x67, 0x98,
-        ],
-        [
-            0xa5, 0x40, 0x76, 0x28, 0x10, 0x4f, 0xdc, 0xe6, 0x43, 0xdd, 0x27, 0x0f, 0x6c, 0xa7,
-            0x63, 0x6f,
-        ],
-        [
-            0x2c, 0x5e, 0x2f, 0x88, 0x6a, 0x84, 0xd2, 0x57, 0x8b, 0x3f, 0x8c, 0x9c, 0x4f, 0x11,
-            0x64, 0x15,
-        ],
-    ];
-    let expected_enc: Vec<[u8; 16]> = states
-        .iter()
-        .copied()
-        .map(|block| {
-            round_keys
-                .iter()
-                .copied()
-                .fold(block, |value, round_key| ivm::aesenc_impl(value, round_key))
-        })
-        .collect();
-    let expected_dec: Vec<[u8; 16]> = states
-        .iter()
-        .copied()
-        .map(|block| {
-            round_keys
-                .iter()
-                .copied()
-                .fold(block, |value, round_key| ivm::aesdec_impl(value, round_key))
-        })
-        .collect();
     let expected_single_round_enc: Vec<[u8; 16]> = states
         .iter()
         .copied()
@@ -190,26 +156,6 @@ fn assert_cuda_disabled_surface_behaves() {
         ivm::aesdec_batch_cuda(&states, rk),
         Some(expected_single_round_dec),
         "aesdec_batch_cuda should return CPU-computed output when CUDA is disabled"
-    );
-    assert_eq!(
-        ivm::aesenc_rounds_batch_cuda(&states, &round_keys),
-        Some(expected_enc.clone()),
-        "aesenc_rounds_batch_cuda should return CPU-computed output when CUDA is disabled"
-    );
-    assert_eq!(
-        ivm::aesdec_rounds_batch_cuda(&states, &round_keys),
-        Some(expected_dec.clone()),
-        "aesdec_rounds_batch_cuda should return CPU-computed output when CUDA is disabled"
-    );
-    assert_eq!(
-        ivm::aesenc_n_rounds_many(&states, &round_keys),
-        expected_enc,
-        "aesenc_n_rounds_many should preserve deterministic CPU output when CUDA is disabled"
-    );
-    assert_eq!(
-        ivm::aesdec_n_rounds_many(&states, &round_keys),
-        expected_dec,
-        "aesdec_n_rounds_many should preserve deterministic CPU output when CUDA is disabled"
     );
     let original_hi = [5u64, 3, 5, 3, 3];
     let original_lo = [7u64, 9, 1, 2, 1];

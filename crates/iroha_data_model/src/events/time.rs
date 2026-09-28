@@ -26,7 +26,6 @@ mod model {
         Constructor,
     )]
     #[getset(get = "pub")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::time::model::TimeEvent")]
     pub struct TimeEvent {
@@ -38,14 +37,23 @@ mod model {
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor, Decode, Encode, IntoSchema,
     )]
     #[repr(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::time::model::TimeEventFilter")]
     pub struct TimeEventFilter(pub ExecutionTime);
     /// Trigger execution time
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::time::model::ExecutionTime")]
     pub enum ExecutionTime {
         /// Execute right before block commit
@@ -54,9 +62,19 @@ mod model {
         Schedule(Schedule),
     }
     /// Schedule of the trigger
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::events::time::model::Schedule")]
     pub struct Schedule {
         /// The first execution time
@@ -73,7 +91,6 @@ mod model {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     // Durations are represented explicitly as millisecond counts (`since_ms`, `length_ms`) and
     // JSON serialization is implemented manually below for the canonical object layout.
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::time::model::TimeInterval")]
     pub struct TimeInterval {

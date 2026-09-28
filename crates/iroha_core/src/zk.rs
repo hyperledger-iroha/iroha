@@ -55,7 +55,10 @@ pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, ver
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
 /// P-256-specific nonnative curve primitives for hardware-selection circuit construction.
-#[cfg(feature = "zk-halo2-ipa")]
+///
+/// Only the closed App-Attest staged monetary fold consumes these gadgets, and that fold is
+/// exercised by unit tests alone.
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) mod kagemusha_p256_curve_gadget;
 /// Core-owned confidential polynomial storage foundation for the consuming prover.
 #[cfg(feature = "zk-halo2-ipa")]
@@ -86,6 +89,7 @@ pub(crate) mod pasta_sha256_table8;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
 #[cfg(feature = "zk-preverify")]
+#[cfg(test)]
 use crate::kura::PipelineProofSnapshot;
 #[cfg(feature = "zk-stark")]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -188,6 +192,7 @@ pub fn encode_halo2_ipa_proving_key_archive(
     }
     Ok(archive)
 }
+#[cfg(test)]
 #[cfg(feature = "zk-halo2-ipa")]
 /// Write Halo2 IPA proving-key bytes with circuit-family and verifier-key binding.
 ///
@@ -1693,6 +1698,7 @@ mod stark_verifying_key_cache_tests {
 std::thread_local! {
     // Observe entry, including cache hits, without sharing counters between
     // concurrently executing native tests. No production admission state.
+    #[cfg(test)]
     static STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -1952,6 +1958,7 @@ pub(crate) fn stark_open_verify_air_public_digest_current(
         &terms,
     )
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
 ///
 /// The first-release native V1 circuit carries an explicit AIR section whose
@@ -2257,116 +2264,6 @@ pub mod test_utils {
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[must_use]
-    fn halo2_ivm_binding_envelope(
-        circuit_id: &str,
-        code_hash: CryptoHash,
-        overlay_hash: CryptoHash,
-    ) -> FixtureEnvelope {
-        use ff::PrimeField as _;
-        use halo2_proofs::{
-            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-            plonk::{ProvingKey, create_proof, keygen_pk, keygen_vk},
-            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-        };
-        #[derive(Clone)]
-        struct KeyMaterial {
-            k: u32,
-            pk: ProvingKey<Curve>,
-            vk_bytes: Vec<u8>,
-        }
-        fn keys() -> &'static KeyMaterial {
-            static CACHE: OnceLock<KeyMaterial> = OnceLock::new();
-            CACHE.get_or_init(|| {
-                let k = 6u32;
-                let params = pasta_params_new(k);
-                let circuit = super::pasta_tiny::IvmOverlayBind::default();
-                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
-                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
-                let mut vk_bytes = super::zk1::wrap_start();
-                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
-                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
-                KeyMaterial { k, pk, vk_bytes }
-            })
-        }
-        fn limbs(hash: &CryptoHash) -> [u64; 4] {
-            let bytes: &[u8; 32] = hash.as_ref();
-            let mut out = [0u64; 4];
-            for (i, limb) in out.iter_mut().enumerate() {
-                let start = i * 8;
-                let end = start + 8;
-                *limb = u64::from_le_bytes(bytes[start..end].try_into().expect("8 bytes"));
-            }
-            out
-        }
-        let code_limbs = limbs(&code_hash);
-        let overlay_limbs = limbs(&overlay_hash);
-        let values: [Scalar; 8] = [
-            Scalar::from(code_limbs[0]),
-            Scalar::from(code_limbs[1]),
-            Scalar::from(code_limbs[2]),
-            Scalar::from(code_limbs[3]),
-            Scalar::from(overlay_limbs[0]),
-            Scalar::from(overlay_limbs[1]),
-            Scalar::from(overlay_limbs[2]),
-            Scalar::from(overlay_limbs[3]),
-        ];
-        let inst_cols_owned: Vec<Vec<Scalar>> = values.iter().map(|v| vec![*v]).collect();
-        let inst_cols: Vec<&[Scalar]> = inst_cols_owned.iter().map(Vec::as_slice).collect();
-        let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
-        let circuit = super::pasta_tiny::IvmOverlayBind { values };
-        let material = keys();
-        let params = pasta_params_new(material.k);
-        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        let mut rng = fixture_rng(0x5EED_F1C7_1234_5690);
-        create_proof::<
-            IPACommitmentScheme<Curve>,
-            ProverIPA<'_, Curve>,
-            Challenge255<Curve>,
-            _,
-            _,
-            _,
-        >(
-            &params,
-            &material.pk,
-            &[circuit],
-            &inst_refs,
-            &mut rng,
-            &mut transcript,
-        )
-        .expect("create proof");
-        let proof_raw = transcript.finalize();
-        let mut proof_bytes = super::zk1::wrap_start();
-        super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
-        super::zk1::wrap_append_instances_pasta_fp_cols(inst_cols.as_slice(), &mut proof_bytes);
-        let mut public_inputs = Vec::with_capacity(values.len() * 32);
-        for value in values {
-            public_inputs.extend_from_slice(value.to_repr().as_ref());
-        }
-        let schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-        let vk_hash = {
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), material.vk_bytes.clone());
-            super::hash_vk(&vk_box)
-        };
-        let envelope = OpenVerifyEnvelope {
-            backend: BackendTag::Halo2IpaPasta,
-            circuit_id: circuit_id.to_owned(),
-            vk_hash,
-            public_inputs: public_inputs.clone(),
-            proof_bytes,
-            aux: Vec::new(),
-        };
-        let proof_bytes = norito::encode_canonical(&envelope)
-            .expect("OpenVerifyEnvelope Norito serialization must work");
-        FixtureEnvelope {
-            proof_bytes,
-            public_inputs,
-            schema_hash,
-            vk_bytes: Some(material.vk_bytes.clone()),
-        }
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    #[must_use]
     fn halo2_ivm_replay_binding_bind_v1_envelope(
         circuit_id: &str,
         code_hash: CryptoHash,
@@ -2486,20 +2383,6 @@ pub mod test_utils {
             schema_hash,
             vk_bytes: Some(material.vk_bytes.clone()),
         }
-    }
-    /// Deterministic Halo2 IPA fixture for the historical `ivm-overlay-bind` circuit.
-    ///
-    /// The circuit exposes 8 instance columns (1 row each) and constrains witness
-    /// values to equal those instances. This fixture is retained for regression/
-    /// negative tests; `Executable::IvmProved` admission no longer accepts this
-    /// binding-only stand-in circuit.
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    #[must_use]
-    pub fn halo2_ivm_overlay_bind_envelope(
-        code_hash: CryptoHash,
-        overlay_hash: CryptoHash,
-    ) -> FixtureEnvelope {
-        halo2_ivm_binding_envelope("halo2/ipa:ivm-overlay-bind", code_hash, overlay_hash)
     }
     /// Deterministic Halo2 IPA fixture for `ivm-replay-binding-v1` proof attachments.
     ///
@@ -3337,9 +3220,9 @@ mod zk1 {
         let bytes = super::halo2_backend::verifying_key_to_processed_bytes(vk);
         write_tlv(buf, *b"H2VK", &bytes);
     }
+    #[cfg(test)]
     /// Append an `I10P` TLV (Pasta Fp instances) to an envelope buffer.
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    #[allow(dead_code)]
     pub fn wrap_append_instances_pasta_fp(
         instances: &[halo2_proofs::halo2curves::pasta::Fp],
         buf: &mut Vec<u8>,
@@ -3417,15 +3300,6 @@ macro_rules! advice {
             || $label,
             $column,
             0,
-            || halo2_proofs::circuit::Value::known($value)
-        )
-    };
-    ($region:ident, $label:literal, $column:expr, $offset:expr => $value:expr) => {
-        advice!(
-            @call $region,
-            || $label,
-            $column,
-            $offset,
             || halo2_proofs::circuit::Value::known($value)
         )
     };
@@ -4183,15 +4057,19 @@ mod pow5_depth {
 pub struct DedupCache {
     seen: BTreeSet<[u8; 32]>,
 }
+#[cfg(test)]
 #[cfg(feature = "zk-preverify")]
 const TRACE_DIGEST_BACKEND: &str = "zk-trace/digest";
+#[cfg(test)]
 #[cfg(feature = "zk-preverify")]
 static TRACE_DIGEST_QUEUE: OnceLock<Mutex<BTreeMap<u64, Vec<PipelineProofSnapshot>>>> =
     OnceLock::new();
+#[cfg(test)]
 #[cfg(feature = "zk-preverify")]
 fn trace_digest_queue() -> &'static Mutex<BTreeMap<u64, Vec<PipelineProofSnapshot>>> {
     TRACE_DIGEST_QUEUE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
+#[cfg(test)]
 /// Construct diagnostic metadata representing a verified IVM trace digest.
 #[cfg(feature = "zk-preverify")]
 pub fn make_trace_digest_artifact(
@@ -4211,6 +4089,7 @@ pub fn make_trace_digest_artifact(
         tx_hash: tx_hash_bytes,
     }
 }
+#[cfg(test)]
 /// Record a verified trace-digest artifact for a block height.
 #[cfg(feature = "zk-preverify")]
 pub fn queue_trace_digest(height: u64, artifact: PipelineProofSnapshot) {
@@ -4219,6 +4098,7 @@ pub fn queue_trace_digest(height: u64, artifact: PipelineProofSnapshot) {
         .expect("trace digest queue poisoned");
     guard.entry(height).or_default().push(artifact);
 }
+#[cfg(test)]
 /// Drain all queued trace-digest artifacts for the given block height.
 #[cfg(feature = "zk-preverify")]
 pub fn collect_trace_digests_for_height(height: u64) -> Vec<PipelineProofSnapshot> {
@@ -4666,6 +4546,7 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
     assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 impl DedupCache {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return true if this proof is new to the cache and insert it; false if duplicate.
     pub fn check_and_insert(&mut self, proof: &ProofBox) -> bool {
         self.seen.insert(hash_proof(proof))
@@ -9358,15 +9239,16 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
-    #![cfg_attr(not(test), allow(dead_code))]
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner},
         halo2curves::pasta::Fp as Scalar,
         plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
         poly::Rotation,
     };
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     #[derive(Clone, Default)]
     pub struct Add;
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl Circuit<Scalar> for Add {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9410,8 +9292,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct Mul;
+    #[cfg(test)]
     impl Circuit<Scalar> for Mul {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9455,8 +9339,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     #[derive(Clone, Default)]
     pub struct AddPublic;
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl Circuit<Scalar> for AddPublic {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9503,8 +9389,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct MulPublic;
+    #[cfg(test)]
     impl Circuit<Scalar> for MulPublic {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9551,8 +9439,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct IdPublic;
+    #[cfg(test)]
     impl Circuit<Scalar> for IdPublic {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9591,8 +9481,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     #[derive(Clone, Default)]
     pub struct AddTwoRows;
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl Circuit<Scalar> for AddTwoRows {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9634,16 +9526,36 @@ mod pasta_tiny {
                     advice!(region, "c0", c => Scalar::from(4))?;
                     // Row 1: 5 + 7 = 12
                     s.enable(&mut region, 1)?;
-                    advice!(region, "a1", a, 1 => Scalar::from(5))?;
-                    advice!(region, "b1", b, 1 => Scalar::from(7))?;
-                    advice!(region, "c1", c, 1 => Scalar::from(12))?;
+                    advice!(
+                        @call region,
+                        || "a1",
+                        a,
+                        1,
+                        || halo2_proofs::circuit::Value::known(Scalar::from(5))
+                    )?;
+                    advice!(
+                        @call region,
+                        || "b1",
+                        b,
+                        1,
+                        || halo2_proofs::circuit::Value::known(Scalar::from(7))
+                    )?;
+                    advice!(
+                        @call region,
+                        || "c1",
+                        c,
+                        1,
+                        || halo2_proofs::circuit::Value::known(Scalar::from(12))
+                    )?;
                     Ok(())
                 },
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct AddThree;
+    #[cfg(test)]
     impl Circuit<Scalar> for AddThree {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9691,8 +9603,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     #[derive(Clone, Default)]
     pub struct AddTwoInstPublic;
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl Circuit<Scalar> for AddTwoInstPublic {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9747,6 +9661,7 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     /// Circuit binding eight single-row instance columns to witness values.
     ///
     /// Historical binding gadget retained for tests and fixture generation. It proves
@@ -9759,6 +9674,7 @@ mod pasta_tiny {
         /// Witness values constrained to equal the corresponding public instances.
         pub values: [Scalar; 8],
     }
+    #[cfg(test)]
     impl Default for IvmOverlayBind {
         fn default() -> Self {
             Self {
@@ -9766,6 +9682,7 @@ mod pasta_tiny {
             }
         }
     }
+    #[cfg(test)]
     impl Circuit<Scalar> for IvmOverlayBind {
         type Config = (
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
@@ -9876,7 +9793,9 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     pub struct AnonTransfer2x2;
+    #[cfg(test)]
     impl Circuit<Scalar> for AnonTransfer2x2 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9925,8 +9844,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct VoteBool;
+    #[cfg(test)]
     impl Circuit<Scalar> for VoteBool {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -9965,8 +9886,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct CommitOpen; // algebraic test relation; not a cryptographic commitment
+    #[cfg(test)]
     impl Circuit<Scalar> for CommitOpen {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // m
@@ -10009,8 +9932,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct Merkle2; // algebraic test tree; not a collision-resistant Merkle tree
+    #[cfg(test)]
     impl Circuit<Scalar> for Merkle2 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // leaf
@@ -10074,8 +9999,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct VoteBoolCommit; // dev-test quintic relation; not a cryptographic commitment
+    #[cfg(test)]
     impl Circuit<Scalar> for VoteBoolCommit {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -10137,8 +10064,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct AnonTransfer2x2Commit; // commit(in/out) and sum conservation
+    #[cfg(test)]
     impl Circuit<Scalar> for AnonTransfer2x2Commit {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
@@ -10260,8 +10189,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct VoteBoolCommitMerkle2; // constrained Pow5 commit and two-level test tree
+    #[cfg(test)]
     impl Circuit<Scalar> for VoteBoolCommitMerkle2 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -10345,8 +10276,10 @@ mod pasta_tiny {
             )
         }
     }
+    #[cfg(test)]
     #[derive(Clone, Default)]
     pub struct AnonTransfer2x2CommitMerkle2;
+    #[cfg(test)]
     impl Circuit<Scalar> for AnonTransfer2x2CommitMerkle2 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
@@ -10498,18 +10431,24 @@ mod pasta_tiny {
         }
     }
     // Depth-8 membership variants using the sole constrained Pow5 test relation.
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     #[derive(Clone, Default)]
-    #[allow(dead_code)] // circuit scaffolding, constructed in gated tests/examples
     pub struct VoteBoolCommitMerkle8; // instances: [commit, root]
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_V: u64 = 1;
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_RHO: u64 = 12_345;
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_SIBS: [u64; 8] = [10, 11, 12, 13, 14, 15, 16, 17];
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_DIRS: [u64; 8] = [0; 8];
+    #[cfg(test)]
     fn pow5(x: Scalar) -> Scalar {
         let x2 = x * x;
         let x4 = x2 * x2;
         x4 * x
     }
+    #[cfg(test)]
     pub(super) fn constrained_pow5_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
         let lhs = lhs + Scalar::from(7u64);
         let rhs = rhs + Scalar::from(13u64);
@@ -10522,6 +10461,7 @@ mod pasta_tiny {
             Scalar::from(7u64),
         )
     }
+    #[cfg(test)]
     fn pow5_expr(
         expr: halo2_proofs::plonk::Expression<Scalar>,
     ) -> halo2_proofs::plonk::Expression<Scalar> {
@@ -10529,6 +10469,7 @@ mod pasta_tiny {
         let fourth = squared.clone() * squared;
         fourth * expr
     }
+    #[cfg(test)]
     fn constrained_pow5_pair_expr(
         lhs: halo2_proofs::plonk::Expression<Scalar>,
         rhs: halo2_proofs::plonk::Expression<Scalar>,
@@ -10538,6 +10479,7 @@ mod pasta_tiny {
         halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64)) * pow5_expr(lhs)
             + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64)) * pow5_expr(rhs)
     }
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     pub(super) fn vote_bool_commit_merkle8_witnesses(
         v: Scalar,
         rho: Scalar,
@@ -10559,6 +10501,7 @@ mod pasta_tiny {
         }
         (commit, witnesses, prev)
     }
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     pub(super) fn vote_bool_commit_merkle8_sample_inputs()
     -> (Scalar, Scalar, [Scalar; 8], [Scalar; 8]) {
         (
@@ -10568,6 +10511,7 @@ mod pasta_tiny {
             VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_DIRS.map(Scalar::from),
         )
     }
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
     impl Circuit<Scalar> for VoteBoolCommitMerkle8 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -10683,194 +10627,6 @@ mod pasta_tiny {
                     for (i, col) in ws.iter().enumerate() {
                         let w_val = witness_vals[i];
                         advice!(region, move "w{i}", *col => w_val)?;
-                    }
-                    Ok(())
-                },
-            )
-        }
-    }
-    #[derive(Clone, Default)]
-    #[allow(dead_code)] // circuit scaffolding, constructed in gated tests/examples
-    pub struct AnonTransfer2x2CommitMerkle8; // instances: [cm_in0, cm_in1, cm_out0, cm_out1, nf, root]
-    impl Circuit<Scalar> for AnonTransfer2x2CommitMerkle8 {
-        type Config = (
-            // values and randomness
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sk
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // serial
-            // siblings for in0 depth-8 path
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8], // sibs
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8], // dirs
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8], // w nodes
-            // instances
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 5], // cm_in0, cm_in1, cm_out0, cm_out1, nf
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,      // root
-            Selector,
-        );
-        type FloorPlanner = SimpleFloorPlanner;
-        type Params = ();
-        fn without_witnesses(&self) -> Self {
-            Self
-        }
-        #[allow(clippy::too_many_lines)]
-        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-            let in0 = meta.advice_column();
-            let in1 = meta.advice_column();
-            let out0 = meta.advice_column();
-            let out1 = meta.advice_column();
-            let r0 = meta.advice_column();
-            let r1 = meta.advice_column();
-            let r2 = meta.advice_column();
-            let r3 = meta.advice_column();
-            let sk = meta.advice_column();
-            let serial = meta.advice_column();
-            let mut sib = [in0; 8];
-            let mut dir = [in1; 8];
-            let mut w = [out0; 8];
-            for column in &mut sib {
-                *column = meta.advice_column();
-            }
-            for column in &mut dir {
-                *column = meta.advice_column();
-            }
-            for column in &mut w {
-                *column = meta.advice_column();
-            }
-            let cm_cols = [
-                meta.instance_column(),
-                meta.instance_column(),
-                meta.instance_column(),
-                meta.instance_column(),
-                meta.instance_column(),
-            ];
-            let root = meta.instance_column();
-            let s = meta.selector();
-            // Constrain the canonical local Pow5 test relation directly; there is no alternate
-            // assignment-only gadget path.
-            meta.create_gate("anon_transfer_commit_merkle8", |meta| {
-                let s = meta.query_selector(s);
-                let a = meta.query_advice(in0, Rotation::cur());
-                let b = meta.query_advice(in1, Rotation::cur());
-                let c = meta.query_advice(out0, Rotation::cur());
-                let d = meta.query_advice(out1, Rotation::cur());
-                let r0q = meta.query_advice(r0, Rotation::cur());
-                let r1q = meta.query_advice(r1, Rotation::cur());
-                let r2q = meta.query_advice(r2, Rotation::cur());
-                let r3q = meta.query_advice(r3, Rotation::cur());
-                let skq = meta.query_advice(sk, Rotation::cur());
-                let serq = meta.query_advice(serial, Rotation::cur());
-                let cm_in0 = meta.query_instance(cm_cols[0], Rotation::cur());
-                let cm_in1 = meta.query_instance(cm_cols[1], Rotation::cur());
-                let cm_out0 = meta.query_instance(cm_cols[2], Rotation::cur());
-                let cm_out1 = meta.query_instance(cm_cols[3], Rotation::cur());
-                let nf = meta.query_instance(cm_cols[4], Rotation::cur());
-                let rootq = meta.query_instance(root, Rotation::cur());
-                let h = |x: halo2_proofs::plonk::Expression<Scalar>,
-                         r: halo2_proofs::plonk::Expression<Scalar>| {
-                    let x2 = x.clone() * x.clone();
-                    let x4 = x2.clone() * x2.clone();
-                    let x5 = x4 * x.clone();
-                    let r2 = r.clone() * r.clone();
-                    let r4 = r2.clone() * r2.clone();
-                    let r5 = r4 * r.clone();
-                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2)) * x5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3)) * r5
-                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(7))
-                };
-                // cm constraints and conservation
-                let cm0 = h(a.clone(), r0q.clone());
-                let cm1 = h(b.clone(), r1q.clone());
-                let cm2 = h(c.clone(), r2q.clone());
-                let cm3 = h(d.clone(), r3q.clone());
-                let nf_exp = h(skq.clone(), serq.clone());
-                let mut cons = vec![
-                    s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
-                    s.clone() * (cm0.clone() - cm_in0),
-                    s.clone() * (cm1 - cm_in1),
-                    s.clone() * (cm2 - cm_out0),
-                    s.clone() * (cm3 - cm_out1),
-                    s.clone() * (nf_exp - nf),
-                ];
-                let constant =
-                    |value: u64| halo2_proofs::plonk::Expression::Constant(Scalar::from(value));
-                let shift = |expr: halo2_proofs::plonk::Expression<Scalar>, offset: u64| {
-                    expr + constant(offset)
-                };
-                let pow5 = |expr: halo2_proofs::plonk::Expression<Scalar>| {
-                    let squared = expr.clone() * expr.clone();
-                    let fourth = squared.clone() * squared.clone();
-                    fourth * expr
-                };
-                let pedersen_pair =
-                    |lhs: halo2_proofs::plonk::Expression<Scalar>,
-                     rhs: halo2_proofs::plonk::Expression<Scalar>| {
-                        constant(2) * pow5(lhs) + constant(3) * pow5(rhs)
-                    };
-                // depth-8 membership for cm0
-                let mut prev = cm0;
-                for i in 0..8 {
-                    let sibling = meta.query_advice(sib[i], Rotation::cur());
-                    let direction_bit = meta.query_advice(dir[i], Rotation::cur());
-                    let witness = meta.query_advice(w[i], Rotation::cur());
-                    cons.push(
-                        s.clone() * (direction_bit.clone() * (direction_bit.clone() - constant(1))),
-                    );
-                    let forward_hash =
-                        pedersen_pair(shift(prev.clone(), 7), shift(sibling.clone(), 13));
-                    let reverse_hash =
-                        pedersen_pair(shift(sibling.clone(), 7), shift(prev.clone(), 13));
-                    let expected_branch = (constant(1) - direction_bit.clone())
-                        * forward_hash.clone()
-                        + direction_bit.clone() * reverse_hash;
-                    cons.push(s.clone() * (witness.clone() - expected_branch));
-                    prev = witness;
-                }
-                cons.push(s * (prev - rootq));
-                cons
-            });
-            (
-                in0, in1, out0, out1, r0, r1, r2, r3, sk, serial, sib, dir, w, cm_cols, root, s,
-            )
-        }
-        #[allow(clippy::too_many_lines)]
-        fn synthesize(
-            &self,
-            cfg: Self::Config,
-            mut layouter: impl Layouter<Scalar>,
-        ) -> Result<(), PlonkError> {
-            let (in0, in1, out0, out1, r0, r1, r2, r3, sk, serial, sib, dir, w, _cm_cols, _root, s) =
-                cfg;
-            layouter.assign_region(
-                || "anon_transfer_commit_merkle8",
-                |mut region| {
-                    s.enable(&mut region, 0)?;
-                    advice!(region, "in0", in0 => Scalar::from(7))?;
-                    advice!(region, "in1", in1 => Scalar::from(5))?;
-                    advice!(region, "out0", out0 => Scalar::from(6))?;
-                    advice!(region, "out1", out1 => Scalar::from(6))?;
-                    advice!(region, "r0", r0 => Scalar::from(11))?;
-                    advice!(region, "r1", r1 => Scalar::from(13))?;
-                    advice!(region, "r2", r2 => Scalar::from(17))?;
-                    advice!(region, "r3", r3 => Scalar::from(19))?;
-                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
-                    advice!(region, "serial", serial => Scalar::from(42))?;
-                    for (i, col) in sib.iter().enumerate() {
-                        advice!(region, move "sib{i}", *col => Scalar::from(20 + i as u64))?;
-                    }
-                    for (i, col) in dir.iter().enumerate() {
-                        advice!(region, move "dir{i}", *col => Scalar::from(0))?;
-                    }
-                    let mut acc = Scalar::from(0);
-                    for (i, col) in w.iter().enumerate() {
-                        acc += Scalar::from(20 + i as u64);
-                        advice!(region, move "w{i}", *col => acc)?;
                     }
                     Ok(())
                 },

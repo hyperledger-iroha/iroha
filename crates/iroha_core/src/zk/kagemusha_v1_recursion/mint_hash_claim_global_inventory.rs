@@ -116,95 +116,9 @@ impl<F: KagemushaPoseidonFieldV1 + ff::WithSmallOrderMulGroup<3>> Circuit<F>
 /// the current hybrid Claim. Indices 0..96 remain the external statement;
 /// 97..110 retain reciprocal commitments/challenges/evaluations; 111..112
 /// state the Eq and Ep complete-source counts respectively.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "inventory proof is not selected by the release")
-)]
 pub(super) struct KagemushaClaimGlobalInventoryProofInputV1<F: KagemushaPoseidonFieldV1> {
     pub(super) circuit: KagemushaClaimGlobalInventoryCircuitV1<F>,
     pub(super) instances: Vec<Vec<F>>,
-}
-
-/// Prove the Eq scalar-verifier inventory without authorizing a monetary Claim.
-#[expect(dead_code, reason = "inventory proof awaits joined child verification")]
-pub(super) fn build_kagemusha_claim_eq_global_inventory_v1(
-    eq_carrier_params: &ParamsIPA<EqAffine>,
-    ep_carrier_params: &ParamsIPA<EpAffine>,
-    eq_shard_params: &ParamsIPA<EqAffine>,
-    ep_shard_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaMintHashClaimPairWitnessV1<'_>,
-    audits: &KagemushaMintHashClaimDeferredAuditsV1,
-) -> Result<KagemushaClaimGlobalInventoryProofInputV1<Fp>, String> {
-    audits.validate_release_inventory_v1()?;
-    validate_claim_pair_witness_v1(
-        eq_carrier_params,
-        ep_carrier_params,
-        eq_shard_params,
-        ep_shard_params,
-        &witness,
-    )?;
-    let scalar = build_claim_scalar_half_v1::<EqAffine>(
-        &super::super::composite::eq_succinct_vk(eq_carrier_params),
-        &super::super::composite::eq_succinct_vk(eq_shard_params),
-        KagemushaPastaParityV1::Eq,
-        witness.previous.map(|state| state.eq),
-        witness.previous_metadata,
-        &witness.successor,
-        witness.metadata,
-        &witness.eq_leaf,
-        witness.eq,
-        Some(audits.carrier_binding),
-    )?;
-    finish_global_inventory_v1::<EqAffine>(
-        scalar,
-        KagemushaPastaParityV1::Eq,
-        witness.metadata.eq_deferred_audit,
-        audits.eq_digest,
-        &audits.eq_carrier,
-        &audits.ep_carrier,
-        audits.ep.batch.source_count(),
-    )
-}
-
-/// Prove the Ep scalar-verifier inventory without authorizing a monetary Claim.
-#[expect(dead_code, reason = "inventory proof awaits joined child verification")]
-pub(super) fn build_kagemusha_claim_ep_global_inventory_v1(
-    eq_carrier_params: &ParamsIPA<EqAffine>,
-    ep_carrier_params: &ParamsIPA<EpAffine>,
-    eq_shard_params: &ParamsIPA<EqAffine>,
-    ep_shard_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaMintHashClaimPairWitnessV1<'_>,
-    audits: &KagemushaMintHashClaimDeferredAuditsV1,
-) -> Result<KagemushaClaimGlobalInventoryProofInputV1<Fq>, String> {
-    audits.validate_release_inventory_v1()?;
-    validate_claim_pair_witness_v1(
-        eq_carrier_params,
-        ep_carrier_params,
-        eq_shard_params,
-        ep_shard_params,
-        &witness,
-    )?;
-    let scalar = build_claim_scalar_half_v1::<EpAffine>(
-        &super::super::composite::ep_succinct_vk(ep_carrier_params),
-        &super::super::composite::ep_succinct_vk(ep_shard_params),
-        KagemushaPastaParityV1::Ep,
-        witness.previous.map(|state| state.ep),
-        witness.previous_metadata,
-        &witness.successor,
-        witness.metadata,
-        &witness.ep_leaf,
-        witness.ep,
-        Some(audits.carrier_binding),
-    )?;
-    finish_global_inventory_v1::<EpAffine>(
-        scalar,
-        KagemushaPastaParityV1::Ep,
-        witness.metadata.ep_deferred_audit,
-        audits.ep_digest,
-        &audits.ep_carrier,
-        &audits.eq_carrier,
-        audits.eq.batch.source_count(),
-    )
 }
 
 fn finish_global_inventory_v1<C>(

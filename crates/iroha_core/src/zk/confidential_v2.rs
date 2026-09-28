@@ -11,11 +11,14 @@ use halo2_proofs::{
 use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::proof::VerifyingKeyBox;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg(test)]
+use iroha_data_model::zk::StarkFriOpenProofV1;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_data_model::{
     NetworkId,
     confidential::ConfidentialStatus,
     proof::{ProofBox, VerifyingKeyRecord},
-    zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
+    zk::{BackendTag, OpenVerifyEnvelope},
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use zeroize::{Zeroize, Zeroizing};
@@ -101,10 +104,6 @@ macro_rules! define_confidential_public_input_spec {
             $($variant,)+
         }
         impl $field {
-            $field_visibility const ALL: [Self; $count] = [
-                Self::$first_variant,
-                $(Self::$variant,)+
-            ];
             $field_visibility const fn index(self) -> usize {
                 self as usize
             }
@@ -124,13 +123,6 @@ macro_rules! define_confidential_public_input_spec {
         impl<T> $values<T> {
             $field_visibility fn into_array(self) -> [T; $count] {
                 [self.$first_member, $(self.$member,)+]
-            }
-            $field_visibility fn from_array(values: [T; $count]) -> Self {
-                let [$first_member, $($member,)+] = values;
-                Self {
-                    $first_member,
-                    $($member,)+
-                }
             }
             $field_visibility fn try_map<U, E>(
                 self,
@@ -761,6 +753,7 @@ pub fn confidential_unshield_v3_vk_record(
 pub fn is_confidential_unshield_v3_circuit_id(raw: &str) -> bool {
     raw == CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID
 }
+#[cfg(test)]
 /// Parse the exact public columns from a confidential-transfer proof envelope.
 pub fn parse_transfer_public_inputs(
     proof_bytes: &[u8],
@@ -789,91 +782,7 @@ pub fn parse_transfer_public_inputs(
         columns[8][0],
     ))
 }
-/// Parse the exact public columns from a full-unshield proof envelope.
-pub fn parse_unshield_public_inputs(
-    proof_bytes: &[u8],
-) -> Result<
-    (
-        [[u8; 32]; 2],
-        [[u8; 32]; 2],
-        [u8; 32],
-        [u8; 32],
-        [u8; 32],
-        [u8; 32],
-    ),
-    String,
-> {
-    let public = exact_confidential_public_columns::<8>(
-        proof_bytes,
-        "full unshield",
-        ConfidentialUnshieldFullPublicInputV1::ALL.map(ConfidentialUnshieldFullPublicInputV1::name),
-    )
-    .map(ConfidentialUnshieldFullPublicInputsV1::from_array)?;
-    Ok((
-        [public.input_commitment_0, public.input_commitment_1],
-        [public.nullifier_0, public.nullifier_1],
-        public.root,
-        public.public_amount,
-        public.asset_tag,
-        public.network_tag,
-    ))
-}
-/// Parse the exact public columns from a change-unshield proof envelope.
-pub fn parse_unshield_public_inputs_v3(
-    proof_bytes: &[u8],
-) -> Result<
-    (
-        [[u8; 32]; 2],
-        [[u8; 32]; 2],
-        [u8; 32],
-        [u8; 32],
-        [u8; 32],
-        [u8; 32],
-        [u8; 32],
-    ),
-    String,
-> {
-    let public = exact_confidential_public_columns::<9>(
-        proof_bytes,
-        "change unshield",
-        ConfidentialUnshieldChangePublicInputV1::ALL
-            .map(ConfidentialUnshieldChangePublicInputV1::name),
-    )
-    .map(ConfidentialUnshieldChangePublicInputsV1::from_array)?;
-    Ok((
-        [public.input_commitment_0, public.input_commitment_1],
-        [public.nullifier_0, public.nullifier_1],
-        public.change_commitment_0,
-        public.root,
-        public.public_amount,
-        public.asset_tag,
-        public.network_tag,
-    ))
-}
-fn exact_confidential_public_columns<const N: usize>(
-    proof_bytes: &[u8],
-    label: &str,
-    field_names: [&str; N],
-) -> Result<[[u8; 32]; N], String> {
-    let columns = extract_confidential_public_columns(proof_bytes)
-        .ok_or_else(|| format!("failed to decode {label} proof public inputs"))?;
-    if columns.len() != N {
-        return Err(format!(
-            "{label} proof must expose exactly {N} public-input columns; found {}",
-            columns.len()
-        ));
-    }
-    let mut values = [[0; 32]; N];
-    for (index, (column, field_name)) in columns.iter().zip(field_names).enumerate() {
-        let [value] = column.as_slice() else {
-            return Err(format!(
-                "{label} public input '{field_name}' at column {index} must contain exactly one row"
-            ));
-        };
-        values[index] = *value;
-    }
-    Ok(values)
-}
+#[cfg(test)]
 fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
     let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).ok()?;
     envelope.validate_for_admission().ok()?;
@@ -994,6 +903,7 @@ fn confidential_poseidon_fq_spec_v3()
 }
 #[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
 std::thread_local! {
+    #[cfg(test)]
     static CONFIDENTIAL_POSEIDON_FQ_V3: std::cell::RefCell<
         ConfidentialNativePoseidonV3<halo2_proofs::halo2curves::pasta::Fq>,
     > = std::cell::RefCell::new(ConfidentialNativePoseidonV3::from_spec(
@@ -1668,9 +1578,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         public_amount: AssignedValue<Scalar>,
         asset_tag: AssignedValue<Scalar>,
         network_tag: AssignedValue<Scalar>,
-        input_amount: AssignedValue<Scalar>,
-        change_amount: Option<AssignedValue<Scalar>>,
-        has_second_input: AssignedValue<Scalar>,
     }
     impl AssignedUnshieldRelationV4 {
         fn full_public_inputs(
@@ -1861,7 +1768,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         let public_nullifier_1 = gate.mul(ctx, present_input_1, nullifiers[1]);
         let input_sum = gate.add(ctx, input_amounts[0], input_amounts[1]);
         let mut change_commitment_0 = None;
-        let mut change_amount = None;
         let public_amount = if let UnshieldWitnessRef::Change(change_witness) = witness {
             let include_output_0 = change_witness.is_some_and(|value| value.include_output_0);
             let present_output_0 = ctx.load_witness(if include_output_0 {
@@ -1872,7 +1778,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             gate.assert_bit(ctx, present_output_0);
             let output_amount_u128 = change_witness.map_or(0, |value| value.output_0_amount);
             let output_amount = ctx.load_witness(scalar_from_u128(output_amount_u128));
-            change_amount = Some(output_amount);
             range.range_check(
                 ctx,
                 output_amount,
@@ -1946,49 +1851,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             public_amount,
             asset_tag: asset,
             network_tag: network,
-            input_amount: input_sum,
-            change_amount,
-            has_second_input: present_input_1,
-        })
-    }
-    /// Already-constrained change-unshield cells needed by recursive StepEq.
-    #[derive(Clone, Debug)]
-    #[expect(
-        dead_code,
-        reason = "Retain the exact constrained amount and presence cells for recursive unshield composition"
-    )]
-    pub(crate) struct AssignedConfidentialUnshieldChangeStepV4 {
-        /// Existing standalone public schema in its exact order.
-        pub(crate) public: [AssignedValue<Scalar>; 9],
-        /// Sum of the one or two constrained input openings.
-        pub(crate) input_amount: AssignedValue<Scalar>,
-        /// Constrained confidential change opening amount.
-        pub(crate) change_amount: AssignedValue<Scalar>,
-        /// Constrained optional-input presence bit.
-        pub(crate) has_second_input: AssignedValue<Scalar>,
-    }
-    /// Assign the secure change-unshield relation into an existing Eq/Fp
-    /// builder and retain its constrained amount cells for StepEq copy-binding.
-    #[expect(
-        dead_code,
-        reason = "Retain the shared relation adapter for recursive unshield composition"
-    )]
-    pub(crate) fn assign_confidential_unshield_change_step_v4<const DEPTH: usize>(
-        ctx: &mut Context<Scalar>,
-        range: &halo2_base::gates::RangeChip<Scalar>,
-        witness: Option<&ConfidentialUnshieldWitnessV3>,
-    ) -> Result<AssignedConfidentialUnshieldChangeStepV4, String> {
-        let relation =
-            assign_unshield_relation::<DEPTH>(ctx, range, UnshieldWitnessRef::Change(witness))?;
-        let public = relation.change_public_inputs()?.into_array();
-        let change_amount = relation.change_amount.ok_or_else(|| {
-            "change-unshield relation omitted its constrained change amount".to_owned()
-        })?;
-        Ok(AssignedConfidentialUnshieldChangeStepV4 {
-            public,
-            input_amount: relation.input_amount,
-            change_amount,
-            has_second_input: relation.has_second_input,
         })
     }
     fn unshield_builder<const DEPTH: usize>(
@@ -3051,12 +2913,14 @@ pub fn derive_confidential_owner_tag_v2_with_diversifier(
 ) -> Result<[u8; 32], String> {
     derive_confidential_owner_tag_v3_with_diversifier(spend_key, diversifier)
 }
+#[cfg(test)]
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the field tag for an asset-definition identifier.
 pub fn derive_confidential_asset_tag_v2(asset_definition_id: &str) -> [u8; 32] {
     derive_confidential_asset_tag_v3(asset_definition_id)
         .expect("validated asset identifiers derive non-zero V3 tags")
 }
+#[cfg(test)]
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the field tag for an exact genesis-derived network identity.
 pub fn derive_confidential_network_tag_v2(network_id: &NetworkId) -> [u8; 32] {
@@ -3078,6 +2942,7 @@ pub fn derive_confidential_note_v2(
         owner_tag,
     )
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a confidential spend nullifier from its opening and context.
 pub fn derive_confidential_nullifier_v2(
@@ -3093,11 +2958,6 @@ pub fn derive_confidential_nullifier_v2(
         derive_confidential_network_tag_v3(network_id).expect("exact network identity"),
     )
     .expect("validated confidential nullifier inputs")
-}
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Encode an exact `u128` amount as one canonical Pasta scalar.
-pub fn encode_confidential_amount_v2(amount: u128) -> [u8; 32] {
-    scalar_to_repr_bytes(scalar_from_u128(amount))
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the canonical empty root of the fixed confidential tree.
@@ -3352,6 +3212,7 @@ fn confidential_commitment_leaf_v3(commitment: [u8; 32], index: usize) -> Result
 }
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 std::thread_local! {
+    #[cfg(test)]
     static CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -3365,6 +3226,7 @@ fn confidential_commitment_leaf_hash_calls_v3() -> usize {
 }
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 std::thread_local! {
+    #[cfg(test)]
     static CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }

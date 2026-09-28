@@ -113,26 +113,31 @@ pub struct ZkAmsMkheSecurityAttackRecordV1 {
 }
 impl ZkAmsMkheSecurityAttackRecordV1 {
     /// Estimator family used for this result.
+    #[cfg(test)]
     #[must_use]
     pub const fn suite(self) -> ZkAmsMkheSecurityEstimatorSuiteV1 {
         self.suite
     }
     /// Exact attack identity.
+    #[cfg(test)]
     #[must_use]
     pub const fn attack(self) -> ZkAmsMkheSecurityAttackV1 {
         self.attack
     }
     /// Exact 50-digit estimator output for `log2(rop)`.
+    #[cfg(test)]
     #[must_use]
     pub const fn rop_log2(self) -> &'static str {
         self.rop_log2
     }
     /// Conservative integral security strength used by admission.
+    #[cfg(test)]
     #[must_use]
     pub const fn rop_log2_floor(self) -> u16 {
         self.rop_log2_floor
     }
     /// SHA-256 of the estimator's exact canonical result representation.
+    #[cfg(test)]
     #[must_use]
     pub const fn result_repr_sha256(self) -> [u8; 32] {
         self.result_repr_sha256
@@ -218,6 +223,7 @@ pub struct ZkAmsMkheSecurityCertificateV1 {
 }
 impl ZkAmsMkheSecurityCertificateV1 {
     /// Certificate schema version.
+    #[cfg(test)]
     #[must_use]
     pub const fn version(self) -> u8 {
         self.version
@@ -233,26 +239,31 @@ impl ZkAmsMkheSecurityCertificateV1 {
         self.candidate_input_digest
     }
     /// Pinned upstream lattice-estimator revision.
+    #[cfg(test)]
     #[must_use]
     pub const fn lattice_estimator_commit(self) -> [u8; 20] {
         self.lattice_estimator_commit
     }
     /// SHA-256 of the verified official SageMath disk image.
+    #[cfg(test)]
     #[must_use]
     pub const fn sage_dmg_sha256(self) -> [u8; 32] {
         self.sage_dmg_sha256
     }
     /// SHA-256 of the exact fail-closed estimator runner.
+    #[cfg(test)]
     #[must_use]
     pub const fn estimator_runner_sha256(self) -> [u8; 32] {
         self.estimator_runner_sha256
     }
     /// SHA-256 of the canonical estimator transcript.
+    #[cfg(test)]
     #[must_use]
     pub const fn estimator_transcript_sha256(self) -> [u8; 32] {
         self.estimator_transcript_sha256
     }
     /// Exact ordered attack results.
+    #[cfg(test)]
     #[must_use]
     pub const fn attacks(&self) -> &[ZkAmsMkheSecurityAttackRecordV1; 6] {
         &self.attacks

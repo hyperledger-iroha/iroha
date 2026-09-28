@@ -4,36 +4,47 @@
 //! exact ZK-AMS coefficient-membership arguments.  It deliberately does not
 //! reuse FCMP's 32-byte cycle transcript: T256 proof points occupy 33 bytes and
 //! its scalar field uses the canonical Vega little-endian proof encoding.
-#![allow(dead_code)]
+#[cfg(test)]
+use super::sponge::Keccak256;
 #[cfg(test)]
 use super::sponge::keccak256;
-use super::{
-    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1,
-    sponge::Keccak256,
+use super::{VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1};
+#[cfg(test)]
+use crate::generalized_bulletproof::{
+    ArithmeticCircuitWitness, ProofRandomSource, SecretMultiexpBuilder,
+    exact_small_coefficient_source_v1 as exact_small, try_exact_capacity_vec_v1,
 };
 use crate::generalized_bulletproof::{
-    ArithmeticCircuitWitness, GeneralizedBulletproofErrorV1, ProofGenerators, ProofPoint,
-    ProofRandomSource, ProofScalar, ProofSuite, SecretMultiexpBuilder, VectorCommitmentOpening,
-    exact_small_coefficient_source_v1 as exact_small, try_exact_capacity_vec_v1,
+    GeneralizedBulletproofErrorV1, ProofGenerators, ProofPoint, ProofScalar, ProofSuite,
+    VectorCommitmentOpening,
 };
 use core::ops::{AddAssign, Neg, SubAssign};
 use halo2curves::ff::Field as _;
-use std::sync::{Mutex, OnceLock};
+#[cfg(test)]
+use std::sync::Mutex;
+use std::sync::OnceLock;
+#[cfg(test)]
 use thiserror::Error;
+#[cfg(test)]
 #[path = "bulletproof_t256_transcript_v1.rs"]
 mod transcript_v1;
+#[cfg(test)]
 #[path = "bulletproof_t256_workspace_lease_v1.rs"]
 mod workspace_lease_v1;
+#[cfg(test)]
 use transcript_v1::{
     ExactT256ProofBufferV1, T256BulletproofProverTranscriptV1, T256BulletproofVerifierTranscriptV1,
 };
+#[cfg(test)]
 pub(in crate::vega) use workspace_lease_v1::acquire_zk_ams_t256_cpk_workspace_v1;
+#[cfg(test)]
 use workspace_lease_v1::{
     T256MembershipWorkspaceRoleV1, ZK_AMS_T256_MEMBERSHIP_WORKSPACE_LEASE_V1,
     acquire_zk_ams_t256_membership_workspace_v1, preflight_zk_ams_t256_membership_opening_v1,
     preflight_zk_ams_t256_membership_proving_v1,
 };
 const T256_BP_MAX_GATES_V1: usize = 65_536;
+#[cfg(test)]
 const T256_BP_GENERATOR_BASIS_DOMAIN_V1: &[u8] =
     b"iroha.generalized-bulletproof.t256.generator-basis.v1";
 const T256_BP_G_LABEL_V1: &[u8] = b"iroha.generalized-bulletproof.t256.g.v1";
@@ -45,10 +56,15 @@ pub(super) const ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1: [u8; 32] = [
     0x18, 0x10, 0xe5, 0x0b, 0x84, 0x8b, 0x38, 0xd0, 0xc2, 0xb3, 0xcd, 0x96, 0xaf, 0xf9, 0xa3, 0xf8,
 ];
 pub(super) const ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1: usize = 16_384;
+#[cfg(test)]
 pub(super) const ZK_AMS_MEMBERSHIP_MAX_CHUNK_ORDINAL_V1: u16 = 47;
+#[cfg(test)]
 const ZK_AMS_MEMBERSHIP_WIRE_MAGIC_V1: [u8; 4] = *b"ZMBP";
+#[cfg(test)]
 const ZK_AMS_MEMBERSHIP_WIRE_VERSION_V1: u8 = 1;
+#[cfg(test)]
 const ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1: usize = 4 + 1 + 1 + 2 + 4 + 33 + 2;
+#[cfg(test)]
 const ZK_AMS_MEMBERSHIP_FIXED_PROOF_POINTS_V1: usize = 9;
 const ZK_AMS_MEMBERSHIP_FIXED_PROOF_SCALARS_V1: usize = 5;
 const ZK_AMS_MEMBERSHIP_PRE_IPA_SCALARS_V1: usize = 3;
@@ -59,6 +75,7 @@ const _: () = {
             == ZK_AMS_MEMBERSHIP_FIXED_PROOF_SCALARS_V1
     );
 };
+#[cfg(test)]
 fn clear_t256_scalar_encoding_bytes_v1(bytes: &mut [u8; 32]) {
     bytes.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -66,6 +83,7 @@ fn clear_t256_scalar_encoding_bytes_v1(bytes: &mut [u8; 32]) {
     #[cfg(test)]
     T256_SCALAR_ENCODING_CLEARS_V1.with(|clears| clears.set(clears.get().saturating_add(1)));
 }
+#[cfg(test)]
 fn clear_t256_point_encoding_bytes_v1(bytes: &mut [u8; 33]) {
     bytes.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -73,7 +91,9 @@ fn clear_t256_point_encoding_bytes_v1(bytes: &mut [u8; 33]) {
     #[cfg(test)]
     T256_POINT_ENCODING_CLEARS_V1.with(|clears| clears.set(clears.get().saturating_add(1)));
 }
+#[cfg(test)]
 struct SecretT256ScalarEncodingV1([u8; 32]);
+#[cfg(test)]
 impl SecretT256ScalarEncodingV1 {
     fn new(value: &Scalar) -> Self {
         let mut owned = Self([0_u8; 32]);
@@ -84,11 +104,13 @@ impl SecretT256ScalarEncodingV1 {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for SecretT256ScalarEncodingV1 {
     fn drop(&mut self) {
         clear_t256_scalar_encoding_bytes_v1(&mut self.0);
     }
 }
+#[cfg(test)]
 /// Lend one borrowed T256 scalar's owned canonical encoding to an explicit
 /// publication boundary and erase the bytes after success, error, or unwind.
 pub(super) fn with_borrowed_t256_scalar_encoding_v1<T>(
@@ -100,12 +122,14 @@ pub(super) fn with_borrowed_t256_scalar_encoding_v1<T>(
     drop(encoded);
     result
 }
+#[cfg(test)]
 /// Owner for one borrowed private T256 point's canonical proof encoding.
 ///
 /// Construction starts with an owned zero buffer so even identity/error exits
 /// run the same byte eraser. The owner stays live across all transcript and
 /// proof writes and is also erased if one of those writes unwinds.
 pub(super) struct SecretT256PointEncodingV1([u8; 33]);
+#[cfg(test)]
 impl SecretT256PointEncodingV1 {
     pub(super) fn new(point: &Point) -> Result<Self, GeneralizedBulletproofErrorV1> {
         let mut owned = Self([0_u8; 33]);
@@ -131,6 +155,7 @@ impl SecretT256PointEncodingV1 {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for SecretT256PointEncodingV1 {
     fn drop(&mut self) {
         clear_t256_point_encoding_bytes_v1(&mut self.0);
@@ -149,6 +174,7 @@ std::thread_local! {
 pub(super) fn secret_msm_test_observations_v1() -> (usize, usize) {
     T256_SECRET_MSM_OBSERVATIONS_V1.with(core::cell::Cell::get)
 }
+#[cfg(test)]
 /// Best-effort erased named copy of a T256 prover secret.
 ///
 /// The public scalar type is intentionally `Copy` for field arithmetic, so
@@ -156,17 +182,21 @@ pub(super) fn secret_msm_test_observations_v1() -> (usize, usize) {
 /// its own stack instance.  Owned witness vectors are cleared independently by
 /// the generalized-Bulletproof RAII containers.
 pub(super) struct ZeroizingT256ScalarCopyV1(Scalar);
+#[cfg(test)]
 struct BorrowedT256ScalarCopyV1<'a>(&'a mut Scalar);
+#[cfg(test)]
 impl BorrowedT256ScalarCopyV1<'_> {
     fn get(&self) -> Scalar {
         *self.0
     }
 }
+#[cfg(test)]
 impl Drop for BorrowedT256ScalarCopyV1<'_> {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
+#[cfg(test)]
 impl ZeroizingT256ScalarCopyV1 {
     pub(super) fn new(mut value: Scalar) -> Self {
         let incoming = BorrowedT256ScalarCopyV1(&mut value);
@@ -194,16 +224,19 @@ impl ZeroizingT256ScalarCopyV1 {
         self.0 += *left * *right;
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingT256ScalarCopyV1 {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
+#[cfg(test)]
 /// Audited RAII owner for a vector of secret T256 scalars.
 ///
 /// This is crate-private so other native T256 protocols reuse the same
 /// clearing boundary instead of growing protocol-local best-effort erasers.
 pub(super) struct ZeroizingT256ScalarVecV1(Vec<Scalar>);
+#[cfg(test)]
 impl ZeroizingT256ScalarVecV1 {
     #[cfg(test)]
     pub(super) fn new(values: Vec<Scalar>) -> Self {
@@ -259,11 +292,13 @@ impl ZeroizingT256ScalarVecV1 {
         core::mem::take(&mut self.0)
     }
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZeroizingT256ScalarVecV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZeroizingT256ScalarVecV1([REDACTED])")
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingT256ScalarVecV1 {
     fn drop(&mut self) {
         for scalar in &mut self.0 {
@@ -285,6 +320,7 @@ std::thread_local! {
 pub(super) fn zeroizing_t256_scalar_vec_drop_count_v1() -> usize {
     ZEROIZING_T256_SCALAR_VEC_DROPS_V1.with(core::cell::Cell::get)
 }
+#[cfg(test)]
 /// Exact small-coefficient set certified by one membership proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -294,6 +330,7 @@ pub(super) enum ZkAmsT256MembershipBoundV1 {
     /// Coefficients are members of `{-2, -1, 0, 1, 2}`.
     Two = 2,
 }
+#[cfg(test)]
 impl ZkAmsT256MembershipBoundV1 {
     fn gates_per_coefficient(self) -> usize {
         match self {
@@ -317,6 +354,7 @@ impl ZkAmsT256MembershipBoundV1 {
         }
     }
 }
+#[cfg(test)]
 impl TryFrom<u8> for ZkAmsT256MembershipBoundV1 {
     type Error = ZkAmsT256MembershipErrorV1;
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -327,6 +365,7 @@ impl TryFrom<u8> for ZkAmsT256MembershipBoundV1 {
         }
     }
 }
+#[cfg(test)]
 /// Stable failure classes for exact T256 coefficient-membership proofs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ZkAmsT256MembershipErrorV1 {
@@ -361,6 +400,7 @@ pub(super) enum ZkAmsT256MembershipErrorV1 {
     #[error(transparent)]
     Backend(#[from] GeneralizedBulletproofErrorV1),
 }
+#[cfg(test)]
 /// Canonical public evidence for one coefficient chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsT256MembershipProofV1 {
@@ -370,6 +410,7 @@ pub(super) struct ZkAmsT256MembershipProofV1 {
     commitment: Point,
     proof: Vec<u8>,
 }
+#[cfg(test)]
 struct BorrowedZkAmsT256MembershipProofWireV1<'a> {
     bound: ZkAmsT256MembershipBoundV1,
     chunk_ordinal: u16,
@@ -378,6 +419,7 @@ struct BorrowedZkAmsT256MembershipProofWireV1<'a> {
     proof: &'a [u8],
     padded_gates: usize,
 }
+#[cfg(test)]
 struct BorrowedZkAmsT256MembershipHeaderV1<'a> {
     bound: ZkAmsT256MembershipBoundV1,
     chunk_ordinal: u16,
@@ -386,6 +428,7 @@ struct BorrowedZkAmsT256MembershipHeaderV1<'a> {
     encoded_proof_len: usize,
     proof: &'a [u8],
 }
+#[cfg(test)]
 fn borrow_zk_ams_t256_membership_header_v1(
     bytes: &[u8],
 ) -> Result<BorrowedZkAmsT256MembershipHeaderV1<'_>, ZkAmsT256MembershipErrorV1> {
@@ -423,6 +466,7 @@ fn borrow_zk_ams_t256_membership_header_v1(
         proof: &bytes[ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1..],
     })
 }
+#[cfg(test)]
 fn borrow_zk_ams_t256_membership_proof_wire_exact_v1(
     bytes: &[u8],
 ) -> Result<BorrowedZkAmsT256MembershipProofWireV1<'_>, ZkAmsT256MembershipErrorV1> {
@@ -445,10 +489,12 @@ fn borrow_zk_ams_t256_membership_proof_wire_exact_v1(
         padded_gates,
     })
 }
+#[cfg(test)]
 struct CanonicalMembershipProofSyntaxCursorV1<'a> {
     proof: &'a [u8],
     cursor: usize,
 }
+#[cfg(test)]
 impl CanonicalMembershipProofSyntaxCursorV1<'_> {
     fn read_point(&mut self) -> Result<(), GeneralizedBulletproofErrorV1> {
         let end = self
@@ -498,6 +544,7 @@ impl CanonicalMembershipProofSyntaxCursorV1<'_> {
         Ok(())
     }
 }
+#[cfg(test)]
 fn preflight_generalized_membership_proof_syntax_v1(
     proof: &[u8],
     padded_gates: usize,
@@ -526,6 +573,7 @@ fn preflight_generalized_membership_proof_syntax_v1(
     cursor.finish()?;
     Ok(())
 }
+#[cfg(test)]
 /// Allocation-free canonical syntax preflight for one exact membership chunk.
 ///
 /// This validates the fixed wrapper, outer commitment, all generalized-
@@ -547,6 +595,7 @@ pub(super) fn preflight_zk_ams_t256_membership_chunk_wire_v1(
     preflight_generalized_membership_proof_syntax_v1(borrowed.proof, borrowed.padded_gates)?;
     Ok(borrowed.commitment)
 }
+#[cfg(test)]
 impl ZkAmsT256MembershipProofV1 {
     pub(super) fn bound(&self) -> ZkAmsT256MembershipBoundV1 {
         self.bound
@@ -797,6 +846,7 @@ where
     ProofGenerators::new(g, h, g_bold, h_bold)
         .expect("fixed T256 Bulletproof basis has canonical shape")
 }
+#[cfg(test)]
 /// Digest of every point in the full, ordered T256 generator basis.
 pub(super) fn zk_ams_t256_bulletproof_generator_basis_digest_v1() -> [u8; 32] {
     static DIGEST: OnceLock<[u8; 32]> = OnceLock::new();
@@ -823,6 +873,7 @@ pub(super) fn zk_ams_t256_bulletproof_generator_basis_digest_v1() -> [u8; 32] {
         hash.finalize()
     })
 }
+#[cfg(test)]
 fn membership_shape(
     coefficient_count: usize,
     bound: ZkAmsT256MembershipBoundV1,
@@ -854,6 +905,7 @@ fn membership_shape(
     }
     Ok((actual_gates, padded_gates, constraint_count))
 }
+#[cfg(test)]
 fn membership_proof_len(padded_gates: usize) -> Result<usize, ZkAmsT256MembershipErrorV1> {
     if padded_gates == 0 || !padded_gates.is_power_of_two() {
         return Err(ZkAmsT256MembershipErrorV1::CoefficientCount);
@@ -876,6 +928,7 @@ fn membership_proof_len(padded_gates: usize) -> Result<usize, ZkAmsT256Membershi
         })
         .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow.into())
 }
+#[cfg(test)]
 fn signed_scalar(coefficient: i8) -> Scalar {
     // Obtain the absolute value and sign with arithmetic masks, then select
     // the field sign algebraically. Valid membership coefficients are in
@@ -888,6 +941,7 @@ fn signed_scalar(coefficient: i8) -> Scalar {
     let magnitude = Scalar::from_u64(magnitude);
     magnitude - (Scalar::from_u64(sign) * (magnitude + magnitude))
 }
+#[cfg(test)]
 fn append_boolean_witness(
     a_l: &mut ZeroizingT256ScalarVecV1,
     a_r: &mut ZeroizingT256ScalarVecV1,
@@ -898,6 +952,7 @@ fn append_boolean_witness(
     a_r.try_push_within_capacity(bit.get())?;
     Ok(())
 }
+#[cfg(test)]
 fn membership_commitment_for_suite<S>(
     coefficients: &[i8],
     bound: ZkAmsT256MembershipBoundV1,
@@ -939,6 +994,7 @@ where
     }
     Ok((commitment, values, actual_gates))
 }
+#[cfg(test)]
 fn membership_witness<S>(
     coefficients: &[i8],
     bound: ZkAmsT256MembershipBoundV1,
@@ -981,6 +1037,7 @@ where
     let witness = ArithmeticCircuitWitness::<S>::new(a_l.take(), a_r.take(), openings)?;
     Ok((secret_commitment, witness))
 }
+#[cfg(test)]
 fn prove_membership_chunk_for_suite<S, R>(
     context_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
@@ -1044,26 +1101,31 @@ where
         transcript_digest,
     ))
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum ZkAmsT256MembershipVerificationInputV1<'a> {
     Owned(&'a ZkAmsT256MembershipProofV1),
     Wire(&'a [u8]),
 }
+#[cfg(test)]
 enum BorrowedT256MembershipCommitmentV1<'a> {
     Point(Point),
     Wire(&'a [u8]),
 }
+#[cfg(test)]
 struct PreparedZkAmsT256MembershipVerificationV1<'a> {
     commitment: Point,
     proof: &'a [u8],
     padded_gates: usize,
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum T256MembershipVerifierBasisV1 {
     Canonical,
     #[cfg(test)]
     Fixed([u8; 32]),
 }
+#[cfg(test)]
 fn prepare_zk_ams_t256_membership_verification_v1<'a>(
     context_digest: [u8; 32],
     expected_chunk_ordinal: u16,
@@ -1129,6 +1191,7 @@ fn prepare_zk_ams_t256_membership_verification_v1<'a>(
         padded_gates,
     })
 }
+#[cfg(test)]
 fn verify_prepared_membership_chunk_for_suite<S>(
     context_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
@@ -1160,6 +1223,7 @@ where
     statement.verify(&mut transcript)?;
     Ok(transcript.finish()?)
 }
+#[cfg(test)]
 fn verify_membership_input_for_suite_with_lease_v1<S>(
     context_digest: [u8; 32],
     expected_chunk_ordinal: u16,
@@ -1203,6 +1267,7 @@ where
         prepared,
     )
 }
+#[cfg(test)]
 fn verify_zk_ams_t256_membership_input_v1(
     context_digest: [u8; 32],
     expected_chunk_ordinal: u16,
@@ -1219,6 +1284,7 @@ fn verify_zk_ams_t256_membership_input_v1(
         T256MembershipVerifierBasisV1::Canonical,
     )
 }
+#[cfg(test)]
 /// Prove exact membership for one release-shape 16,384-coefficient chunk.
 pub(super) fn prove_zk_ams_t256_membership_chunk_v1<R: ProofRandomSource>(
     context_digest: [u8; 32],
@@ -1254,6 +1320,7 @@ pub(super) fn prove_zk_ams_t256_membership_chunk_v1<R: ProofRandomSource>(
         rng,
     )
 }
+#[cfg(test)]
 /// Commit one exact release-shape membership chunk under the canonical T256 basis.
 ///
 /// This is the shared commitment primitive for state-owned opening checks and
@@ -1282,6 +1349,7 @@ pub(super) fn commit_zk_ams_t256_membership_chunk_v1(
     )
     .map(|(commitment, _values, _actual_gates)| *commitment.expose_ref())
 }
+#[cfg(test)]
 /// Verify exact membership for one release-shape 16,384-coefficient chunk.
 pub(super) fn verify_zk_ams_t256_membership_chunk_v1(
     context_digest: [u8; 32],
@@ -1296,6 +1364,7 @@ pub(super) fn verify_zk_ams_t256_membership_chunk_v1(
         ZkAmsT256MembershipVerificationInputV1::Owned(evidence),
     )
 }
+#[cfg(test)]
 /// Verify one canonical borrowed release-shape membership chunk without
 /// allocating an owned proof buffer.
 pub(super) fn verify_zk_ams_t256_membership_chunk_wire_v1(

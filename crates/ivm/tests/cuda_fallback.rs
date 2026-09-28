@@ -20,8 +20,6 @@ fn cuda_helpers_fall_back_when_disabled() {
     assert!(ivm::aesdec_cuda([0u8; 16], [0u8; 16]).is_none());
     assert!(ivm::aesenc_batch_cuda(&[[0u8; 16]], [0u8; 16]).is_none());
     assert!(ivm::aesdec_batch_cuda(&[[0u8; 16]], [0u8; 16]).is_none());
-    assert!(ivm::aesenc_rounds_batch_cuda(&[[0u8; 16]], &[[0u8; 16]]).is_none());
-    assert!(ivm::aesdec_rounds_batch_cuda(&[[0u8; 16]], &[[0u8; 16]]).is_none());
     // Sorting helper returns None without CUDA.
     let mut hi = [5u64, 3, 5, 3, 3];
     let mut lo = [7u64, 9, 1, 2, 1];

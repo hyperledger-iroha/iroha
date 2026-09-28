@@ -527,7 +527,7 @@ fn direct_journal_file_metadata(path: &Path, max_bytes: usize) -> io::Result<Sec
     let metadata = secure_file_metadata::from_path(path)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
-        || !journal_file_is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&metadata)
         || metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX)
     {
         return Err(io::Error::new(
@@ -536,22 +536,6 @@ fn direct_journal_file_metadata(path: &Path, max_bytes: usize) -> io::Result<Sec
         ));
     }
     Ok(metadata)
-}
-fn journal_file_is_single_link(metadata: &SecureMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
 }
 #[cfg(unix)]
 fn journal_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {

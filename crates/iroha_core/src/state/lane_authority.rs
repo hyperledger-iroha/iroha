@@ -520,6 +520,62 @@ pub(super) fn peer_pool_with_inputs(
     Ok(ranked_stake_peer_pool(candidates))
 }
 
+/// Resolve the peers authoritative for an active route: the global committee.
+///
+/// Every transaction executes in the global Sumeragi block, so lanes and dataspaces are routing
+/// labels. An active route's authority is the committee the lag-2 schedule derives for
+/// `authority_height` (every live validator, in the core's canonical order), the same committee
+/// QueuePlan admission binds. The reported fault tolerance is the global `⌊(n − 1) / 3⌋`.
+///
+/// # Errors
+/// The dataspace is unknown, the lane is not active on it at `authority_height`, a live validator
+/// key is not BLS-normal, or no validator is live.
+pub(crate) fn resolve_global_route(
+    world: &impl WorldReadOnly,
+    route: LaneAuthorityRoute,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    authority_height: u64,
+) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+    if nexus.dataspace_catalog.by_id(route.dataspace_id()).is_none() {
+        return Err(LaneAuthorityError::UnknownDataspace {
+            dataspace_id: route.dataspace_id(),
+        });
+    }
+    if consensus_lane_dataspace_at_height(route.lane_id(), nexus, authority_height)
+        != Some(route.dataspace_id())
+    {
+        return Err(LaneAuthorityError::InactiveRoute {
+            lane_id: route.lane_id(),
+            dataspace_id: route.dataspace_id(),
+            authority_height,
+        });
+    }
+    let validators = crate::sumeragi::schedule::scheduled_committee(world, authority_height)
+        .map_err(|_| LaneAuthorityError::InvalidAuthoritySource {
+            lane_id: route.lane_id(),
+            dataspace_id: route.dataspace_id(),
+            authority_height,
+        })?;
+    let fault_tolerance = validators
+        .len()
+        .checked_sub(1)
+        .map(|faulty| faulty / 3)
+        .and_then(|faulty| u32::try_from(faulty).ok())
+        .ok_or(LaneAuthorityError::UndersizedPool {
+            lane_id: route.lane_id(),
+            dataspace_id: route.dataspace_id(),
+            authority_height,
+            required: 1,
+            actual: validators.len(),
+        })?;
+    Ok(LaneAuthorityCommittee::new(
+        route,
+        authority_height,
+        fault_tolerance,
+        validators,
+    ))
+}
+
 /// Resolve an exact deterministic `3f+1` route committee from immutable state inputs.
 pub(super) fn resolve_from_sources(
     world: &impl WorldReadOnly,
@@ -767,4 +823,93 @@ pub(super) fn authenticated_committee_for_descriptor(
         state.network_id,
         finality.height_context.epoch,
     )
+}
+
+#[cfg(test)]
+mod global_route_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+
+    fn state_with_validators(seeds: &[u8]) -> State {
+        let mut state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let keys = seeds
+            .iter()
+            .map(|seed| KeyPair::from_seed(vec![*seed; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        {
+            let mut world = state.world.block();
+            let mut peers = world.peers_mut_for_testing().transaction();
+            for key in &keys {
+                peers.push(PeerId::new(key.public_key().clone()));
+            }
+            peers.apply();
+            world.commit();
+        }
+        for key in &keys {
+            let pop = iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("PoP");
+            state
+                .world
+                .register_validator_pop_for_testing(key.public_key().clone(), pop);
+        }
+        state
+    }
+
+    #[test]
+    fn an_active_route_is_served_by_the_global_committee() {
+        let state = state_with_validators(&[0xD1, 0xD2, 0xD3, 0xD4]);
+        let route = LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let expected =
+            crate::sumeragi::schedule::scheduled_committee(state.view().world(), 3).unwrap();
+        assert_eq!(expected.len(), 4);
+        let committee = state.resolve_route_authority_at_height(route, 3).unwrap();
+        assert_eq!(committee.route(), route);
+        assert_eq!(committee.authority_height(), 3);
+        assert_eq!(committee.fault_tolerance(), 1);
+        assert_eq!(committee.validators(), expected.as_slice());
+        assert_eq!(
+            state.resolve_route_authority(route).unwrap().validators(),
+            expected.as_slice(),
+            "the committed-height read names the same committee"
+        );
+    }
+
+    #[test]
+    fn unknown_inactive_or_unstaffed_routes_have_no_authority() {
+        let state = state_with_validators(&[0xD5]);
+        assert!(matches!(
+            state.resolve_route_authority_at_height(
+                LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::new(77)),
+                3
+            ),
+            Err(LaneAuthorityError::UnknownDataspace { .. })
+        ));
+        assert!(matches!(
+            state.resolve_route_authority_at_height(
+                LaneAuthorityRoute::new(LaneId::new(9), DataSpaceId::UNIVERSAL),
+                3
+            ),
+            Err(LaneAuthorityError::InactiveRoute { .. })
+        ));
+        let single = state
+            .resolve_route_authority_at_height(
+                LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                3,
+            )
+            .unwrap();
+        assert_eq!((single.validators().len(), single.fault_tolerance()), (1, 0));
+        let empty = state_with_validators(&[]);
+        assert!(matches!(
+            empty.resolve_route_authority_at_height(
+                LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                3
+            ),
+            Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
+        ));
+    }
 }

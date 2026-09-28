@@ -3406,6 +3406,9 @@ pub mod isi {
 /// Implementations for domain queries.
 pub mod query {
     use super::*;
+    use crate::smartcontracts::isi::query::json_predicate::{
+        parse_domain_predicate_value, predicate_matches_with_aliases,
+    };
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::{StateReadOnly, WorldReadOnly},
@@ -3483,35 +3486,6 @@ pub mod query {
         Owners(Vec<AccountId>),
         Full,
     }
-    fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
-        DomainId::parse_fully_qualified(raw)
-            .ok()
-            .or_else(|| DomainId::try_new(raw, "universal").ok())
-    }
-    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-        if path.is_empty() {
-            return None;
-        }
-        let mut current = value;
-        for segment in path.split('.') {
-            if segment.is_empty() {
-                return None;
-            }
-            match current {
-                Value::Object(map) => current = map.get(segment)?,
-                _ => return None,
-            }
-        }
-        Some(current)
-    }
-    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-        matches!(value, Value::String(raw) if raw == expected)
-    }
-    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-        values
-            .iter()
-            .any(|value| matches!(value, Value::String(raw) if raw == expected))
-    }
     fn domain_alias_values(domain: &Domain, field: &str) -> Vec<String> {
         match field {
             "id" | "domain" | "domain_id" => {
@@ -3529,71 +3503,8 @@ pub mod query {
             _ => Vec::new(),
         }
     }
-    fn domain_json_value<'a>(cache: &'a mut Option<Value>, domain: &Domain) -> Option<&'a Value> {
-        if cache.is_none() {
-            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(domain);
-        }
-        cache.as_ref()
-    }
     fn predicate_matches_domain(predicate: &PredicateJson, domain: &Domain) -> bool {
-        let mut domain_json = None;
-        for cond in &predicate.equals {
-            let aliases = domain_alias_values(domain, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = domain_json_value(&mut domain_json, domain) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if actual != &cond.value {
-                return false;
-            }
-        }
-        for cond in &predicate.r#in {
-            let aliases = domain_alias_values(domain, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = domain_json_value(&mut domain_json, domain) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if !cond.values.iter().any(|candidate| candidate == actual) {
-                return false;
-            }
-        }
-        for field in &predicate.exists {
-            if !domain_alias_values(domain, field).is_empty() {
-                continue;
-            }
-            let Some(value) = domain_json_value(&mut domain_json, domain) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, field) else {
-                return false;
-            };
-            if actual.is_null() {
-                return false;
-            }
-        }
-        true
+        predicate_matches_with_aliases(predicate, domain, domain_alias_values)
     }
     impl ValidSingularQuery for FindDomainById {
         #[metrics(+"find_domain_by_id")]

@@ -1227,18 +1227,6 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         self.ep_protocol_digest
     }
 
-    /// Return the actual Eq private-carrier protocol identity derived from its authenticated key.
-    #[must_use]
-    pub const fn inner_state_eq_protocol_digest(&self) -> [u8; 32] {
-        self.inner_eq_protocol_digest
-    }
-
-    /// Return the actual Ep private-carrier protocol identity derived from its authenticated key.
-    #[must_use]
-    pub const fn inner_state_ep_protocol_digest(&self) -> [u8; 32] {
-        self.inner_ep_protocol_digest
-    }
-
     /// Return the actual Eq GuardBundle protocol identity derived from its authenticated key.
     #[must_use]
     pub const fn guard_eq_protocol_digest(&self) -> [u8; 32] {
@@ -3707,6 +3695,7 @@ pub(super) fn verify_ep_hybrid_succinct_protocol(
     .map(|verified| verified.accumulator)
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Verify an Eq ordered mint-hash claim with its authenticated compact carrier.
 pub(super) fn verify_eq_mint_hash_claim_hybrid_succinct_protocol(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
@@ -3754,6 +3743,7 @@ pub(super) fn verify_eq_mint_hash_claim_hybrid_succinct_protocol_with_transcript
     )
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Verify an Ep ordered mint-hash claim with its authenticated compact carrier.
 pub(super) fn verify_ep_mint_hash_claim_hybrid_succinct_protocol(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,

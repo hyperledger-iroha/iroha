@@ -4,6 +4,7 @@
 //! synthesis has established the virtual-to-physical cell map, five Table8
 //! lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
+#[cfg(test)]
 use super::pasta_sha256_table8::IV;
 use super::pasta_sha256_table8::{
     AssignedBlockWord, AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
@@ -21,6 +22,7 @@ use halo2_base::{
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
 };
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
 use sha2::{compress256, digest::generic_array::GenericArray};
 /// Independent Table8 lanes fixed by the V1 circuit identity.
 pub(crate) const PASTA_SHA256_LANES_V1: usize = 5;
@@ -185,6 +187,7 @@ struct PastaSha256BoundedJobV1<F: ScalarField> {
     final_block_selectors: Vec<AssignedValue<F>>,
 }
 
+#[cfg(test)]
 /// Exact ordinary SHA message cells used by the terminal semantic planner.
 ///
 /// Every dynamic byte is the exact Base cell consumed by [`PastaSha256JobsV1`]. Tests retain
@@ -340,6 +343,7 @@ where
         });
         Ok(output_words)
     }
+    #[cfg(test)]
     /// Hash an active prefix of a fixed-capacity message without changing the key shape.
     ///
     /// `message.len()` and each source byte's constant/assigned provenance must be fixed by the
@@ -615,6 +619,7 @@ where
             .collect()
     }
 
+    #[cfg(test)]
     /// Copy only ordinary queued messages for the current recursive claim planner.
     ///
     /// Bounded Table8 jobs select an intermediate digest. Its ordinary claim format instead
@@ -693,6 +698,7 @@ where
             .collect()
     }
 
+    #[cfg(test)]
     /// Borrow exact ordinary SHA jobs for semantic planning and test inventory.
     ///
     /// Bounded jobs expose intermediate selected states and therefore need a distinct typed-plan

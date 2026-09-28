@@ -8,7 +8,6 @@ publish = false
 iroha_model_base = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 color-eyre = { workspace = true }
-futures = { workspace = true }
 humantime = { workspace = true }
 iroha = { workspace = true }
 iroha_config = { workspace = true }
@@ -21,7 +20,6 @@ ivm = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 iroha_genesis = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
-nonzero_ext = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
 tracing = { workspace = true }

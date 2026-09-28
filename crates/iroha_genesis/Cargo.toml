@@ -53,7 +53,6 @@ norito = { workspace = true, default-features = false, features = ["node-codec"]
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_schema = { workspace = true }
 iroha_data_model = { workspace = true, features = ["application-model", "bls", "transparent_api"], default-features = false }
-iroha_executor_data_model = { workspace = true }
 iroha_version = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }
@@ -64,6 +63,7 @@ derive_more = { workspace = true, features = ["deref"] }
 eyre = { workspace = true }
 
 [dev-dependencies]
+iroha_executor_data_model = { workspace = true }
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
 iroha_test_samples = { workspace = true }
 

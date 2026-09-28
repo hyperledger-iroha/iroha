@@ -161,39 +161,6 @@ impl PrivateSettlementToriiRuntimeV1 {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_store(store: Arc<PrivateSettlementFileSidecarStoreV1>) -> Self {
-        Self {
-            store: Some(store),
-            availability_signer: None,
-            phase_signer: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_store_and_signer(
-        store: Arc<PrivateSettlementFileSidecarStoreV1>,
-        availability_signer: Arc<PrivateSettlementAvailabilitySignerV1>,
-    ) -> Self {
-        Self {
-            store: Some(store),
-            availability_signer: Some(availability_signer),
-            phase_signer: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_store_and_phase_signer(
-        store: Arc<PrivateSettlementFileSidecarStoreV1>,
-        phase_signer: Arc<PrivateSettlementPhaseSignerV1>,
-    ) -> Self {
-        Self {
-            store: Some(store),
-            availability_signer: None,
-            phase_signer: Some(phase_signer),
-        }
-    }
-
     fn store(&self) -> Result<&PrivateSettlementFileSidecarStoreV1, Response> {
         self.store
             .as_deref()

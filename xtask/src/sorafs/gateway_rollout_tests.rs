@@ -29,29 +29,30 @@ fn route_plan_generates_headers_and_plan() {
     };
     run_gateway_route_plan(options).expect("route plan generation succeeds");
     let rendered = fs::read_to_string(&plan_path).expect("plan contents");
-    let plan_json: serde_json::Value = serde_json::from_str(&rendered).expect("json plan payload");
+    let plan_json: norito::json::Value =
+        norito::json::from_str(&rendered).expect("json plan payload");
     assert_eq!(
         plan_json["content_cid"],
-        serde_json::Value::String("baaaaaaaa".into())
+        norito::json::Value::String("baaaaaaaa".into())
     );
     assert_eq!(
         plan_json["route_binding"],
-        serde_json::Value::String(
+        norito::json::Value::String(
             "host=docs.sora.link;cid=baaaaaaaa;generated_at=1970-01-01T00:00:00Z;label=docs@canary"
                 .into()
         )
     );
     assert_eq!(
         plan_json["headers"]["Sora-Name"],
-        serde_json::Value::String("sora:docs".into())
+        norito::json::Value::String("sora:docs".into())
     );
     assert_eq!(
         plan_json["headers"]["Sora-Content-CID"],
-        serde_json::Value::String("baaaaaaaa".into())
+        norito::json::Value::String("baaaaaaaa".into())
     );
     assert_eq!(
         plan_json["headers_path"],
-        serde_json::Value::String(headers_path.display().to_string())
+        norito::json::Value::String(headers_path.display().to_string())
     );
     assert!(plan_json["rollback"].is_null());
     let template = fs::read_to_string(headers_path).expect("headers template");
@@ -91,25 +92,26 @@ fn route_plan_embeds_rollback_metadata() {
     };
     run_gateway_route_plan(options).expect("route plan generation succeeds");
     let rendered = fs::read_to_string(&plan_path).expect("plan contents");
-    let plan_json: serde_json::Value = serde_json::from_str(&rendered).expect("json plan payload");
+    let plan_json: norito::json::Value =
+        norito::json::from_str(&rendered).expect("json plan payload");
     let rollback = plan_json["rollback"].as_object().expect("rollback section");
     assert_eq!(
         rollback["manifest_json"],
-        serde_json::Value::String(rollback_manifest.display().to_string())
+        norito::json::Value::String(rollback_manifest.display().to_string())
     );
     assert_eq!(
         rollback["release_tag"],
-        serde_json::Value::String("v0".into())
+        norito::json::Value::String("v0".into())
     );
     assert_eq!(
         rollback["route_binding"],
-        serde_json::Value::String(
+        norito::json::Value::String(
             "host=docs.sora.link;cid=b74;generated_at=1970-01-01T00:00:00Z;label=previous".into()
         )
     );
     assert_eq!(
         rollback["headers_path"],
-        serde_json::Value::String(rollback_headers.display().to_string())
+        norito::json::Value::String(rollback_headers.display().to_string())
     );
     let template =
         fs::read_to_string(rollback_headers).expect("rollback headers template contents");

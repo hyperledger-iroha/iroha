@@ -161,7 +161,12 @@ mod authority_tests {
                     ChainId::from("generation-zero-authority"),
                     PathBuf::from("."),
                 )
-                .append_parameter(Parameter::Custom(npos.into_custom_parameter())),
+                .append_parameter(Parameter::Custom(npos.into_custom_parameter()))
+                .append_parameter(Parameter::Sumeragi(
+                    iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                        NonZeroU64::new(epoch_length).unwrap(),
+                    ),
+                )),
                 current.clone(),
             )
             .build_raw()
@@ -188,7 +193,7 @@ mod authority_tests {
         )
         .build_raw()
         .expect("complete authority fixture");
-        ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+        let _ = ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
             &manifest,
             &test_peers(0x90),
         )
@@ -243,7 +248,12 @@ mod authority_tests {
                     ChainId::from("initial-beacon-window"),
                     PathBuf::from("."),
                 )
-                .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter())),
+                .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter()))
+                .append_parameter(Parameter::Sumeragi(
+                    iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                        NonZeroU64::new(length).unwrap(),
+                    ),
+                )),
                 test_peers(0x70),
             )
             .build_raw()

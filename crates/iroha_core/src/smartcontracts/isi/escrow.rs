@@ -1,9 +1,10 @@
 //! Native asset escrow instruction handlers.
 use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
+use crate::smartcontracts::isi::helpers::ensure_custody_account;
+use crate::smartcontracts::isi::query::json_predicate::intersect_candidate_ids;
 use crate::{
     prelude::ValidSingularQuery,
     smartcontracts::ValidQuery,
-    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
 use eyre::Result;
@@ -11,10 +12,11 @@ use iroha_crypto::derive_non_signing_ed25519_public_key;
 #[cfg(test)]
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 #[cfg(test)]
+use iroha_data_model::account::Account;
+#[cfg(test)]
 use iroha_data_model::fastpq::TransferDeltaTranscript;
 use iroha_data_model::{
-    IntoKeyValue,
-    account::{Account, AccountId},
+    account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     escrow::{
         AssetEscrowKind, AssetEscrowRecord, AssetEscrowResolution, AssetEscrowStatus,
@@ -45,7 +47,6 @@ use iroha_data_model::{
         is_reserved_orderbook_escrow_id_v1,
     },
 };
-use iroha_model_base::metadata::Metadata;
 use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
@@ -369,29 +370,6 @@ pub fn escrow_custody_account_id(
         ],
     );
     Ok(AccountId::new(public_key))
-}
-fn ensure_custody_account(
-    custody: &AccountId,
-    state_transaction: &mut StateTransaction<'_, '_>,
-) -> Result<bool, Error> {
-    ensure_controller_capabilities(
-        custody.controller(),
-        &state_transaction.crypto.allowed_signing,
-        &state_transaction.crypto.allowed_curve_ids,
-    )?;
-    if state_transaction.world.account(custody).is_ok() {
-        return Ok(false);
-    }
-    let account = Account {
-        id: custody.clone(),
-        metadata: Metadata::default(),
-        label: None,
-        uaid: None,
-        opaque_ids: Vec::new(),
-    };
-    let (id, value) = account.into_key_value();
-    state_transaction.world.accounts.insert(id, value);
-    Ok(true)
 }
 fn has_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -2229,16 +2207,6 @@ fn account_id_from_value(value: &Value) -> Option<AccountId> {
 fn asset_escrow_status_from_value(value: &Value) -> Option<AssetEscrowStatus> {
     norito::json::from_value(value.clone()).ok()
 }
-fn intersect_escrow_candidate_ids(
-    best: &mut Option<BTreeSet<EscrowId>>,
-    candidates: BTreeSet<EscrowId>,
-) {
-    let Some(current) = best.take() else {
-        *best = Some(candidates);
-        return;
-    };
-    *best = Some(current.intersection(&candidates).copied().collect());
-}
 fn asset_escrow_ids_for_accounts(
     world: &impl WorldReadOnly,
     index: AssetEscrowAccountIndex,
@@ -2275,7 +2243,7 @@ fn asset_escrow_candidate_ids(
     let mut best = None;
     for cond in &predicate.equals {
         if cond.field == "id" {
-            intersect_escrow_candidate_ids(
+            intersect_candidate_ids(
                 &mut best,
                 asset_escrow_id_from_value(&cond.value)
                     .into_iter()
@@ -2284,14 +2252,14 @@ fn asset_escrow_candidate_ids(
             continue;
         }
         if let Some(index) = asset_escrow_account_index(&cond.field) {
-            intersect_escrow_candidate_ids(
+            intersect_candidate_ids(
                 &mut best,
                 asset_escrow_ids_for_accounts(world, index, account_id_from_value(&cond.value)),
             );
             continue;
         }
         if cond.field == "status" {
-            intersect_escrow_candidate_ids(
+            intersect_candidate_ids(
                 &mut best,
                 asset_escrow_ids_for_statuses(world, asset_escrow_status_from_value(&cond.value)),
             );
@@ -2299,7 +2267,7 @@ fn asset_escrow_candidate_ids(
     }
     for cond in &predicate.r#in {
         if cond.field == "id" {
-            intersect_escrow_candidate_ids(
+            intersect_candidate_ids(
                 &mut best,
                 cond.values
                     .iter()
@@ -2309,7 +2277,7 @@ fn asset_escrow_candidate_ids(
             continue;
         }
         if let Some(index) = asset_escrow_account_index(&cond.field) {
-            intersect_escrow_candidate_ids(
+            intersect_candidate_ids(
                 &mut best,
                 asset_escrow_ids_for_accounts(
                     world,
@@ -2320,7 +2288,7 @@ fn asset_escrow_candidate_ids(
             continue;
         }
         if cond.field == "status" {
-            intersect_escrow_candidate_ids(
+            intersect_candidate_ids(
                 &mut best,
                 asset_escrow_ids_for_statuses(
                     world,

@@ -4,7 +4,7 @@ fn store_scanner_attachment(tenant_key: &str, body: &[u8], content_type: &str) -
         id: id.clone(),
         content_type: content_type.to_owned(),
         size: body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.to_owned()),
         provenance: Some(fixture_attachment_provenance(body, content_type)),
         zk1_tags: None,
@@ -31,7 +31,7 @@ fn scan_and_report_single_attachment() {
         id: id.clone(),
         content_type: "application/x-norito".to_string(),
         size: body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
         zk1_tags: None,
@@ -86,7 +86,7 @@ fn report_capacity_eviction_does_not_requeue_completed_attachment() {
         .expect("persist a simulated crash-window provisional receipt")
     );
     assert_eq!(
-        prover_processing_decision(&id, now_ms()),
+        prover_processing_decision(&id, crate::utils::unix_now_ms()),
         ProverProcessingDecision::Suppress
     );
 
@@ -129,7 +129,7 @@ fn report_persistence_failure_leaves_a_retryable_provisional_receipt() {
     process_attachment_once(&id).expect_err("report persistence failure must be visible");
     try_load_report(&id).expect_err("blocked report directory must remain a visible failure");
     assert_eq!(
-        prover_processing_decision(&id, now_ms()),
+        prover_processing_decision(&id, crate::utils::unix_now_ms()),
         ProverProcessingDecision::Suppress,
         "the provisional receipt must bound immediate retries"
     );
@@ -173,7 +173,7 @@ fn successful_report_finalizes_a_suppressed_provisional_receipt_without_reverifi
         "a persisted successful report must finalize the receipt without verification"
     );
     assert_eq!(
-        prover_processing_decision(&location.id, now_ms()),
+        prover_processing_decision(&location.id, crate::utils::unix_now_ms()),
         ProverProcessingDecision::Suppress
     );
 }
@@ -190,7 +190,7 @@ fn failed_report_with_explicit_null_disposition_is_rejected() {
         false,
         Some("failure with explicit null retry disposition"),
         "application/x-norito",
-        now_ms(),
+        crate::utils::unix_now_ms(),
     );
     report.processing = None;
     assert_eq!(
@@ -237,7 +237,7 @@ fn committed_terminal_failure_repairs_a_due_provisional_receipt() {
         false,
         Some("terminal verification failure"),
         "application/x-norito",
-        now_ms(),
+        crate::utils::unix_now_ms(),
     );
     save_report(&terminal).expect("persist terminal report before simulated crash");
     assert!(
@@ -283,7 +283,7 @@ fn cross_tenant_duplicate_uses_one_receipt_even_without_a_report() {
         "content identity must deduplicate tenant-local copies"
     );
     assert_eq!(
-        prover_processing_decision(&id, now_ms()),
+        prover_processing_decision(&id, crate::utils::unix_now_ms()),
         ProverProcessingDecision::Suppress
     );
     {
@@ -500,7 +500,7 @@ fn attachment_file_loading_is_bounded_and_metadata_size_is_not_trusted() {
         id: id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: 1,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
         zk1_tags: None,
@@ -526,7 +526,7 @@ fn nonregular_attachment_body_produces_a_zero_read_rejection_report() {
         id: id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: 0,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(&[], "application/x-norito")),
         zk1_tags: None,
@@ -689,7 +689,7 @@ fn immutable_snapshot_survives_path_replacement_without_reread() {
         id: id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
         zk1_tags: None,
@@ -739,7 +739,7 @@ fn same_size_body_substitution_is_rejected_by_content_address() {
         id: id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
         zk1_tags: None,
@@ -771,7 +771,7 @@ fn snapshot_metadata_and_provenance_invariants_fail_closed() {
         id: id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key),
         provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
         zk1_tags: None,
@@ -897,7 +897,7 @@ fn first_release_scanner_rejects_retired_root_attachment_layout() {
         id: id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: None,
         provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
         zk1_tags: None,
@@ -1187,7 +1187,7 @@ fn oversized_first_attachment_cannot_starve_later_valid_work() {
         id: oversized_id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: oversized_body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(
             &oversized_body,
@@ -1211,7 +1211,7 @@ fn oversized_first_attachment_cannot_starve_later_valid_work() {
         id: valid_id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: valid_body.len() as u64,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(
             &valid_body,
@@ -1276,7 +1276,7 @@ fn scan_respects_byte_budget() {
             id: id.clone(),
             content_type: "application/octet-stream".to_string(),
             size: body.len() as u64,
-            created_ms: now_ms(),
+            created_ms: crate::utils::unix_now_ms(),
             tenant: Some(tenant_key.clone()),
             provenance: Some(fixture_attachment_provenance(
                 &body,
@@ -1366,7 +1366,7 @@ fn deferred_attachment_cannot_head_of_line_block_later_fitting_work() {
             id: id.clone(),
             content_type: "application/octet-stream".to_owned(),
             size: body.len() as u64,
-            created_ms: now_ms(),
+            created_ms: crate::utils::unix_now_ms(),
             tenant: Some(tenant_key.clone()),
             provenance: Some(fixture_attachment_provenance(
                 &body,
@@ -1411,7 +1411,7 @@ fn snapshot_that_crosses_time_budget_is_charged_and_completed_once() {
         id: id.clone(),
         content_type: "application/x-norito".to_owned(),
         size: body_size,
-        created_ms: now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
         zk1_tags: None,
@@ -1451,7 +1451,7 @@ fn scan_bounds_concurrency() {
             id: id.clone(),
             content_type: "application/octet-stream".to_string(),
             size: body.len() as u64,
-            created_ms: now_ms(),
+            created_ms: crate::utils::unix_now_ms(),
             tenant: Some(tenant_key.clone()),
             provenance: Some(fixture_attachment_provenance(
                 &body,
@@ -1531,7 +1531,7 @@ async fn background_worker_processes_pending_attachments() {
         id: ok_id.clone(),
         content_type: "application/x-norito".to_string(),
         size: ok_body.len() as u64,
-        created_ms: super::now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(
             &ok_body,
@@ -1553,7 +1553,7 @@ async fn background_worker_processes_pending_attachments() {
         id: err_id.clone(),
         content_type: "application/x-zk1".to_string(),
         size: err_body.len() as u64,
-        created_ms: super::now_ms(),
+        created_ms: crate::utils::unix_now_ms(),
         tenant: Some(tenant_key.clone()),
         provenance: Some(fixture_attachment_provenance(
             &err_body,

@@ -75,6 +75,7 @@ impl<T: Copy + Zeroize> Drop for SecretCopyValueV1<T> {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static SECRET_COPY_VALUE_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -167,6 +168,7 @@ impl Drop for SecretU256V1 {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static SECRET_U256_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -239,6 +241,7 @@ impl Drop for SecretCycleScalarCanonicalityStateV1 {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static SECRET_CYCLE_SCALAR_CANONICALITY_STATE_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }

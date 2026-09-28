@@ -1,4 +1,5 @@
 //! Implementations for transaction queries.
+use crate::smartcontracts::isi::query::json_predicate::predicate_value_at_path;
 use crate::{
     kura::{KaigiSignalCandidateIndexError, KaigiSignalCandidatePosition},
     state::StateReadOnly,
@@ -345,22 +346,6 @@ fn reject_unbounded_emergency_fast_transaction_history(
         ));
     }
     Ok(())
-}
-fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut current = value;
-    for segment in path.split('.') {
-        if segment.is_empty() {
-            return None;
-        }
-        match current {
-            Value::Object(map) => current = map.get(segment)?,
-            _ => return None,
-        }
-    }
-    Some(current)
 }
 fn transaction_field_equals(
     tx: &CommittedTransaction,
@@ -782,12 +767,6 @@ impl IndexedKaigiSignalCandidate {
     pub const fn transaction(&self) -> &CommittedTransaction {
         &self.transaction
     }
-
-    /// Consume the candidate and return its committed transaction.
-    #[must_use]
-    pub fn into_transaction(self) -> CommittedTransaction {
-        self.transaction
-    }
 }
 
 /// Bounded chronological page returned by the Kaigi signal index.
@@ -921,12 +900,6 @@ impl IndexedKaigiSignalCandidatePage {
     #[must_use]
     pub fn candidates(&self) -> &[IndexedKaigiSignalCandidate] {
         &self.candidates
-    }
-
-    /// Consume the page and return its revalidated candidates.
-    #[must_use]
-    pub fn into_candidates(self) -> Vec<IndexedKaigiSignalCandidate> {
-        self.candidates
     }
 
     /// Return whether another anchored raw candidate follows this page.

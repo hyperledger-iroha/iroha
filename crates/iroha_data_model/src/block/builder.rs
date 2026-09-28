@@ -1,7 +1,7 @@
 //! Proposal-only block builder. Actual typed outputs are installed by one checked owner.
 use super::{BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockSignature, SignedBlock};
 use crate::{
-    consensus::NposConsensusEffects,
+    consensus::{FinalizedGlobalThresholdBeaconPulseV1, NposConsensusEffects},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -23,6 +23,7 @@ pub struct BlockBuilder {
     da_proof_policies: Option<DaProofPolicyBundle>,
     da_pin_intents: Option<DaPinIntentBundle>,
     npos_consensus_effects: Option<NposConsensusEffects>,
+    global_beacon_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
     execution_context: Option<BlockExecutionContextBundle>,
 }
 impl BlockBuilder {
@@ -38,6 +39,7 @@ impl BlockBuilder {
             da_proof_policies: None,
             da_pin_intents: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
         }
     }
     /// Push a signed transaction and update the entrypoint Merkle tree.
@@ -108,7 +110,16 @@ impl BlockBuilder {
         self.header
             .set_npos_effects_hash(self.npos_consensus_effects.as_ref().map(HashOf::new));
         self.header
+            .set_global_beacon_pulse_hash(self.global_beacon_pulse.as_ref().map(HashOf::new));
+        self.header
             .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
+    }
+    /// Attach the current threshold pulse without adding transaction work.
+    pub fn set_global_beacon_pulse(
+        &mut self,
+        pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+    ) {
+        self.global_beacon_pulse = pulse;
     }
     /// Attach deterministic `NPoS` effects that will be embedded in the resulting block.
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
@@ -134,6 +145,7 @@ impl BlockBuilder {
             da_proof_policies: self.da_proof_policies,
             da_pin_intents: self.da_pin_intents,
             npos_consensus_effects: self.npos_consensus_effects,
+            global_beacon_pulse: self.global_beacon_pulse,
         };
         SignedBlock {
             signatures,

@@ -316,6 +316,7 @@ pub fn open_node_config(
 /// # Errors
 ///
 /// Any error of either step.
+#[cfg(test)]
 pub fn read_node_config(
     file: NodeFile,
     options: NodeConfigOptions,

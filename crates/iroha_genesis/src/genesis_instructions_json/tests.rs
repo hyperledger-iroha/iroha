@@ -1000,10 +1000,8 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         // Public Nexus forbids the Taira XOR definition; its operator provisions a mainnet one.
         let xor = if path.contains("nexus/") {
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::parse_fully_qualified(
-                    "mainnet-fixture.universal",
-                )
-                .expect("fixture domain"),
+                DomainId::parse_fully_qualified("mainnet-fixture.universal")
+                    .expect("fixture domain"),
                 "xor".parse().expect("fixture asset"),
             )
         } else {

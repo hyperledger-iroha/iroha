@@ -20,7 +20,6 @@ mod model {
         Encode,
         iroha_schema::IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[event_set(
         schema_name = "iroha_data_model::events::data::sorafs::model::SorafsGatewayEventSet"
     )]
@@ -44,10 +43,18 @@ mod model {
     }
     /// High-level policy classification for a GAR violation.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::data::sorafs::model::SorafsGarPolicy")]
     pub enum SorafsGarPolicy {
         /// Manifest envelope requirements.
@@ -65,10 +72,18 @@ mod model {
     }
     /// Detailed policy outcome for a GAR violation.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::data::sorafs::model::SorafsGarPolicyDetail")]
     pub enum SorafsGarPolicyDetail {
         /// Manifest envelope was required but not supplied.

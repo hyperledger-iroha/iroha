@@ -11,20 +11,24 @@
     dead_code,
     reason = "upstream context and later radix/Hyrax proof authorities remain uninhabited"
 )]
+use super::super::super::super::manifest::RELEASE_MODULI_V1;
+#[cfg(test)]
 use super::super::super::super::{
     ZkAmsMkheErrorV1,
     direct_object_transport::{
         ZkAmsMkheDirectObjectPublicationReceiptV1, ZkAmsMkheDirectObjectReadReceiptV1,
     },
-    manifest::RELEASE_MODULI_V1,
 };
+#[cfg(test)]
 use super::super::streaming_source_snapshot_axes_v1;
-use super::{
-    PHASE23_MANIFEST_CAPACITY_V1, PHASE23_RECORD_COUNT_V1, PHASE23_RING_DEGREE_V1,
-    ZkAmsPhase23MaterializedEncryptedSourceOwnerV1, phase23_record_position_v1,
-};
+use super::{PHASE23_MANIFEST_CAPACITY_V1, PHASE23_RECORD_COUNT_V1, PHASE23_RING_DEGREE_V1};
+#[cfg(test)]
+use super::{ZkAmsPhase23MaterializedEncryptedSourceOwnerV1, phase23_record_position_v1};
+#[cfg(test)]
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
+#[cfg(test)]
 use core::convert::Infallible;
+#[cfg(test)]
 const SOURCE_ALGEBRA_VERSION_V2: u8 = 2;
 const SOURCE_ALGEBRA_RECORDS_V2: usize = 43;
 const SOURCE_ALGEBRA_EQUATIONS_V2: usize = 2;
@@ -37,35 +41,56 @@ const SOURCE_ALGEBRA_CHALLENGE_PAIRS_V2: usize =
 const SOURCE_ALGEBRA_PRODUCT_COEFFICIENTS_V2: usize = 2 * PHASE23_RING_DEGREE_V1;
 const SOURCE_ALGEBRA_P_COEFFICIENTS_V2: usize = 2 * PHASE23_RING_DEGREE_V1;
 const SOURCE_ALGEBRA_H_COEFFICIENTS_V2: usize = PHASE23_RING_DEGREE_V1;
+#[cfg(test)]
 const SOURCE_ALGEBRA_FORMULA_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.phase23.source-algebra.formula";
+#[cfg(test)]
 const SOURCE_ALGEBRA_MAPPING_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.source-algebra.record-equation-limb-map";
+#[cfg(test)]
 const SOURCE_ALGEBRA_ORDERED_BUNDLE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.source-algebra.ordered-ciphertext-bundle";
+#[cfg(test)]
 const SOURCE_ALGEBRA_SOURCE_LINEAGE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.source-algebra.ciphertext-source-lineage";
+#[cfg(test)]
 const SOURCE_ALGEBRA_OUTPUT_LINEAGE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.source-algebra.ciphertext-output-lineage";
+#[cfg(test)]
 const SOURCE_ALGEBRA_PREFLIGHT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.source-algebra.preflight";
+#[cfg(test)]
 const SOURCE_ALGEBRA_AGGREGATE_SCHEDULE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.source-algebra.gamma-beta-schedule";
+#[cfg(test)]
 const SOURCE_ALGEBRA_PREREQUISITE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.source-algebra.prerequisite";
+#[cfg(test)]
 const ORDINARY_PRODUCT_FORMULA_V2: &[u8] = b"T[j,e,l]=ordinary(K[e,l]*r[j,l]);len(T)=2N";
+#[cfg(test)]
 const QUOTIENT_FORMULA_V2: &[u8] = b"H[j,e,l][i]=T[j,e,l][N+i];H[N-1]=0";
+#[cfg(test)]
 const RELATION_FORMULA_V2: &[u8] = b"P=T+p_l*E+delta*M-C=(X^N+1)*H mod q_l";
+#[cfg(test)]
 const TOP_ZERO_FORMULA_V2: &[u8] = b"P[2N-1]=H[N-1]=0";
+#[cfg(test)]
 const LIMB_FORMULA_V2: &[u8] = b"p_l=canonical_T256_mod_q_l";
+#[cfg(test)]
 const CENTERING_FORMULA_V2: &[u8] = b"M_l=m_if_m<=(p-1)/2_else_m-p;then_canonical_mod_q_l";
+#[cfg(test)]
 const EQUATION_ZERO_FORMULA_V2: &[u8] = b"e=0:K=B,E=e0,C=C0,delta=1";
+#[cfg(test)]
 const EQUATION_ONE_FORMULA_V2: &[u8] = b"e=1:K=A,E=e1,C=C1,delta=0";
+#[cfg(test)]
 const AGGREGATE_FORMULA_V2: &[u8] = b"sum_j gamma_lk^j*(equation0+beta_lk*equation1)";
+#[cfg(test)]
 const AGGREGATE_EQUIVALENT_FORMULA_V2: &[u8] =
     b"R=sum_j gamma^j*r_j;K=B+beta*A;E=sum_j gamma^j*(e0_j+beta*e1_j);M=sum_j gamma^j*M_j;C=sum_j gamma^j*(C0_j+beta*C1_j);T=ordinary(K*R)";
+#[cfg(test)]
 const AGGREGATE_EMISSION_ORDER_V2: &[u8] = b"limb->repetition->block->P-low->P-high->H";
+#[cfg(test)]
 const COMMITMENT_CHALLENGE_ORDER_V2: &[u8] =
     b"context/formula/map->all-future-relation-commitments->gamma->beta";
+#[cfg(test)]
 const CHALLENGE_RULE_V2: &[u8] =
     b"gamma_lk,beta_lk:unbiased-nonzero-and-distinct-with-domain-separated-rejection";
 const SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V2: bool = false;
@@ -119,6 +144,7 @@ const _: () = {
 };
 /// Production cannot claim radix/quotient/Hyrax completion in this slice.
 /// This authority is accepted only after authenticated source replay exists.
+#[cfg(test)]
 pub(super) enum RadixHyraxProofSealV2 {
     Production {
         packing: Infallible,
@@ -130,11 +156,13 @@ pub(super) enum RadixHyraxProofSealV2 {
     #[cfg(test)]
     TestOnly,
 }
+#[cfg(test)]
 #[repr(u8)]
 enum SourceEquationV2 {
     Constant = 0,
     Linear = 1,
 }
+#[cfg(test)]
 impl SourceEquationV2 {
     const fn tag_v2(&self) -> u8 {
         match self {
@@ -143,11 +171,13 @@ impl SourceEquationV2 {
         }
     }
 }
+#[cfg(test)]
 #[repr(u8)]
 enum SourceKeyPolynomialV2 {
     B = 1,
     A = 2,
 }
+#[cfg(test)]
 impl SourceKeyPolynomialV2 {
     const fn tag_v2(&self) -> u8 {
         match self {
@@ -156,11 +186,13 @@ impl SourceKeyPolynomialV2 {
         }
     }
 }
+#[cfg(test)]
 #[repr(u8)]
 enum SourceErrorPolynomialV2 {
     E0 = 1,
     E1 = 2,
 }
+#[cfg(test)]
 impl SourceErrorPolynomialV2 {
     const fn tag_v2(&self) -> u8 {
         match self {
@@ -169,11 +201,13 @@ impl SourceErrorPolynomialV2 {
         }
     }
 }
+#[cfg(test)]
 #[repr(u8)]
 enum SourceCiphertextPolynomialV2 {
     C0 = 1,
     C1 = 2,
 }
+#[cfg(test)]
 impl SourceCiphertextPolynomialV2 {
     const fn tag_v2(&self) -> u8 {
         match self {
@@ -182,6 +216,7 @@ impl SourceCiphertextPolynomialV2 {
         }
     }
 }
+#[cfg(test)]
 struct SourceEquationDescriptorV2 {
     equation: SourceEquationV2,
     key: SourceKeyPolynomialV2,
@@ -189,6 +224,7 @@ struct SourceEquationDescriptorV2 {
     ciphertext: SourceCiphertextPolynomialV2,
     delta: u8,
 }
+#[cfg(test)]
 fn equation_descriptor_v2(equation: usize) -> Result<SourceEquationDescriptorV2, ZkAmsMkheErrorV1> {
     match equation {
         0 => Ok(SourceEquationDescriptorV2 {
@@ -208,6 +244,7 @@ fn equation_descriptor_v2(equation: usize) -> Result<SourceEquationDescriptorV2,
         _ => Err(ZkAmsMkheErrorV1::InvalidPhase23Fold),
     }
 }
+#[cfg(test)]
 struct SourceRelationCoordinateV2 {
     ordinal: u16,
     family: u8,
@@ -218,6 +255,7 @@ struct SourceRelationCoordinateV2 {
     limb: u8,
     modulus: u64,
 }
+#[cfg(test)]
 fn relation_coordinate_v2(
     ordinal: u16,
     equation: usize,
@@ -239,6 +277,7 @@ fn relation_coordinate_v2(
         modulus,
     })
 }
+#[cfg(test)]
 fn absorb_coordinate_v2(hash: &mut Keccak256, coordinate: &SourceRelationCoordinateV2) {
     hash.update(&coordinate.ordinal.to_be_bytes());
     hash.update(&[coordinate.family]);
@@ -255,6 +294,7 @@ fn absorb_coordinate_v2(hash: &mut Keccak256, coordinate: &SourceRelationCoordin
     ]);
     hash.update(&coordinate.modulus.to_be_bytes());
 }
+#[cfg(test)]
 fn mapping_digest_for_record_order_v2(
     record_order: &[u16; SOURCE_ALGEBRA_RECORDS_V2],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -286,6 +326,7 @@ fn mapping_digest_for_record_order_v2(
     }
     nonzero_digest_v2(hash.finalize())
 }
+#[cfg(test)]
 fn exact_mapping_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut record_order = [0_u16; SOURCE_ALGEBRA_RECORDS_V2];
     for (ordinal, destination) in record_order.iter_mut().enumerate() {
@@ -294,6 +335,7 @@ fn exact_mapping_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     }
     mapping_digest_for_record_order_v2(&record_order)
 }
+#[cfg(test)]
 fn exact_formula_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(SOURCE_ALGEBRA_FORMULA_DOMAIN_V2);
@@ -321,12 +363,14 @@ fn exact_formula_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     }
     nonzero_digest_v2(hash.finalize())
 }
+#[cfg(test)]
 struct ManifestPreflightAxesV2 {
     ordered_bundle_root: [u8; 32],
     source_lineage_root: [u8; 32],
     output_lineage_root: [u8; 32],
     preflight_digest: [u8; 32],
 }
+#[cfg(test)]
 fn require_common_snapshot_v2(
     receipt: &ZkAmsMkheDirectObjectReadReceiptV1,
     common: &mut Option<([u8; 32], [u8; 32])>,
@@ -347,6 +391,7 @@ fn require_common_snapshot_v2(
     hash.update(&receipt.receipt_digest());
     Ok(())
 }
+#[cfg(test)]
 fn require_common_output_v2(
     receipt: &ZkAmsMkheDirectObjectPublicationReceiptV1,
     publication_identity: &mut Option<[u8; 32]>,
@@ -366,6 +411,7 @@ fn require_common_output_v2(
     hash.update(&receipt.receipt_digest());
     require_common_snapshot_v2(receipt.post_publish_read_receipt(), snapshot, hash)
 }
+#[cfg(test)]
 fn exact_manifest_preflight_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
     owner: &ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>,
 ) -> Result<ManifestPreflightAxesV2, ZkAmsMkheErrorV1> {
@@ -503,6 +549,7 @@ fn exact_manifest_preflight_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P
         preflight_digest,
     })
 }
+#[cfg(test)]
 fn aggregate_schedule_digest_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
     owner: &ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>,
     axes: &ManifestPreflightAxesV2,
@@ -541,16 +588,20 @@ fn aggregate_schedule_digest_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, 
     }
     nonzero_digest_v2(hash.finalize())
 }
+#[cfg(test)]
 struct SourceAlgebraLiveV2<R, K, P> {
     owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>,
 }
+#[cfg(test)]
 struct SourceAlgebraIngressV2<R, K, P> {
     live: Option<SourceAlgebraLiveV2<R, K, P>>,
 }
+#[cfg(test)]
 struct SourceAlgebraPreflightV2<R, K, P> {
     live: Option<SourceAlgebraLiveV2<R, K, P>>,
     axes: ManifestPreflightAxesV2,
 }
+#[cfg(test)]
 struct SourceAlgebraPrerequisiteRecordV2 {
     formula_digest: [u8; 32],
     mapping_digest: [u8; 32],
@@ -574,12 +625,14 @@ struct SourceAlgebraPrerequisiteRecordV2 {
 /// record. The owned manifests and key authority establish exact order through
 /// mandatory preflight; there is no detached ordering seal. It makes no
 /// radix/Hyrax claim and has no field accessors or decomposition seam.
+#[cfg(test)]
 pub(super) struct Phase23SourceAlgebraPrerequisiteV2<R, K, P> {
     live: Option<SourceAlgebraLiveV2<R, K, P>>,
     record: SourceAlgebraPrerequisiteRecordV2,
 }
 #[path = "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1.rs"]
 mod global_lookup_source_replay_v1;
+#[cfg(test)]
 pub(super) use global_lookup_source_replay_v1::{
     CompleteQMaskSOpeningsV1, GlobalLookupSourceReplaySinkSealV1,
     Phase23GlobalLookupRadixSourceCursorV2, Phase23GlobalLookupSourceReplayEvidenceV1,
@@ -587,6 +640,7 @@ pub(super) use global_lookup_source_replay_v1::{
     QMaskSErrorV1, QMaskSOpeningStreamV1, SampledQMaskSBlockV1,
     bind_radix_hyrax_replay_after_materialization_v2, source_opening_commitment_for_suite_v1,
 };
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceAlgebraIngressV2<R, K, P> {
     fn begin_v2(owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>) -> Self {
         Self {
@@ -608,6 +662,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceAlgebraIngressV2<R
         })
     }
 }
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceAlgebraPreflightV2<R, K, P> {
     fn freeze_v2(
         mut self,
@@ -657,6 +712,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceAlgebraPreflightV2
         })
     }
 }
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     Phase23SourceAlgebraPrerequisiteV2<R, K, P>
 {
@@ -669,6 +725,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
         global_lookup_source_replay_v1::replay_global_lookup_source_v1(self, sink)
     }
 }
+#[cfg(test)]
 fn prerequisite_record_digest_v2(
     record: &SourceAlgebraPrerequisiteRecordV2,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -695,6 +752,7 @@ fn prerequisite_record_digest_v2(
     ]);
     nonzero_digest_v2(hash.finalize())
 }
+#[cfg(test)]
 fn validate_prerequisite_record_v2(
     record: &SourceAlgebraPrerequisiteRecordV2,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -724,12 +782,14 @@ fn validate_prerequisite_record_v2(
     }
     Ok(())
 }
+#[cfg(test)]
 fn nonzero_digest_v2(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     if digest == [0; 32] {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     Ok(digest)
 }
+#[cfg(test)]
 pub(super) fn consume_phase23_source_algebra_prerequisite_v2<
     R: crate::vega::MaskedRelaxedRandomSourceV1,
     K,

@@ -5,7 +5,6 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
 };
 use futures::executor;
-use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual;
 use iroha_core::{query::store::LiveQueryStore, state::State as IrohaState};
 use iroha_crypto::{
@@ -18,16 +17,17 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     Identifiable, Registrable, ValidationFail,
-    account::rekey::AccountAlias,
-    account::{Account, AccountId, OpaqueAccountId},
-    block::{BlockHeader, BlockSignature, SignedBlock},
+    account::{Account, AccountId, rekey::AccountAlias},
+    block::BlockHeader,
     domain::Domain,
     identifier::{
         IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
         PhoneRetailCanonicalityAttestationV1, PhoneRetailCanonicalityPayloadV1,
     },
-    isi::identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
-    isi::ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
+    isi::{
+        identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
+        ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
+    },
     nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, UniversalAccountId},
     permission::Permission,
     prelude::{Parameter, Quantity},
@@ -36,10 +36,7 @@ use iroha_data_model::{
         RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
     },
     role::{Role, RoleId},
-    transaction::{
-        IvmBytecode, IvmProved,
-        signed::{TransactionBuilder, TransactionResultInner},
-    },
+    transaction::{IvmBytecode, IvmProved, signed::TransactionBuilder},
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
@@ -52,7 +49,6 @@ use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use std::{
     collections::HashSet,
-    net::SocketAddr,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::PathBuf,
     str::FromStr,
@@ -1583,8 +1579,6 @@ async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
     }
     validate_zk_ivm_prove_job_id("0123456789abcdef0123456789abcdef").expect("canonical id");
 }
-#[cfg(feature = "push")]
-use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_push;
 #[cfg(feature = "telemetry")]
 use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
 #[cfg(feature = "app_api")]
@@ -1839,43 +1833,6 @@ async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
         ),
         "unexpected error: {err:?}"
     );
-}
-pub(crate) fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
-    iroha_data_model::soracloud::SoraInrouManifestV1 {
-        schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
-        guest_images: std::collections::BTreeMap::from([
-            (
-                iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
-                    kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
-                    rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
-                    initrd_image_path: None,
-                    published_artifact:
-                        iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
-                            manifest_digest_hex: "31".repeat(32),
-                            content_cid:
-                                "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
-                                    .to_owned(),
-                        },
-                },
-            ),
-            (
-                iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
-                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
-                    kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
-                    rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
-                    initrd_image_path: None,
-                    published_artifact:
-                        iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
-                            manifest_digest_hex: "32".repeat(32),
-                            content_cid:
-                                "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi"
-                                    .to_owned(),
-                        },
-                },
-            ),
-        ]),
-    }
 }
 fn sample_identifier_policy(
     owner: &AccountId,

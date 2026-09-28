@@ -117,14 +117,6 @@ fn reputation_auth_requires_an_exact_network_identity() {
 }
 
 #[test]
-fn reputation_form_lossy_chars_preserves_a_valid_prefix_before_invalid_utf8() {
-    assert_eq!(
-        ReputationFormLossyChars::new(b"%E2%82%AC%FF").collect::<String>(),
-        "\u{20ac}\u{fffd}"
-    );
-}
-
-#[test]
 fn reputation_canonical_request_enforces_v1_target_and_freshness_bounds() {
     let network_id = fixture_reputation_network_id();
     let exact_nonce = "n".repeat(REPUTATION_CANONICAL_MAX_NONCE_BYTES_V1);
@@ -137,10 +129,11 @@ fn reputation_canonical_request_enforces_v1_target_and_freshness_bounds() {
             .is_err()
     );
 
-    let exact_pairs = (0..REPUTATION_CANONICAL_MAX_QUERY_PAIRS_V1)
+    let exact_pairs = (0
+        ..iroha_torii_shared::canonical_request_form::CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1)
         .map(|index| format!("k{index}=v"))
         .collect::<Vec<_>>()
         .join("&");
-    ReputationFormPlan::new(&exact_pairs).expect("exact query-pair bound");
-    assert!(ReputationFormPlan::new(&(exact_pairs + "&extra=v")).is_err());
+    reputation_form_plan(&exact_pairs).expect("exact query-pair bound");
+    assert!(reputation_form_plan(&(exact_pairs + "&extra=v")).is_err());
 }

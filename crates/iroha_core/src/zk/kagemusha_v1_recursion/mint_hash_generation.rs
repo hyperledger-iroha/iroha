@@ -150,6 +150,7 @@ impl KagemushaGeneratedMintHashArtifactsV1 {
     }
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 struct FirstClaimNativeWitnessV1<'a> {
     eq_carrier: &'a ParamsIPA<EqAffine>,
     ep_carrier: &'a ParamsIPA<EpAffine>,
@@ -178,6 +179,7 @@ struct FirstClaimNativeWitnessV1<'a> {
     ep_successor_history: KagemushaEpAccumulatorV1,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl FirstClaimNativeWitnessV1<'_> {
     fn pair_witness(
         &self,
@@ -216,6 +218,7 @@ impl FirstClaimNativeWitnessV1<'_> {
     }
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 struct PreparedFirstClaimBlueprintV1<'a> {
     native: FirstClaimNativeWitnessV1<'a>,
     audits: KagemushaMintHashClaimDeferredAuditsV1,
@@ -224,6 +227,7 @@ struct PreparedFirstClaimBlueprintV1<'a> {
     ep_instances: Vec<Vec<Fq>>,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl PreparedFirstClaimBlueprintV1<'_> {
     fn build_eq(
         &self,
@@ -266,6 +270,7 @@ impl PreparedFirstClaimBlueprintV1<'_> {
     }
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_first_claim_blueprint_v1<'a>(
     eq_carrier: &'a ParamsIPA<EqAffine>,
@@ -461,19 +466,6 @@ fn prepare_first_claim_blueprint_v1<'a>(
     })
 }
 
-/// Generate and qualify the genuine paired shard and ordered-claim artifact set.
-///
-/// # Errors
-///
-/// Rejects an invalid certificate/release, a non-fixed public ABI, a resource-overrun, any real
-/// shard or claim proof failure, or a claim key whose exact recursive protocol does not converge.
-#[allow(clippy::too_many_lines)]
-pub fn generate_kagemusha_mint_hash_artifacts_v1(
-    witness: KagemushaMintHashArtifactGenerationWitnessV1<'_>,
-) -> Result<KagemushaGeneratedMintHashArtifactsV1, KagemushaArtifactGenerationErrorV1> {
-    generate_kagemusha_mint_hash_artifacts_with_limits_v1(witness, KagemushaKeyLimitsV1::release())
-}
-
 /// Exercise genuine claim keygen and proving under the external aggregate-memory guard.
 ///
 /// This entry point exists only in unit-test builds or the dedicated non-shipping proof harness.
@@ -490,6 +482,7 @@ pub(crate) fn generate_kagemusha_mint_hash_artifacts_for_guarded_test_v1(
     )
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 #[allow(clippy::too_many_lines)]
 fn generate_kagemusha_mint_hash_artifacts_with_limits_v1(
     witness: KagemushaMintHashArtifactGenerationWitnessV1<'_>,
@@ -1027,6 +1020,7 @@ fn generate_kagemusha_mint_hash_artifacts_with_limits_v1(
     ))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn serialize_carrier_params_v1<C>(
     parity: KagemushaPastaParityV1,
     params: &ParamsIPA<C>,
@@ -1052,6 +1046,7 @@ where
     Ok(Arc::from(bytes))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn serialize_helper_keys_v1<C>(
     parity: KagemushaPastaParityV1,
     label: &'static str,
@@ -1069,6 +1064,7 @@ where
     )
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn serialize_helper_keys_with_limits_v1<C>(
     parity: KagemushaPastaParityV1,
     label: &'static str,
@@ -1106,6 +1102,7 @@ where
     Ok((Arc::from(proving), Arc::from(verifying)))
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn serialize_helper_keys_streaming_with_limits_v1<C>(
     parity: KagemushaPastaParityV1,
     label: &'static str,

@@ -22,10 +22,12 @@
 //! quartic-field weights. It evaluates the actual fixed polynomials at `z`,
 //! without treating an extension element as an LDE index or a selector bit.
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::goldilocks_batch_invert_v1;
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E, PolynomialAirFieldV1,
-    PrivacyOuterDigestV1, TransparentStarkErrorV1, goldilocks_batch_invert_v1,
-    goldilocks_primitive_root_v1, privacy_outer_digest_frame_v1,
+    PrivacyOuterDigestV1, TransparentStarkErrorV1, goldilocks_primitive_root_v1,
+    privacy_outer_digest_frame_v1,
 };
 use core::cmp::Ordering;
 use std::vec::Vec;
@@ -57,14 +59,23 @@ pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_BLOWUP_LOG2_V1: u8 = 8;
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1: u16 = 472;
 /// Largest canonical atom collection accepted by one schedule.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1: usize = 65_536;
+#[cfg(test)]
 /// Largest canonical verifier query set accepted in one batch.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1: usize = 272;
+#[cfg(test)]
 /// Largest row-major result, measured in Goldilocks elements.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1: usize = 272 * 472;
 /// Deterministic cap on the evaluator's coarse field-operation work score.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_MAX_EVALUATION_WORK_V1: u64 = 1_u64 << 28;
 /// Fail-closed error from construction, binding, or deterministic evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "query validation that constructs InvalidQuery runs only in test and release-evidence builds"
+    )
+)]
 pub(crate) enum ZkX509FixedAlgebraicErrorV1 {
     /// Native or extension-domain geometry is outside the release profile.
     #[error("zk-X509 algebraic fixed domain is invalid")]
@@ -194,12 +205,14 @@ impl ZkX509FixedAlgebraicDomainV1 {
             .checked_shl(u32::from(self.native_log2))
             .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
     }
+    #[cfg(test)]
     /// Exact extension-domain size.
     pub(crate) fn lde_size_v1(self) -> Result<u64, ZkX509FixedAlgebraicErrorV1> {
         1_u64
             .checked_shl(u32::from(self.lde_log2))
             .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)
     }
+    #[cfg(test)]
     /// Exact power-of-two LDE blowup.
     pub(crate) fn blowup_v1(self) -> Result<u64, ZkX509FixedAlgebraicErrorV1> {
         1_u64
@@ -877,6 +890,7 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         }
         Ok(())
     }
+    #[cfg(test)]
     /// Evaluate every fixed column at sorted, unique verifier LDE indices.
     pub(crate) fn evaluate_query_indices_v1(
         &self,
@@ -1185,6 +1199,7 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 fn validate_query_indices_v1(
     domain: ZkX509FixedAlgebraicDomainV1,
     query_indices: &[u64],
@@ -1210,6 +1225,13 @@ fn validate_query_indices_v1(
     Ok(())
 }
 #[derive(Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "query-slot fields serve only the test and release-evidence opened-row evaluator"
+    )
+)]
 struct GroupedQueryV1 {
     remainder: u64,
     shift: u64,
@@ -1319,6 +1341,7 @@ struct LagrangeTableV1<A = F> {
     linear_prefix: Vec<A>,
 }
 impl LagrangeTableV1<F> {
+    #[cfg(test)]
     fn new_v1(
         domain: ZkX509FixedAlgebraicDomainV1,
         remainder: u64,
@@ -1956,6 +1979,7 @@ pub(crate) struct ZkX509FixedAlgebraicOpeningsV1 {
     fields: Vec<F>,
 }
 impl ZkX509FixedAlgebraicOpeningsV1 {
+    #[cfg(test)]
     /// Concatenate independently capped child schedules in fixed column order.
     ///
     /// Every child must have been evaluated at the identical canonical query set. The caller
@@ -2037,26 +2061,32 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
             fields,
         })
     }
+    #[cfg(test)]
     /// Schedule binding shared by every returned row.
     pub(crate) const fn schedule_digest_v1(&self) -> PrivacyOuterDigestV1 {
         self.schedule_digest
     }
+    #[cfg(test)]
     /// Canonical sorted verifier query indices.
     pub(crate) fn query_indices_v1(&self) -> &[u64] {
         &self.query_indices
     }
+    #[cfg(test)]
     /// Exact fixed row width.
     pub(crate) const fn width_v1(&self) -> u16 {
         self.width
     }
+    #[cfg(test)]
     /// Number of verifier-derived rows.
     pub(crate) fn len_v1(&self) -> usize {
         self.query_indices.len()
     }
+    #[cfg(test)]
     /// Whether the checked opening set is empty.  Valid instances are not.
     pub(crate) fn is_empty_v1(&self) -> bool {
         self.query_indices.is_empty()
     }
+    #[cfg(test)]
     /// Borrow one row by canonical slot.
     pub(crate) fn row_v1(&self, slot: usize) -> Result<&[F], ZkX509FixedAlgebraicErrorV1> {
         if slot >= self.query_indices.len() {
@@ -2073,6 +2103,7 @@ impl ZkX509FixedAlgebraicOpeningsV1 {
             .get(start..end)
             .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)
     }
+    #[cfg(test)]
     /// Borrow the row for one exact verifier query index.
     pub(crate) fn row_for_query_v1(
         &self,

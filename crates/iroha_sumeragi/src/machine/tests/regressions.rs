@@ -158,7 +158,7 @@ fn sync_refetches_a_gap_left_by_a_dropped_forged_prefix() {
 
 /// F2 seed 115: the driver answers the view-0 build `EMPTY` and a transaction arrives right
 /// after, so its `PayloadReady{req}` reaches the core before the `EMPTY` answer. The leader must
-/// build again at once instead of idling until `idle_block_interval` (members would time the
+/// build again at once instead of idling until `payload_retry_interval` (members would time the
 /// view out and record the honest leader as skipped).
 #[test]
 fn payload_ready_during_an_outstanding_build_ends_the_idle_wait() {
@@ -195,7 +195,7 @@ fn payload_ready_during_an_outstanding_build_ends_the_idle_wait() {
         )),
         "the transaction is proposed"
     );
-    // Without a PayloadReady, an empty answer still waits (heartbeat).
+    // Without a PayloadReady, an empty answer still waits for real work.
     let mut h = H::new(4, pick::leader(0));
     h.run_until(h.now + 1_100);
     let out = h.built(b"");

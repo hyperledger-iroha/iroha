@@ -9,7 +9,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::OpaqueAccountId,
     identifier::{
-        IdentifierClaimRecord, IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
+        IdentifierClaimRecord, IdentifierNormalization, IdentifierPolicy,
         IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
         PhoneRetailCanonicalityAttestationV1,
     },
@@ -24,7 +24,6 @@ use std::{
     collections::BTreeMap,
     fmt,
     sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
     vec::Vec,
 };
 use thiserror::Error;
@@ -111,14 +110,8 @@ pub enum IdentifierResolutionError {
     InvalidFheParameters(String),
     #[error("RAM-LFE backend {0:?} does not yet support Torii app execution receipts")]
     UnsupportedBackend(RamLfeBackend),
-    #[error("RAM-LFE output opening is missing")]
-    MissingOutputOpening,
     #[error("RAM-LFE output opening is invalid: {0}")]
     InvalidOutputOpening(String),
-    #[error("resolver BFV key material does not match the policy commitment")]
-    FheKeyMismatch,
-    #[error("encrypted identifier input is not valid UTF-8")]
-    InvalidUtf8,
     #[error("RAM-LFE evaluation failed: {0}")]
     Evaluation(#[from] RamLfeError),
     #[error("identifier policy transcript encoding failed: {0}")]
@@ -212,7 +205,7 @@ impl IdentifierResolutionService {
             .ok_or(IdentifierResolutionError::UnsupportedBackend(
                 program_policy.commitment.backend,
             ))?;
-        let executed_at_ms = now_ms();
+        let executed_at_ms = crate::utils::unix_now_ms();
         let expires_at_ms = runtime
             .receipt_ttl_ms
             .and_then(|ttl| executed_at_ms.checked_add(ttl));
@@ -300,7 +293,7 @@ impl IdentifierResolutionService {
                     "attestor key is not pinned".to_owned(),
                 )
             })?;
-        let now = now_ms();
+        let now = crate::utils::unix_now_ms();
         if statement.network_id != *network_id
             || statement.policy_id != policy.id
             || statement.program_id != program_policy.program_id
@@ -502,12 +495,6 @@ impl IdentifierResolutionService {
             })
     }
 }
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
-}
 fn validate_output_opening(
     opening: &RamLfeOutputOpening,
     execution: &RamLfeExecutionDraft,
@@ -545,7 +532,7 @@ fn validate_output_opening(
             "opened output hash must not be zero".to_owned(),
         ));
     }
-    let now = now_ms();
+    let now = crate::utils::unix_now_ms();
     if payload.opened_at_ms > now {
         return Err(IdentifierResolutionError::InvalidOutputOpening(
             "opening timestamp is in the future".to_owned(),
@@ -625,7 +612,6 @@ mod tests {
         RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
         RamLfeReceiptAttestation,
     };
-    use norito::codec::Encode as _;
     use sha2::{Digest as _, Sha256};
     use std::str::FromStr;
     fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
@@ -747,7 +733,7 @@ mod tests {
             parameter_digest: Hash::new(b"parameters"),
             evaluation_key_digest: Hash::new(b"evaluation-keys"),
             opened_output_hash: Hash::new(b"opened-output"),
-            opened_at_ms: now_ms(),
+            opened_at_ms: crate::utils::unix_now_ms(),
             expires_at_ms: None,
         };
         RamLfeOutputOpening {
@@ -1295,7 +1281,7 @@ mod tests {
             .execute_encrypted(&program_policy, &ciphertext)
             .expect("execute encrypted input");
         let mut opening = opening_for_execution(&program_policy, &signer, &execution);
-        opening.payload.opened_at_ms = now_ms().saturating_add(60_000);
+        opening.payload.opened_at_ms = crate::utils::unix_now_ms().saturating_add(60_000);
         opening.payload.expires_at_ms = opening.payload.opened_at_ms.checked_add(60_000);
         opening.signature = checked_output_opening_signature(&signer, &opening.payload);
         let err = service

@@ -1,6 +1,10 @@
 # Roadmap
 
-Last updated: 2026-09-26.
+- Complete current single-route SDK admission qualification: regenerate signed prepared, Swift parity and Nexus fixtures with the native generators, then rerun focused runtime tests against authenticated ABI-24 artifacts. Source and syntax checks alone do not qualify the deployment.
+
+Last updated: 2026-09-27.
+
+Taira CLI recovery: qualify the canary-signed beacon proof reads and retained Canary operator key in the next signed release, then complete a fresh authorized network replacement and the public funding, DPN deployment, and contract-call workflow. No ledger-wide grants or fabricated completion receipts are part of the repair.
 
 The active [first-release completion goals](specs/first_release_completion_goals.md)
 coordinate privacy/ZK, SoraFS and multilane implementation on one integrated

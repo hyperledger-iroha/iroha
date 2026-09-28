@@ -6,13 +6,14 @@ use crate::{
         MAX_IDENTIFIER_BYTES, MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES,
         MAX_STATIC_ZONES,
     },
-    rad::{ResolverAttestation, rad_retained_bytes},
+    rad::rad_retained_bytes,
 };
 use eyre::{Result, WrapErr, bail};
 use hickory_proto::{
     op::{Message, Query, ResponseCode},
     rr::Record,
 };
+use iroha_data_model::soradns::ResolverAttestationDocumentV1;
 use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use std::collections::HashMap;
 use tracing::warn;
@@ -22,7 +23,7 @@ pub struct ResolverState {
     resolver_id: String,
     region: String,
     bundles: HashMap<String, ProofBundleV1>,
-    resolver_adverts: HashMap<String, ResolverAttestation>,
+    resolver_adverts: HashMap<String, ResolverAttestationDocumentV1>,
     static_zones: HashMap<String, StaticZoneEntry>,
     bundle_retained_bytes: usize,
     rad_retained_bytes: usize,
@@ -85,7 +86,7 @@ impl ResolverState {
     }
     pub fn update_resolver_adverts(
         &mut self,
-        adverts: HashMap<String, ResolverAttestation>,
+        adverts: HashMap<String, ResolverAttestationDocumentV1>,
     ) -> Result<ResolverDiff> {
         let retained_bytes = rad_map_retained_bytes(&adverts)?;
         self.admit_projected_state(self.bundle_retained_bytes, retained_bytes)?;
@@ -322,9 +323,12 @@ fn bundle_map_retained_bytes(bundles: &HashMap<String, ProofBundleV1>) -> Result
     }
     Ok(retained)
 }
-fn rad_map_retained_bytes(adverts: &HashMap<String, ResolverAttestation>) -> Result<usize> {
+fn rad_map_retained_bytes(
+    adverts: &HashMap<String, ResolverAttestationDocumentV1>,
+) -> Result<usize> {
     validate_state_count("RAD state", adverts.len(), MAX_STATE_RAD_ENTRIES)?;
-    let mut retained = map_bucket_bytes::<String, ResolverAttestation>(adverts.capacity())?;
+    let mut retained =
+        map_bucket_bytes::<String, ResolverAttestationDocumentV1>(adverts.capacity())?;
     for (key, advert) in adverts {
         charge_key(&mut retained, key, key.capacity())?;
         retained = retained
@@ -821,7 +825,7 @@ mod tests {
             validate_state_count("test map", MAX_STATE_BUNDLES + 1, MAX_STATE_BUNDLES).is_err()
         );
     }
-    fn sample_rad(valid_from_unix: u64, valid_until_unix: u64) -> ResolverAttestation {
+    fn sample_rad(valid_from_unix: u64, valid_until_unix: u64) -> ResolverAttestationDocumentV1 {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");
         let operator_account = {
             let public_key: PublicKey =
@@ -830,7 +834,7 @@ mod tests {
                     .expect("public key literal");
             AccountId::new(public_key)
         };
-        ResolverAttestation {
+        ResolverAttestationDocumentV1 {
             version: 1,
             resolver_id: [1; 32],
             fqdn: "docs.sora".into(),

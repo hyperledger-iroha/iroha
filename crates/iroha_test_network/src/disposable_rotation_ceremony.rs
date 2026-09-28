@@ -10,14 +10,13 @@ use iroha_core::{
     validator_committee_evidence::{
         ValidatorCommitteeProvisioningEvidenceV1, ValidatorCommitteeSelectionEvidenceV1,
         verify_validator_committee_provisioning_evidence_v1,
-        verify_validator_committee_selection_evidence_v1,
     },
 };
 use iroha_data_model::{
     NetworkId,
     block::consensus_v2::HeightContextId,
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1},
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
 };
 use norito::derive::JsonSerialize;
 use std::{
@@ -204,97 +203,13 @@ fn provider_handle(peer: &PeerId) -> String {
 }
 
 fn verify_input(
-    seats: &[&NetworkPeer],
-    authorizing_seats: &[&NetworkPeer],
-    evidence: &ValidatorCommitteeSelectionEvidenceV1,
-    input: DisposableRotationProofInput,
-) -> Result<(GlobalThresholdBeaconDkgSessionV1, BridgeFinalityVerifier)> {
-    ensure!(
-        input.anchor_height != 0,
-        "rotation requires an independent positive finality anchor"
-    );
-    let trusted = HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
-        input.trusted_context_id,
-    ));
-    let selected = verify_validator_committee_selection_evidence_v1(
-        evidence,
-        input.network_id,
-        trusted,
-        input.anchor_height,
-        input.target_epoch,
-        input.transition_id.into(),
-    )
-    .map_err(|error| eyre!("rotation selection evidence is invalid: {error}"))?;
-    let preparation = selected.preparation();
-    let incumbent = selected
-        .incumbent_authority()
-        .validators
-        .iter()
-        .map(|keys| keys.validator.clone())
-        .collect::<Vec<_>>();
-    ensure!(
-        authorizing_seats.len() == incumbent.len()
-            && authorizing_seats
-                .iter()
-                .zip(&incumbent)
-                .all(|(seat, peer)| seat.id() == *peer),
-        "rotation signers must match the complete exact incumbent roster in order"
-    );
-    let roster = preparation
-        .roster
-        .iter()
-        .map(|seat| seat.validator.clone())
-        .collect::<Vec<_>>();
-    ensure!(
-        roster.len() == seats.len()
-            && seats
-                .iter()
-                .zip(&roster)
-                .all(|(seat, peer)| seat.id() == *peer)
-            && roster.len() >= 4
-            && (roster.len() - 1) % 3 == 0,
-        "rotation processes must match every exact frozen 3f+1 seat in order"
-    );
-    let observed = selected.observed_height();
-    let commitments_end_height = observed
-        .checked_add(1)
-        .ok_or_else(|| eyre!("height overflow"))?;
-    let deliveries_end_height = observed
-        .checked_add(2)
-        .ok_or_else(|| eyre!("height overflow"))?;
-    let acceptances_end_height = observed
-        .checked_add(3)
-        .ok_or_else(|| eyre!("height overflow"))?;
-    let cutoff = preparation
-        .first_height
-        .checked_sub(1)
-        .ok_or_else(|| eyre!("invalid cutoff"))?;
-    ensure!(
-        acceptances_end_height < cutoff,
-        "rotation DKG misses the preparation cutoff"
-    );
-    let mut verifier = BridgeFinalityVerifier::with_context(input.network_id, trusted);
-    for proof in &evidence.finality_chain {
-        verifier.verify(proof)?;
-    }
-    Ok((
-        GlobalThresholdBeaconDkgSessionV1 {
-            version: 1,
-            network_id: input.network_id,
-            session_id: preparation
-                .beacon_session_id()
-                .map_err(|error| eyre!(error))?,
-            attempt_id: preparation.transition_id().map_err(|error| eyre!(error))?,
-            authority_generation: preparation.authority_generation,
-            roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
-            committee_size: u16::try_from(roster.len())?,
-            threshold: u16::try_from((roster.len() - 1) / 3 + 1)?,
-            start_height: observed,
-            commitments_end_height,
-            deliveries_end_height,
-            acceptances_end_height,
-        },
-        verifier,
+    _seats: &[&NetworkPeer],
+    _authorizing_seats: &[&NetworkPeer],
+    _evidence: &ValidatorCommitteeSelectionEvidenceV1,
+    _input: DisposableRotationProofInput,
+) -> Result<(GlobalThresholdBeaconDkgSessionV1, SumeragiFinalityVerifier)> {
+    Err(eyre!(
+        "rotation requires current authenticated committee state evidence, which is unavailable"
     ))
 }
 
@@ -320,7 +235,7 @@ fn broadcast_public<T: norito::NoritoSerialize>(
     Ok(())
 }
 
-fn broadcast_finality(seats: &mut [SeatProcess], proof: &BridgeFinalityProof) -> Result<()> {
+fn broadcast_finality(seats: &mut [SeatProcess], proof: &SumeragiFinalityProof) -> Result<()> {
     let bytes = norito::encode_canonical(proof)?;
     for seat in seats {
         write_frame(&mut seat.finality_writer, &bytes, MAX_FINALITY_FRAME_BYTES)?;
@@ -625,12 +540,12 @@ fn spawn_seat(
 
 fn verify_genesis_input(
     network: &Network,
-    first_finality: &BridgeFinalityProof,
+    first_finality: &SumeragiFinalityProof,
 ) -> Result<(
     NativeGenesisProvisioningBundle,
     GlobalThresholdBeaconDkgSessionV1,
     Vec<PeerId>,
-    BridgeFinalityVerifier,
+    SumeragiFinalityVerifier,
 )> {
     ensure!(
         network.validators().len() == 4,
@@ -642,7 +557,7 @@ fn verify_genesis_input(
         network_id.into_genesis_hash() == bundle.block_hash
             && first_finality.block_header.hash() == bundle.block_hash
             && first_finality.block_header.height().get() == 1
-            && first_finality.finality_artifact.height == 1,
+            && first_finality.height() == 1,
         "genesis DKG anchor is not the exact retained signed genesis"
     );
     let genesis = network.genesis();
@@ -657,15 +572,15 @@ fn verify_genesis_input(
             && available.len() == roster.len(),
         "disposable genesis DKG lacks an exact real process for each signed voter"
     );
-    iroha_core::sumeragi::validate_signed_genesis_v2_authority(
-        &genesis,
-        &first_finality.finality_artifact.height_context,
-        &first_finality.finality_artifact.validator_set_pops,
-    )?;
-    let mut verifier = BridgeFinalityVerifier::with_context(
-        network_id,
-        first_finality.finality_artifact.context_id(),
-    );
+    let validators = iroha_core::sumeragi::schedule::genesis_validators(&genesis)?
+        .into_iter()
+        .map(|(peer, proof_of_possession)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession,
+        })
+        .collect();
+    let mut verifier =
+        SumeragiFinalityVerifier::new(&genesis.0, &network.chain_id().to_string(), validators)?;
     verifier.verify(first_finality)?;
     let session = genesis_dkg_session(network_id, &roster);
     let _ =
@@ -1295,13 +1210,13 @@ pub async fn prepare_disposable_pending_custody(
 /// private edge acceptance, failed native process, or invalid quorum assembly.
 pub async fn run_disposable_genesis_dkg<F, Fut>(
     network: &Network,
-    first_finality: &BridgeFinalityProof,
+    first_finality: &SumeragiFinalityProof,
     certificate_height: u64,
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<BridgeFinalityProof>>,
+    Fut: Future<Output = Result<SumeragiFinalityProof>>,
 {
     let (bundle, session, roster, verifier) = verify_genesis_input(network, first_finality)?;
     let binary = Program::IrohadTaira.resolve_async().await?;
@@ -1355,13 +1270,13 @@ pub async fn run_disposable_genesis_dkg_from_configs<F, Fut>(
     network_id: NetworkId,
     seats: &[DisposableGenesisConfigSeat],
     native_binary: &Path,
-    first_finality: &BridgeFinalityProof,
+    first_finality: &SumeragiFinalityProof,
     certificate_height: u64,
     next_finality: F,
 ) -> Result<DisposableGenesisDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<BridgeFinalityProof>>,
+    Fut: Future<Output = Result<SumeragiFinalityProof>>,
 {
     ensure!(
         seats.len() == 4,
@@ -1372,7 +1287,7 @@ where
             && network_id.into_genesis_hash() == bundle.block_hash
             && first_finality.block_header.hash() == bundle.block_hash
             && first_finality.block_header.height().get() == 1
-            && first_finality.finality_artifact.height == 1,
+            && first_finality.height() == 1,
         "external genesis DKG anchor differs from retained signed genesis"
     );
     let manifest: RawGenesisTransaction = norito::json::from_slice(&bundle.manifest_json)?;
@@ -1388,15 +1303,19 @@ where
         roster.len() == 4 && seats.iter().map(|seat| &seat.validator).eq(roster.iter()),
         "native config seats differ from exact signed-genesis voter order"
     );
-    iroha_core::sumeragi::validate_signed_genesis_v2_authority(
-        &genesis,
-        &first_finality.finality_artifact.height_context,
-        &first_finality.finality_artifact.validator_set_pops,
+    let validators = validated
+        .validator_pops()
+        .iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key: public_key.clone(),
+            proof_of_possession: proof_of_possession.clone(),
+        })
+        .collect();
+    let mut verifier = SumeragiFinalityVerifier::new(
+        validated.block(),
+        &manifest.chain_id().to_string(),
+        validators,
     )?;
-    let mut verifier = BridgeFinalityVerifier::with_context(
-        network_id,
-        first_finality.finality_artifact.context_id(),
-    );
     verifier.verify(first_finality)?;
     let session = genesis_dkg_session(network_id, &roster);
     let _ =
@@ -1428,8 +1347,8 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
     bundle: NativeGenesisProvisioningBundle,
     session: GlobalThresholdBeaconDkgSessionV1,
     roster: Vec<PeerId>,
-    mut verifier: BridgeFinalityVerifier,
-    first_finality: &BridgeFinalityProof,
+    mut verifier: SumeragiFinalityVerifier,
+    first_finality: &SumeragiFinalityProof,
     certificate_height: u64,
     mut next_finality: F,
     binary: &Path,
@@ -1437,7 +1356,7 @@ async fn run_genesis_dkg_with_seats<F, Fut, S>(
 ) -> Result<DisposableGenesisDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<BridgeFinalityProof>>,
+    Fut: Future<Output = Result<SumeragiFinalityProof>>,
     S: FnMut(
         &Path,
         &PeerId,
@@ -1501,7 +1420,7 @@ where
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(2).await?;
     ensure!(
-        proof.finality_artifact.height == 2 && proof.block_header.height().get() == 2,
+        proof.height() == 2 && proof.block_header.height().get() == 2,
         "genesis commitments were not followed by exact h2 finality"
     );
     verifier.verify(&proof)?;
@@ -1513,7 +1432,7 @@ where
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(3).await?;
     ensure!(
-        proof.finality_artifact.height == 3 && proof.block_header.height().get() == 3,
+        proof.height() == 3 && proof.block_header.height().get() == 3,
         "genesis deliveries were not followed by exact h3 finality"
     );
     verifier.verify(&proof)?;
@@ -1528,7 +1447,7 @@ where
     broadcast_public(&mut processes, &assembled)?;
     let proof = next_finality(4).await?;
     ensure!(
-        proof.finality_artifact.height == 4 && proof.block_header.height().get() == 4,
+        proof.height() == 4 && proof.block_header.height().get() == 4,
         "genesis acceptances were not followed by exact h4 finality"
     );
     verifier.verify(&proof)?;
@@ -1679,7 +1598,7 @@ pub async fn run_disposable_rotation_dkg<F, Fut>(
 ) -> Result<DisposableRotationDkgOutput>
 where
     F: FnMut(u64) -> Fut,
-    Fut: Future<Output = Result<BridgeFinalityProof>>,
+    Fut: Future<Output = Result<SumeragiFinalityProof>>,
 {
     ensure!(provider_revision != 0, "provider revision must be positive");
     let (session, mut verifier) = verify_input(seats, authorizing_seats, evidence, input)?;
@@ -1726,7 +1645,7 @@ where
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(session.commitments_end_height).await?;
     ensure!(
-        proof.finality_artifact.height == session.commitments_end_height
+        proof.height() == session.commitments_end_height
             && proof.block_header.height().get() == session.commitments_end_height,
         "rotation commitments were not followed by exact phase finality"
     );
@@ -1739,7 +1658,7 @@ where
     broadcast_public(&mut processes, &public.public_snapshot()?)?;
     let proof = next_finality(session.deliveries_end_height).await?;
     ensure!(
-        proof.finality_artifact.height == session.deliveries_end_height
+        proof.height() == session.deliveries_end_height
             && proof.block_header.height().get() == session.deliveries_end_height,
         "rotation deliveries were not followed by exact phase finality"
     );
@@ -1755,7 +1674,7 @@ where
     broadcast_public(&mut processes, &assembled)?;
     let proof = next_finality(session.acceptances_end_height).await?;
     ensure!(
-        proof.finality_artifact.height == session.acceptances_end_height
+        proof.height() == session.acceptances_end_height
             && proof.block_header.height().get() == session.acceptances_end_height,
         "rotation acceptances were not followed by exact phase finality"
     );
@@ -1801,7 +1720,7 @@ where
         .map(|proof| {
             let path = controller
                 .path()
-                .join(format!("phase-{}.norito", proof.finality_artifact.height));
+                .join(format!("phase-{}.norito", proof.height()));
             fs::write(&path, norito::encode_canonical(proof)?)?;
             Ok(path)
         })

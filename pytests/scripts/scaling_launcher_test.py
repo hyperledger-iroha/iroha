@@ -135,7 +135,7 @@ def setup(tmp_path, monkeypatch):
                 def collect(original, verify):
                     verify()
                     return tuple(launcher.ReadyReceipt(pin.peer_id, pin.identity,
-                        'test-node', 'test-network', 'test-genesis', 'test-context',
+                        'test-node', 'test-network', 'test-genesis', 'test-instance', 'test-execution',
                         '1' * 64, image.sha256, pin.identity, '2' * 64, '3' * 64,
                         '4' * 64, b'test-native-receipt') for pin in original)
                 step.collect = collect

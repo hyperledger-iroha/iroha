@@ -118,10 +118,12 @@ pub(super) struct TwoSlotStoreConfigV1 {
 /// This bound applies only while opening or creating the fixed store. Normal loads and
 /// compare-and-swap operations retain their separate blocking or typed nonblocking contracts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct TwoSlotInitializationWaitV1 {
     timeout: Duration,
     retry_interval: Duration,
 }
+#[cfg(test)]
 impl TwoSlotInitializationWaitV1 {
     /// Construct a non-zero initialization wait bounded by the V1 hard limit.
     pub(super) fn try_new(timeout: Duration, retry_interval: Duration) -> io::Result<Self> {
@@ -259,10 +261,12 @@ pub(super) struct TwoSlotStoreV1 {
 /// The init-lock identity is part of the immutable two-slot binding material,
 /// so unlink/recreate substitution cannot split cooperating writers across two
 /// independently lockable filesystem objects.
+#[cfg(test)]
 pub(super) struct TwoSlotBoundOperationLeaseV1 {
     store: TwoSlotStoreV1,
     init_lock: Option<TwoSlotInitFileLockV1>,
 }
+#[cfg(test)]
 impl fmt::Debug for TwoSlotBoundOperationLeaseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -918,6 +922,7 @@ impl RootedDirectory {
         open_or_create_two_slot_store_v1_with(self, config, initial_payload, |_| Ok(()))
     }
     /// Open or initialize a two-slot store under a bounded cross-process wait.
+    #[cfg(test)]
     pub(super) fn open_or_create_two_slot_store_v1_bounded(
         &self,
         config: TwoSlotStoreConfigV1,
@@ -2559,6 +2564,7 @@ impl TwoSlotInitFileLockV1 {
         };
         Self::from_opened(root, name, handle, true)
     }
+    #[cfg(test)]
     fn open_existing(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
         let name = two_slot_init_lock_name(config);
         root.verify()?;
@@ -2605,6 +2611,7 @@ impl TwoSlotInitFileLockV1 {
         lock.verify()?;
         Ok(lock)
     }
+    #[cfg(test)]
     fn acquire_bounded(
         root: &RootedDirectory,
         config: &TwoSlotStoreConfigV1,
@@ -2639,6 +2646,7 @@ impl TwoSlotInitFileLockV1 {
             }
         }
     }
+    #[cfg(test)]
     fn try_acquire_bound(
         root: &RootedDirectory,
         config: &TwoSlotStoreConfigV1,
@@ -2695,6 +2703,7 @@ impl TwoSlotInitFileLockV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TwoSlotInitializationLockModeV1 {
     Blocking,
+    #[cfg(test)]
     Bounded(TwoSlotInitializationWaitV1),
 }
 impl Drop for TwoSlotInitFileLockV1 {
@@ -2709,6 +2718,7 @@ enum TwoSlotCasModeV1 {
     LegacyBlocking,
     NonblockingTyped,
 }
+#[cfg(test)]
 impl TwoSlotBoundOperationLeaseV1 {
     /// Revalidate the exact bound init lock and immutable two-slot headers.
     pub(super) fn verify(&self) -> io::Result<()> {
@@ -2748,6 +2758,7 @@ impl TwoSlotStoreV1 {
     ///
     /// This nonblocking lease is intended for higher-level composite
     /// operations that span external effects and a later two-slot CAS.
+    #[cfg(test)]
     pub(super) fn try_acquire_bound_operation_lease(
         &self,
         parent: &RootedDirectory,
@@ -2771,6 +2782,7 @@ impl TwoSlotStoreV1 {
             }
         }
     }
+    #[cfg(test)]
     fn verify_exact_parent(&self, parent: &RootedDirectory) -> io::Result<()> {
         parent.verify()?;
         self.directory.verify()?;
@@ -2847,6 +2859,7 @@ impl TwoSlotStoreV1 {
         })
     }
     /// Attempt to load the highest complete record without waiting for either lock.
+    #[cfg(test)]
     pub(super) fn try_load(&self) -> Result<TwoSlotSnapshotV1, TwoSlotTryErrorV1> {
         self.with_try_exclusive_lock(|store| {
             select_two_slot_record_unlocked(store).map(|record| two_slot_snapshot(store, record))
@@ -2861,6 +2874,7 @@ impl TwoSlotStoreV1 {
         self.compare_and_swap_with(expected, payload, |_| Ok(()))
     }
     /// Attempt one typed compare-and-swap without waiting for either lock.
+    #[cfg(test)]
     pub(super) fn try_compare_and_swap(
         &self,
         expected: &TwoSlotSnapshotV1,
@@ -3927,6 +3941,7 @@ where
     }
     let init_file_lock = match lock_mode {
         TwoSlotInitializationLockModeV1::Blocking => TwoSlotInitFileLockV1::acquire(root, &config)?,
+        #[cfg(test)]
         TwoSlotInitializationLockModeV1::Bounded(wait) => {
             TwoSlotInitFileLockV1::acquire_bounded(root, &config, wait)?
         }

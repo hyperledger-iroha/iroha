@@ -128,6 +128,7 @@ impl Cell {
 }
 /// Fragment a message into multiple cells of the given class.
 /// If the message is empty, returns an empty vector.
+#[cfg(test)]
 pub fn fragment_message(class: CellClass, message: &[u8]) -> Vec<Cell> {
     if message.is_empty() {
         return Vec::new();

@@ -97,23 +97,14 @@ pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode
 }
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
 pub mod block_store;
-/// The certified-chain reader: committed blocks as their Kura frames certify them.
-pub mod certified_chain;
-/// A certified test chain: real genesis, execution and BLS-certified Kura frames.
-#[cfg(any(test, feature = "iroha-core-tests"))]
-pub mod test_chain;
-/// The execution result `R` of a block (`specs/sumeragi.md` §4.1).
-pub mod commitment;
+/// Current parent-bound threshold beacon production and authenticated partial transport.
+pub mod beacon;
 /// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).
 pub mod bodies;
-/// The node's executor: executes, applies and builds blocks on the committed State.
-pub mod executor;
-/// Block payloads: the leader's proposal builder and the deterministic `EMPTY` block.
-pub mod payload;
-/// Startup: genesis apply and replay, and the core's `Init`.
-pub mod startup;
-/// The node's Sumeragi instance: startup, production backends and the driver.
-pub mod node;
+/// The certified-chain reader: committed blocks as their Kura frames certify them.
+pub mod certified_chain;
+/// The execution result `R` of a block (`specs/sumeragi.md` §4.1).
+pub mod commitment;
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
 /// Production cryptography of the Sumeragi driver: `H = iroha_crypto::Hash`, BLS-normal
@@ -123,22 +114,37 @@ pub mod crypto;
 /// node (the v2 runtime still runs until the cutover).
 pub mod driver;
 pub(crate) mod exec;
+/// The node's executor: executes, applies and builds blocks on the committed State.
+pub mod executor;
+/// Portable proofs and challenge-bound current-node finality statements.
+pub mod finality;
+/// Genesis-bound consensus metadata derived from the staged genesis state.
+pub mod genesis_meta;
 pub(crate) mod lane_planner;
 pub mod message;
 /// The Sumeragi driver's P2P transport: the frame envelope, traffic classes, egress and
 /// ingress.
 pub mod net;
 pub mod network_topology;
+/// The node's Sumeragi instance: startup, production backends and the driver.
+pub mod node;
 pub(crate) mod output_guard;
+/// Nonempty block payloads and the leader's proposal builder.
+pub mod payload;
 pub(crate) mod penalties;
 /// File-backed safety records, store id and installation log of the Sumeragi driver (§7.4).
 pub mod records;
 pub(crate) mod safety_wal;
 /// The lag-2 height-configuration schedule and the genesis committee (`specs/sumeragi.md` §10).
 pub mod schedule;
-/// Genesis-bound consensus metadata derived from the staged genesis state.
-pub mod genesis_meta;
-pub use genesis_meta::{staged_genesis_execution_policy_hash, staged_genesis_nexus_amx_context_hash};
+/// Startup: genesis apply and replay, and the core's `Init`.
+pub mod startup;
+/// A certified test chain: real genesis, execution and BLS-certified Kura frames.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub mod test_chain;
+pub use genesis_meta::{
+    staged_genesis_execution_policy_hash, staged_genesis_nexus_amx_context_hash,
+};
 /// The initial validator roster: the authenticated subset of the configured trusted peers.
 pub mod roster;
 pub use roster::filter_validators_from_trusted;
@@ -6606,11 +6612,11 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
 }
 mod admission_capacity;
 mod admission_input;
+use crate::snapshot::{StartupRecovery, StartupRecoveryPublisher, startup_recovery_channel};
 pub use admission_capacity::{
     AdmissionCapacityUnavailableV1, AuthenticatedAdmissionCapacityV1, Rs16PayloadGeometryV1,
 };
 pub use admission_input::QueuePlanInputCapacityErrorV1;
-use crate::snapshot::{StartupRecovery, StartupRecoveryPublisher, startup_recovery_channel};
 
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
 ///
@@ -8874,7 +8880,8 @@ mod authoritative_runtime_gate_tests {
             .public_key()
             .try_to_bytes()
             .expect("fixture public key is canonical");
-        let recovery_network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
+        let recovery_network_id =
+            crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
         let (body_request, commit_request, commit_response) =
             v2_maximum_recovery_wires(&recovery_network_id, minimal_peer, 1);
         assert_eq!(

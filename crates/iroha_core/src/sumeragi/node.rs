@@ -11,13 +11,14 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use iroha_config::parameters::actual::SumeragiLocalOverrides;
 
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     block::SignedBlock,
     parameter::system::ConsensusMode,
     sumeragi::{SumeragiFootprint, SumeragiHaltReason, SumeragiStatus},
 };
+use iroha_model_base::peer::PeerId;
 /// The Sumeragi wire protocol version peers bind in the handshake.
 pub use iroha_sumeragi::message::PROTOCOL_VERSION;
 use iroha_sumeragi::{
@@ -32,7 +33,8 @@ use super::{
     bodies::{BodyLimits, FileBodyStore},
     crypto::{BlsCrypto, KeyPairSigner, core_key, iroha_key},
     driver::{
-        Driver, DriverConfig, DriverHandle, DriverStart, RunningDriver, SharedCrypto, assemble_init,
+        Driver, DriverConfig, DriverHandle, DriverStart, RunningDriver, SharedCrypto,
+        assemble_init,
         traits::{BlockStore, Net, Observer, SystemClock},
     },
     executor::{ExecutorContext, StateExecutor},
@@ -99,6 +101,8 @@ pub struct StartInputs<N> {
     pub observer: Arc<dyn Observer>,
     /// Driver limits.
     pub driver: DriverConfig,
+    /// Runtime-only threshold share custody installed by the node's signer broker.
+    pub beacon_signer: Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
 }
 
 /// Everything [`start`] needs from the node.
@@ -139,6 +143,8 @@ pub struct RunningNode {
     pub instance: Hash32,
     /// The instance's cryptography.
     pub crypto: Arc<BlsCrypto>,
+    identity: NodeIdentity,
+    beacon: Arc<super::beacon::BeaconService>,
 }
 
 impl RunningNode {
@@ -147,6 +153,7 @@ impl RunningNode {
         NodeHandle {
             driver: self.driver.handle(),
             instance: self.instance,
+            identity: self.identity.clone(),
         }
     }
 }
@@ -156,6 +163,16 @@ impl RunningNode {
 pub struct NodeHandle {
     driver: DriverHandle,
     instance: Hash32,
+    identity: NodeIdentity,
+}
+
+/// Immutable identity and resolved configuration of the running consensus instance.
+#[derive(Clone, Debug)]
+pub struct NodeIdentity {
+    /// Consensus peer identity installed at startup.
+    pub node_id: PeerId,
+    /// Canonical fingerprint of the effective local and driver settings.
+    pub config_fingerprint: Hash,
 }
 
 impl core::fmt::Debug for NodeHandle {
@@ -167,6 +184,11 @@ impl core::fmt::Debug for NodeHandle {
 }
 
 impl NodeHandle {
+    /// Identity captured from the actual startup inputs, never from HTTP parameters.
+    pub fn identity(&self) -> &NodeIdentity {
+        &self.identity
+    }
+
     /// The instance id (`I`).
     pub fn instance(&self) -> Hash32 {
         self.instance
@@ -326,6 +348,7 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
         consensus_mode,
     })?
     .start(StartInputs {
+        beacon_signer: None,
         net,
         queue,
         key_pair,
@@ -343,6 +366,7 @@ pub struct Prepared {
     tip: GenesisTip,
     blocks: Arc<KuraBlockStore>,
     executor: StateExecutor,
+    consensus_mode: ConsensusMode,
 }
 
 impl core::fmt::Debug for Prepared {
@@ -449,6 +473,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         tip,
         blocks,
         executor,
+        consensus_mode,
     })
 }
 
@@ -471,6 +496,7 @@ impl Prepared {
             tip,
             blocks,
             executor,
+            consensus_mode,
         } = self;
         let StartInputs {
             net,
@@ -479,8 +505,19 @@ impl Prepared {
             config,
             observer,
             driver,
+            beacon_signer,
         } = inputs;
         executor.attach_queue(queue);
+        let beacon = super::beacon::BeaconService::spawn(
+            Arc::clone(&state),
+            instance,
+            PeerId::new(key_pair.public_key().clone()),
+            beacon_signer,
+            net.clone(),
+            consensus_mode,
+        )
+        .map_err(|error| NodeError::Driver(error.to_string()))?;
+        executor.attach_beacon(Arc::clone(&beacon));
         let shared: SharedCrypto = crypto.clone();
         // Records of the node's keys.
         let key =
@@ -514,11 +551,23 @@ impl Prepared {
                 .consensus_schedule()
                 .init_configs(GENESIS_HEIGHT)
                 .map_err(|error| NodeError::Input(error.to_string()))?;
-            (configs, view.world().parameters().sumeragi().demotion_window.get())
+            (
+                configs,
+                view.world().parameters().sumeragi().demotion_window.get(),
+            )
         };
         let n = configs
             .first()
             .map_or(1, |(_, config)| config.committee.n());
+        let identity = NodeIdentity {
+            node_id: PeerId::new(key_pair.public_key().clone()),
+            config_fingerprint: configuration_fingerprint(
+                n,
+                &config.local,
+                &driver,
+                &config.retired_keys,
+            ),
+        };
         let init = assemble_init(
             &*blocks,
             instance,
@@ -564,10 +613,13 @@ impl Prepared {
             },
         )
         .map_err(|error| NodeError::Driver(error.to_string()))?;
+        beacon.set_wakeup(running.handle());
         Ok(RunningNode {
+            beacon,
             driver: running,
             instance,
             crypto,
+            identity,
         })
     }
 
@@ -588,12 +640,21 @@ impl Prepared {
             .map_err(|error| NodeError::Driver(error.to_string()))?;
         let node = self.start(inputs)?;
         let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
-        ingress.register(node.instance, Arc::new(node.driver.handle()));
+        ingress.register(
+            node.instance,
+            Arc::new(super::beacon::BeaconFrameSink::new(
+                node.driver.handle(),
+                Arc::clone(&node.beacon),
+            )),
+        );
         let ingress_thread = match spawn_ingress(subscription, Arc::clone(&ingress)) {
             Ok(thread) => thread,
             Err(error) => {
+                node.beacon.shutdown();
                 node.driver.shutdown();
-                return Err(NodeError::Driver(format!("sumeragi ingress thread: {error}")));
+                return Err(NodeError::Driver(format!(
+                    "sumeragi ingress thread: {error}"
+                )));
             }
         };
         Ok(NetworkedNode {
@@ -622,11 +683,11 @@ impl NetworkedNode {
     /// Stop the instance and wait for its threads. The ingress thread ends with the network.
     pub fn shutdown(self) {
         self.ingress.unregister(&self.node.instance);
+        self.node.beacon.shutdown();
         self.node.driver.shutdown();
         drop(self.ingress_thread);
     }
 }
-
 
 /// Reports of the instance in the node's log. Evidence is logged for the operator; the
 /// status endpoint reads [`super::driver::DriverHandle::status`].
@@ -663,6 +724,57 @@ impl Observer for LogObserver {
     }
 }
 
+/// Canonical fingerprint shared by release inventory and the actual running driver.
+///
+/// Binds every resolved local/driver limit, the body-store cap and retired keys. Chain
+/// parameters are authenticated by the committed execution-result preimage. File locations
+/// and the one-shot fresh-key assertion do not change the running protocol configuration.
+#[must_use]
+pub fn configuration_fingerprint(
+    committee_size: usize,
+    overrides: &SumeragiLocalOverrides,
+    driver: &DriverConfig,
+    retired_keys: &[iroha_crypto::PublicKey],
+) -> Hash {
+    use norito::codec::Encode as _;
+    let local = local_params(committee_size, overrides);
+    let mut bytes = b"iroha/sumeragi/node-configuration/v1\0".to_vec();
+    for value in [
+        u64::from(PROTOCOL_VERSION),
+        local.t_base,
+        local.t_max,
+        u64::from(local.start_cap),
+        u64::from(local.decay_after),
+        local.rebroadcast_interval,
+        local.status_keepalive,
+        local.build_timeout,
+        local.fetch_retry,
+        u64::from(local.sync_batch),
+        local.sync_retry,
+        u64::from(local.sync_max_bytes),
+        u64::from(local.max_observers),
+        driver.ingress.per_peer[0] as u64,
+        driver.ingress.per_peer[1] as u64,
+        driver.ingress.per_peer[2] as u64,
+        u64::from(driver.ingress.bulk_every),
+        driver.backoff.initial,
+        driver.backoff.max,
+        driver.held.effects as u64,
+        driver.held.payload_bytes,
+        driver.serve.bytes_per_sec,
+        driver.serve.burst_bytes,
+        driver.serve.max_peers as u64,
+        driver.frame_limit,
+        BodyLimits::default().max_bytes,
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut retired = retired_keys.to_vec();
+    retired.sort();
+    bytes.extend_from_slice(&retired.encode());
+    Hash::new(bytes)
+}
+
 /// The core's local parameters for a committee of `n`, with the node's overrides.
 fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> LocalParams {
     let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
@@ -678,7 +790,9 @@ fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> LocalParams {
         status_keepalive: overrides
             .status_keepalive
             .map_or(defaults.status_keepalive, millis),
-        build_timeout: overrides.build_timeout.map_or(defaults.build_timeout, millis),
+        build_timeout: overrides
+            .build_timeout
+            .map_or(defaults.build_timeout, millis),
         fetch_retry: overrides.fetch_retry.map_or(defaults.fetch_retry, millis),
         sync_batch: overrides.sync_batch.unwrap_or(defaults.sync_batch),
         sync_retry: overrides.sync_retry.map_or(defaults.sync_retry, millis),
@@ -710,8 +824,61 @@ fn startup_nonce() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn configuration_fingerprint_binds_effective_runtime_settings() {
+        use super::{DriverConfig, SumeragiLocalOverrides, configuration_fingerprint};
+        let local = SumeragiLocalOverrides::default();
+        let driver = DriverConfig::default();
+        let original = configuration_fingerprint(4, &local, &driver, &[]);
+        let explicit_default = SumeragiLocalOverrides {
+            t_base: Some(std::time::Duration::from_millis(2_000)),
+            ..local
+        };
+        assert_eq!(
+            original,
+            configuration_fingerprint(4, &explicit_default, &driver, &[])
+        );
+        let changed = SumeragiLocalOverrides {
+            build_timeout: Some(std::time::Duration::from_millis(201)),
+            ..local
+        };
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &changed, &driver, &[])
+        );
+        let mut changed_driver = driver;
+        changed_driver.ingress.per_peer[0] += 1;
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &local, &changed_driver, &[])
+        );
+        changed_driver = driver;
+        changed_driver.held.payload_bytes += 1;
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &local, &changed_driver, &[])
+        );
+        let first =
+            iroha_crypto::KeyPair::from_seed(vec![1; 32], iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone();
+        let second =
+            iroha_crypto::KeyPair::from_seed(vec![2; 32], iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone();
+        assert_ne!(
+            original,
+            configuration_fingerprint(4, &local, &driver, &[first.clone()])
+        );
+        assert_eq!(
+            configuration_fingerprint(4, &local, &driver, &[first.clone(), second.clone()]),
+            configuration_fingerprint(4, &local, &driver, &[second, first])
+        );
+    }
+
     use std::{collections::HashMap, num::NonZeroU64, time::Duration};
 
+    use iroha_crypto::HashOf;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
@@ -719,27 +886,23 @@ mod tests {
         parameter::{Parameter, system::SumeragiParameter},
         prelude::*,
     };
-    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-    use iroha_model_base::{chain::ChainId, peer::PeerId};
-    use iroha_primitives::time::TimeSource;
     use iroha_data_model::{
         isi::Log,
         transaction::{FeePaymentIntent, TransactionEntrypoint},
     };
-    use iroha_crypto::HashOf;
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::{chain::ChainId, peer::PeerId};
+    use iroha_primitives::time::TimeSource;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
     };
 
     use super::*;
-    use iroha_sumeragi::types::PublicKey as CoreKey;
     use crate::{
-        governance::manifest::LaneManifestRegistry,
-        query::store::LiveQueryStore,
-        state::World,
-        sumeragi::driver::traits::Frame,
-        tx::AcceptedTransaction,
+        governance::manifest::LaneManifestRegistry, query::store::LiveQueryStore, state::World,
+        sumeragi::driver::traits::Frame, tx::AcceptedTransaction,
     };
+    use iroha_sumeragi::types::PublicKey as CoreKey;
 
     /// The in-memory transport: every node's handle, filled once the nodes started (frames
     /// sent before are dropped, and the core rebroadcasts).
@@ -785,13 +948,12 @@ mod tests {
     }
 
     /// A chain of `validators` with a 100 ms block time and the given idle interval.
-    fn chain(validators: u8, idle_block_interval_ms: u64) -> Chain {
+    fn chain(validators: u8, payload_retry_interval_ms: u64) -> Chain {
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("sumeragi-node-test");
         let mut keys = (0..validators)
             .map(|index| {
-                KeyPair::try_from_seed(vec![0xC0 + index; 32], Algorithm::BlsNormal)
-                    .expect("key")
+                KeyPair::try_from_seed(vec![0xC0 + index; 32], Algorithm::BlsNormal).expect("key")
             })
             .collect::<Vec<_>>();
         keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
@@ -813,9 +975,11 @@ mod tests {
             .collect::<Vec<_>>();
         // TODO(WP9): the genesis builder drops its v2 context requirement.
         let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-            .append_parameter(Parameter::Sumeragi(SumeragiParameter::IdleBlockIntervalMs(
-                NonZeroU64::new(idle_block_interval_ms).expect("non-zero"),
-            )))
+            .append_parameter(Parameter::Sumeragi(
+                SumeragiParameter::PayloadRetryIntervalMs(
+                    NonZeroU64::new(payload_retry_interval_ms).expect("non-zero"),
+                ),
+            ))
             .with_block_cadence_ms(NonZeroU64::new(100).expect("non-zero"))
             .set_topology(entries)
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
@@ -990,15 +1154,30 @@ mod tests {
         }
     }
 
-    fn wait_for_height(validators: &[Validator], height: u64, limit: Duration) {
-        wait_until(validators, limit, &format!("height {height}"), || {
-            committed_heights(validators).iter().all(|&h| h >= height)
-        });
+    fn assert_idle_height_unchanged(validators: &[Validator], duration: Duration) {
+        let baseline = committed_heights(validators);
+        let started = std::time::Instant::now();
+        while started.elapsed() < duration {
+            assert_eq!(
+                committed_heights(validators),
+                baseline,
+                "idle chain advanced"
+            );
+            for validator in validators {
+                assert!(validator.node.driver.handle().halted().is_none());
+                assert_eq!(validator.queue.queued_len(), 0);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// Submit a transaction to every validator's queue (the transaction gossip's job in the
     /// node) and tell the drivers.
-    fn submit(chain: &Chain, validators: &[Validator], message: &str) -> HashOf<TransactionEntrypoint> {
+    fn submit(
+        chain: &Chain,
+        validators: &[Validator],
+        message: &str,
+    ) -> HashOf<TransactionEntrypoint> {
         let network_id = NetworkId::from_genesis_hash(chain.genesis.hash());
         let signed = TransactionBuilder::new(
             network_id,
@@ -1027,9 +1206,18 @@ mod tests {
     }
 
     fn committed_everywhere(validators: &[Validator], hash: HashOf<TransactionEntrypoint>) -> bool {
-        validators
-            .iter()
-            .all(|validator| validator.state.has_committed_entrypoint(hash))
+        validators.iter().all(|validator| {
+            validator.state.has_committed_entrypoint(hash)
+                && validator
+                    .node
+                    .driver
+                    .handle()
+                    .status()
+                    .is_some_and(|status| {
+                        status.applied_height
+                            == u64::try_from(validator.state.view().height()).unwrap()
+                    })
+        })
     }
 
     /// Every validator stored the same blocks up to `height`, each with its commit certificate
@@ -1044,30 +1232,50 @@ mod tests {
             for block in &blocks {
                 assert!(block.commit_certificate().is_some(), "height {height}");
                 assert_eq!(block.hash(), blocks[0].hash(), "height {height}");
+                assert!(
+                    block.network_entrypoint_count() > 0,
+                    "empty block at {height}"
+                );
             }
         }
     }
 
     #[test]
-    fn idle_chain_commits_heartbeats_and_restarts() {
+    fn idle_chain_never_advances_and_real_work_survives_restart() {
         let chain = chain(4, 200);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
-        wait_for_height(&validators, 5, Duration::from_secs(30));
+        assert_eq!(committed_heights(&validators), vec![GENESIS_HEIGHT; 4]);
+        assert_idle_height_unchanged(&validators, Duration::from_millis(750));
+        let hash = submit(&chain, &validators, "after idle");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "real work after idle",
+            || committed_everywhere(&validators, hash),
+        );
+        assert_idle_height_unchanged(&validators, Duration::from_millis(750));
         shutdown(validators);
         let committed = disks
             .iter()
             .map(|disk| disk.kura.blocks_count())
             .min()
             .expect("validators");
-        assert!(committed >= 5, "Kura holds {committed} blocks");
+        assert_eq!(committed, 2, "only genesis and the submitted transaction");
         assert_same_certified_blocks(&disks, committed);
-        // Restart over the same Kura and records: genesis and every block replay, and the
-        // chain goes on.
+        // Replay the exact retained history, remain idle, then accept new work.
         let validators = start_all(&chain, &disks, false);
-        let resumed = u64::try_from(committed).expect("fits");
-        wait_for_height(&validators, resumed + 2, Duration::from_secs(30));
+        assert_idle_height_unchanged(&validators, Duration::from_millis(750));
+        let hash = submit(&chain, &validators, "after idle restart");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "real work after restart",
+            || committed_everywhere(&validators, hash),
+        );
+        assert_eq!(committed_heights(&validators), vec![3; 4]);
         shutdown(validators);
+        assert_same_certified_blocks(&disks, 3);
     }
 
     /// Replay checks every stored block against its certified result (§12.1): a certificate
@@ -1077,7 +1285,13 @@ mod tests {
         let chain = chain(4, 200);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
-        wait_for_height(&validators, 3, Duration::from_secs(30));
+        let hash = submit(&chain, &validators, "certified replay input");
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "replay input committed",
+            || committed_everywhere(&validators, hash),
+        );
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
@@ -1122,27 +1336,33 @@ mod tests {
     }
 
     #[test]
-    fn transactions_commit_at_once_without_heartbeats_and_after_restart() {
-        // The idle interval is far beyond the test: every block carries a transaction.
+    fn every_committed_block_contains_work_before_and_after_restart() {
+        // Explicit queue notifications must bypass even a long rebuild retry interval.
         let chain = chain(4, 600_000);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
         for index in 0..3 {
             let hash = submit(&chain, &validators, &format!("before restart {index}"));
-            wait_until(&validators, Duration::from_secs(30), "transaction committed", || {
-                committed_everywhere(&validators, hash)
-            });
+            wait_until(
+                &validators,
+                Duration::from_secs(30),
+                "transaction committed",
+                || committed_everywhere(&validators, hash),
+            );
         }
-        // One block per transaction and no heartbeat; a view change under load may commit an
-        // extra `EMPTY` block.
         let heights = committed_heights(&validators);
-        assert!(heights.iter().all(|&h| h >= 4), "{heights:?}");
+        assert_eq!(heights, vec![4; 4]);
         // Applied transactions leave every queue.
-        wait_until(&validators, Duration::from_secs(10), "queues drained", || {
-            validators
-                .iter()
-                .all(|validator| validator.queue.queued_len() == 0)
-        });
+        wait_until(
+            &validators,
+            Duration::from_secs(10),
+            "queues drained",
+            || {
+                validators
+                    .iter()
+                    .all(|validator| validator.queue.queued_len() == 0)
+            },
+        );
         shutdown(validators);
         let committed = disks
             .iter()
@@ -1152,9 +1372,13 @@ mod tests {
         assert_same_certified_blocks(&disks, committed);
         let validators = start_all(&chain, &disks, false);
         let hash = submit(&chain, &validators, "after restart");
-        wait_until(&validators, Duration::from_secs(30), "transaction committed", || {
-            committed_everywhere(&validators, hash)
-        });
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "transaction committed",
+            || committed_everywhere(&validators, hash),
+        );
         shutdown(validators);
+        assert_same_certified_blocks(&disks, 5);
     }
 }

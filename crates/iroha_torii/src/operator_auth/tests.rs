@@ -4,13 +4,9 @@ use super::*;
 use axum::http::HeaderValue;
 use ciborium::ser::into_writer;
 use ed25519_dalek::Signer as _;
-use p256::{
-    ecdsa::{SigningKey, signature::Signer as _},
-    elliptic_curve::rand_core::OsRng,
-};
+use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use rand::rand_core::{TryCryptoRng, TryRngCore};
 use rand::rngs::OsRng as FallibleOsRng;
-use std::io::Write as _;
 const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];

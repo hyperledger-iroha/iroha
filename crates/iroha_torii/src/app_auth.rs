@@ -56,12 +56,7 @@ use iroha_data_model::{
     NetworkId, ValidationFail,
     account::{AccountController, AccountId, address::AccountAddress, rekey::AccountAlias},
     alias_setup::AccountAliasName,
-    query::{
-        ItemKindTag, Query, QueryRequest, QueryWithParams,
-        dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
-        error::QueryExecutionFail,
-        parameters::QueryParams,
-    },
+    query::error::QueryExecutionFail,
     soracloud::{
         CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestSignatureWitnessV1,
         CanonicalRequestWitnessV1,
@@ -69,14 +64,18 @@ use iroha_data_model::{
 };
 #[cfg(feature = "app_api")]
 use iroha_torii_shared::FeeQuoteRequest;
+use iroha_torii_shared::canonical_request_form::{
+    CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1, CanonicalFormError, CanonicalRequestExactWriter,
+    CanonicalRequestFormPlan, canonical_request_decimal_len, canonical_request_query_pair_count,
+    write_canonical_request_decimal,
+};
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use std::{
     fmt,
-    io::Write as _,
     num::NonZeroUsize,
-    sync::{Arc, Mutex, OnceLock, RwLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{Arc, OnceLock, RwLock},
+    time::Duration,
 };
 /// Header carrying the authorising account id.
 pub const HEADER_ACCOUNT: &str = "X-Iroha-Account";
@@ -88,9 +87,8 @@ pub const HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 pub const HEADER_NONCE: &str = "X-Iroha-Nonce";
 /// Header carrying the base64 Norito-encoded multisig witness.
 pub const HEADER_WITNESS: &str = "X-Iroha-Witness";
+#[cfg(test)]
 const ACCOUNT_BODY_CONTEXT: &str = "account_id";
-/// Maximum number of decoded form pairs covered by one canonical V1 request.
-const CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1: usize = 64;
 /// Maximum raw query bytes covered by one canonical V1 request.
 ///
 /// This matches the complete HTTP/1 parser-buffer ceiling and also protects
@@ -131,6 +129,28 @@ pub(crate) const CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1: usize =
     Algorithm::MlDsa.signature_payload_len();
 /// HTTP request types used for canonical signing.
 pub use axum::http::{Method, Uri};
+#[cfg(test)]
+use iroha_data_model::query::ItemKindTag;
+#[cfg(test)]
+use iroha_data_model::query::Query;
+#[cfg(test)]
+use iroha_data_model::query::QueryRequest;
+#[cfg(test)]
+use iroha_data_model::query::QueryWithParams;
+#[cfg(test)]
+use iroha_data_model::query::dsl::CompoundPredicate;
+#[cfg(test)]
+use iroha_data_model::query::dsl::HasProjection;
+#[cfg(test)]
+use iroha_data_model::query::dsl::PredicateMarker;
+#[cfg(test)]
+use iroha_data_model::query::dsl::SelectorMarker;
+#[cfg(test)]
+use iroha_data_model::query::dsl::SelectorTuple;
+#[cfg(test)]
+use iroha_data_model::query::parameters::QueryParams;
+#[cfg(test)]
+use std::sync::Mutex;
 /// Canonical request freshness configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct CanonicalRequestAuthConfig {
@@ -242,11 +262,12 @@ pub struct VerifiedCanonicalRequest {
     /// Full signer set that satisfied the request authorisation.
     pub verified_signers: Vec<PublicKey>,
 }
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CanonicalRequestBodyProof<'a> {
     SignatureBase64(&'a str),
-    WitnessBase64(&'a str),
 }
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CanonicalRequestBodyAuth<'a> {
     pub(crate) account_id: &'a str,
@@ -255,264 +276,22 @@ pub(crate) struct CanonicalRequestBodyAuth<'a> {
     pub(crate) proof: CanonicalRequestBodyProof<'a>,
 }
 
-#[derive(Clone, Copy)]
-struct CanonicalRequestRawFormPair<'a> {
-    key: &'a [u8],
-    value: &'a [u8],
-}
-
-struct CanonicalRequestFormPlan<'a> {
-    pairs: [CanonicalRequestRawFormPair<'a>; CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1],
-    pair_count: usize,
-    encoded_bytes: usize,
-}
-
-#[derive(Clone)]
-struct CanonicalRequestFormDecodedBytes<'a> {
-    raw: &'a [u8],
-    index: usize,
-}
-
-impl<'a> CanonicalRequestFormDecodedBytes<'a> {
-    fn new(raw: &'a [u8]) -> Self {
-        Self { raw, index: 0 }
-    }
-}
-
-impl Iterator for CanonicalRequestFormDecodedBytes<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let byte = *self.raw.get(self.index)?;
-        if byte == b'+' {
-            self.index += 1;
-            return Some(b' ');
-        }
-        if byte == b'%'
-            && let (Some(high), Some(low)) = (
-                self.raw
-                    .get(self.index + 1)
-                    .and_then(|byte| canonical_request_hex_nibble(*byte)),
-                self.raw
-                    .get(self.index + 2)
-                    .and_then(|byte| canonical_request_hex_nibble(*byte)),
-            )
-        {
-            self.index += 3;
-            return Some((high << 4) | low);
-        }
-        self.index += 1;
-        Some(byte)
-    }
-}
-
-#[derive(Clone)]
-struct CanonicalRequestFormLossyChars<'a> {
-    bytes: CanonicalRequestFormDecodedBytes<'a>,
-}
-
-impl<'a> CanonicalRequestFormLossyChars<'a> {
-    fn new(raw: &'a [u8]) -> Self {
-        Self {
-            bytes: CanonicalRequestFormDecodedBytes::new(raw),
-        }
-    }
-
-    fn advance(&mut self, bytes: usize) {
-        for _ in 0..bytes {
-            let _ = self.bytes.next();
-        }
-    }
-}
-
-impl Iterator for CanonicalRequestFormLossyChars<'_> {
-    type Item = char;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut probe = self.bytes.clone();
-        let mut encoded = [0_u8; 4];
-        let mut length = 0;
-        while length < encoded.len() {
-            let Some(byte) = probe.next() else {
-                break;
-            };
-            encoded[length] = byte;
-            length += 1;
-        }
-        if length == 0 {
-            return None;
-        }
-        match std::str::from_utf8(&encoded[..length]) {
-            Ok(valid) => {
-                let ch = valid.chars().next().expect("non-empty UTF-8 probe");
-                self.advance(ch.len_utf8());
-                Some(ch)
-            }
-            Err(error) if error.valid_up_to() != 0 => {
-                let valid = std::str::from_utf8(&encoded[..error.valid_up_to()])
-                    .expect("UTF-8 validation guarantees its reported prefix is valid");
-                let ch = valid.chars().next().expect("non-empty valid UTF-8 prefix");
-                self.advance(ch.len_utf8());
-                Some(ch)
-            }
-            Err(error) => {
-                self.advance(error.error_len().unwrap_or(length));
-                Some(char::REPLACEMENT_CHARACTER)
-            }
-        }
-    }
-}
-
-const fn canonical_request_hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-const fn canonical_request_form_byte_len(byte: u8) -> usize {
-    match byte {
-        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' | b' ' => 1,
-        _ => 3,
-    }
-}
-
-fn canonical_request_form_component_len(raw: &[u8]) -> Option<usize> {
-    CanonicalRequestFormLossyChars::new(raw).try_fold(0_usize, |mut length, ch| {
-        let mut encoded = [0_u8; 4];
-        for byte in ch.encode_utf8(&mut encoded).as_bytes() {
-            length = length.checked_add(canonical_request_form_byte_len(*byte))?;
-        }
-        Some(length)
+/// Validate `raw` against the V1 query limits and plan its canonical form.
+fn canonical_request_form_plan(raw: &str) -> Result<CanonicalRequestFormPlan<'_>, crate::Error> {
+    validate_canonical_request_raw_query(raw)?;
+    CanonicalRequestFormPlan::new(raw).map_err(|error| match error {
+        CanonicalFormError::TooManyPairs => canonical_request_pair_limit_error(),
+        CanonicalFormError::Capacity => canonical_request_capacity_error(),
     })
-}
-
-impl<'a> CanonicalRequestFormPlan<'a> {
-    fn new(raw: &'a str) -> Result<Self, crate::Error> {
-        validate_canonical_request_raw_query(raw)?;
-        let mut pairs: [CanonicalRequestRawFormPair<'a>; CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1] =
-            [CanonicalRequestRawFormPair {
-                key: &[],
-                value: &[],
-            }; CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1];
-        let mut pair_count = 0;
-        for sequence in raw
-            .as_bytes()
-            .split(|byte| *byte == b'&')
-            .filter(|sequence| !sequence.is_empty())
-        {
-            let separator = sequence
-                .iter()
-                .position(|byte| *byte == b'=')
-                .unwrap_or(sequence.len());
-            pairs[pair_count] = CanonicalRequestRawFormPair {
-                key: &sequence[..separator],
-                value: if separator < sequence.len() {
-                    &sequence[separator + 1..]
-                } else {
-                    &[]
-                },
-            };
-            pair_count += 1;
-        }
-        pairs[..pair_count].sort_unstable_by(|left, right| {
-            CanonicalRequestFormLossyChars::new(left.key)
-                .cmp(CanonicalRequestFormLossyChars::new(right.key))
-                .then_with(|| {
-                    CanonicalRequestFormLossyChars::new(left.value)
-                        .cmp(CanonicalRequestFormLossyChars::new(right.value))
-                })
-        });
-        let encoded_bytes = pairs[..pair_count]
-            .iter()
-            .enumerate()
-            .try_fold(0_usize, |length, (index, pair)| {
-                length
-                    .checked_add(usize::from(index != 0))
-                    .and_then(|length| {
-                        canonical_request_form_component_len(pair.key)
-                            .and_then(|key| length.checked_add(key))
-                    })
-                    .and_then(|length| length.checked_add(1))
-                    .and_then(|length| {
-                        canonical_request_form_component_len(pair.value)
-                            .and_then(|value| length.checked_add(value))
-                    })
-            })
-            .ok_or_else(canonical_request_capacity_error)?;
-        Ok(Self {
-            pairs,
-            pair_count,
-            encoded_bytes,
-        })
-    }
-
-    fn write_to(&self, writer: &mut CanonicalRequestExactWriter<'_>) {
-        for (index, pair) in self.pairs[..self.pair_count].iter().enumerate() {
-            if index != 0 {
-                writer.push(b'&');
-            }
-            write_canonical_request_form_component(pair.key, writer);
-            writer.push(b'=');
-            write_canonical_request_form_component(pair.value, writer);
-        }
-    }
-}
-
-fn write_canonical_request_form_component(
-    raw: &[u8],
-    writer: &mut CanonicalRequestExactWriter<'_>,
-) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for ch in CanonicalRequestFormLossyChars::new(raw) {
-        let mut encoded = [0_u8; 4];
-        for byte in ch.encode_utf8(&mut encoded).as_bytes() {
-            match *byte {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
-                    writer.push(*byte)
-                }
-                b' ' => writer.push(b'+'),
-                byte => {
-                    writer.push(b'%');
-                    writer.push(HEX[usize::from(byte >> 4)]);
-                    writer.push(HEX[usize::from(byte & 0x0f)]);
-                }
-            }
-        }
-    }
-}
-
-struct CanonicalRequestExactWriter<'a> {
-    bytes: &'a mut [u8],
-    offset: usize,
-}
-
-impl<'a> CanonicalRequestExactWriter<'a> {
-    fn new(bytes: &'a mut [u8]) -> Self {
-        Self { bytes, offset: 0 }
-    }
-
-    fn push(&mut self, byte: u8) {
-        self.bytes[self.offset] = byte;
-        self.offset += 1;
-    }
-
-    fn extend(&mut self, bytes: &[u8]) {
-        let end = self.offset + bytes.len();
-        self.bytes[self.offset..end].copy_from_slice(bytes);
-        self.offset = end;
-    }
 }
 /// Canonicalise a raw query string by decoding, sorting, and re-encoding.
 #[cfg(test)]
 fn canonical_query_string(raw: Option<&str>) -> Result<String, crate::Error> {
-    let plan = CanonicalRequestFormPlan::new(raw.unwrap_or_default())?;
-    let mut output = allocate_exact_canonical_auth_bytes(plan.encoded_bytes)?;
+    let plan = canonical_request_form_plan(raw.unwrap_or_default())?;
+    let mut output = allocate_exact_canonical_auth_bytes(plan.encoded_bytes())?;
     let mut writer = CanonicalRequestExactWriter::new(&mut output);
     plan.write_to(&mut writer);
-    debug_assert_eq!(writer.offset, plan.encoded_bytes);
+    debug_assert_eq!(writer.offset(), plan.encoded_bytes());
     String::from_utf8(output.into_vec()).map_err(|_| {
         crate::Error::Query(ValidationFail::NotPermitted(
             "canonical request query is not valid UTF-8".to_owned(),
@@ -546,47 +325,22 @@ fn validate_canonical_request_raw_query(raw: &str) -> Result<(), crate::Error> {
     }
     // `form_urlencoded::parse` ignores empty `&`-delimited components. Count
     // the same lexical units without percent-decoding source-sized strings.
-    let pair_count = raw
-        .as_bytes()
-        .split(|byte| *byte == b'&')
-        .filter(|pair| !pair.is_empty())
-        .take(CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1.saturating_add(1))
-        .count();
-    if pair_count > CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 {
-        return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
-            "canonical request query exceeds the V1 limit of {CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1} pairs"
-        ))));
+    if canonical_request_query_pair_count(raw) > CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 {
+        return Err(canonical_request_pair_limit_error());
     }
     Ok(())
+}
+
+fn canonical_request_pair_limit_error() -> crate::Error {
+    crate::Error::Query(ValidationFail::NotPermitted(format!(
+        "canonical request query exceeds the V1 limit of {CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1} pairs"
+    )))
 }
 
 fn canonical_request_capacity_error() -> crate::Error {
     crate::Error::Query(ValidationFail::QueryFailed(
         QueryExecutionFail::CapacityLimit,
     ))
-}
-
-fn canonical_request_decimal_len(mut value: u64) -> usize {
-    let mut length = 1;
-    while value >= 10 {
-        value /= 10;
-        length += 1;
-    }
-    length
-}
-
-fn write_canonical_request_decimal(mut value: u64, writer: &mut CanonicalRequestExactWriter<'_>) {
-    let mut digits = [0_u8; 20];
-    let mut start = digits.len();
-    loop {
-        start -= 1;
-        digits[start] = b'0' + u8::try_from(value % 10).expect("decimal digit fits in u8");
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    writer.extend(&digits[start..]);
 }
 
 fn bounded_canonical_request_message_with_network(
@@ -606,7 +360,7 @@ fn bounded_canonical_request_message_with_network(
             "invalid canonical request nonce".to_owned(),
         )));
     }
-    let query = CanonicalRequestFormPlan::new(uri.query().unwrap_or_default())?;
+    let query = canonical_request_form_plan(uri.query().unwrap_or_default())?;
     let freshness_bytes = if let Some((timestamp_ms, nonce)) = freshness {
         1_usize
             .checked_add(canonical_request_decimal_len(timestamp_ms))
@@ -629,7 +383,7 @@ fn bounded_canonical_request_message_with_network(
         .and_then(|length| length.checked_add(1))
         .and_then(|length| length.checked_add(uri.path().len()))
         .and_then(|length| length.checked_add(1))
-        .and_then(|length| length.checked_add(query.encoded_bytes))
+        .and_then(|length| length.checked_add(query.encoded_bytes()))
         .and_then(|length| length.checked_add(1 + 64))
         .and_then(|length| length.checked_add(freshness_bytes))
         .ok_or_else(canonical_request_capacity_error)?;
@@ -658,7 +412,7 @@ fn bounded_canonical_request_message_with_network(
         writer.push(b'\n');
         writer.extend(nonce.as_bytes());
     }
-    debug_assert_eq!(writer.offset, total_bytes);
+    debug_assert_eq!(writer.offset(), total_bytes);
     Ok(output)
 }
 
@@ -1101,6 +855,7 @@ pub fn canonical_request_witness_message(
 ///
 /// # Errors
 /// Returns [`norito::Error`] when witness encoding fails.
+#[cfg(test)]
 pub fn witness_header_value(witness: &CanonicalRequestWitnessV1) -> Result<String, norito::Error> {
     validate_canonical_request_witness_for_encoding(witness)?;
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -1142,6 +897,7 @@ fn encode_bounded_canonical_base64_value(
     String::from_utf8(encoded).map_err(|_| norito::Error::InvalidUtf8)
 }
 
+#[cfg(test)]
 fn bounded_witness_encode_error(error: norito::core::BoundedEncodeError) -> norito::Error {
     match error {
         norito::core::BoundedEncodeError::FrameTooLarge {
@@ -1273,14 +1029,6 @@ fn validate_canonical_account_header_literal(account_literal: &str) -> Result<()
     Ok(())
 }
 
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
 fn parse_required_header_exact_text<'a>(
     headers: &'a HeaderMap,
     name: &'static str,
@@ -1421,6 +1169,7 @@ fn parse_canonical_account_header_address(
             }
         })
 }
+#[cfg(test)]
 fn parse_account_body_value(
     state: &Arc<CoreState>,
     account_literal: &str,
@@ -1432,6 +1181,7 @@ fn parse_account_body_value(
         "invalid account_id value",
     )
 }
+#[cfg(test)]
 fn parse_account_literal_value(
     state: &Arc<CoreState>,
     account_literal: &str,
@@ -1461,7 +1211,7 @@ fn validate_freshness(
     nonce: &str,
     nonce_context: &'static str,
 ) -> Result<(), crate::Error> {
-    let delta_ms = now_unix_ms().abs_diff(timestamp_ms);
+    let delta_ms = crate::utils::unix_now_ms().abs_diff(timestamp_ms);
     let max_skew_ms: u64 = config
         .max_clock_skew
         .as_millis()
@@ -1668,6 +1418,7 @@ fn decode_witness_value(
     }
     Ok(witness)
 }
+#[cfg(test)]
 fn verify_single_signature_authorization(
     state: &Arc<CoreState>,
     account: &AccountId,
@@ -1764,6 +1515,7 @@ fn verify_multisig_witness_authorization(
         }
     }
 }
+#[cfg(test)]
 fn validate_expected_account(
     expected_account: Option<&AccountId>,
     account: &AccountId,
@@ -1828,6 +1580,7 @@ fn finish_verified_canonical_request(
     })
 }
 /// Validate an iterable query against the executor on behalf of `authority`.
+#[cfg(test)]
 pub fn validate_iter_query_for_authority<Q>(
     state: &Arc<CoreState>,
     authority: &AccountId,
@@ -1860,6 +1613,7 @@ where
     validate_fresh_query_for_client_world_parts(request, authority, &world, latest_block, limits)
         .map_err(crate::Error::Query)
 }
+#[cfg(test)]
 pub(crate) fn verify_canonical_body_request(
     state: &Arc<CoreState>,
     auth: CanonicalRequestBodyAuth<'_>,
@@ -1907,61 +1661,13 @@ pub(crate) fn verify_canonical_body_request(
                 auth_config.nonce_ttl,
             )
         }
-        CanonicalRequestBodyProof::WitnessBase64(witness_b64) => {
-            let witness = decode_witness_value(witness_b64, "witness_base64")?;
-            if witness.subject_account != account {
-                return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                    "account_id does not match witness_base64 subject_account".to_owned(),
-                )));
-            }
-            if witness.timestamp_ms != auth.timestamp_ms {
-                return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                    "timestamp_ms does not match witness_base64 timestamp_ms".to_owned(),
-                )));
-            }
-            if witness.nonce != auth.nonce {
-                return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                    "nonce does not match witness_base64 nonce".to_owned(),
-                )));
-            }
-            let expected_hash = bounded_canonical_network_request_hash(
-                state.network_id_ref(),
-                method,
-                uri,
-                unsigned_body,
-            )?;
-            if witness.canonical_request_hash != expected_hash {
-                return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                    "witness_base64 canonical request hash mismatch".to_owned(),
-                )));
-            }
-            let verified_signers = verify_multisig_witness_authorization(
-                state,
-                &account,
-                &witness,
-                "witness_base64",
-                "canonical body witness signature payload",
-            )?;
-            let signer = verified_signers
-                .first()
-                .expect("non-empty witness signer set")
-                .try_clone_for_admission()
-                .map_err(|_| canonical_request_capacity_error())?;
-            finish_verified_canonical_request(
-                account,
-                signer,
-                verified_signers,
-                auth.nonce,
-                &replay_cache,
-                auth_config.nonce_ttl,
-            )
-        }
     }
 }
 /// Verify optional exact-network canonical request headers.
 ///
 /// Returns `Ok(Some(identity))` when a signature is present and valid, `Ok(None)` when
 /// no signing headers are provided, and an error when headers are malformed or verification fails.
+#[cfg(test)]
 pub fn verify_canonical_request(
     state: &Arc<CoreState>,
     headers: &HeaderMap,
@@ -2344,9 +2050,7 @@ mod tests {
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::Execute as _,
-        state::{State, StateReadOnly, World},
-        sumeragi::network_topology::Topology,
+        state::{State, World},
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
@@ -2432,7 +2136,7 @@ mod tests {
         body: &[u8],
         nonce: &'static str,
     ) -> HeaderMap {
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let message = canonical_network_request_signature_message(
             network_id,
             method,
@@ -2483,7 +2187,7 @@ mod tests {
         body: &[u8],
         nonce: &'static str,
     ) -> HeaderMap {
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let message = canonical_network_request_signature_message(
             network_id,
             method,
@@ -2581,7 +2285,9 @@ mod tests {
     #[cfg(test)]
     fn test_guard(config: CanonicalRequestAuthConfig) -> impl Drop {
         static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        struct Guard(std::sync::MutexGuard<'static, ()>);
+        struct Guard {
+            _lock: std::sync::MutexGuard<'static, ()>,
+        }
         impl Drop for Guard {
             fn drop(&mut self) {
                 configure(CanonicalRequestAuthConfig::default()).expect("default app-auth config");
@@ -2592,7 +2298,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         configure(config).expect("valid app-auth test config");
-        Guard(guard)
+        Guard { _lock: guard }
     }
     #[cfg(test)]
     fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -2970,7 +2676,7 @@ mod tests {
     #[test]
     fn canonical_nonce_accepts_only_one_to_256_printable_ascii_bytes() {
         let config = CanonicalRequestAuthConfig::default();
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let exact = "!".repeat(256);
         validate_freshness(&config, timestamp_ms, &exact, "nonce")
             .expect("256 printable ASCII bytes are accepted");
@@ -3634,7 +3340,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "accept-valid-signature";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -3683,7 +3389,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "reject-noncanonical-signature-header";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -3740,7 +3446,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "accept-alias-account-header";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -3844,7 +3550,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "wrong-signature";
         let bad_sig = checked_signature(checked_app_auth_key_fixture().private_key(), b"forged");
         let account_literal = account.to_canonical_hex().expect("account header hex");
@@ -3880,7 +3586,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "all-zero-signature";
         let account_literal = account.to_canonical_hex().expect("account header hex");
         let mut headers = HeaderMap::new();
@@ -3918,7 +3624,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
             &method,
@@ -3983,7 +3689,7 @@ mod tests {
         let method = Method::POST;
         let uri: Uri = "/v1/transactions".parse().expect("uri");
         let unsigned_body = br#"{"request":"refill"}"#;
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "body-auth-noncanonical-base64";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -4036,7 +3742,7 @@ mod tests {
         let method = Method::POST;
         let uri: Uri = "/v1/transactions".parse().expect("uri");
         let unsigned_body = br#"{"request":"refill"}"#;
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "body-auth-invalid-r";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -4100,7 +3806,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "mismatched-path-account";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -4178,7 +3884,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "replayed-nonce";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -4259,7 +3965,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = format!("configure-preserves-replay-cache-{timestamp_ms}");
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -4375,7 +4081,7 @@ mod tests {
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "multisig-http-auth";
         let message = canonical_network_request_signature_message(
             state.network_id_ref(),
@@ -4596,7 +4302,7 @@ mod tests {
         let state = minimal_state_with_account(&account);
         let method = Method::POST;
         let uri: Uri = "/v1/soracloud/deploy?view=full".parse().expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "valid-multisig-witness";
         let witness = multisig_witness(
             state.network_id_ref(),
@@ -4640,7 +4346,7 @@ mod tests {
         let mut witness = CanonicalRequestWitnessV1 {
             schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
             subject_account: account.clone(),
-            timestamp_ms: now_unix_ms(),
+            timestamp_ms: crate::utils::unix_now_ms(),
             nonce: "sdk-signed-witness".to_owned(),
             canonical_request_hash: canonical_network_request_hash(
                 state.network_id_ref(),
@@ -4718,7 +4424,7 @@ mod tests {
         let state = minimal_state_with_account(&account);
         let method = Method::POST;
         let uri: Uri = "/v1/soracloud/deploy?view=full".parse().expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let nonce = "invalid-r-multisig-witness";
         for (label, replacement_r, expected) in [
             (
@@ -4783,7 +4489,7 @@ mod tests {
         let state = minimal_state_with_account(&account);
         let method = Method::POST;
         let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
-        let timestamp_ms = now_unix_ms();
+        let timestamp_ms = crate::utils::unix_now_ms();
         let witness = multisig_witness(
             state.network_id_ref(),
             &account,
@@ -4831,7 +4537,7 @@ mod tests {
             &method,
             &uri,
             b"{}",
-            now_unix_ms(),
+            crate::utils::unix_now_ms(),
             "threshold-multisig-witness",
             &[&signer_one, &signer_two],
         );
@@ -4868,7 +4574,7 @@ mod tests {
             &method,
             &uri,
             b"{}",
-            now_unix_ms(),
+            crate::utils::unix_now_ms(),
             "replayed-multisig-witness",
             &[&signer_one, &signer_two],
         );

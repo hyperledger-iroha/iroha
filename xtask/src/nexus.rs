@@ -28,7 +28,7 @@ use iroha_torii_shared::status::Status;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
-    json::{self as serde_json, Map as JsonMap, Value as JsonValue},
+    json::{Map as JsonMap, Value as JsonValue},
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 use std::{
@@ -61,14 +61,16 @@ pub enum NexusConnectFixtureMode {
     Write,
     /// Compare the rendered bytes with an existing output tree.
     Check,
+    /// Emit exactly the native generated JSON to standard output without filesystem writes.
+    Print,
 }
 #[derive(Debug, PartialEq, Eq)]
 /// Closed command-line options for the Nexus Connect fixture owner.
 pub struct NexusConnectFixtureOptions {
     /// Exactly one requested operation.
     pub mode: NexusConnectFixtureMode,
-    /// Absolute root containing `fixtures/sdk/nexus_connect_transfer_v1.json`.
-    pub output_root: PathBuf,
+    /// Required absolute root for file modes; absent in standard-output mode.
+    pub output_root: Option<PathBuf>,
 }
 #[derive(Debug, Clone, Copy)]
 struct NexusConnectFixtureSubmitter;
@@ -91,7 +93,7 @@ impl NexusToriiSubmitter for NexusConnectFixtureSubmitter {
         })
     }
 }
-/// Parse the exact `--write|--check --output-root <absolute>` surface.
+/// Parse exactly `--print` or `--write|--check --output-root <absolute>`.
 pub fn parse_nexus_connect_fixture_options(
     arguments: impl IntoIterator<Item = String>,
 ) -> Result<NexusConnectFixtureOptions, Box<dyn Error>> {
@@ -100,14 +102,14 @@ pub fn parse_nexus_connect_fixture_options(
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
-            "--write" | "--check" => {
-                let requested = if argument == "--write" {
-                    NexusConnectFixtureMode::Write
-                } else {
-                    NexusConnectFixtureMode::Check
+            "--write" | "--check" | "--print" => {
+                let requested = match argument.as_str() {
+                    "--write" => NexusConnectFixtureMode::Write,
+                    "--check" => NexusConnectFixtureMode::Check,
+                    _ => NexusConnectFixtureMode::Print,
                 };
                 if mode.replace(requested).is_some() {
-                    return Err("expected exactly one of --write or --check".into());
+                    return Err("expected exactly one of --print, --write or --check".into());
                 }
             }
             "--output-root" if output_root.is_none() => {
@@ -129,24 +131,56 @@ pub fn parse_nexus_connect_fixture_options(
             "--output-root" => return Err("--output-root was supplied more than once".into()),
             _ => {
                 return Err(format!(
-                    "unknown argument `{argument}`; usage: --write|--check --output-root <absolute-directory>"
+                    "unknown argument `{argument}`; usage: --print or --write|--check --output-root <absolute-directory>"
                 )
                 .into());
             }
         }
     }
-    Ok(NexusConnectFixtureOptions {
-        mode: mode.ok_or("expected exactly one of --write or --check")?,
-        output_root: output_root.ok_or("--output-root is required")?,
-    })
+    let options = NexusConnectFixtureOptions {
+        mode: mode.ok_or("expected exactly one of --print, --write or --check")?,
+        output_root,
+    };
+    validate_nexus_connect_fixture_options(&options)?;
+    Ok(options)
 }
-/// Build and either stage or verify the Rust-owned Nexus Connect fixture.
+fn validate_nexus_connect_fixture_options(
+    options: &NexusConnectFixtureOptions,
+) -> Result<(), Box<dyn Error>> {
+    match (options.mode, options.output_root.as_ref()) {
+        (NexusConnectFixtureMode::Print, Some(_)) => {
+            Err("--print conflicts with --output-root".into())
+        }
+        (NexusConnectFixtureMode::Write | NexusConnectFixtureMode::Check, None) => {
+            Err("--output-root is required for --write or --check".into())
+        }
+        _ => Ok(()),
+    }
+}
+/// Build and print, stage or verify the Rust-owned Nexus Connect fixture.
 pub fn run_nexus_connect_fixture(
     options: &NexusConnectFixtureOptions,
 ) -> Result<(), Box<dyn Error>> {
+    run_nexus_connect_fixture_with_stdout(options, &mut io::stdout().lock())
+}
+fn run_nexus_connect_fixture_with_stdout(
+    options: &NexusConnectFixtureOptions,
+    stdout: &mut impl io::Write,
+) -> Result<(), Box<dyn Error>> {
+    validate_nexus_connect_fixture_options(options)?;
+    if options.mode == NexusConnectFixtureMode::Print {
+        stdout.write_all(&build_nexus_connect_fixture()?)?;
+        stdout.flush()?;
+        return Ok(());
+    }
+    let requested = options
+        .output_root
+        .as_ref()
+        .ok_or("file mode requires an output root")?;
     let output_root = match options.mode {
-        NexusConnectFixtureMode::Write => nexus_connect_staging_root(&options.output_root)?,
-        NexusConnectFixtureMode::Check => options.output_root.clone(),
+        NexusConnectFixtureMode::Write => nexus_connect_staging_root(requested)?,
+        NexusConnectFixtureMode::Check => requested.clone(),
+        NexusConnectFixtureMode::Print => unreachable!("print returns without filesystem effects"),
     };
     let output = output_root.join(NEXUS_CONNECT_FIXTURE_OUTPUT);
     let rendered = build_nexus_connect_fixture()?;
@@ -437,6 +471,9 @@ fn sync_nexus_connect_fixture(
     mode: NexusConnectFixtureMode,
 ) -> Result<(), Box<dyn Error>> {
     match mode {
+        NexusConnectFixtureMode::Print => {
+            return Err("stdout mode has no fixture file destination".into());
+        }
         NexusConnectFixtureMode::Check => {
             let actual = fs::read(path).map_err(|error| {
                 io::Error::new(
@@ -449,7 +486,7 @@ fn sync_nexus_connect_fixture(
             })?;
             if actual != expected {
                 return Err(format!(
-                    "generated Nexus fixture {} is stale; rerun nexus-connect-fixture --write against an external staging root",
+                    "generated Nexus fixture {} is stale; capture nexus-connect-fixture --print into a staging file and publish the verified bytes",
                     path.display()
                 )
                 .into());
@@ -583,7 +620,7 @@ fn load_lane_compliance_map(
             path.display()
         )
     })?;
-    let file: LaneComplianceEvidenceFile = serde_json::from_str(&raw).map_err(|err| {
+    let file: LaneComplianceEvidenceFile = json::from_str(&raw).map_err(|err| {
         format!(
             "failed to parse lane compliance evidence {}: {err}",
             path.display()
@@ -591,7 +628,7 @@ fn load_lane_compliance_map(
     })?;
     let mut map = HashMap::new();
     for record in file.lanes {
-        let serialized_policy = serde_json::to_string(&record.policy).map_err(|err| {
+        let serialized_policy = json::to_string(&record.policy).map_err(|err| {
             format!(
                 "failed to serialize lane compliance policy for lane {}: {err}",
                 record.lane_id
@@ -805,11 +842,8 @@ struct LaneAuditRow {
     status_height: u64,
 }
 impl LaneAuditRow {
-    fn compliance_json_string(&self) -> Result<Option<String>, serde_json::Error> {
-        self.lane_compliance
-            .as_ref()
-            .map(serde_json::to_json)
-            .transpose()
+    fn compliance_json_string(&self) -> Result<Option<String>, json::Error> {
+        self.lane_compliance.as_ref().map(json::to_json).transpose()
     }
 }
 pub fn run_lane_audit(options: &LaneAuditOptions) -> Result<(), Box<dyn Error>> {
@@ -895,7 +929,7 @@ fn write_json_rows(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<dyn Err
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let rendered = serde_json::to_json_pretty(&rows.to_vec())?;
+    let rendered = json::to_json_pretty(&rows.to_vec())?;
     fs::write(path, rendered)?;
     Ok(())
 }
@@ -1279,7 +1313,7 @@ mod tests {
         assert!(compliance.is_valid(0));
         assert!(compliance.is_null(1));
         let parsed: JsonValue =
-            serde_json::from_str(compliance.value(0)).expect("compliance json parses");
+            json::from_str(compliance.value(0)).expect("compliance json parses");
         assert_eq!(
             parsed
                 .get("reviewer_signatures")
@@ -1430,7 +1464,7 @@ mod tests {
             .expect("valid Nexus fixture options"),
             NexusConnectFixtureOptions {
                 mode: NexusConnectFixtureMode::Write,
-                output_root: PathBuf::from(&root),
+                output_root: Some(PathBuf::from(&root)),
             }
         );
         for invalid in [
@@ -1456,6 +1490,75 @@ mod tests {
         ] {
             assert!(parse_nexus_connect_fixture_options(invalid).is_err());
         }
+    }
+    #[test]
+    fn nexus_connect_fixture_print_requires_no_file_mode_or_root() {
+        let parsed =
+            parse_nexus_connect_fixture_options(["--print".to_owned()]).expect("stdout mode");
+        assert_eq!(parsed.mode, NexusConnectFixtureMode::Print);
+        assert_eq!(parsed.output_root, None);
+        for arguments in [
+            vec!["--print", "--write"],
+            vec!["--check", "--print"],
+            vec!["--print", "--print"],
+            vec!["--print", "--output-root", "/tmp"],
+            vec!["--output-root", "/tmp", "--print"],
+            vec!["--print", "unexpected"],
+        ] {
+            assert!(
+                parse_nexus_connect_fixture_options(arguments.into_iter().map(str::to_owned))
+                    .is_err()
+            );
+        }
+        let mut output = Vec::new();
+        assert!(
+            run_nexus_connect_fixture_with_stdout(
+                &NexusConnectFixtureOptions {
+                    mode: NexusConnectFixtureMode::Print,
+                    output_root: Some(PathBuf::from("/nonexistent/fixture-root")),
+                },
+                &mut output
+            )
+            .is_err()
+        );
+        assert!(
+            output.is_empty(),
+            "invalid stdout options fail before rendering or writing"
+        );
+    }
+    #[test]
+    fn nexus_connect_fixture_stdout_is_exact_native_json_and_preserves_write_errors() {
+        let options = NexusConnectFixtureOptions {
+            mode: NexusConnectFixtureMode::Print,
+            output_root: None,
+        };
+        let expected = build_nexus_connect_fixture().expect("native generator");
+        let mut output = Vec::new();
+        run_nexus_connect_fixture_with_stdout(&options, &mut output).expect("capture stdout");
+        assert_eq!(
+            output, expected,
+            "stdout must contain only the same generated JSON bytes"
+        );
+        assert!(output.ends_with(b"\n"));
+        let _: JsonValue = json::from_slice(&output).expect("one complete JSON document");
+        struct Broken;
+        impl io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "fixture stdout closed",
+                ))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let error = run_nexus_connect_fixture_with_stdout(&options, &mut Broken)
+            .expect_err("stdout failure must propagate");
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::BrokenPipe
+        );
     }
     #[test]
     fn nexus_connect_fixture_is_deterministic_and_has_closed_domain_fields() {
@@ -1585,21 +1688,23 @@ mod tests {
         let staging = tempdir().expect("temporary staging root");
         let write = NexusConnectFixtureOptions {
             mode: NexusConnectFixtureMode::Write,
-            output_root: staging.path().to_path_buf(),
+            output_root: Some(staging.path().to_path_buf()),
         };
         run_nexus_connect_fixture(&write).expect("write staged Nexus fixture");
         let output = staging.path().join(NEXUS_CONNECT_FIXTURE_OUTPUT);
         assert!(output.is_file());
         run_nexus_connect_fixture(&NexusConnectFixtureOptions {
             mode: NexusConnectFixtureMode::Check,
-            output_root: staging.path().to_path_buf(),
+            output_root: Some(staging.path().to_path_buf()),
         })
         .expect("check staged Nexus fixture");
         let error = run_nexus_connect_fixture(&NexusConnectFixtureOptions {
             mode: NexusConnectFixtureMode::Write,
-            output_root: nexus_connect_workspace_root()
-                .expect("workspace root")
-                .to_path_buf(),
+            output_root: Some(
+                nexus_connect_workspace_root()
+                    .expect("workspace root")
+                    .to_path_buf(),
+            ),
         })
         .expect_err("write mode must refuse the live workspace");
         assert!(error.to_string().contains("refuses the live workspace"));
@@ -1653,15 +1758,12 @@ mod tests {
     }
     fn write_compliance_file(path: &Path, records: Vec<LaneComplianceEvidenceRecord>) {
         let file = LaneComplianceEvidenceFile { lanes: records };
-        let value = serde_json::to_value(&file).expect("lane compliance value");
-        let mut rendered =
-            serde_json::to_string_pretty(&value).expect("lane compliance serialization");
+        let value = json::to_value(&file).expect("lane compliance value");
+        let mut rendered = json::to_string_pretty(&value).expect("lane compliance serialization");
         rendered.push('\n');
         fs::write(path, rendered).expect("write compliance file");
     }
     fn policy_to_json_value(policy: &LaneCompliancePolicy) -> JsonValue {
-        let norito_value = json::to_value(policy).expect("policy json value");
-        let rendered = json::to_string(&norito_value).expect("policy json encode");
-        serde_json::from_str(&rendered).expect("serde policy json")
+        json::to_value(policy).expect("policy json value")
     }
 }

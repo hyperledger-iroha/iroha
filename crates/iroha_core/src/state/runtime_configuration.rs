@@ -43,6 +43,7 @@ impl State {
         &self.settlement
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Update Nexus configuration snapshot.
     ///
     /// # Errors

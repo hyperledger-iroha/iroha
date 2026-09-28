@@ -4,7 +4,10 @@
 //! accelerator only resumes a fresh final field; CPU execution remains an
 //! explicit policy choice; required-device failures are returned to the caller.
 
-use fastpq_isi::{GoldilocksDigest384LastFieldStreamV1, GoldilocksDigest384V1};
+use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
+#[cfg(any(test, feature = "fastpq-gpu"))]
+use fastpq_isi::GoldilocksDigest384V1;
+#[cfg(any(test, feature = "fastpq-gpu"))]
 use rayon::prelude::*;
 
 #[cfg(test)]
@@ -131,7 +134,7 @@ pub(crate) fn preflight_last_fields_execution(execution: DigestExecutionV1) -> c
             };
             let bytes = b"public-probe";
             let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain, &[], bytes.len())
-                .ok_or_else(|| native_error("invalid fixed public preflight prefix"))?;
+                .map_err(native_error)?;
             let job = Digest384LastFieldJob::new(prefix, bytes).map_err(native_error)?;
             // The executor runs its independent public KAT before this probe.
             // Its readiness allocation is already in last_fields_payload_charge.
@@ -145,6 +148,7 @@ pub(crate) fn preflight_last_fields_execution(execution: DigestExecutionV1) -> c
 /// Common geometry and payload charging precede either policy. Only required
 /// device execution constructs typed jobs; CPU preserves the optimized prefix
 /// owner without repeating its suffix absorption for unused device state.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn execute_last_fields_with_cpu<'a>(
     job_count: usize,
     total_final_field_bytes: usize,
@@ -233,6 +237,7 @@ impl core::fmt::Debug for Digest384LastFieldJob<'_> {
     }
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 impl<'a> Digest384LastFieldJob<'a> {
     /// Validate a fresh stream handoff without inferring buffered sponge state.
     pub(crate) fn new(

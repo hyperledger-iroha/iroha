@@ -6,19 +6,25 @@
 //! spool implementation.  No pathname, key, raw snapshot, or detached digest
 //! constructor crosses the boundary.
 
+#[cfg(test)]
 use std::path::PathBuf;
 
+#[cfg(test)]
+use iroha_crypto::confidential_spool::ConfidentialSpoolLayoutV1;
 use iroha_crypto::confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1, ConfidentialSpoolLayoutV1,
-    ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
+    ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1, ConfidentialSpoolSnapshotV1,
+    ConfidentialSpoolWriterV1,
 };
+#[cfg(test)]
+use iroha_zkp_halo2::vega::ZkAmsMkheRnsNativeSourceProviderV1;
 use iroha_zkp_halo2::vega::{
     ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
     ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
-    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceProviderV1,
-    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
+    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
+    ZkAmsMkheRnsNativeSourceWriterV1,
 };
 
+#[cfg(test)]
 /// Core-owned factory for unlinked authenticated RNS-native source arenas.
 ///
 /// This owner deliberately implements neither `Clone` nor `Debug`: even a
@@ -27,6 +33,7 @@ pub struct CoreZkAmsMkheRnsNativeSourceProviderV1 {
     directory: PathBuf,
 }
 
+#[cfg(test)]
 impl CoreZkAmsMkheRnsNativeSourceProviderV1 {
     /// Bind the provider to a caller-selected private spool directory.
     ///
@@ -174,6 +181,7 @@ impl Drop for CoreZkAmsMkheRnsNativePairReadGuardV1<'_> {
     }
 }
 
+#[cfg(test)]
 impl ZkAmsMkheRnsNativeSourceProviderV1 for CoreZkAmsMkheRnsNativeSourceProviderV1 {
     type Writer = CoreZkAmsMkheRnsNativeSourceWriterV1;
 
@@ -360,6 +368,7 @@ fn read_error_poisons_v1(error: ConfidentialSpoolErrorV1) -> bool {
     }
 }
 
+#[cfg(test)]
 fn spool_layout_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     arena: ZkAmsMkheRnsNativeSourceArenaV1,

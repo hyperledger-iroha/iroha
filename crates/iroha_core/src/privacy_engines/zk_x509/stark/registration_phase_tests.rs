@@ -2186,25 +2186,12 @@ fn main_joined_row_order_and_base_aux_phase_are_domain_bound() {
         "a root from the wrong phase changes X5B1"
     );
 }
-fn tiny_authenticated_main_polynomial_fixture_v1(
-    seed: u8,
-) -> aggregate::MaskedTracePolynomialSetV1 {
+fn tiny_main_mask_group_fixture_v1(seed: u8) -> main_aggregate::MainTraceMaskGroupV1 {
     let mut rng = StdRng::from_seed([seed; 32]);
-    let (_, polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
-        b"iroha:test:zk-x509:main-scratch-leaf:v1",
-        b"iroha:test:zk-x509:main-scratch-node:v1",
-        usize::from(seed),
-        2,
-        4,
-        1,
-        1,
-        &[],
-        &mut rng,
-        |_| Ok(vec![F(u64::from(seed)); 4]),
-    )
-    .expect("tiny authenticated masked polynomials");
-    polynomials
+    main_aggregate::MainTraceMaskGroupV1::sample_v1(2, 11, 1, &mut rng, |_| {
+        Ok(ZeroizingMainTraceColumnV1(vec![F(u64::from(seed)); 4]))
+    })
+    .expect("tiny original-mask group")
 }
 #[test]
 fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
@@ -2220,7 +2207,7 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
     ] {
         let polynomials = (0..hostile_count)
             .map(|index| {
-                tiny_authenticated_main_polynomial_fixture_v1(
+                tiny_main_mask_group_fixture_v1(
                     u8::try_from(index + 1).expect("small hostile count"),
                 )
             })
@@ -2234,15 +2221,12 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
             Err(ZkX509StarkErrorV1::TranscriptMismatch)
         ));
     }
-    // Six authenticated polynomial sets are still rejected when any
-    // native/commitment-domain shape is not the verifier-fixed MAIN shape.
-    // The consuming constructor owns the vector, so every retained secret
-    // coefficient is zeroized on this failure path.
+    // Six mask groups are still rejected when any native/commitment-domain
+    // shape is not the verifier-fixed MAIN shape. The consuming constructor
+    // owns the vector, so every original secret mask clears on failure.
     let wrong_shape = (0..FULL_PROFILE_TRACE_GROUPS_V1)
         .map(|index| {
-            tiny_authenticated_main_polynomial_fixture_v1(
-                u8::try_from(index + 0x21).expect("six fixtures"),
-            )
+            tiny_main_mask_group_fixture_v1(u8::try_from(index + 0x21).expect("six fixtures"))
         })
         .collect();
     assert!(matches!(

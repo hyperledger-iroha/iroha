@@ -111,8 +111,8 @@ def _assert_quarantine_restart_contract(source: str, parent: str) -> None:
     body = _body(source, rf"\basync\s+fn\s+{name}\s*\(\s*\)")
     masked = mask_rust(body)
     assert not re.search(r"\b(?:return|for|while|loop|fn|macro_rules)\b", masked)
-    # The only conditional is the exact final matches! guard inventoried below.
-    assert len(re.findall(r"\bif\b", masked)) == 1
+    # The only conditionals are the two matches! guards inventoried below.
+    assert len(re.findall(r"\bif\b", masked)) == 2
     expected_assertions = (
         'assert_ne!(manifest.digest().expect("primary manifest digest"), '
         'shared_manifest.digest().expect("shared manifest digest"));',
@@ -121,6 +121,10 @@ def _assert_quarantine_restart_contract(source: str, parent: str) -> None:
             ProviderIngestDeliveryStateV1::SourceClaimed { attempts: 0, .. }));''',
         "assert_ne!(manifest_id, shared_manifest_id);",
         'assert_eq!(node.stored_manifests().expect("stored manifests").len(), 2);',
+        '''assert!(matches!(
+            current_staged_publisher_assignment_v1(&storage.state, &authorization, None),
+            Err(StorageError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ), "historical authorization cannot admit staging without current durable native finality");''',
         "assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);",
         "assert_eq!(outcome.source_jobs_claimed, 1);",
         "assert_eq!(outcome.manifests_stored, 0);",
@@ -394,7 +398,10 @@ def test_completion_signer_binding_is_public_exact_and_rechecked() -> None:
         : config.index("impl SorafsProviderIngestRuntimeConfig")
     ]
     assert "private_key" not in provider_ingest_config
-    assert "credential" not in provider_ingest_config
+    # The only credential surface is the owner-only file path that selects the built-in
+    # software completion producer; no inline credential material is configurable.
+    credential_fields = re.findall(r"pub\s+(\w*credential\w*)\s*:\s*([^,]+),", provider_ingest_config)
+    assert credential_fields == [("native_completion_credential", "Option<PathBuf>")]
 
 
 def test_completion_commit_still_revalidates_the_full_finalized_context() -> None:

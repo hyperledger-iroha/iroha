@@ -1,5 +1,6 @@
 //! This module provides the [`State`] — an in-memory representation of the current blockchain state.
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
+use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
@@ -70,7 +71,7 @@ use iroha_data_model::{
     da::{
         commitment::{DaCommitmentKey, DaCommitmentLocation, DaCommitmentRecord},
         pin_intent::DaPinIntentWithLocation,
-        types::{BlobDigest, StorageTicketId},
+        types::StorageTicketId,
     },
     escrow::{AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     events::{
@@ -502,6 +503,7 @@ pub(crate) use committed_transaction_context::seed_committed_transaction_context
 pub(crate) use da_hydration::DaIndexHydrationError;
 #[cfg(test)]
 pub(crate) use lane_authority::authenticated_committee_in_finalized_bundle;
+pub(crate) use lane_authority::resolve_global_route;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {
@@ -521,7 +523,7 @@ use tiered::{TieredKeyHandle, TieredSnapshotPayload};
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("state fixture key generation should succeed")
 }
-#[cfg(any(test, feature = "bench"))]
+#[cfg(test)]
 pub(crate) fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("state fixture key generation for requested algorithm should succeed")
@@ -545,7 +547,15 @@ mod checked_keypair_tests {
         }
     }
 }
-#[cfg(feature = "telemetry")]
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::query::{
+    projection_checkpoint::{
+        QueryProjectionCheckpointPlanError, QueryProjectionCheckpointPublishPlan,
+        QueryProjectionCheckpointShard, QueryProjectionUploadedShardArchive,
+    },
+    projection_shard::QueryProjectionShardArchive,
+};
+#[cfg(all(test, feature = "telemetry"))]
 use crate::telemetry::ConfidentialTreeStats;
 #[allow(unused_imports)]
 use crate::telemetry::StateTelemetry;
@@ -575,28 +585,21 @@ use crate::{
     },
     query::{
         index_status::{QueryIndexJournal, QueryIndexStatus},
-        projection_checkpoint::{
-            QueryProjectionCheckpoint, QueryProjectionCheckpointPlanError,
-            QueryProjectionCheckpointPublishPlan, QueryProjectionCheckpointShard,
-            QueryProjectionUploadedShardArchive,
-        },
+        projection_checkpoint::QueryProjectionCheckpoint,
         projection_checkpoint_journal::QueryProjectionCheckpointJournal,
-        projection_shard::QueryProjectionShardArchive,
         store::LiveQueryStoreHandle,
     },
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
         isi::{triggers::trigger_is_enabled, world::isi::apply_policy_if_due},
-        ivm::cache::{
-            CacheStats, IvmCache, PreparedContractCache, PreparedContractCacheStats, ProgramSummary,
-        },
+        ivm::cache::{IvmCache, PreparedContractCache, ProgramSummary},
         triggers::{
             set::{
                 DataTriggerMatchSnapshot, ExecutableRef, Set as TriggerSet,
                 SetBlock as TriggerSetBlock, SetReadOnly as TriggerSetReadOnly,
                 SetTransaction as TriggerSetTransaction, SetView as TriggerSetView,
-                data_trigger_action_matches, time_trigger_action_is_due,
+                data_trigger_action_matches,
             },
             specialized::{LoadedAction, LoadedActionTrait},
         },
@@ -606,6 +609,8 @@ use crate::{
     },
     tle_release::{TleKeySessionLifecycleV1, TleKeySessionPublicStateV1, TleReleaseAdapterError},
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::da::types::BlobDigest;
 pub(crate) mod storage_transactions;
 // Covers the inclusive 1 MiB canonical Kotodama argument-record boundary,
 // whose conservative decode/materialization escrow is a little over 2 Mi gas,
@@ -752,22 +757,25 @@ pub fn threshold_key_lifecycle_certificate_preimage_v1(
     Ok(preimage)
 }
 
-fn threshold_key_lifecycle_successor_roster_v1(
-    current_height: u64,
-    parent_context: &iroha_data_model::block::consensus_v2::HeightContext,
-) -> Option<Vec<PeerId>> {
-    if parent_context.height.checked_add(1) != Some(current_height) {
-        return None;
+/// The committee that authorizes threshold-key lifecycle certificates at `height`: the entry
+/// World's lag-2 consensus schedule holds for that height (committed in `R_{height−2}`, identical
+/// on every node), in the core's canonical order.
+///
+/// # Errors
+/// The schedule holds no entry for `height`, or the entry's committee is empty.
+pub(crate) fn threshold_key_lifecycle_roster_v1(
+    world: &impl WorldReadOnly,
+    height: u64,
+) -> core::result::Result<Vec<PeerId>, String> {
+    let config = world.consensus_schedule().get(height).ok_or_else(|| {
+        format!("threshold-key lifecycle authority has no scheduled committee for height {height}")
+    })?;
+    if config.committee.is_empty() {
+        return Err(format!(
+            "threshold-key lifecycle authority has an empty committee at height {height}"
+        ));
     }
-    let roster = match (
-        parent_context.height == parent_context.epoch_end_height,
-        parent_context.next_epoch_snapshot.as_ref(),
-    ) {
-        (true, Some(snapshot)) => &snapshot.roster,
-        (false, None) => &parent_context.roster,
-        (true, None) | (false, Some(_)) => return None,
-    };
-    (!roster.is_empty()).then(|| roster.iter().map(|entry| entry.validator.clone()).collect())
+    Ok(config.committee.clone())
 }
 
 /// Verify an exact current-roster `2f + 1` lifecycle certificate.
@@ -993,15 +1001,30 @@ mod threshold_key_lifecycle_certificate_tests {
         );
     }
 
-    #[test]
-    fn frozen_height_context_order_survives_commit_topology_rotation() {
-        use iroha_data_model::block::consensus_v2::{ConsensusMode, ValidatorPower};
+    fn schedule_world(entries: [Vec<PeerId>; 3], genesis_height: u64) -> World {
+        use crate::sumeragi::schedule::{ChainParamsRecord, ConsensusSchedule, ScheduledConfig};
+        let world = World::new();
+        let params = ChainParamsRecord::from_parameters(&Default::default());
+        let [first, second, third] = entries.map(|committee| ScheduledConfig {
+            height: 0,
+            committee,
+            params: params.clone(),
+        });
+        let mut schedule = world.consensus_schedule.block();
+        *schedule.get_mut() = ConsensusSchedule::genesis(genesis_height, [first, second, third]);
+        schedule.commit();
+        world
+    }
 
-        let (mut certificate, keys, roster) = certified_fixture();
-        certificate.effective_height = 2;
+    fn sign_at_height(
+        mut certificate: ThresholdKeyLifecycleCertificateV1,
+        keys: &[KeyPair],
+        height: u64,
+    ) -> ThresholdKeyLifecycleCertificateV1 {
+        certificate.effective_height = height;
         certificate.signatures.clear();
         let preimage = threshold_key_lifecycle_certificate_preimage_v1(&certificate)
-            .expect("encode height-two certificate preimage");
+            .expect("encode lifecycle certificate preimage");
         certificate.signatures = keys
             .iter()
             .take(3)
@@ -1009,54 +1032,28 @@ mod threshold_key_lifecycle_certificate_tests {
             .map(|(index, key)| ThresholdKeyLifecycleSignatureV1 {
                 signer_index: u16::try_from(index).expect("small signer index"),
                 signature: Signature::try_new(key.private_key(), &preimage)
-                    .expect("sign height-two lifecycle certificate"),
+                    .expect("sign lifecycle certificate"),
             })
             .collect();
-        let election_roster = roster
-            .iter()
-            .cloned()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                certificate.network_id,
-                8,
-                &election_roster,
-            );
-        let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
-            crate::sumeragi::v2_context::GenesisContextInputs {
-                network_id: certificate.network_id,
-                election: crate::sumeragi::v2_context::FrozenElectionInputs {
-                    epoch: 0,
-                    kagemusha_mint_finality_authority,
-                    kagemusha_mint_finality_authorization,
-                    epoch_end_height: 8,
-                    mode: ConsensusMode::Npos,
-                    roster: election_roster,
-                    leader_seed: [0x51; 32],
-                },
-                next_epoch_snapshot: None,
-                nexus_amx_context_hash: Hash::prehashed([0x52; Hash::LENGTH]),
-                execution_policy_hash: Hash::prehashed([0x53; Hash::LENGTH]),
-                da_layout:
-                    iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
-            },
-        )
-        .expect("build exact parent height context");
-        let frozen_roster = threshold_key_lifecycle_successor_roster_v1(2, &parent_context)
-            .expect("derive the successor's frozen roster");
+        certificate
+    }
+
+    #[test]
+    fn scheduled_committee_order_survives_commit_topology_rotation() {
+        let (certificate, keys, roster) = certified_fixture();
+        let certificate = sign_at_height(certificate, &keys, 2);
+        let world = schedule_world([roster.clone(), roster.clone(), roster.clone()], 1);
+        let scheduled = threshold_key_lifecycle_roster_v1(&world.view(), 2)
+            .expect("the schedule holds height two");
+        assert_eq!(scheduled, roster);
         let mut rotated_commit_topology = roster.clone();
         rotated_commit_topology[..3].rotate_left(1);
-        assert_ne!(frozen_roster, rotated_commit_topology);
         assert_eq!(
             verify_threshold_key_lifecycle_certificate_v1(
                 &certificate,
                 &certificate.network_id,
                 2,
-                &frozen_roster,
+                &scheduled,
             ),
             Ok(()),
             "leader-role rotation must not change lifecycle signer indices",
@@ -1074,127 +1071,62 @@ mod threshold_key_lifecycle_certificate_tests {
     }
 
     #[test]
-    fn frozen_successor_roster_obeys_epoch_boundary_snapshot_presence() {
-        use iroha_data_model::block::consensus_v2::{
-            ConsensusMode, DualQuorum, ValidatorPower, finality::FinalizedNextEpochSnapshot,
-        };
-
-        let sorted_roster = || {
-            let mut roster = (0..4)
-                .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-                .map(|validator| ValidatorPower {
-                    validator,
-                    power: 1,
-                })
-                .collect::<Vec<_>>();
-            roster.sort();
-            roster
-        };
-        let parent_roster = sorted_roster();
-        let successor_roster = sorted_roster();
-        let network_id = network_id(0x63);
-        let (parent_authorization, parent_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network_id,
-                1,
-                &parent_roster,
-            );
-        let successor_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            network_id,
-            1,
-            &successor_roster,
-        );
-        let successor_authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-                &parent_authorization,
-                &successor_authority,
-                9,
-                iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(
-                    iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
-                        session_id: [0x67; 32],
-                        transcript_hash: [0x68; 32],
-                    },
-                ),
-                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
-                [0x69; 32],
-            );
-        let successor_snapshot = FinalizedNextEpochSnapshot {
-            committee_preparation: None,
-            epoch: 1,
-            kagemusha_mint_finality_authorization: successor_authorization,
-            kagemusha_mint_finality_authority: successor_authority,
-            epoch_end_height: 9,
-            mode: ConsensusMode::Npos,
-            validator_set_pops: vec![vec![0x61]; successor_roster.len()],
-            quorum: DualQuorum::from_roster(&successor_roster)
-                .expect("derive exact successor quorum"),
-            roster: successor_roster.clone(),
-            leader_seed: [0x62; 32],
-        };
-        let boundary_parent = crate::sumeragi::v2_context::build_genesis_height_context(
-            crate::sumeragi::v2_context::GenesisContextInputs {
-                network_id,
-                election: crate::sumeragi::v2_context::FrozenElectionInputs {
-                    epoch: 0,
-                    kagemusha_mint_finality_authority: parent_authority,
-                    kagemusha_mint_finality_authorization: parent_authorization,
-                    epoch_end_height: 1,
-                    mode: ConsensusMode::Npos,
-                    roster: parent_roster.clone(),
-                    leader_seed: [0x64; 32],
-                },
-                next_epoch_snapshot: Some(successor_snapshot),
-                nexus_amx_context_hash: Hash::prehashed([0x65; Hash::LENGTH]),
-                execution_policy_hash: Hash::prehashed([0x66; Hash::LENGTH]),
-                da_layout:
-                    iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
-            },
-        )
-        .expect("build epoch-boundary parent context");
-        let selected = threshold_key_lifecycle_successor_roster_v1(2, &boundary_parent)
-            .expect("select authenticated next-epoch roster");
+    fn lifecycle_roster_is_the_scheduled_committee_of_exactly_that_height() {
+        let (_, _, roster) = certified_fixture();
+        let (_, _, successor) = certified_fixture();
+        let world = schedule_world([roster.clone(), roster.clone(), successor.clone()], 5);
         assert_eq!(
-            selected,
-            successor_roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>()
+            threshold_key_lifecycle_roster_v1(&world.view(), 6),
+            Ok(roster)
         );
-
-        let mut non_boundary_parent = boundary_parent.clone();
-        non_boundary_parent.epoch_end_height = 8;
-        non_boundary_parent.kagemusha_mint_finality_authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
-                &non_boundary_parent.kagemusha_mint_finality_authority,
-                8,
-            );
-        non_boundary_parent.next_epoch_snapshot = None;
         assert_eq!(
-            threshold_key_lifecycle_successor_roster_v1(2, &non_boundary_parent),
-            Some(
-                parent_roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect()
-            ),
-            "non-boundary heights retain the parent frozen roster",
+            threshold_key_lifecycle_roster_v1(&world.view(), 7),
+            Ok(successor),
+            "a committee change scheduled for a height governs that height"
         );
+        for height in [4, 8] {
+            assert!(
+                threshold_key_lifecycle_roster_v1(&world.view(), height).is_err(),
+                "height {height} is outside the schedule window"
+            );
+        }
+        assert!(threshold_key_lifecycle_roster_v1(&World::new().view(), 1).is_err());
+        let empty = schedule_world([Vec::new(), Vec::new(), Vec::new()], 1);
+        assert!(threshold_key_lifecycle_roster_v1(&empty.view(), 2).is_err());
+    }
 
-        let mut unexpected_snapshot = non_boundary_parent.clone();
-        unexpected_snapshot.next_epoch_snapshot = boundary_parent.next_epoch_snapshot.clone();
-        assert!(
-            threshold_key_lifecycle_successor_roster_v1(2, &unexpected_snapshot).is_none(),
-            "a non-boundary parent cannot inject a next-epoch snapshot",
+    #[test]
+    fn next_height_admission_reads_the_committed_schedule() {
+        let (certificate, keys, roster) = certified_fixture();
+        let network = certificate.network_id;
+        let state = State::new_with_chain_and_network_id_for_testing(
+            schedule_world([roster.clone(), roster.clone(), roster.clone()], 1),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            iroha_model_base::chain::ChainId::from("lifecycle-admission"),
+            network,
         );
-        let mut missing_snapshot = boundary_parent.clone();
-        missing_snapshot.next_epoch_snapshot = None;
+        let certificate = sign_at_height(certificate, &keys, 2);
         assert!(
-            threshold_key_lifecycle_successor_roster_v1(2, &missing_snapshot).is_none(),
-            "an epoch-boundary parent must authenticate the complete successor snapshot",
+            state
+                .verify_next_height_threshold_key_lifecycle_certificate_v1(&certificate)
+                .is_err(),
+            "admission requires a committed parent"
         );
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(header.hash());
+        block_hashes.commit_for_tests();
+        assert_eq!(
+            state.verify_next_height_threshold_key_lifecycle_certificate_v1(&certificate),
+            Ok((header.hash(), roster)),
+        );
+        let wrong_height = sign_at_height(certificate, &keys, 3);
         assert!(
-            threshold_key_lifecycle_successor_roster_v1(3, &boundary_parent).is_none(),
-            "a parent context cannot authorize a non-successor height",
+            state
+                .verify_next_height_threshold_key_lifecycle_certificate_v1(&wrong_height)
+                .is_err(),
+            "a certificate must name the next height"
         );
     }
 }
@@ -4184,17 +4116,6 @@ impl MergeLedgerPublicationMode {
         }
     }
 }
-/// Failures while publishing startup state that was deferred behind snapshot
-/// bootstrap authentication.
-#[derive(Debug, ThisError)]
-pub enum DeferredStartupHydrationError {
-    /// Kura has not completed its token-consuming authentication transition.
-    #[error("snapshot bootstrap authentication is still pending")]
-    SnapshotBootstrapAuthenticationPending,
-    /// Durable merge authority failed complete validation.
-    #[error("deferred merge-ledger hydration failed: {0}")]
-    MergeLedger(#[from] MergeLedgerCommitError),
-}
 fn validate_merge_snapshot_against_nexus(
     nexus: &iroha_config::parameters::actual::Nexus,
     lane_id: LaneId,
@@ -5277,6 +5198,7 @@ pub struct SmartContractCodeUploadDescriptor {
     /// Exact number of 64 KiB chunks required for the artifact.
     pub chunk_count: u32,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Read-only progress for one authority-owned pending contract-code upload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmartContractCodeUploadProgress {
@@ -7601,6 +7523,7 @@ impl WorldBlock<'_> {
     pub fn take_external_events(&mut self) -> Vec<EventBox> {
         core::mem::take(&mut self.external_event_buf)
     }
+    #[cfg(test)]
     /// Emit a pipeline warning event into the external buffer.
     pub fn push_pipeline_warning(
         &mut self,
@@ -9294,6 +9217,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<'block, DomainId, u64> {
         &mut self.musubi_domain_ownership_generations
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Mutable Musubi archive-commitment storage.
     pub fn musubi_archives_mut(
         &mut self,
@@ -11544,6 +11468,7 @@ impl WorldView<'_> {
         self.private_settlement_aborts.get(bundle_id)
     }
 
+    #[cfg(test)]
     /// Read the exact public all-Prepare barrier currently registered for a bundle.
     #[must_use]
     pub fn private_settlement_prepare_barrier_v1(
@@ -12335,7 +12260,9 @@ impl json::JsonDeserialize for GovernanceProposalStatus {
         }
     }
 }
-fn oracle_stage_deadline(
+/// Absolute deadline height for an oracle change `stage` started at `started_at`, or `None`
+/// when the governance SLA for that stage is disabled.
+pub(crate) fn oracle_stage_deadline(
     stage: iroha_data_model::oracle::OracleChangeStage,
     cfg: &iroha_config::parameters::actual::OracleGovernance,
     started_at: u64,
@@ -12354,7 +12281,8 @@ fn oracle_stage_deadline(
         Some(started_at.saturating_add(sla))
     }
 }
-fn seed_oracle_change_stages(
+/// Stage records for a new oracle change: intake starts at `created_at`; later stages wait.
+pub(crate) fn seed_oracle_change_stages(
     created_at: u64,
     cfg: &iroha_config::parameters::actual::OracleGovernance,
 ) -> Vec<iroha_data_model::oracle::OracleChangeStageRecord> {
@@ -13141,12 +13069,14 @@ struct StatelessValidationCacheEntry {
     expires_at_ms: Option<u128>,
     not_before_ms: u128,
 }
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct StatelessValidationCacheWarmEntry {
     key: crate::tx::StatelessValidationCacheKey,
     expires_at_ms: Option<u128>,
     not_before_ms: u128,
 }
+#[cfg(test)]
 fn stateless_validation_cache_warm_entry(
     tx: &crate::tx::AcceptedTransaction<'_>,
     max_clock_drift_ms: u128,
@@ -15035,6 +14965,35 @@ impl<'state> StateBlock<'state> {
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
     }
+    /// Apply a current threshold pulse before lifecycle and transaction writes.
+    /// The caller retains the session authenticated from the exact committed predecessor.
+    pub(crate) fn apply_pristine_global_beacon_pulse(
+        &mut self,
+        header: BlockHeader,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+        parent: iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+    ) -> eyre::Result<()> {
+        if self._curr_block != header
+            || self.start_of_block_effects_applied
+            || self.applied_npos_consensus_effects_hash.is_some()
+            || header.global_beacon_pulse_hash() != Some(HashOf::new(&pulse))
+            || header.height().get() != pulse.height
+            || header.prev_block_hash() != Some(parent.block_hash)
+            || parent.height.checked_add(1) != Some(pulse.height)
+            || self.network_id != pulse.network_id
+        {
+            return Err(eyre::eyre!(
+                "current pulse differs from its pristine carrier"
+            ));
+        }
+        let mut transaction = self.consensus_effects_transaction()?;
+        transaction
+            .world
+            .verify_and_advance_global_beacon_pulse(session, pulse, parent)?;
+        transaction.apply_consensus_effects();
+        Ok(())
+    }
     /// Apply one exact NPoS finality bundle on the pristine pre-lifecycle overlay.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_pristine_npos_consensus_effects(
@@ -16391,6 +16350,7 @@ pub struct StateTransaction<'block, 'state> {
     /// Borrow the original block refusal owner; dropping a child cannot clear it.
     local_storage_refusal: &'block mut Option<StateStorageAdmissionError>,
     /// Borrowed original State pool for final-application stake indexes.
+    #[cfg(test)]
     pub(crate) stake_index_budget: &'state mv::allocation::AllocationBudget,
     /// Actual MV runtime scope; projected fields never replace its undo authority.
     pub(crate) canonical_runtime: CellTransaction<'block, 'state, SnapshotNexusRuntime>,
@@ -17037,6 +16997,7 @@ impl<'state> StateView<'state> {
                 time_trigger_action_requires_clock_progress(action, parent_creation_time)
             })
     }
+    #[cfg(test)]
     /// Check if any time triggers should fire for a block with the given header.
     pub fn time_triggers_due_for_block(&self, block_header: &BlockHeader) -> bool {
         let to = block_header.creation_time();
@@ -17064,7 +17025,7 @@ impl<'state> StateView<'state> {
             .time_triggers()
             .iter()
             .any(|(_, action)| {
-                time_trigger_action_is_due(
+                crate::smartcontracts::triggers::set::time_trigger_action_is_due(
                     action,
                     &event,
                     current_block_height,
@@ -21227,6 +21188,7 @@ impl World {
             .map_err(|err| Error::InvariantViolation(err.into()))?;
         Ok(())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Register an active validator consensus key with a PoP for deterministic tests.
     pub fn register_validator_pop_for_testing(&mut self, public_key: PublicKey, pop: Vec<u8>) {
         let id = derive_validator_key_id(&public_key);
@@ -21253,6 +21215,7 @@ impl World {
         }
         block.commit();
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to UAID dataspace bindings for tests and API scaffolding.
     pub fn uaid_dataspaces_mut_for_testing(
         &mut self,
@@ -21268,13 +21231,7 @@ impl World {
     pub fn provider_owners_mut_for_testing(&mut self) -> &mut Storage<ProviderId, AccountId> {
         &mut self.provider_owners
     }
-    /// Provides mutable access to provider-ingest completion authorities for tests.
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn provider_ingest_completion_authorities_mut_for_testing(
-        &mut self,
-    ) -> &mut Storage<ProviderId, ProviderIngestCompletionAuthorityV1> {
-        &mut self.provider_ingest_completion_authorities
-    }
     /// Provides mutable access to the Space Directory manifest registry for tests and API scaffolding.
     pub fn space_directory_manifests_mut_for_testing(
         &mut self,
@@ -21285,144 +21242,168 @@ impl World {
     pub fn smart_contract_state_mut_for_testing(&mut self) -> &mut Storage<StatePath, Vec<u8>> {
         &mut self.smart_contract_state
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud service revisions for tests and API scaffolding.
     pub fn soracloud_service_revisions_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String), SoraDeploymentBundleV1> {
         &mut self.soracloud_service_revisions
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud deployment state for tests and API scaffolding.
     pub fn soracloud_service_deployments_mut_for_testing(
         &mut self,
     ) -> &mut Storage<Name, SoraServiceDeploymentStateV1> {
         &mut self.soracloud_service_deployments
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud runtime state for tests and API scaffolding.
     pub fn soracloud_service_runtime_mut_for_testing(
         &mut self,
     ) -> &mut Storage<Name, SoraServiceRuntimeStateV1> {
         &mut self.soracloud_service_runtime
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to placed Inrou replica runtime state for tests and API scaffolding.
     pub fn soracloud_inrou_replica_runtime_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
         &mut self.soracloud_inrou_replica_runtime
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud audit events for tests and API scaffolding.
     pub fn soracloud_service_audit_events_mut_for_testing(
         &mut self,
     ) -> &mut Storage<u64, SoraServiceAuditEventV1> {
         &mut self.soracloud_service_audit_events
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud app topology audit events for tests and API scaffolding.
     pub fn soracloud_app_infra_audit_events_mut_for_testing(
         &mut self,
     ) -> &mut Storage<u64, SoraAppInfraAuditEventV1> {
         &mut self.soracloud_app_infra_audit_events
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to authoritative Soracloud ciphertext state for tests and API scaffolding.
     pub fn soracloud_service_state_entries_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String, String), SoraServiceStateEntryV1> {
         &mut self.soracloud_service_state_entries
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud decryption request records for tests and API scaffolding.
     pub fn soracloud_decryption_request_records_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String), SoraDecryptionRequestRecordV1> {
         &mut self.soracloud_decryption_request_records
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud agent apartments for tests and API scaffolding.
     pub fn soracloud_agent_apartments_mut_for_testing(
         &mut self,
     ) -> &mut Storage<String, SoraAgentApartmentRecordV1> {
         &mut self.soracloud_agent_apartments
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud agent-apartment audit events for tests and API scaffolding.
     pub fn soracloud_agent_apartment_audit_events_mut_for_testing(
         &mut self,
     ) -> &mut Storage<u64, SoraAgentApartmentAuditEventV1> {
         &mut self.soracloud_agent_apartment_audit_events
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud training jobs for tests and API scaffolding.
     pub fn soracloud_training_jobs_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String), SoraTrainingJobRecordV1> {
         &mut self.soracloud_training_jobs
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud training-job audit events for tests and API scaffolding.
     pub fn soracloud_training_job_audit_events_mut_for_testing(
         &mut self,
     ) -> &mut Storage<u64, SoraTrainingJobAuditEventV1> {
         &mut self.soracloud_training_job_audit_events
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud model registries for tests and API scaffolding.
     pub fn soracloud_model_registries_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String), SoraModelRegistryV1> {
         &mut self.soracloud_model_registries
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud model-weight versions for tests and API scaffolding.
     pub fn soracloud_model_weight_versions_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String, String), SoraModelWeightVersionRecordV1> {
         &mut self.soracloud_model_weight_versions
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud model-weight audit events for tests and API scaffolding.
     pub fn soracloud_model_weight_audit_events_mut_for_testing(
         &mut self,
     ) -> &mut Storage<u64, SoraModelWeightAuditEventV1> {
         &mut self.soracloud_model_weight_audit_events
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud model artifacts for tests and API scaffolding.
     pub fn soracloud_model_artifacts_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String), SoraModelArtifactRecordV1> {
         &mut self.soracloud_model_artifacts
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud model-artifact audit events for tests and API scaffolding.
     pub fn soracloud_model_artifact_audit_events_mut_for_testing(
         &mut self,
     ) -> &mut Storage<u64, SoraModelArtifactAuditEventV1> {
         &mut self.soracloud_model_artifact_audit_events
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Returns mutable access to uploaded-model bundles for testing.
     pub fn soracloud_uploaded_model_bundles_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String, String), SoraUploadedModelBundleV1> {
         &mut self.soracloud_uploaded_model_bundles
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to canonical Hugging Face sources for tests and API scaffolding.
     pub fn soracloud_hf_sources_mut_for_testing(
         &mut self,
     ) -> &mut Storage<Hash, SoraHfSourceRecordV1> {
         &mut self.soracloud_hf_sources
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to authoritative Inrou host adverts for tests and API scaffolding.
     pub fn soracloud_inrou_host_capabilities_mut_for_testing(
         &mut self,
     ) -> &mut Storage<AccountId, SoraInrouHostCapabilityRecordV1> {
         &mut self.soracloud_inrou_host_capabilities
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to HF shared-lease pools for tests and API scaffolding.
     pub fn soracloud_hf_shared_lease_pools_mut_for_testing(
         &mut self,
     ) -> &mut Storage<Hash, SoraHfSharedLeasePoolV1> {
         &mut self.soracloud_hf_shared_lease_pools
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to public-lane validators for direct world fixtures.
     pub fn public_lane_validators_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(LaneId, AccountId), PublicLaneValidatorRecord> {
         &mut self.public_lane_validators
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to active Inrou placement records for tests and API scaffolding.
     pub fn soracloud_inrou_service_placements_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String), SoraInrouServicePlacementRecordV1> {
         &mut self.soracloud_inrou_service_placements
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to verifying keys for tests and API scaffolding.
     pub fn verifying_keys_mut_for_testing(
         &mut self,
@@ -21432,42 +21413,49 @@ impl World {
     > {
         &mut self.verifying_keys
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the verifying-key circuit index for tests and API scaffolding.
     pub fn verifying_keys_by_circuit_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, u32), iroha_data_model::proof::VerifyingKeyId> {
         &mut self.verifying_keys_by_circuit
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to HF shared-lease memberships for tests and API scaffolding.
     pub fn soracloud_hf_shared_lease_members_mut_for_testing(
         &mut self,
     ) -> &mut Storage<(String, String), SoraHfSharedLeaseMemberV1> {
         &mut self.soracloud_hf_shared_lease_members
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to HF shared-lease audit events for tests and API scaffolding.
     pub fn soracloud_hf_shared_lease_audit_events_mut_for_testing(
         &mut self,
     ) -> &mut Storage<u64, SoraHfSharedLeaseAuditEventV1> {
         &mut self.soracloud_hf_shared_lease_audit_events
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud mailbox messages for tests and API scaffolding.
     pub fn soracloud_mailbox_messages_mut_for_testing(
         &mut self,
     ) -> &mut Storage<Hash, SoraServiceMailboxMessageV1> {
         &mut self.soracloud_mailbox_messages
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to Soracloud runtime receipts for tests and API scaffolding.
     pub fn soracloud_runtime_receipts_mut_for_testing(
         &mut self,
     ) -> &mut Storage<Hash, SoraRuntimeReceiptV1> {
         &mut self.soracloud_runtime_receipts
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to SoraFS pin manifests for tests and API scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
     ) -> &mut Storage<ManifestDigest, PinManifestRecord> {
         &mut self.pin_manifests
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to SoraFS replication orders for tests and API scaffolding.
     pub fn replication_orders_mut_for_testing(
         &mut self,
@@ -21746,6 +21734,7 @@ impl World {
             .expect("identifier claims must match account bindings in world constructor");
         world
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Creates a [`World`] populated with assets and pre-defined roles.
     ///
     /// This constructor inserts `roles` directly into the world state without
@@ -21774,6 +21763,7 @@ impl World {
         }
         world
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Grant a role to an account in test/bench setup code.
     ///
     /// This directly mutates role assignments without emitting events.
@@ -23965,13 +23955,6 @@ pub trait WorldReadOnly {
     fn identifier_policies_iter(&self) -> impl Iterator<Item = &IdentifierPolicy> {
         self.identifier_policies().iter().map(|(_, policy)| policy)
     }
-    /// Iterate registered fee sponsor programs.
-    #[inline]
-    fn fee_sponsor_programs_iter(&self) -> impl Iterator<Item = &FeeSponsorProgram> {
-        self.fee_sponsor_programs()
-            .iter()
-            .map(|(_, program)| program)
-    }
     /// Resolve an opaque identifier within a specific policy namespace.
     fn resolve_identifier_claim(
         &self,
@@ -24042,6 +24025,7 @@ pub trait WorldReadOnly {
             .filter_map(|proof_id| self.proofs().get_key_value(proof_id))
     }
     world_ro_accessors!(contract_uploads, declaration);
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return committed progress for one authority-owned pending upload.
     fn contract_code_upload_progress(
         &self,
@@ -24069,10 +24053,6 @@ pub trait WorldReadOnly {
             .unwrap_or(1)
     }
     world_ro_accessors!(musubi_registry, declaration);
-    /// Active Musubi registry policy revision.
-    fn musubi_registry_policy_revision(&self) -> u64 {
-        self.musubi_registry_policy().revision
-    }
     world_ro_accessors!(soracloud, declaration);
     world_ro_accessors!(agreements_and_lanes, declaration);
     world_ro_accessors!(sorafs_and_privacy, declaration);
@@ -24109,6 +24089,7 @@ pub trait WorldReadOnly {
             .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
             .copied()
     }
+    #[cfg(test)]
     /// Resolve one exact global-beacon slot through the authoritative derived index.
     ///
     /// This checks the index-to-record binding but intentionally leaves public DKG and final
@@ -24227,19 +24208,6 @@ pub trait WorldReadOnly {
             .get(id)
             .ok_or_else(|| FindError::Domain(id.clone()))?;
         Ok(domain)
-    }
-    /// Get `Domain` and pass it to closure.
-    ///
-    /// # Errors
-    /// Fails if there is no domain
-    fn map_domain<'slf, T>(
-        &'slf self,
-        id: &DomainId,
-        f: impl FnOnce(&'slf Domain) -> T,
-    ) -> Result<T, FindError> {
-        let domain = self.domain(id)?;
-        let value = f(domain);
-        Ok(value)
     }
     /// Returns reference for domains map
     #[inline]
@@ -24383,6 +24351,7 @@ pub trait WorldReadOnly {
             .and_then(|key| self.account_scope_accounts().get(&key))
             .map_or_else(Vec::new, |accounts| accounts.iter().cloned().collect())
     }
+    #[cfg(test)]
     /// Iterate asset definitions in domain
     fn asset_definitions_in_domain_iter<'slf>(
         &'slf self,
@@ -24410,6 +24379,7 @@ pub trait WorldReadOnly {
     fn asset_definitions_iter(&self) -> impl Iterator<Item = &AssetDefinition> {
         self.asset_definitions().iter().map(|(_, ad)| ad)
     }
+    #[cfg(test)]
     /// Resolve an asset alias to canonical aid using the world-state alias index.
     #[inline]
     fn asset_definition_id_by_alias(
@@ -24441,6 +24411,7 @@ pub trait WorldReadOnly {
             None => None,
         }
     }
+    #[cfg(test)]
     /// Resolve a contract alias to a canonical contract address using the world-state alias index.
     #[inline]
     fn contract_address_by_alias(&self, alias: &ContractAlias) -> Option<ContractAddress> {
@@ -24468,16 +24439,6 @@ pub trait WorldReadOnly {
             // corrupt state instead of silently reviving a legacy binding.
             None => None,
         }
-    }
-    /// Iterate holders tracked for an asset definition.
-    fn asset_definition_holders_iter<'a>(
-        &'a self,
-        definition_id: &'a AssetDefinitionId,
-    ) -> impl Iterator<Item = &'a AccountId> {
-        self.asset_definition_holders()
-            .get(definition_id)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
     }
     /// Iterate concrete asset identifiers tracked for an asset definition.
     fn asset_definition_assets_iter<'a>(
@@ -24565,20 +24526,7 @@ pub trait WorldReadOnly {
                 .map(|(asset_id, value)| AssetEntry::new(asset_id, value))
         })
     }
-    /// Iterate assets held by all accounts within the specified domain.
-    #[allow(clippy::type_complexity)]
-    fn assets_in_domain_iter<'a>(
-        &'a self,
-        id: &'a DomainId,
-    ) -> impl Iterator<Item = AssetEntry<'a>> {
-        let account_ids = self
-            .accounts_in_domain_iter(id)
-            .map(|account| account.id().clone())
-            .collect::<Vec<_>>();
-        account_ids.into_iter().flat_map(move |account_id| {
-            self.assets_in_account_iter(&account_id).collect::<Vec<_>>()
-        })
-    }
+    #[cfg(test)]
     /// Iterate assets matching a specific definition.
     ///
     /// Asset ownership is keyed by `(owner subject, definition, scope)`, so definition queries
@@ -25123,13 +25071,6 @@ impl<'world> WorldBlock<'world> {
         &mut self.replication_orders
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Mutable provider-ingest completion-authority registry accessor for tests.
-    pub fn provider_ingest_completion_authorities_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1> {
-        &mut self.provider_ingest_completion_authorities
-    }
-    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
     /// Mutable verifying-key registry accessor used exclusively by tests and API scaffolding.
     pub fn verifying_keys_mut_for_testing(
         &mut self,
@@ -25140,7 +25081,7 @@ impl<'world> WorldBlock<'world> {
     > {
         &mut self.verifying_keys
     }
-    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Mutable verifying-key circuit index accessor used exclusively by tests and API scaffolding.
     pub fn verifying_keys_by_circuit_mut_for_testing(
         &mut self,
@@ -25188,22 +25129,6 @@ impl<'world> WorldBlock<'world> {
         self.try_transaction(
             #[cfg(feature = "telemetry")]
             None,
-            axt_lane_config,
-            axt_current_slot,
-        )
-        .expect("test World child admission")
-    }
-    /// Open a test-only World checkpoint with explicit event telemetry.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-    pub fn trasaction(
-        &mut self,
-        #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
-        axt_lane_config: LaneConfig,
-        axt_current_slot: u64,
-    ) -> Box<WorldTransaction<'_, 'world>> {
-        self.try_transaction(
-            #[cfg(feature = "telemetry")]
-            telemetry,
             axt_lane_config,
             axt_current_slot,
         )
@@ -25403,7 +25328,7 @@ fn parliament_timed_ovn_reservation_reducer_error_v1(
     }
 }
 
-impl<'block, 'world> WorldTransaction<'block, 'world> {
+impl WorldTransaction<'_, '_> {
     /// Update the executor data model, purge permissions it no longer declares, and synchronize
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
@@ -25454,16 +25379,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         let prev = core::mem::replace(self.executor_data_model.get_mut(), executor_data_model);
         self.update_parameters_from_executor(&prev);
-    }
-    /// Test helper: mutable access to runtime upgrade registry.
-    pub fn runtime_upgrades_mut(
-        &mut self,
-    ) -> &mut StorageTransaction<
-        'block,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
-    > {
-        &mut self.runtime_upgrades
     }
     fn add_account_alias_to_reverse_index(&mut self, account_id: &AccountId, label: &AccountAlias) {
         if self.account_aliases_by_account.get(account_id).is_none() {
@@ -26199,62 +26114,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn remove_provider_owner_for_testing(&mut self, provider: ProviderId) -> Option<AccountId> {
         self.provider_owners.remove(provider)
     }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to the pin-manifest registry for test scaffolding.
-    pub fn pin_manifests_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ManifestDigest, PinManifestRecord> {
-        &mut self.pin_manifests
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to the alias-manifest registry during tests.
-    pub fn manifest_aliases_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ManifestAliasId, ManifestAliasRecord> {
-        &mut self.manifest_aliases
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to replication orders for deterministic test setup.
-    pub fn replication_orders_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ReplicationOrderId, ReplicationOrderRecord> {
-        &mut self.replication_orders
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to provider-ingest completion authorities for tests.
-    pub fn provider_ingest_completion_authorities_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, ProviderId, ProviderIngestCompletionAuthorityV1> {
-        &mut self.provider_ingest_completion_authorities
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to resolver directory records for deterministic tests.
-    pub fn soradns_directory_records_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, DirectoryId, ResolverDirectoryRecordV1> {
-        &mut self.soradns_directory_records
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    /// Provides mutable access to the latest directory pointer for tests.
-    pub fn soradns_directory_latest_mut_for_testing(
-        &mut self,
-    ) -> &mut CellTransaction<'block, 'world, Option<DirectoryId>> {
-        &mut self.soradns_directory_latest
-    }
-    /// Test helper: get mutable access to governance referenda storage for direct seeding.
-    pub fn governance_referenda_mut(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, String, GovernanceReferendumRecord> {
-        &mut self.governance_referenda
-    }
-    /// Test helper: get mutable access to elections storage for direct seeding.
-    pub fn elections_mut(&mut self) -> &mut StorageTransaction<'block, String, ElectionState> {
-        &mut self.elections
-    }
-    /// Test helper: seed governance locks while retaining the exact expiry index.
-    pub fn governance_locks_mut(&mut self) -> GovernanceLocksMutForTesting<'_, 'block, 'world> {
-        GovernanceLocksMutForTesting { world: self }
-    }
     /// Replace one referendum's lock set while keeping the expiry index exact.
     pub(crate) fn put_governance_locks(
         &mut self,
@@ -26345,12 +26204,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         self.governance_proposals.insert(proposal_id, proposal);
         Ok(())
-    }
-    /// Test helper: get mutable access to governance slashing ledger for direct seeding.
-    pub fn governance_slashes_mut(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, String, GovernanceSlashLedger> {
-        &mut self.governance_slashes
     }
     fn remove_parliament_tle_retention_contribution(
         &mut self,
@@ -26985,6 +26838,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.timed_ovn_evidence.insert(ballot_attempt_id, state);
         Ok(())
     }
+    #[cfg(test)]
     /// Persist one finalized public beacon key and remove its matching active DKG snapshot.
     pub(crate) fn put_finalized_global_beacon_key_session(
         &mut self,
@@ -27020,6 +26874,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.global_beacon_key_sessions.insert(session_id, record);
         Ok(())
     }
+    #[cfg(test)]
     /// Install the singleton successor pointer and its first authorized pulse height.
     ///
     /// A lifecycle instruction in block `H` uses `H + 1`, so consensus effects
@@ -27048,6 +26903,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, session_id);
         Ok(())
     }
+    #[cfg(test)]
     /// Retire the singleton key at an exclusive future pulse height.
     pub(crate) fn retire_global_beacon_key_session(
         &mut self,
@@ -27144,22 +27000,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
         Ok(link)
     }
-    /// Test helper: seed governance proposals while retaining the exact typed index.
-    pub fn governance_proposals_mut(
-        &mut self,
-    ) -> GovernanceProposalsMutForTesting<'_, 'block, 'world> {
-        GovernanceProposalsMutForTesting {
-            world: self,
-            mutably_borrowed: BTreeSet::new(),
-        }
-    }
-    /// Provides mutable access to on-chain parameters for direct test-state seeding.
-    #[doc(hidden)]
-    pub fn parameters_mut_for_testing(
-        &mut self,
-    ) -> &mut CellTransaction<'block, 'world, Parameters> {
-        &mut self.parameters
-    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Validate and persist one Parliament attempt for integration-test state seeding.
     #[doc(hidden)]
     pub fn put_parliament_attempt_for_testing(
@@ -27174,6 +27015,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         self.put_parliament_attempt(attempt)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Remove one Parliament attempt from integration-test fixture state.
     #[doc(hidden)]
     pub fn remove_parliament_attempt_for_testing(
@@ -27271,79 +27113,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             );
         }
         Some(removed)
-    }
-    /// Test helper: get mutable access to citizenship storage for direct seeding.
-    pub fn citizens_mut(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, AccountId, CitizenshipRecord> {
-        &mut self.citizens
-    }
-    /// Test helper: get mutable access to stored proof records for direct seeding.
-    pub fn proofs_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<
-        'block,
-        iroha_data_model::proof::ProofId,
-        iroha_data_model::proof::ProofRecord,
-    > {
-        &mut self.proofs
-    }
-    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
-    /// Test helper: get mutable access to public lane validators for direct seeding.
-    pub fn public_lane_validators_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, (LaneId, AccountId), PublicLaneValidatorRecord> {
-        &mut self.public_lane_validators
-    }
-    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
-    /// Test helper: get mutable access to public lane stake shares for direct seeding.
-    pub fn public_lane_stake_shares_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, (LaneId, AccountId, AccountId), PublicLaneStakeShare> {
-        &mut self.public_lane_stake_shares
-    }
-    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
-    /// Test helper: get mutable access to public lane rewards for direct seeding.
-    pub fn public_lane_rewards_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, (LaneId, u64), PublicLaneRewardRecord> {
-        &mut self.public_lane_rewards
-    }
-    /// Test helper: get mutable access to stored proof tags for direct seeding.
-    pub fn proof_tags_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, iroha_data_model::proof::ProofId, Vec<[u8; 4]>> {
-        &mut self.proof_tags
-    }
-    /// Test helper: get mutable access to the tag → proof index for direct seeding.
-    pub fn proofs_by_tag_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, [u8; 4], Vec<iroha_data_model::proof::ProofId>> {
-        &mut self.proofs_by_tag
-    }
-    /// Test helper: get mutable access to verifying-key registry for seeding.
-    pub fn verifying_keys_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<
-        'block,
-        iroha_data_model::proof::VerifyingKeyId,
-        iroha_data_model::proof::VerifyingKeyRecord,
-    > {
-        &mut self.verifying_keys
-    }
-    /// Test helper: get mutable access to the verifying-key circuit index for seeding.
-    pub fn verifying_keys_by_circuit_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, (String, u32), iroha_data_model::proof::VerifyingKeyId>
-    {
-        &mut self.verifying_keys_by_circuit
-    }
-    /// Test helper: get mutable access to shielded asset state for direct seeding.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn zk_assets_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, AssetDefinitionId, ZkAssetState> {
-        &mut self.zk_assets
     }
     /// Test helper: index a manually seeded confidential-policy transition.
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -28052,6 +27821,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             self.account_roles.remove(role);
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Get mutable reference to [`Asset`]
     ///
     /// # Errors
@@ -28435,6 +28205,148 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let lane_config = self.axt_lane_config.clone();
         let current_slot = self.axt_current_slot;
         let _ = self.rebuild_axt_policies_from_space_directory(&lane_config, current_slot);
+    }
+}
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl<'block, 'world> WorldTransaction<'block, 'world> {
+    /// Test helper: mutable access to runtime upgrade registry.
+    pub fn runtime_upgrades_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        iroha_data_model::runtime::RuntimeUpgradeId,
+        iroha_data_model::runtime::RuntimeUpgradeRecord,
+    > {
+        &mut self.runtime_upgrades
+    }
+    /// Provides mutable access to the pin-manifest registry for test scaffolding.
+    pub fn pin_manifests_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, ManifestDigest, PinManifestRecord> {
+        &mut self.pin_manifests
+    }
+    /// Provides mutable access to the alias-manifest registry during tests.
+    pub fn manifest_aliases_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, ManifestAliasId, ManifestAliasRecord> {
+        &mut self.manifest_aliases
+    }
+    /// Provides mutable access to replication orders for deterministic test setup.
+    pub fn replication_orders_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, ReplicationOrderId, ReplicationOrderRecord> {
+        &mut self.replication_orders
+    }
+    /// Provides mutable access to resolver directory records for deterministic tests.
+    pub fn soradns_directory_records_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, DirectoryId, ResolverDirectoryRecordV1> {
+        &mut self.soradns_directory_records
+    }
+    /// Provides mutable access to the latest directory pointer for tests.
+    pub fn soradns_directory_latest_mut_for_testing(
+        &mut self,
+    ) -> &mut CellTransaction<'block, 'world, Option<DirectoryId>> {
+        &mut self.soradns_directory_latest
+    }
+    /// Test helper: get mutable access to governance referenda storage for direct seeding.
+    pub fn governance_referenda_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, String, GovernanceReferendumRecord> {
+        &mut self.governance_referenda
+    }
+    /// Test helper: get mutable access to elections storage for direct seeding.
+    pub fn elections_mut(&mut self) -> &mut StorageTransaction<'block, String, ElectionState> {
+        &mut self.elections
+    }
+    /// Test helper: seed governance locks while retaining the exact expiry index.
+    pub fn governance_locks_mut(&mut self) -> GovernanceLocksMutForTesting<'_, 'block, 'world> {
+        GovernanceLocksMutForTesting { world: self }
+    }
+    /// Test helper: get mutable access to governance slashing ledger for direct seeding.
+    pub fn governance_slashes_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, String, GovernanceSlashLedger> {
+        &mut self.governance_slashes
+    }
+    /// Test helper: seed governance proposals while retaining the exact typed index.
+    pub fn governance_proposals_mut(
+        &mut self,
+    ) -> GovernanceProposalsMutForTesting<'_, 'block, 'world> {
+        GovernanceProposalsMutForTesting {
+            world: self,
+            mutably_borrowed: BTreeSet::new(),
+        }
+    }
+    /// Provides mutable access to on-chain parameters for direct test-state seeding.
+    #[doc(hidden)]
+    pub fn parameters_mut_for_testing(
+        &mut self,
+    ) -> &mut CellTransaction<'block, 'world, Parameters> {
+        &mut self.parameters
+    }
+    /// Test helper: get mutable access to stored proof records for direct seeding.
+    pub fn proofs_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        iroha_data_model::proof::ProofId,
+        iroha_data_model::proof::ProofRecord,
+    > {
+        &mut self.proofs
+    }
+    /// Test helper: get mutable access to public lane validators for direct seeding.
+    pub fn public_lane_validators_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, (LaneId, AccountId), PublicLaneValidatorRecord> {
+        &mut self.public_lane_validators
+    }
+    /// Test helper: get mutable access to public lane stake shares for direct seeding.
+    pub fn public_lane_stake_shares_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, (LaneId, AccountId, AccountId), PublicLaneStakeShare> {
+        &mut self.public_lane_stake_shares
+    }
+    /// Test helper: get mutable access to public lane rewards for direct seeding.
+    pub fn public_lane_rewards_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, (LaneId, u64), PublicLaneRewardRecord> {
+        &mut self.public_lane_rewards
+    }
+    /// Test helper: get mutable access to stored proof tags for direct seeding.
+    pub fn proof_tags_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, iroha_data_model::proof::ProofId, Vec<[u8; 4]>> {
+        &mut self.proof_tags
+    }
+    /// Test helper: get mutable access to the tag → proof index for direct seeding.
+    pub fn proofs_by_tag_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, [u8; 4], Vec<iroha_data_model::proof::ProofId>> {
+        &mut self.proofs_by_tag
+    }
+    /// Test helper: get mutable access to verifying-key registry for seeding.
+    pub fn verifying_keys_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        iroha_data_model::proof::VerifyingKeyId,
+        iroha_data_model::proof::VerifyingKeyRecord,
+    > {
+        &mut self.verifying_keys
+    }
+    /// Test helper: get mutable access to the verifying-key circuit index for seeding.
+    pub fn verifying_keys_by_circuit_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, (String, u32), iroha_data_model::proof::VerifyingKeyId>
+    {
+        &mut self.verifying_keys_by_circuit
+    }
+    /// Test helper: get mutable access to shielded asset state for direct seeding.
+    pub fn zk_assets_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, AssetDefinitionId, ZkAssetState> {
+        &mut self.zk_assets
     }
 }
 /// Snapshot of consensus-key policy copied into runtime state.
@@ -28856,6 +28768,7 @@ impl State {
             .nexus_projection(&self.nexus.read())
             .expect("persisted canonical runtime must be valid")
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Capture an active lane's complete storage identity from one canonical runtime view.
     /// The returned data remains an exact locator after retirement; it does not
     /// authorize historical execution, publication, or a fresh lane producer.
@@ -29444,6 +29357,7 @@ impl State {
         }
         QueryIndexJournal::journal_path(&root)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn query_projection_checkpoint_journal_path(&self) -> PathBuf {
         let root = self.kura.store_root();
         if root.as_os_str().is_empty() {
@@ -29541,6 +29455,7 @@ impl State {
     pub fn query_projection_checkpoint_snapshot(&self) -> Option<QueryProjectionCheckpoint> {
         self.query_projection_checkpoint_journal.read().snapshot()
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Persist the latest durable query projection checkpoint descriptor.
     pub fn persist_query_projection_checkpoint(
         &self,
@@ -29611,6 +29526,7 @@ impl State {
             }
         }
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Build and persist a query projection checkpoint from the current index snapshot.
     pub fn publish_query_projection_checkpoint(
         &self,
@@ -29625,6 +29541,7 @@ impl State {
         self.persist_query_projection_checkpoint(Some(checkpoint.clone()));
         checkpoint
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Validate uploaded shard archives against the current query-index snapshot and
     /// build a checkpoint publication plan without mutating state yet.
     ///
@@ -29649,6 +29566,7 @@ impl State {
             uploads,
         )
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Build and persist a query projection checkpoint from uploaded shard archives.
     ///
     /// This is the intended handoff point for the future DA projection worker: once
@@ -30059,6 +29977,7 @@ impl State {
             .get_by_manifest(digest)
             .map(|entry| entry.commitment.clone())
     }
+    #[cfg(test)]
     /// Lookup a DA commitment by `(lane_id, epoch, sequence)`.
     #[must_use]
     pub fn find_da_commitment_by_lane_epoch_sequence(
@@ -30078,6 +29997,7 @@ impl State {
         let view = self.view();
         StateReadOnly::axt_policy_snapshot(&view)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Install or update a dataspace AXT policy entry.
     pub fn set_axt_policy(&mut self, dsid: DataSpaceId, mut policy: AxtPolicyEntry) {
         let previous_policy = self.world.axt_policies.view().get(&dsid).copied();
@@ -30250,6 +30170,7 @@ impl State {
         block.commit();
         snapshot
     }
+    #[cfg(test)]
     /// Remove a dataspace AXT policy entry.
     pub fn remove_axt_policy(&mut self, dsid: &DataSpaceId) {
         let previous_policy = self.world.axt_policies.view().get(dsid).copied();
@@ -30318,7 +30239,7 @@ impl State {
     pub fn transactions_latest_height_for_testing(&self) -> usize {
         self.transactions.latest_height()
     }
-    #[cfg(any(test, feature = "app_api"))]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Prune the AXT replay ledger using the provided slot and retention window (test helper).
     pub fn prune_axt_replay_ledger_for_tests(&mut self, current_slot: u64, retention_slots: u64) {
         let mut block = self.world.axt_replay_ledger.block();
@@ -30332,7 +30253,7 @@ impl State {
         }
         block.commit();
     }
-    #[cfg(any(test, feature = "app_api"))]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Insert an AXT replay record (test helper).
     pub fn insert_axt_replay_entry_for_tests(
         &mut self,
@@ -31415,6 +31336,7 @@ impl State {
         }
         Ok(s)
     }
+    #[cfg(test)]
     /// Fallibly construct [`State`] with an explicit chain id and a
     /// feature-stable telemetry argument.
     ///
@@ -31617,6 +31539,7 @@ impl State {
         )
         .0
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Construct a fresh configured-catalog fixture with explicit display and security identities.
     ///
     /// The returned Kura is the same authenticated storage owned by State. This
@@ -31879,7 +31802,12 @@ impl State {
     }
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
-    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+    #[cfg(any(
+        test,
+        feature = "iroha-core-tests",
+        feature = "bench",
+        feature = "dev-tools"
+    ))]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.try_block(curr_block).unwrap_or_else(|error| {
             panic!("persisted active runtime ABI is incompatible with this node: {error:?}")
@@ -32849,14 +32777,18 @@ impl State {
             .lock()
             .summarize_program_with_hash(code_hash, bytecode)
     }
+    #[cfg(test)]
     /// Return contract query summary and preparation counters.
     #[must_use]
-    pub fn contract_query_ivm_cache_stats(&self) -> CacheStats {
+    pub fn contract_query_ivm_cache_stats(&self) -> crate::smartcontracts::ivm::cache::CacheStats {
         self.contract_query_ivm_cache.lock().stats()
     }
+    #[cfg(test)]
     /// Return prepared-artifact and owned-runtime counters for contract queries.
     #[must_use]
-    pub fn contract_query_prepared_cache_stats(&self) -> PreparedContractCacheStats {
+    pub fn contract_query_prepared_cache_stats(
+        &self,
+    ) -> crate::smartcontracts::ivm::cache::PreparedContractCacheStats {
         self.contract_query_ivm_cache
             .lock()
             .prepared_contract_cache()
@@ -32999,48 +32931,32 @@ impl State {
     }
     /// Authenticate a threshold-key lifecycle certificate for the contiguous next block.
     ///
-    /// This admission check uses the durable parent's exact frozen roster, never
-    /// the mutable commit topology. Execution still checks the certificate again,
-    /// including its exact height, session compare-and-set and replay protection.
-    /// No State view is held while authenticating durable finality.
+    /// This admission check uses the committee World's consensus schedule holds for the next
+    /// height (the same entry execution reads), never the mutable commit topology. Execution
+    /// still checks the certificate again, including its exact height, session compare-and-set
+    /// and replay protection.
     ///
     /// # Errors
     ///
-    /// Rejects absent/corrupt finality, a changed committed tip, and any invalid
-    /// network, height, roster or quorum binding. Returns the authenticated parent
+    /// Rejects a chain without a committed parent, a next height without a scheduled committee,
+    /// and any invalid network, height, roster or quorum binding. Returns the committed parent
     /// hash and roster so ingress can also require local ownership of the global control route.
     pub fn verify_next_height_threshold_key_lifecycle_certificate_v1(
         &self,
         certificate: &iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
     ) -> core::result::Result<(HashOf<BlockHeader>, Vec<PeerId>), String> {
-        let (parent_height, parent_hash) = {
-            let hashes = self.block_hashes.view();
-            let height = u64::try_from(hashes.len())
-                .map_err(|_| "lifecycle parent height exceeds u64".to_owned())?;
-            let hash = hashes
-                .last()
-                .copied()
+        let (parent_hash, height, roster) = {
+            let view = self.view();
+            let parent_hash = view
+                .latest_block_hash()
                 .ok_or_else(|| "lifecycle admission requires a committed parent".to_owned())?;
-            (height, hash)
+            let height = u64::try_from(view.height())
+                .ok()
+                .and_then(|parent| parent.checked_add(1))
+                .ok_or_else(|| "lifecycle execution height overflows".to_owned())?;
+            let roster = threshold_key_lifecycle_roster_v1(view.world(), height)?;
+            (parent_hash, height, roster)
         };
-        let height = parent_height
-            .checked_add(1)
-            .ok_or_else(|| "lifecycle execution height overflows".to_owned())?;
-        let (header, parent) = self
-            .kura
-            .v2_finality_artifact_with_header(parent_height)
-            .map_err(|error| format!("lifecycle parent finality is invalid: {error}"))?
-            .ok_or_else(|| "lifecycle parent finality is absent".to_owned())?;
-        if header.height().get() != parent_height
-            || header.hash() != parent_hash
-            || parent.height_context.network_id != *self.network_id_ref()
-        {
-            return Err("lifecycle parent differs from the committed network/tip".to_owned());
-        }
-        let roster = threshold_key_lifecycle_successor_roster_v1(height, &parent.height_context)
-            .ok_or_else(|| {
-                "lifecycle parent does not authenticate the successor roster".to_owned()
-            })?;
         verify_threshold_key_lifecycle_certificate_v1(
             certificate,
             self.network_id_ref(),
@@ -33048,12 +32964,6 @@ impl State {
             &roster,
         )
         .map_err(|error| error.to_string())?;
-        let hashes = self.block_hashes.view();
-        if u64::try_from(hashes.len()).ok() != Some(parent_height)
-            || hashes.last().copied() != Some(parent_hash)
-        {
-            return Err("lifecycle committed tip changed during authentication".to_owned());
-        }
         Ok((parent_hash, roster))
     }
     /// Latest committed block height derived from the block hash journal.
@@ -33376,6 +33286,7 @@ impl State {
             time_trigger_action_requires_clock_progress(action, parent_creation_time)
         })
     }
+    #[cfg(test)]
     /// Check if any time triggers should fire for a block with the given header.
     ///
     /// This avoids acquiring a full [`StateView`] on consensus hot paths that only need
@@ -33404,7 +33315,12 @@ impl State {
             u64::try_from(block_header.creation_time().as_millis()).unwrap_or(u64::MAX);
         let world = self.world_view();
         world.triggers().time_triggers().iter().any(|(_, action)| {
-            time_trigger_action_is_due(action, &event, current_block_height, current_block_time_ms)
+            crate::smartcontracts::triggers::set::time_trigger_action_is_due(
+                action,
+                &event,
+                current_block_height,
+                current_block_time_ms,
+            )
         })
     }
     /// Latest committed block hash derived from the block hash journal.
@@ -33426,6 +33342,7 @@ impl State {
         crate::snapshot::canonical_state_snapshot_hash(self)
             .map(HashOf::<BlockHeader>::from_untyped_unchecked)
     }
+    #[cfg(test)]
     /// Previous committed block hash (if any) derived from the block hash journal.
     ///
     /// This is cheaper than acquiring a full [`StateView`] and avoids locking
@@ -33443,7 +33360,7 @@ impl State {
         self.transactions.view().get(&hash).is_some()
     }
     /// Seed canonical entrypoint membership for focused fixtures.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn record_committed_entrypoints_for_tests(
         &self,
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
@@ -33493,6 +33410,7 @@ impl State {
         let params = self.world.parameters.view();
         (params.sumeragi().max_clock_drift(), params.transaction())
     }
+    #[cfg(test)]
     /// Warm the block stateless-validation cache for a Torii batch with one cache lock.
     #[doc(hidden)]
     #[track_caller]
@@ -33503,6 +33421,7 @@ impl State {
     {
         self.warm_stateless_validation_cache_for_torii_prechecked_entries(txs);
     }
+    #[cfg(test)]
     fn warm_stateless_validation_cache_for_torii_prechecked_entries<'iter, 'tx, I>(&self, txs: I)
     where
         'tx: 'iter,
@@ -34039,36 +33958,6 @@ impl State {
         self.validate_recovered_merge_metadata(hydrated_entries.last())?;
         *self.merge_admission.write() = hydrated_admission;
         self.merge_ledger.replace(hydrated_entries);
-        Ok(())
-    }
-    /// Load journals whose recovery was deliberately deferred while Kura was
-    /// awaiting authenticated snapshot-bootstrap finalization.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if Kura is still provisional or its durable merge
-    /// history cannot be validated atomically against the restored State.
-    pub fn rehydrate_deferred_startup_journals_after_snapshot_authentication(
-        &mut self,
-    ) -> Result<(), DeferredStartupHydrationError> {
-        if self.kura.provisional_snapshot_bootstrap_pending() {
-            return Err(DeferredStartupHydrationError::SnapshotBootstrapAuthenticationPending);
-        }
-        let canonical_query_index_status = {
-            let hashes = self.block_hashes.view();
-            let indexed_height = u64::try_from(hashes.len()).unwrap_or(u64::MAX);
-            (indexed_height > 0).then(|| QueryIndexStatus {
-                indexed_height,
-                indexed_block_hash: hashes.last().copied(),
-            })
-        };
-        let LoadedStateJournals {
-            query_index,
-            query_projection_checkpoint,
-        } = load_state_journals(&self.kura, canonical_query_index_status, true);
-        *self.query_index_journal.write() = query_index;
-        *self.query_projection_checkpoint_journal.write() = query_projection_checkpoint;
-        self.recover_merge_ledger_from_kura()?;
         Ok(())
     }
     fn replay_persisted_merge_settlements(&self) -> Result<(), MergeLedgerCommitError> {
@@ -34900,6 +34789,32 @@ impl State {
         let view = self.view();
         StateReadOnly::resolve_lane_committee_at_height(&view, route, authority_height)
     }
+    /// Resolve the peers authoritative for a route at the committed height: the global
+    /// committee (lanes and dataspaces are routing labels; every transaction executes in the
+    /// global Sumeragi block). Torii routes and proxies requests by this authority.
+    ///
+    /// # Errors
+    /// The route is unknown or inactive, or no validator is live.
+    pub fn resolve_route_authority(
+        &self,
+        route: LaneAuthorityRoute,
+    ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+        let view = self.view();
+        let authority_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+        lane_authority::resolve_global_route(view.world(), route, view.nexus(), authority_height)
+    }
+    /// [`Self::resolve_route_authority`] at an explicit consensus height.
+    ///
+    /// # Errors
+    /// The route is unknown or inactive at `authority_height`, or no validator is live there.
+    pub fn resolve_route_authority_at_height(
+        &self,
+        route: LaneAuthorityRoute,
+        authority_height: u64,
+    ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+        let view = self.view();
+        lane_authority::resolve_global_route(view.world(), route, view.nexus(), authority_height)
+    }
     /// Return whether a lane is active at the committed lane-authority height.
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
         let nexus = self.nexus_snapshot();
@@ -35637,15 +35552,6 @@ impl State {
         Ok(self
             .validate_or_record_lane_relay(envelope, true)?
             .expect("persisting relay validation always returns an insertion outcome"))
-    }
-    /// Resolve and authenticate the global execution commitment for a relay.
-    ///
-    /// This is a read-only Kura lookup. It does not mutate world state.
-    pub fn authenticated_lane_relay_execution_commitment(
-        &self,
-        envelope: &LaneRelayEnvelope,
-    ) -> Result<iroha_data_model::block::consensus_v2::ExecutionCommitment, LaneRelayError> {
-        Self::verify_lane_relay_finality_from_kura(self.kura.as_ref(), envelope)
     }
     /// Fully authenticate a merge-authoritative embedded relay.
     ///
@@ -47071,6 +46977,7 @@ impl State {
         }
         Ok(())
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Set consensus-key policy while constructing fixture state.
     ///
     /// Production startup must use [`Self::validate_sumeragi_key_policy`] instead: committed
@@ -50205,12 +50112,6 @@ fn autoscale_lane_drain_state_matches_context(
         && state.intent.validator_count == committee.validator_count
         && state.intent.min_quorum == committee.min_quorum
 }
-fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
-    lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
-        || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
-        || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
-        || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
-}
 fn ensure_manual_lane_has_no_reserved_autoscale_metadata(
     lane: &iroha_data_model::nexus::LaneConfig,
 ) -> Result<(), LaneLifecycleError> {
@@ -51707,6 +51608,7 @@ fn compute_final_confidential_statuses(
     }
     (vk_statuses, pedersen_statuses, poseidon_statuses)
 }
+#[cfg(test)]
 fn compute_vk_set_hash_from_statuses(
     world: &impl WorldReadOnly,
     statuses: &std::collections::BTreeMap<
@@ -51781,6 +51683,7 @@ fn params_effective(
         && activation_height.is_none_or(|h| height >= h)
         && withdraw_height.is_none_or(|h| height < h)
 }
+#[cfg(test)]
 /// Compute a deterministic hash of all active verifying-key registry entries in the current world state.
 #[must_use]
 pub fn compute_vk_set_hash(world: &impl WorldReadOnly) -> Option<[u8; 32]> {
@@ -51791,6 +51694,7 @@ pub fn compute_vk_set_hash(world: &impl WorldReadOnly) -> Option<[u8; 32]> {
         .collect::<std::collections::BTreeMap<_, _>>();
     compute_vk_set_hash_from_statuses(world, &statuses)
 }
+#[cfg(test)]
 /// Compute a deterministic hash of verifying-key entries effective at `height`.
 #[must_use]
 pub fn compute_vk_set_hash_at_height(world: &impl WorldReadOnly, height: u64) -> Option<[u8; 32]> {
@@ -52851,6 +52755,7 @@ impl<'state> StateBlock<'state> {
     pub fn committed_fragment_count(&self) -> usize {
         self.committed_fragments
     }
+    #[cfg(test)]
     /// Whether this block captured at least one committed fragment.
     #[must_use]
     pub fn has_committed_fragments(&self) -> bool {
@@ -53384,7 +53289,12 @@ impl<'state> StateBlock<'state> {
         self.transaction_with_event_telemetry(true)
     }
     /// Open a test-owned transaction through the same fallible production constructor.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(any(
+        test,
+        feature = "bench",
+        feature = "iroha-core-tests",
+        feature = "dev-tools"
+    ))]
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.try_transaction().expect("test State child admission")
     }
@@ -53499,6 +53409,7 @@ impl<'state> StateBlock<'state> {
         let axt_next_handle_counters_after_block = fields.axt_next_handle_counters.clone();
         Ok(StateTransaction {
             local_storage_refusal: &mut fields.local_storage_refusal,
+            #[cfg(test)]
             stake_index_budget: fields.state_ref.stake_index_budget(),
             canonical_runtime: fields.canonical_runtime.transaction(),
             committed_fragments: &mut fields.committed_fragments,
@@ -58364,7 +58275,6 @@ mod public_lane_slash_observability_staging_tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{block::BlockHeader, nexus::PublicLaneValidatorStatus};
-    use nonzero_ext::nonzero;
 
     fn test_state() -> State {
         State::with_telemetry(
@@ -58381,7 +58291,7 @@ mod public_lane_slash_observability_staging_tests {
     #[test]
     fn accepted_transaction_moves_slash_observability_to_the_block_boundary() {
         let state = test_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         let lane_id = LaneId::new(71);
         let slash_id = Hash::new("block-boundary-slash");
@@ -58419,7 +58329,7 @@ mod public_lane_slash_observability_staging_tests {
     #[test]
     fn dropped_transaction_discards_slash_observability() {
         let state = test_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         {
             let mut transaction = block.transaction();
@@ -58447,7 +58357,7 @@ mod public_lane_slash_observability_staging_tests {
                 .telemetry
                 .add_block_fee_amount(&Quantity::from(11_u64));
         }
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.consensus_effects_probe_block(header).unwrap();
         let lane_id = LaneId::new(73);
         let status_before = crate::status::lane_scoped_status_fingerprint_for_tests();
@@ -58541,7 +58451,6 @@ mod parliament_commit_telemetry_tests {
         isi::governance::ParliamentLifecycleTransitionKindV1 as Transition,
     };
     use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
     use std::sync::Arc;
 
     fn state_with_parliament_telemetry() -> (State, Arc<crate::telemetry::Metrics>) {
@@ -58577,7 +58486,7 @@ mod parliament_commit_telemetry_tests {
     fn parliament_metrics_publish_only_after_canonical_block_commit() {
         let (state, metrics) = state_with_parliament_telemetry();
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
             let mut block = state.block(header);
             stage_parliament_projection(&mut block);
             assert_eq!(
@@ -58605,7 +58514,7 @@ mod parliament_commit_telemetry_tests {
         );
         assert_eq!(metrics.governance_citizens_total.get(), 0);
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         stage_parliament_projection(&mut block);
         block
@@ -58638,7 +58547,7 @@ mod parliament_commit_telemetry_tests {
     #[test]
     fn authenticated_replay_refreshes_gauges_without_recounting_transitions() {
         let (state, metrics) = state_with_parliament_telemetry();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         stage_parliament_projection(&mut block);
         block.authenticated_replay_commit = true;
@@ -58702,7 +58611,6 @@ mod musubi_replication_shortfall_telemetry_tests {
     use crate::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::block::BlockHeader;
     use mv::cell::Cell;
-    use nonzero_ext::nonzero;
     use std::sync::Arc;
     fn replication_shortfall_gauge(metrics: &crate::telemetry::Metrics) -> u64 {
         metrics
@@ -58742,7 +58650,7 @@ mod musubi_replication_shortfall_telemetry_tests {
         let (state, metrics, _telemetry) = state_with_shortfall(2, true);
         assert_eq!(replication_shortfall_gauge(&metrics), 2);
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
             *transaction
@@ -58760,7 +58668,7 @@ mod musubi_replication_shortfall_telemetry_tests {
         );
         assert_eq!(replication_shortfall_gauge(&metrics), 2);
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
             *transaction
@@ -58779,7 +58687,7 @@ mod musubi_replication_shortfall_telemetry_tests {
             2
         );
         assert_eq!(replication_shortfall_gauge(&metrics), 2);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         *transaction
@@ -58820,7 +58728,7 @@ mod committed_transaction_context_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         let signed = TransactionBuilder::new(
@@ -58850,7 +58758,7 @@ mod committed_transaction_context_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         let ballot = InstructionBox::from(iroha_data_model::isi::governance::CastZkBallot {
@@ -58885,7 +58793,7 @@ mod committed_transaction_context_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         let update = InstructionBox::from(UpdatePlainConviction {
@@ -59588,7 +59496,6 @@ mod fastpq_tx_set_hash_tests {
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
-    use nonzero_ext::nonzero;
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
@@ -59666,7 +59573,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let _guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
@@ -59761,7 +59668,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         state_block.authenticated_replay_commit = true;
         let _guard = crate::exec_witness::exec_witness_guard();
@@ -59805,7 +59712,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let _guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
@@ -59884,7 +59791,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let _guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
@@ -61209,53 +61116,27 @@ impl StateTransaction<'_, '_> {
     pub fn block_height(&self) -> u64 {
         self._curr_block.height().get()
     }
-    /// Resolve the current height's exact finality-frozen validator order for
-    /// threshold-key lifecycle certificate authentication.
+    /// Resolve the current height's committee order for threshold-key lifecycle certificate
+    /// authentication: the committee World's lag-2 consensus schedule holds for this height
+    /// (see [`threshold_key_lifecycle_roster_v1`]).
     ///
-    /// The mutable commit topology rotates consensus roles after every block,
-    /// so its positions are not stable signer indices. The parent finality
-    /// artifact instead authenticates either the unchanged epoch roster or the
-    /// complete next-epoch snapshot governing this block.
+    /// The mutable commit topology rotates consensus roles after every block, so its positions
+    /// are not stable signer indices; the scheduled committee is committed state every node
+    /// shares.
     pub(crate) fn threshold_key_lifecycle_frozen_roster_v1(
         &self,
     ) -> core::result::Result<Vec<PeerId>, String> {
         let current_height = self.block_height();
-        let parent_height = current_height
-            .checked_sub(1)
-            .filter(|height| *height != 0)
-            .ok_or_else(|| {
-                "threshold-key lifecycle authority has no finalized parent height".to_owned()
-            })?;
-        let parent = match self.kura.v2_finality_artifact(parent_height) {
-            Ok(Some(parent)) => parent,
-            Ok(None) => {
-                #[cfg(test)]
-                {
-                    let fixture_roster = self.commit_topology().get().clone();
-                    if !fixture_roster.is_empty() {
-                        return Ok(fixture_roster);
-                    }
-                }
-                return Err(format!(
-                    "threshold-key lifecycle authority lacks finality at parent height {parent_height}"
-                ));
+        let roster = threshold_key_lifecycle_roster_v1(&self.world, current_height);
+        #[cfg(test)]
+        if roster.is_err() {
+            // Unit fixtures without a consensus schedule supply the roster directly.
+            let fixture_roster = self.commit_topology().get().clone();
+            if !fixture_roster.is_empty() {
+                return Ok(fixture_roster);
             }
-            Err(error) => {
-                return Err(format!(
-                    "failed to authenticate threshold-key lifecycle parent finality: {error}"
-                ));
-            }
-        };
-        if parent.height_context.network_id != self.network_id {
-            return Err(
-                "threshold-key lifecycle parent finality belongs to another network".to_owned(),
-            );
         }
-        threshold_key_lifecycle_successor_roster_v1(current_height, &parent.height_context)
-            .ok_or_else(|| {
-                "threshold-key lifecycle parent finality does not define this height's frozen roster"
-                    .to_owned()
-            })
+        roster
     }
     fn ensure_private_settlement_feature_active_v1(
         &self,
@@ -61653,6 +61534,7 @@ impl StateTransaction<'_, '_> {
     ) -> Option<&iroha_data_model::nexus::PrivateSettlementAbortReceiptV1> {
         self.world.private_settlement_aborts.get(bundle_id)
     }
+    #[cfg(test)]
     /// Read the exact public all-Prepare barrier currently registered in this overlay.
     #[must_use]
     pub fn private_settlement_prepare_barrier_v1(
@@ -61668,6 +61550,7 @@ impl StateTransaction<'_, '_> {
             PrivateSettlementStagedLockRecordV1::Resource { .. } => None,
         }
     }
+    #[cfg(test)]
     /// Read only the opaque pool epoch and root from this transaction overlay.
     #[must_use]
     pub fn private_settlement_pool_head_v1(
@@ -62253,6 +62136,7 @@ impl StateTransaction<'_, '_> {
             )
         })
     }
+    #[cfg(test)]
     /// Record a transfer delta so the FASTPQ prover can consume a structured transcript.
     pub fn record_transfer_transcript(
         &mut self,
@@ -62261,6 +62145,7 @@ impl StateTransaction<'_, '_> {
     ) -> Result<(), Error> {
         self.record_transfer_transcripts(authority, vec![delta])
     }
+    #[cfg(test)]
     /// Record a multi-delta transfer transcript so the FASTPQ prover can consume batch witnesses.
     pub fn record_transfer_transcripts(
         &mut self,
@@ -62274,6 +62159,7 @@ impl StateTransaction<'_, '_> {
             self.require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
         self.record_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas)
     }
+    #[cfg(test)]
     /// Stage a transfer transcript under an already resolved execution identity.
     ///
     /// Numeric movement preparation owns identity resolution so direct protocol execution can
@@ -64722,14 +64608,9 @@ impl SnapshotNexusRuntime {
         }
     }
 }
+// TODO: publish only after a finalized accumulated root and restricted read ACL.
+#[cfg(test)]
 #[path = "state/retail_contract_state_snapshot.rs"]
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "TODO: publish only after a finalized accumulated root and restricted read ACL"
-    )
-)]
 mod retail_contract_state_snapshot;
 #[path = "state/retail_daily_limit_state.rs"]
 pub(crate) mod retail_daily_limit_state;

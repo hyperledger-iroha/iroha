@@ -415,11 +415,6 @@ impl GenericProgramSummary {
     pub fn program(&self) -> &[u8] {
         &self.program
     }
-    /// Clone the shared immutable program image without copying its bytes.
-    #[must_use]
-    pub fn shared_program(&self) -> Arc<[u8]> {
-        Arc::clone(&self.program)
-    }
 }
 /// Admission result for either a self-describing contract or a generic IVM program.
 #[derive(Clone, Debug)]

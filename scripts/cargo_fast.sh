@@ -45,6 +45,11 @@ Options:
   --zero-debug            Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
   --linker MODE           Linker: off (default)|auto|mold|lld|ld.lld|zld|ld64.lld|<path>
                           Explicit modes must pass the native compiler probe
+  --node-set              Check the node leaves in one Cargo invocation:
+                          check -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins
+                          Unified features share one iroha_core/iroha_torii artifact per
+                          edit; remaining cargo args are appended. Per-crate checks
+                          remain the gate for crate-specific feature gating.
   --print-env             Print selected env/config and exit
   -h, --help              Show this help
 
@@ -56,6 +61,7 @@ Examples:
   scripts/cargo_fast.sh --target-slot core-tests --incremental -- test -p iroha_core
   scripts/cargo_fast.sh --jobs 6 -- build -p irohad
   scripts/cargo_fast.sh --linker auto -- build -p irohad
+  scripts/cargo_fast.sh --stable-local-metadata --incremental --node-set
 USAGE
 }
 
@@ -73,6 +79,7 @@ stable_local_metadata=false
 linker_mode="off"
 zero_debug=false
 print_env_only=false
+node_set=false
 cargo_driver="cargo"
 
 declare -a cargo_args
@@ -151,6 +158,9 @@ while [[ $# -gt 0 ]]; do
 		--print-env)
 			print_env_only=true
 			;;
+		--node-set)
+			node_set=true
+			;;
 		-h | --help)
 			usage
 			exit 0
@@ -174,6 +184,15 @@ while [[ $# -gt 0 ]]; do
 	esac
 	shift || true
 done
+
+if [[ "${node_set}" == true ]]; then
+	# Bash 3.2 treats an empty array expansion as unbound under set -u.
+	if [[ ${#cargo_args[@]} -eq 0 ]]; then
+		cargo_args=(check -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins)
+	else
+		cargo_args=(check -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins "${cargo_args[@]}")
+	fi
+fi
 
 if [[ ${#cargo_args[@]} -eq 0 ]]; then
 	echo "error: missing cargo arguments" >&2

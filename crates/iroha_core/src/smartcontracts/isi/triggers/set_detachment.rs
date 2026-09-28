@@ -105,6 +105,7 @@ impl SetBlock<'_> {
         Ok(mode)
     }
 
+    #[cfg(test)]
     /// Admit retained values once, capture all original stores, and release writers.
     ///
     /// The callback runs on the immutable complete block before any capture
@@ -187,6 +188,7 @@ impl<Admission> DetachedSet<Admission> {
             && self.contracts.matches_current(&target.contracts)
     }
 
+    #[cfg(test)]
     /// Compare all actual acquisition identities and modes of an owned block.
     /// This retains no target reference and grants no publication capability.
     pub(crate) fn matches_block_predecessor(&self, target: &SetBlock<'_>) -> bool {

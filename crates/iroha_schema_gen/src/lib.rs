@@ -45,6 +45,10 @@ macro_rules! schema_types {
             // Block stream
             BlockMessage,
             BlockSubscriptionRequest,
+            // Current Torii finality responses and challenge-bound node statements.
+            iroha_data_model::sumeragi_finality::SumeragiFinalityProof,
+            iroha_data_model::sumeragi_finality::SumeragiFinalityBundle,
+            iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
             // Durable cross-service DA spool envelope.
             iroha_data_model::da::ingest::StoredDaReceipt,
             iroha_data_model::fastpq::TransferTranscript,
@@ -526,6 +530,66 @@ mod tests {
         <Vec<PublicKey>>::update_schema_map(&mut schemas);
         <BTreeSet<SignedTransaction>>::update_schema_map(&mut schemas);
     }
+    #[test]
+    fn current_finality_http_contracts_have_complete_schema_entries() {
+        use iroha_data_model::{
+            sumeragi::SumeragiStatus,
+            sumeragi_finality::{
+                FinalityValidator, SumeragiFinalityAttestation, SumeragiFinalityAttestationBody,
+                SumeragiFinalityBundle, SumeragiFinalityProof,
+            },
+        };
+        let schemas = super::build_schemas();
+        assert!(schemas.contains_key::<FinalityValidator>());
+        assert!(schemas.contains_key::<SumeragiFinalityBundle>());
+        assert!(schemas.contains_key::<SumeragiStatus>());
+        let Some(Metadata::Struct(proof)) = schemas.get::<SumeragiFinalityProof>() else {
+            panic!("current finality proof is absent from the canonical schema");
+        };
+        assert_eq!(
+            proof
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["block_header", "block_wire", "committee"]
+        );
+        let Some(Metadata::Struct(body)) = schemas.get::<SumeragiFinalityAttestationBody>() else {
+            panic!("current finality attestation body is absent from the canonical schema");
+        };
+        assert_eq!(
+            body.declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "challenge",
+                "network_id",
+                "node_id",
+                "node_fingerprint",
+                "build_fingerprint",
+                "config_fingerprint",
+                "genesis_block_hash",
+                "genesis_finality_proof",
+                "status",
+                "finality_proof"
+            ]
+        );
+        let Some(Metadata::Struct(attestation)) = schemas.get::<SumeragiFinalityAttestation>()
+        else {
+            panic!("current finality attestation is absent from the canonical schema");
+        };
+        assert_eq!(
+            attestation
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["body", "signature"]
+        );
+        assert!(find_missing_schema_references(&schemas).is_empty());
+    }
+
     #[test]
     fn public_conviction_context_and_result_have_complete_schema_entries() {
         use iroha_data_model::governance::conviction::{

@@ -1,8 +1,9 @@
 //! Production prover facade for the first-release IVM private-note STARK.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::relation::validate_statement_v1;
 use super::{
     relation::{
         IvmPrivateNoteRelationErrorV1, IvmPrivateNoteWitnessV1, validate_private_note_relation_v1,
-        validate_statement_v1,
     },
     stark::{prove_private_note_stark_v1_with_rng, verify_private_note_stark_v1},
 };
@@ -76,6 +77,7 @@ fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNotePro
         | ProofManagedNoteStarkErrorV1::Internal => IvmPrivateNoteProofErrorV1::ProverInvariant,
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNoteProofErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Resource => IvmPrivateNoteProofErrorV1::ResourceLimit,
@@ -150,6 +152,7 @@ pub fn prove_ivm_private_note_v1(
         &mut OsRng,
     )
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Verify one complete first-release IVM private-note proof.
 ///
 /// # Errors

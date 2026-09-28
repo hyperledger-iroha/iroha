@@ -18,9 +18,9 @@ use iroha_core::beacon::{
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey};
 use iroha_data_model::{
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
 };
 use std::num::NonZeroU64;
 use zeroize::Zeroizing;
@@ -28,6 +28,25 @@ use zeroize::Zeroizing;
 #[path = "taira_public_reset_beacon/relay.rs"]
 mod relay;
 use relay::GenesisRelay;
+
+fn genesis_verifier(
+    genesis: &iroha_genesis::ValidatedGenesisBundle,
+    chain_id: &str,
+) -> Result<SumeragiFinalityVerifier> {
+    let validators = genesis
+        .validator_pops()
+        .iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key: public_key.clone(),
+            proof_of_possession: proof_of_possession.clone(),
+        })
+        .collect();
+    Ok(SumeragiFinalityVerifier::new(
+        genesis.block(),
+        chain_id,
+        validators,
+    )?)
+}
 
 const PLAN_SCHEMA: &str = "iroha.taira.public-reset.beacon-bootstrap-plan.v1";
 const REQUEST_SCHEMA: &str = "iroha.global-beacon.bootstrap.request.v1";
@@ -90,7 +109,7 @@ struct GenesisProofV1 {
     manifest: iroha_genesis::RawGenesisTransaction,
     signed_wire: Vec<u8>,
     public_key: PublicKey,
-    first_finality: BridgeFinalityProof,
+    first_finality: SumeragiFinalityProof,
 }
 
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
@@ -99,7 +118,7 @@ struct PublicBundleV1 {
     schema: String,
     request: NativeRequestV1,
     genesis: GenesisProofV1,
-    phase_proofs: Vec<BridgeFinalityProof>,
+    phase_proofs: Vec<SumeragiFinalityProof>,
     finalized_observed_height: u64,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     finalization_draft: ThresholdKeyLifecycleCertificateV1,
@@ -236,7 +255,7 @@ fn derive_public_beacon_inputs_from_slots(
     validators: &[BeaconValidatorSlot<'_>],
     clients: &[reset::ValidatorClientV1],
 ) -> Result<PreparedBeaconInputsV1> {
-    use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiNposParameters};
+    use iroha_data_model::parameter::system::SumeragiConsensusMode;
     reset::validate_nonce(nonce)?;
     if genesis.block().header().height().get() != 1
         || genesis.consensus_metadata().mode != SumeragiConsensusMode::Npos
@@ -249,19 +268,18 @@ fn derive_public_beacon_inputs_from_slots(
     }
     let parameters = manifest.effective_parameters()?;
     let first_pulse = parameters
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
-        .and_then(|npos| npos.epoch_length_blocks().get().checked_sub(1))
-        .ok_or_else(|| {
-            eyre!("beacon preparation requires explicit signed NPoS epoch parameters")
-        })?;
-    // Onboarding/faucet apply at 2/3; the QueuePlanSynced final canary uses
-    // admission/proposal/merge carriers 4/5/6. Ordinary installation can then
-    // execute at 7 and activate at 8. Actual observations remain authoritative.
-    if first_pulse <= 7 {
+        .sumeragi()
+        .epoch_length_blocks
+        .get()
+        .checked_sub(1)
+        .ok_or_else(|| eyre!("signed Sumeragi epoch has no pre-boundary pulse height"))?;
+    // Onboarding, funding and the final canary each supply a real Ordinary
+    // transaction. Starting at genesis, installation can first execute at 5
+    // and activate at 6. This is a minimum window, never an observed height;
+    // the challenged committed-height capture remains authoritative.
+    if first_pulse <= 5 {
         return Err(eyre!(
-            "required operations and installation must precede the first mandatory beacon pulse after height 7"
+            "required operations and installation must precede the first mandatory beacon pulse after height 5"
         ));
     }
     let roster = iroha_core::sumeragi::startup::genesis_committee_peers(genesis.block())?;
@@ -587,7 +605,7 @@ fn read_public<T: JsonDeserialize>(path: &Path, label: &str) -> Result<(T, Vec<u
     ))
 }
 
-fn plan_genesis(
+pub(super) fn plan_genesis(
     inventory: &InventoryV1,
     wire: &[u8],
 ) -> Result<iroha_genesis::ValidatedGenesisBundle> {
@@ -622,7 +640,7 @@ fn plan_genesis(
     Ok(validated)
 }
 
-fn peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
+pub(super) fn peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
     inventory
         .validators
         .iter()
@@ -656,8 +674,8 @@ fn observe_new(
     }
 }
 
-/// Keep the account signer from each client config separate from the dedicated
-/// operator signer required by the authenticated-height status read.
+/// Keep the transaction account signer separate from the dedicated operator
+/// signer required by the authenticated-height status read.
 fn retained_beacon_operator_key(
     input: Option<&reset::PinnedInput>,
     inventory: &InventoryV1,
@@ -682,28 +700,45 @@ fn signed_beacon_client(
     Ok(builder.build()?.with_request_deadline(deadline))
 }
 
+/// Read the installation as its submitting account at every independent peer.
+/// A validator service account is neither the transaction sender nor a ledger
+/// reader; the dedicated HTTP operator credential does not authorize queries.
+fn beacon_observation_clients(
+    config: &ClientConfig,
+    inventory: &InventoryV1,
+    operator_key: &KeyPair,
+    deadline: Instant,
+) -> Result<[Client; 4]> {
+    if config.account.to_string() != inventory.canary_onboarding_request.account_id {
+        return Err(eyre!(
+            "beacon observation account must be the retained installation signer"
+        ));
+    }
+    inventory
+        .validator_clients
+        .iter()
+        .map(|selected| {
+            let mut peer = config.clone();
+            peer.torii_api_url = selected.probe_origin.parse()?;
+            signed_beacon_client(peer, operator_key, deadline)
+        })
+        .collect::<Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| eyre!("beacon bootstrap needs exactly four independent client contexts"))
+}
+
 impl<R: ProcessRunner> OpenSshTransport<'_, R> {
-    fn beacon_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
+    pub(super) fn beacon_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
         let operator_key = retained_beacon_operator_key(
             self.runtime.validator_operator_key.as_ref(),
             &self.admitted.inventory,
         )?;
-        self.runtime
-            .validator_client_configs
-            .iter()
-            .zip(&self.admitted.inventory.validator_clients)
-            .map(|(input, selected)| {
-                let mut config = load_client_config_for_inventory(
-                    input,
-                    "beacon observation client",
-                    &self.admitted.inventory,
-                )?;
-                config.torii_api_url = selected.probe_origin.parse()?;
-                signed_beacon_client(config, &operator_key, deadline)
-            })
-            .collect::<Result<Vec<_>>>()?
-            .try_into()
-            .map_err(|_| eyre!("beacon bootstrap needs exactly four independent client contexts"))
+        let config = load_client_config_for_inventory(
+            &self.runtime.client_config,
+            "beacon installation signer",
+            &self.admitted.inventory,
+        )?;
+        beacon_observation_clients(&config, &self.admitted.inventory, &operator_key, deadline)
     }
 
     fn beacon_daemon(&self) -> Result<PathBuf> {
@@ -826,7 +861,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let ceremony = root.join("ceremony");
         ensure_private_directory(&ceremony)?;
         let program = self.beacon_daemon()?;
-        let mut relay = GenesisRelay::new(request.dkg_session, h1, deadline)?;
+        let mut relay = GenesisRelay::new(
+            request.dkg_session,
+            h1,
+            genesis_verifier(&genesis, &inventory.chain_id)?,
+            deadline,
+        )?;
         for (index, peer) in request.target_roster.iter().enumerate() {
             let selected = inventory
                 .validator_clients
@@ -1004,20 +1044,17 @@ fn validate_bundle_identity(inventory: &InventoryV1, bundle: &PublicBundleV1) ->
     }
     let genesis = plan_genesis(inventory, &bundle.genesis.signed_wire)?;
     if bundle.genesis.first_finality.block_header.hash() != genesis.block().hash()
-        || bundle.genesis.first_finality.finality_artifact.height != 1
+        || bundle.genesis.first_finality.block_header.height().get() != 1
     {
         return Err(eyre!(
             "native beacon bundle has another signed-genesis anchor"
         ));
     }
-    let mut verifier = BridgeFinalityVerifier::with_context(
-        plan.request.dkg_session.network_id,
-        bundle.genesis.first_finality.finality_artifact.context_id(),
-    );
+    let mut verifier = genesis_verifier(&genesis, &inventory.chain_id)?;
     verifier.verify(&bundle.genesis.first_finality)?;
     for (offset, proof) in bundle.phase_proofs.iter().enumerate() {
         let height = u64::try_from(offset + 2)?;
-        if proof.finality_artifact.height != height || proof.block_header.height().get() != height {
+        if proof.block_header.height().get() != height {
             return Err(eyre!("beacon phase proof is not an immediate successor"));
         }
         verifier.verify(proof)?;
@@ -1522,11 +1559,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "beacon committed transaction differs from the retained envelope and authenticated carrier"
                     ));
                 }
-                let wire = peer.get_canonical_executed_block_wire(
-                    carrier_height,
+                let certified = height.verified_proof_at(&genesis, carrier_height)?;
+                certified.verify_committed_transaction(
+                    &self
+                        .admitted
+                        .inventory
+                        .beacon_bootstrap
+                        .request
+                        .dkg_session
+                        .network_id,
                     &details.transaction,
-                    &proof.finality_artifact.commit_qc.execution_commitment,
                 )?;
+                let wire = certified.canonical_executed_wire()?;
                 if exact_wire
                     .as_ref()
                     .is_some_and(|previous| previous != &wire)
@@ -1586,11 +1630,7 @@ fn validate_installation_proof(
     claims: &reset::AuthorizationClaimsV1,
     native: &VerifiedInstall,
 ) -> Result<json::Value> {
-    use iroha_data_model::{
-        block::consensus_v2::{ConsensusMode, ValidatorPower},
-        bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
-        query::CommittedTransaction,
-    };
+    use iroha_data_model::{query::CommittedTransaction, sumeragi_finality::SumeragiFinalityProof};
     let (envelope, _) = read_public::<InstallEnvelopeV1>(
         &root.join("install.prepared.json"),
         "beacon install envelope",
@@ -1623,7 +1663,7 @@ fn validate_installation_proof(
         .get("height_evidence")
         .and_then(json::Value::as_object)
         .ok_or_else(|| eyre!("beacon height evidence absent"))?;
-    let proofs: Vec<BridgeFinalityProof> = json::from_value(
+    let proofs: Vec<SumeragiFinalityProof> = json::from_value(
         evidence
             .get("proofs")
             .cloned()
@@ -1633,23 +1673,6 @@ fn validate_installation_proof(
     let first = proofs
         .first()
         .ok_or_else(|| eyre!("beacon proof chain is empty"))?;
-    let peers = genesis
-        .validator_pops()
-        .iter()
-        .map(|(key, pop)| (PeerId::new(key.clone()), pop.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let (roster, pops): (Vec<_>, Vec<_>) = peers
-        .into_iter()
-        .map(|(validator, pop)| {
-            (
-                ValidatorPower {
-                    validator,
-                    power: 1,
-                },
-                pop,
-            )
-        })
-        .unzip();
     if first.block_header.height().get() != 1
         || first.block_header.hash() != genesis.expected_hash()
     {
@@ -1658,26 +1681,15 @@ fn validate_installation_proof(
         ));
     }
     let network = inventory.beacon_bootstrap.request.dkg_session.network_id;
-    let mut verifier =
-        BridgeFinalityVerifier::with_context(network, first.finality_artifact.context_id());
+    let mut verifier = genesis_verifier(&genesis, &inventory.chain_id)?;
     let mut carrier = None;
     for proof in &proofs {
-        let artifact = &proof.finality_artifact;
-        if artifact.height_context.network_id != network
-            || artifact.height_context.mode != ConsensusMode::Npos
-            || artifact.height_context.roster != roster
-            || artifact.validator_set_pops != pops
-            || artifact.height_context.snapshot_bootstrap.is_some()
-            || artifact.commit_qc.signers.len() != 3
-        {
-            return Err(eyre!("beacon proof chain changes its exact genesis roster"));
-        }
-        verifier.verify(proof)?;
+        let verified = verifier.verify(proof)?;
         if proof.block_header.height().get() == native.bundle.finalization_draft.effective_height {
-            carrier = Some(proof);
+            carrier = Some(verified);
         }
     }
-    let proof =
+    let certified =
         carrier.ok_or_else(|| eyre!("beacon proof chain omits the installation carrier"))?;
     let committed: CommittedTransaction = json::from_value(
         object
@@ -1686,22 +1698,15 @@ fn validate_installation_proof(
             .ok_or_else(|| eyre!("beacon committed transaction missing"))?,
     )?;
     let wire = hex::decode(string("carrier_wire_hex")?)?;
-    let block = iroha_data_model::block::decode_framed_signed_block(&wire)?;
-    if block.encode_wire()? != wire
-        || block.header() != proof.block_header
-        || committed.block_hash() != &block.hash()
+    if certified.canonical_executed_wire()? != wire
         || committed.entrypoint()
             != &iroha_data_model::transaction::TransactionEntrypoint::External(transaction)
-        || committed.result().is_err()
-        || !committed.verify_inclusion_in_authenticated_execution(
-            &block,
-            &proof.finality_artifact.commit_qc.execution_commitment,
-        )
     {
         return Err(eyre!(
-            "beacon installation is not successful in the independently authenticated execution"
+            "beacon installation differs from the authenticated carrier and exact transaction"
         ));
     }
+    certified.verify_committed_transaction(&network, &committed)?;
     Ok(receipt)
 }
 
@@ -2421,9 +2426,32 @@ mod tests {
         )
         .unwrap();
         assert_ne!(config.key_pair.public_key(), admitted.public_key());
+        inventory.canary_onboarding_request.account_id = config.account.to_string();
+        assert!(
+            inventory
+                .validator_clients
+                .iter()
+                .all(|peer| peer.account_id != config.account.to_string())
+        );
+        let mut wrong_account = config.clone();
+        wrong_account.account =
+            iroha_data_model::account::AccountId::new(admitted.public_key().clone());
+        wrong_account.key_pair = admitted.clone();
+        assert!(
+            beacon_observation_clients(
+                &wrong_account,
+                &inventory,
+                &admitted,
+                Instant::now() + Duration::from_secs(3),
+            )
+            .is_err()
+        );
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}/", listener.local_addr().unwrap());
+        for peer in &mut inventory.validator_clients {
+            peer.probe_origin = origin.clone();
+        }
         let expected_key = admitted.public_key().to_string().to_ascii_lowercase();
         let server = std::thread::spawn(move || {
             for _ in 0..4 {
@@ -2449,12 +2477,18 @@ mod tests {
                     .unwrap();
             }
         });
-        for _ in 0..4 {
-            let mut peer = config.clone();
-            peer.torii_api_url = origin.parse().unwrap();
-            let client =
-                signed_beacon_client(peer, &admitted, Instant::now() + Duration::from_secs(3))
-                    .unwrap();
+        for client in beacon_observation_clients(
+            &config,
+            &inventory,
+            &admitted,
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap()
+        {
+            assert_eq!(
+                client.account_client().unwrap().authority(),
+                &config.account
+            );
             assert_eq!(
                 client.operator_key_pair().unwrap().public_key(),
                 admitted.public_key()

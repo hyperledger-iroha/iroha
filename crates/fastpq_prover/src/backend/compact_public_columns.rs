@@ -108,6 +108,7 @@ pub(super) fn base_values(index: PhysicalRowIndex) -> [u64; PUBLIC_COLUMN_COUNT]
 /// LDE or extension opening must instead use [`PublicColumnReconstruction::reconstruct_at`].
 /// Every input cell is canonical before any cell is dropped; projection alone
 /// does not establish the remaining hash/SMT AIR or authenticate a statement.
+#[cfg(test)]
 pub(super) fn project_base_row(
     index: PhysicalRowIndex,
     complete: &[u64],
@@ -182,6 +183,7 @@ impl<'a> SourceTraceColumns<'a> {
     }
 
     /// Read one retained physical row without copying or reinterpreting source.
+    #[cfg(test)]
     pub(super) fn committed_row(&self, row: usize) -> Result<[u64; COMMITTED_COLUMN_COUNT]> {
         if row >= PHYSICAL_ROW_COUNT {
             return Err(Error::QueryIndexOutOfRange {

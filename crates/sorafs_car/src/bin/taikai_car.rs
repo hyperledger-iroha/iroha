@@ -14,14 +14,15 @@ use sorafs_car::taikai::{
     BundleRequest, BundleSummary, RehydrateRequest, bundle_segment, load_extra_metadata,
     rehydrate_from_car, validate_distinct_artifact_paths, validate_track_metadata,
 };
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs,
-    io::{self, Write},
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
 };
+#[path = "../taikai/output_fs.rs"]
+mod output_fs;
+use output_fs::{ensure_parent_dir, set_no_follow_flag, validate_output_writable};
 #[derive(Parser, Debug)]
 #[command(
     name = "taikai_car",
@@ -1129,130 +1130,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
         ));
     }
     Ok(file)
-}
-fn ensure_parent_dir(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("failed to create output parent `{}`", parent.display()))?;
-    }
-    Ok(())
-}
-fn validate_output_path(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(eyre!("output `{}` must not be a symlink", path.display()));
-            }
-            if !metadata.is_file() {
-                return Err(eyre!("output `{}` must be a regular file", path.display()));
-            }
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(eyre!(
-                "failed to inspect output `{}`: {err}",
-                path.display()
-            ));
-        }
-    }
-    if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
-            }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(eyre!(
-                            "output parent `{}` must not be a symlink",
-                            ancestor.display()
-                        ));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(eyre!(
-                            "output parent `{}` must be a directory",
-                            ancestor.display()
-                        ));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(eyre!(
-                        "failed to inspect output parent `{}`: {err}",
-                        ancestor.display()
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-fn validate_output_writable(path: &Path) -> Result<()> {
-    validate_output_path(path)?;
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => {
-            return Err(eyre!(
-                "failed to inspect output `{}`: {err}",
-                path.display()
-            ));
-        }
-    };
-    if metadata.permissions().readonly() {
-        return Err(eyre!("output `{}` must be writable", path.display()));
-    }
-    let mut options = fs::OpenOptions::new();
-    options.write(true);
-    set_no_follow_flag(&mut options);
-    options
-        .open(path)
-        .wrap_err_with(|| format!("output `{}` must be writable", path.display()))?;
-    Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }
 fn render_indexes_map(indexes: &iroha_data_model::taikai::TaikaiEnvelopeIndexes) -> Map {
     let mut time_key = Map::new();

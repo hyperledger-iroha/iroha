@@ -10,6 +10,7 @@ mod json_u64;
 mod kaigi;
 mod lifecycle_instructions;
 mod manifest;
+mod plain_governance;
 mod retail_daily_limit_instructions;
 mod staking_instructions;
 mod verifying_key_instructions;
@@ -77,7 +78,6 @@ use iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability;
 use iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist;
 use iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl;
 use iroha_data_model::isi::escrow::CancelAssetLock;
-use iroha_data_model::isi::governance::CastPlainBallot;
 use iroha_data_model::isi::governance::CastZkBallot;
 use iroha_data_model::isi::governance::ProposeDeployContract;
 use iroha_data_model::isi::governance::ProposeValidationFeePolicy;
@@ -286,16 +286,12 @@ pub fn decode_instruction_frame(bytes: &[u8], network_prefix: u16) -> CodecResul
     }
 }
 
-/// Decode the current public instruction frame variants with native canonical validation.
+/// Decode exactly the current public `InstructionBox` frame.
+///
+/// Concrete instruction frames belong inside the registered box. They are not
+/// alternative public frames and are never retried after box admission fails.
 pub fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_core::Error> {
-    let primary_error = match norito::decode_canonical::<InstructionBox>(bytes) {
-        Ok(instruction) => return Ok(instruction),
-        Err(error) => error,
-    };
-    match norito::decode_canonical::<ProposeValidationFeePolicy>(bytes) {
-        Ok(instruction) => Ok(instruction.into()),
-        Err(_) => Err(primary_error),
-    }
+    norito::decode_canonical::<InstructionBox>(bytes)
 }
 
 /// Preserve the canonical account error code and diagnostic for platform adapters.
@@ -884,16 +880,6 @@ fn remove_case_insensitive(map: &mut json::Map, key: &str) -> Option<json::Value
         .or_else(|| map.remove(&key.to_ascii_uppercase()))
 }
 
-fn parse_u8_value(value: json::Value, context: &str) -> CodecResult<u8> {
-    let parsed = parse_u64_value(value, context)?;
-    u8::try_from(parsed).map_err(|_| {
-        CodecError::new(
-            CodecErrorKind::InvalidArgument,
-            format!("{context} must fit into u8"),
-        )
-    })
-}
-
 fn parse_canonical_quantity_text(source: &str, context: &str) -> CodecResult<Quantity> {
     let quantity = Quantity::from_str(source).map_err(|err| {
         CodecError::new(
@@ -1204,6 +1190,7 @@ pub fn validate_governance_instruction_selectors(value: &json::Value) -> CodecRe
     for (variant, field) in [
         ("CastZkBallot", "election_id"),
         ("CastPlainBallot", "referendum_id"),
+        ("UpdatePlainConviction", "referendum_id"),
     ] {
         validate_governance_selector_payload(instruction.get(variant), field, variant)?;
     }
@@ -1278,6 +1265,9 @@ fn kagemusha_instruction_to_json(instruction: &InstructionBox) -> Option<CodecRe
 
 /// Admit a JSON instruction value with the existing explicit variant checks.
 pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
+    if let Some(instruction) = plain_governance::from_json(&value) {
+        return instruction;
+    }
     if let Some(instruction) = retail_daily_limit_instructions::from_json(&value) {
         return instruction;
     }
@@ -1318,7 +1308,8 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
     );
     if !requires_explicit_parser {
         if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
-            if activation_instructions::is_activation_instruction(&instruction)
+            if plain_governance::is_plain_instruction(&instruction)
+                || activation_instructions::is_activation_instruction(&instruction)
                 || retail_daily_limit_instructions::is_retail_instruction(&instruction)
                 || game_instructions::is_game_instruction(&instruction)
                 || verifying_key_instructions::is_verifying_key_instruction(&instruction)
@@ -2896,34 +2887,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                 };
                 return Ok(Box::new(ballot).into_instruction_box());
             }
-            if let Some(json::Value::Object(mut fields)) = map.remove("CastPlainBallot") {
-                let referendum_id = parse_string_value(
-                    required_value(&mut fields, "referendum_id", "CastPlainBallot")?,
-                    "CastPlainBallot.referendum_id",
-                )?;
-                let owner_value = required_value(&mut fields, "owner", "CastPlainBallot")?;
-                let owner = parse_account_id_value(owner_value, "CastPlainBallot.owner")?;
-                let amount = parse_canonical_quantity_value(
-                    required_value(&mut fields, "amount", "CastPlainBallot")?,
-                    "CastPlainBallot.amount",
-                )?;
-                let duration_blocks = parse_u64_value(
-                    required_value(&mut fields, "duration_blocks", "CastPlainBallot")?,
-                    "CastPlainBallot.duration_blocks",
-                )?;
-                let direction = parse_u8_value(
-                    required_value(&mut fields, "direction", "CastPlainBallot")?,
-                    "CastPlainBallot.direction",
-                )?;
-                let ballot = CastPlainBallot {
-                    referendum_id,
-                    owner,
-                    amount,
-                    duration_blocks,
-                    direction,
-                };
-                return Ok(Box::new(ballot).into_instruction_box());
-            }
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterCitizen") {
                 let owner_value = required_value(&mut fields, "owner", "RegisterCitizen")?;
                 let owner = parse_account_id_value(owner_value, "RegisterCitizen.owner")?;
@@ -3343,6 +3306,9 @@ fn exact_json_object_fields(
 
 /// Render a typed instruction through its canonical JavaScript JSON contract.
 pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<json::Value> {
+    if let Some(value) = plain_governance::to_json(instruction) {
+        return value;
+    }
     if let Some(value) = retail_daily_limit_instructions::to_json(instruction) {
         return value;
     }
@@ -4234,32 +4200,6 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-        return Ok(json::Value::Object(outer));
-    }
-    if let Some(ballot) = instruction_ref.as_any().downcast_ref::<CastPlainBallot>() {
-        let mut inner = json::Map::new();
-        inner.insert(
-            "referendum_id".to_owned(),
-            json::Value::String(ballot.referendum_id.clone()),
-        );
-        inner.insert(
-            "owner".to_owned(),
-            json::to_value(&ballot.owner).map_err(codec_error)?,
-        );
-        inner.insert(
-            "amount".to_owned(),
-            json::Value::String(ballot.amount.to_string()),
-        );
-        inner.insert(
-            "duration_blocks".to_owned(),
-            json::to_value(&ballot.duration_blocks).map_err(codec_error)?,
-        );
-        inner.insert(
-            "direction".to_owned(),
-            json::to_value(&ballot.direction).map_err(codec_error)?,
-        );
-        let mut outer = json::Map::new();
-        outer.insert("CastPlainBallot".to_owned(), json::Value::Object(inner));
         return Ok(json::Value::Object(outer));
     }
     if let Some(citizen) = instruction_ref.as_any().downcast_ref::<RegisterCitizen>() {

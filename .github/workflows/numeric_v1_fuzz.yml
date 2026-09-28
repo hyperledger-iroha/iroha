@@ -6,6 +6,7 @@ on:
       - ".github/workflows/numeric_v1_fuzz.yml"
       - "crates/iroha_primitives/src/bigint.rs"
       - "crates/iroha_primitives/src/numeric.rs"
+      - "crates/iroha_primitives/src/numeric/**"
       - "crates/iroha_primitives/src/numeric_abi.rs"
       - "crates/kotodama_lang/src/**"
       - "crates/kotodama_lang/tests/**"

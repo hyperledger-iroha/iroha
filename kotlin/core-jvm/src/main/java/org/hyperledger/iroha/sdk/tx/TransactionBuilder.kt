@@ -19,8 +19,9 @@ class TransactionBuilder(
      * Encodes the payload for public Torii submission and signs it using the provided signer.
      *
      * The caller selects the signature-bound admission intent. Ordinary is the
-     * default for direct single-route work; specialized multi-route protocols
-     * must set QueuePlanSynced before signing.
+     * default for direct single-route work. An explicitly selected intent is
+     * retained in the signed bytes; current Torii ingress rejects unsupported
+     * multi-route admission before acknowledging custody.
      */
     @Throws(NoritoException::class, SigningException::class)
     fun encodeAndSign(payload: TransactionPayload, signer: Signer): SignedTransaction =

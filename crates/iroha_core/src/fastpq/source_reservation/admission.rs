@@ -26,7 +26,9 @@ pub(crate) struct PreparedSourceQuota {
     mandatory: EntryBundleReservationLedger,
     ordinary_context: ReservationContext,
     mandatory_context: ReservationContext,
+    #[cfg(test)]
     ordinary_ceiling: SourceUsage,
+    #[cfg(test)]
     mandatory_ceiling: SourceUsage,
     profile: FastpqSourcePolicyV1,
 }
@@ -47,6 +49,7 @@ impl PreparedSourceFragment<'_> {
         result
     }
 
+    #[cfg(test)]
     /// Replace one complete logical bundle before the matching movement.
     /// A failure permanently refuses this physical attempt, even if ignored.
     pub(crate) fn replace_bundle<'a, I>(
@@ -378,7 +381,9 @@ impl PreparedSourceQuota {
             )?,
             ordinary_context,
             mandatory_context,
+            #[cfg(test)]
             ordinary_ceiling: usage(ordinary),
+            #[cfg(test)]
             mandatory_ceiling: usage(mandatory),
             profile,
         })
@@ -518,6 +523,7 @@ impl PreparedSourceQuota {
         Ok(owner)
     }
 
+    #[cfg(test)]
     /// Begin one applied mandatory-purpose fragment in its isolated pool.
     /// Failed/zero no-transfer purposes do not fabricate source E entries.
     pub(crate) fn mandatory_fragment(&mut self) -> Result<PreparedSourceFragment<'_>, String> {
@@ -531,16 +537,19 @@ impl PreparedSourceQuota {
         })
     }
 
+    #[cfg(test)]
     /// Exact committed ordinary usage, independent of the mandatory holdback.
     pub(crate) fn ordinary_usage(&self) -> SourceUsage {
         self.ordinary.usage()
     }
 
+    #[cfg(test)]
     /// Exact committed applied-purpose usage; retained obligations are separate.
     pub(crate) fn mandatory_usage(&self) -> SourceUsage {
         self.mandatory.usage()
     }
 
+    #[cfg(test)]
     /// Conservative ordinary and mandatory ceilings, including maximum semantics.
     pub(crate) fn ceilings(&self) -> (SourceUsage, SourceUsage) {
         (self.ordinary_ceiling, self.mandatory_ceiling)

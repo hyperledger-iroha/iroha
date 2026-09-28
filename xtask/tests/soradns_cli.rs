@@ -5,7 +5,7 @@ use iroha_primitives::soradns::{
     GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
     derive_gateway_hosts_with_profile,
 };
-use norito::json::{self as serde_json, Value};
+use norito::json::{self, Value};
 use std::{fs, path::PathBuf};
 use tempfile::TempDir;
 fn workspace_root() -> PathBuf {
@@ -29,7 +29,7 @@ fn soradns_hosts_reports_expected_derivations() {
     ]);
     cmd.assert().success();
     let raw = fs::read_to_string(&output_path).expect("host summary output");
-    let parsed: Value = serde_json::from_str(&raw).expect("host summary json");
+    let parsed: Value = json::from_str(&raw).expect("host summary json");
     let entries = parsed
         .as_array()
         .expect("soradns-hosts should render an array");
@@ -74,7 +74,7 @@ fn soradns_hosts_supports_taira_mon_pretty_suffix() {
     ]);
     cmd.assert().success();
     let raw = fs::read_to_string(&output_path).expect("host summary output");
-    let parsed: Value = serde_json::from_str(&raw).expect("host summary json");
+    let parsed: Value = json::from_str(&raw).expect("host summary json");
     let entries = parsed
         .as_array()
         .expect("soradns-hosts should render an array");
@@ -121,17 +121,17 @@ fn soradns_binding_template_writes_payload_and_headers() {
     ]);
     cmd.assert().success();
     let payload_raw = fs::read_to_string(&json_out).expect("binding payload");
-    let payload: Value = serde_json::from_str(&payload_raw).expect("binding json");
+    let payload: Value = json::from_str(&payload_raw).expect("binding json");
     assert_eq!(payload["alias"].as_str(), Some("docs.sora"));
     assert_eq!(payload["hostname"].as_str(), Some("docs.sora.gw.sora.name"));
-    assert_eq!(payload["proofStatus"].as_str(), Some("ok"));
-    assert_eq!(payload["generatedAt"].as_str(), Some(timestamp));
+    assert_eq!(payload["proof_status"].as_str(), Some("ok"));
+    assert_eq!(payload["generated_at"].as_str(), Some(timestamp));
     let expected_cid = {
         let root = hex::decode("0123456789abcdef").expect("root hex");
         let encoded = BASE32_NOPAD.encode(&root).to_ascii_lowercase();
         format!("b{encoded}")
     };
-    assert_eq!(payload["contentCid"].as_str(), Some(expected_cid.as_str()));
+    assert_eq!(payload["content_cid"].as_str(), Some(expected_cid.as_str()));
     let headers = payload["headers"]
         .as_object()
         .expect("headers block should be an object");
@@ -200,7 +200,7 @@ fn soradns_gar_template_renders_payload() {
     ]);
     cmd.assert().success();
     let payload_raw = fs::read_to_string(&output_path).expect("gar payload");
-    let payload: Value = serde_json::from_str(&payload_raw).expect("gar json");
+    let payload: Value = json::from_str(&payload_raw).expect("gar json");
     assert_eq!(payload["version"].as_u64(), Some(2));
     let bindings = derive_gateway_hosts("docs.sora").expect("derive gateway hosts");
     assert_eq!(payload["name"].as_str(), Some(bindings.normalized_name()));
@@ -275,7 +275,7 @@ fn soradns_gar_template_derives_manifest_metadata() {
     ]);
     cmd.assert().success();
     let payload_raw = fs::read_to_string(&output_path).expect("gar payload");
-    let payload: Value = serde_json::from_str(&payload_raw).expect("gar json");
+    let payload: Value = json::from_str(&payload_raw).expect("gar json");
     let expected_root = hex::decode("0123456789abcdef").expect("root hex");
     let expected_cid = format!(
         "b{}",
@@ -316,7 +316,7 @@ fn soradns_cache_plan_renders_targets() {
     ]);
     cmd.assert().success();
     let raw = fs::read_to_string(&output_path).expect("cache plan output");
-    let plan: Value = serde_json::from_str(&raw).expect("cache plan json");
+    let plan: Value = json::from_str(&raw).expect("cache plan json");
     assert_eq!(plan["http_method"].as_str(), Some("PURGE"));
     assert_eq!(plan["auth_header"].as_str(), Some("Authorization"));
     assert_eq!(plan["auth_env"].as_str(), Some("CACHE_PURGE_TOKEN"));
@@ -375,7 +375,7 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
     ]);
     cmd.assert().success();
     let raw = fs::read_to_string(&output_path).expect("acme plan output");
-    let plan: Value = serde_json::from_str(&raw).expect("acme plan json");
+    let plan: Value = json::from_str(&raw).expect("acme plan json");
     assert_eq!(
         plan["directory_url"].as_str(),
         Some("https://acme.example/soranet"),
@@ -492,7 +492,7 @@ fn soradns_acme_plan_supports_taira_mon_pretty_suffix() {
     ]);
     cmd.assert().success();
     let raw = fs::read_to_string(&output_path).expect("acme plan output");
-    let plan: Value = serde_json::from_str(&raw).expect("acme plan json");
+    let plan: Value = json::from_str(&raw).expect("acme plan json");
     let hosts = plan["hosts"].as_array().expect("hosts array should exist");
     let entry = hosts[0].as_object().expect("host entry");
     assert_eq!(

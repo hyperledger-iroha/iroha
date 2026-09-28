@@ -458,18 +458,6 @@ pub fn verify_with_limits_and_semantics(
     verify_prechecked_with_semantics(batch, proof, limits.max_air_row_values, semantics)
 }
 
-/// Verify an AXT proof after the caller has applied [`VerifyLimits::default`].
-///
-/// This is crate-private so only admission paths that performed the exact default
-/// preflight can skip its repeated payload scans.
-pub(crate) fn verify_with_default_limits_prechecked_and_semantics(
-    batch: &TransitionBatch,
-    proof: &Proof,
-    semantics: ProofSemantics,
-) -> Result<()> {
-    verify_prechecked_with_semantics(batch, proof, DEFAULT_MAX_VERIFY_AIR_ROW_VALUES, semantics)
-}
-
 fn verify_prechecked_with_semantics(
     batch: &TransitionBatch,
     proof: &Proof,

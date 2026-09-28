@@ -122,11 +122,6 @@ impl PreparedExecutionEffects {
     pub const fn work(&self) -> PublicPreparationWork {
         self.work
     }
-    /// Canonical operation-tagged row ordering hash.
-    #[must_use]
-    pub const fn ordering_hash(&self) -> Hash {
-        self.ordering_hash
-    }
     /// Bind each chronological effect to independently committed intermediate roots.
     /// # Errors
     /// Rejects an incorrect root count or noncanonical hash marker.

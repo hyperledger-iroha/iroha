@@ -1306,13 +1306,15 @@ fn production_streaming_automorphism_source_is_direct_fail_closed_and_bounded() 
     assert!(!lineage.contains("Vec::with_capacity"));
 }
 #[test]
-fn streaming_automorphism_is_the_only_production_facade_surface() {
+fn streaming_automorphism_is_the_only_parked_facade_surface() {
     let facades = [
         include_str!("../mkhe.rs"),
         include_str!("../../zk_ams.rs"),
         include_str!("../../../vega.rs"),
     ];
-    let production = [
+    // The evaluated-key runtime has no production consumer yet, so the streaming
+    // automorphism facade is re-exported for tests only.
+    let parked = [
         "ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1",
         "automorphism_switch_zk_ams_mkhe_collective_streaming_v1",
         "zk_ams_mkhe_streaming_collective_automorphism_accounting_v1",
@@ -1322,8 +1324,8 @@ fn streaming_automorphism_is_the_only_production_facade_surface() {
         "relinearize_zk_ams_mkhe_collective_v1",
     ];
     for source in facades {
-        for name in production {
-            let position = source.find(name).expect("production streaming facade item");
+        for name in parked {
+            let position = source.find(name).expect("parked streaming facade item");
             let use_start = source[..position]
                 .rfind("pub use ")
                 .expect("streaming facade pub use");
@@ -1332,7 +1334,11 @@ fn streaming_automorphism_is_the_only_production_facade_surface() {
                 .rev()
                 .find(|line| !line.trim().is_empty())
                 .map(str::trim);
-            assert_ne!(preceding_line, Some("#[cfg(test)]"), "{name} is test-only");
+            assert_eq!(
+                preceding_line,
+                Some("#[cfg(test)]"),
+                "{name} must stay test-only"
+            );
         }
         for name in removed {
             assert!(!source.contains(name), "retired facade item {name}");

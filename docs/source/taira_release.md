@@ -389,6 +389,7 @@ descriptor:
       --genesis-file /srv/taira/taira-validator-1/releases/COMMIT/genesis/genesis.json \
       --operator-public-key REVIEWED_CANONICAL_OPERATOR_PUBLIC_KEY \
       --torii-bind-address 0.0.0.0:8080 \
+      --trusted-proxy-ip 192.168.64.1 \
       --output /absolute/private/taira-validator-1.toml
 
 Descriptor 198 must already identify the corresponding generated peer config;
@@ -401,6 +402,13 @@ configuration to stdout. The required `--torii-bind-address` selects a canonical
 IP and nonzero port; the port must equal the generated Torii port. For the
 MacStadium deployment, generate with `--bind-host 127.0.0.1` and project Torii to
 `0.0.0.0:8080` through `0.0.0.0:8083` for the four corresponding validators.
+Pass the approved Mac-to-guest proxy address explicitly with
+`--trusted-proxy-ip 192.168.64.1` for this deployment: MCP and per-validator
+routes connect directly from that hop, while the shared guest edge uses
+loopback. Other deployments must supply their own observed proxy host address.
+The repeatable option accepts individual canonical unicast IPs, installs exact
+`/32` or `/128` trust entries alongside loopback, and grants no rate-limit bypass.
+The proxy must supply the socket-observed client address in `X-Forwarded-For`.
 P2P listeners and advertised peer addresses remain unchanged. The generated
 onboarding key, faucet key, public rANS
 table and `nexus.registry.manifest_directory` paths remain in the configuration,

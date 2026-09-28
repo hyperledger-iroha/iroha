@@ -81,6 +81,7 @@ impl AliasAttester {
         ))
     }
 }
+#[cfg(test)]
 /// Verify that `attestation` signs the canonical alias-record preimage.
 ///
 /// # Errors
@@ -442,10 +443,6 @@ impl AliasStorage {
         storage.metrics = Some(metrics);
         storage
     }
-    /// Attach telemetry metrics to an existing storage instance.
-    pub fn set_metrics(&mut self, metrics: Arc<Metrics>) {
-        self.metrics = Some(metrics);
-    }
     /// Insert or update an alias record.
     ///
     /// # Errors
@@ -495,6 +492,7 @@ impl AliasStorage {
             .cloned();
         alias.map_or_else(|| Ok(None), |name| self.resolve(&name))
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Record a Merkle attestation hash for an alias if present.
     ///
     /// # Errors
@@ -530,16 +528,6 @@ impl AliasStorage {
             event = kind.as_label(),
             data_source = "ds_placeholder",
             "alias_usage"
-        );
-    }
-    /// Emit an audit log entry capturing attester signature material.
-    pub fn audit_attestation(&self, alias: &Name, attestation: &AliasAttestation) {
-        event!(
-            Level::INFO,
-            alias = %alias.as_ref(),
-            attester = %attestation.attester,
-            signature_len = attestation.signature.payload().len(),
-            "alias_attestation_recorded"
         );
     }
 }
@@ -582,10 +570,6 @@ impl AliasService {
     /// Access storage for read/write operations.
     pub fn storage(&self) -> &AliasStorage {
         &self.storage
-    }
-    /// Attach metrics instrumentation to the service storage.
-    pub fn set_metrics(&mut self, metrics: Arc<Metrics>) {
-        self.storage.set_metrics(metrics);
     }
     /// Resolve alias to target, returning attestation hashes for auditing.
     ///

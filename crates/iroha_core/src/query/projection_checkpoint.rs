@@ -3,20 +3,21 @@
 //! The full async projection worker is not wired yet, but Torii already needs a
 //! stable contract for the reserved DA blob class/codec so clients can discover
 //! how cold query shards will be published once the worker is enabled.
-use crate::query::{
-    index_status::QueryIndexStatus,
-    projection_shard::{
-        QUERY_PROJECTION_SHARD_ARCHIVE_VERSION, QUERY_PROJECTION_SHARD_ROWSET_CODEC,
-        QueryProjectionShardArchive, QueryProjectionShardArchiveError,
-    },
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::query::projection_shard::{
+    QUERY_PROJECTION_SHARD_ARCHIVE_VERSION, QUERY_PROJECTION_SHARD_ROWSET_CODEC,
+    QueryProjectionShardArchiveError,
 };
+use crate::query::{index_status::QueryIndexStatus, projection_shard::QueryProjectionShardArchive};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::BlockHeader,
     da::types::{BlobClass, BlobCodec, BlobDigest, Compression, StorageTicketId},
 };
 use norito::codec::{Decode, Encode};
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use std::collections::HashSet;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use thiserror::Error;
 /// Version of the checkpoint descriptor payload itself.
 pub const QUERY_PROJECTION_CHECKPOINT_VERSION: u16 = 1;
@@ -104,6 +105,7 @@ pub struct QueryProjectionUploadedShardArchive {
     /// Storage ticket resolving the shard archive in SoraFS.
     pub storage_ticket: StorageTicketId,
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Errors returned when building a checkpoint publish plan from uploaded archives.
 #[derive(Debug, Error)]
 pub enum QueryProjectionCheckpointPlanError {
@@ -249,6 +251,7 @@ pub enum QueryProjectionCheckpointPlanError {
     #[error(transparent)]
     Archive(#[from] QueryProjectionShardArchiveError),
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Validated checkpoint publication plan derived from uploaded shard archives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryProjectionCheckpointPublishPlan {
@@ -299,6 +302,7 @@ impl From<(QueryProjectionShardArchive, BlobDigest, StorageTicketId)>
         Self::new(archive, manifest_digest, storage_ticket)
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl QueryProjectionCheckpointPublishPlan {
     /// Build a validated checkpoint publication plan from uploaded shard archives.
     ///
@@ -428,6 +432,7 @@ impl QueryProjectionCheckpointPublishPlan {
         self.checkpoint
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn admit_checkpoint_shard_reference(
     retained_shards: usize,
     retained_asset_definition_id_bytes: usize,

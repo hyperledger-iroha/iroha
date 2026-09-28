@@ -1,5 +1,6 @@
 //! This module contains trait implementations related to block queries
 use super::*;
+use crate::smartcontracts::isi::query::json_predicate::predicate_value_at_path;
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 use eyre::Result;
 use iroha_crypto::HashOf;
@@ -105,22 +106,6 @@ fn enforce_emergency_fast_block_query_bound(
         return Err(QueryExecutionFail::GasBudgetExceeded);
     }
     Ok(())
-}
-fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut current = value;
-    for segment in path.split('.') {
-        if segment.is_empty() {
-            return None;
-        }
-        match current {
-            Value::Object(map) => current = map.get(segment)?,
-            _ => return None,
-        }
-    }
-    Some(current)
 }
 fn predicate_value_equals_hash(value: &Value, expected: HashOf<BlockHeader>) -> bool {
     value

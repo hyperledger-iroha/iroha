@@ -10,12 +10,11 @@ pub(crate) use finality::{
     torii_proof_finality_for_block, torii_proof_finality_for_block_with_context,
 };
 
-use iroha_config::parameters::{defaults, defaults::zk::fastpq};
+use iroha_config::parameters::defaults::zk::fastpq;
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     governance::manifest::LaneManifestRegistry,
-    queue::{Queue, RouteLegRole, RoutingDecision, RoutingPlan, TransactionGuard},
-    smartcontracts::Execute,
+    queue::{Queue, RouteLegRole, RoutingDecision, RoutingPlan},
     state::{State, StateBlock, StateReadOnly, WorldReadOnly},
     tx::AcceptedTransaction,
 };
@@ -46,7 +45,7 @@ use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntr
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::DataSpaceId;
 use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
@@ -235,26 +234,6 @@ fn execution_context_for_routing_plan(
         legs,
     )
 }
-/// Repeatedly drain and apply queued transactions, incrementing block height
-/// starting at `start_height`, until the queue is empty. Returns total applied.
-pub fn drain_queue_and_apply_all(
-    state: &Arc<State>,
-    queue: &Arc<Queue>,
-    chain_id: &ChainId,
-    start_height: u64,
-) -> usize {
-    let mut total = 0usize;
-    let mut h = start_height;
-    loop {
-        let n = apply_queued_in_one_block(state, queue, chain_id, h);
-        if n == 0 {
-            break;
-        }
-        total += n;
-        h += 1;
-    }
-    total
-}
 /// Publish an executed fixture block through genuine durable finality.
 ///
 /// Core binds the original captured witness and result wire to the fixture
@@ -322,9 +301,9 @@ pub fn contract_code_hash_hex(code_bytes: &[u8]) -> String {
 /// and clears it on drop. The underlying directory is removed when the guard is dropped.
 #[must_use]
 pub struct TestDataDirGuard {
-    temp_dir: tempfile::TempDir,
+    _temp_dir: tempfile::TempDir,
     canonical_path: PathBuf,
-    override_guard: crate::data_dir::OverrideGuard,
+    _override_guard: crate::data_dir::OverrideGuard,
 }
 impl TestDataDirGuard {
     /// Create a new temporary data directory and activate the override.
@@ -336,9 +315,9 @@ impl TestDataDirGuard {
             .expect("canonicalize temp data dir");
         let override_guard = crate::data_dir::OverrideGuard::new(&canonical_path);
         Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             canonical_path,
-            override_guard,
+            _override_guard: override_guard,
         }
     }
     /// Access the filesystem path backing this guard.

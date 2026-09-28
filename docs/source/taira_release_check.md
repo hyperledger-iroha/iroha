@@ -11,11 +11,40 @@ fault or advanced product qualification.
 Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux additionally selects OpenSSH descriptor custody, native process
-identity, and credential custody controls. The runner's selected regression census isauthoritative for the current source and platform.
+identity, and credential custody controls. The runner's selected regression census is authoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
+
+Torii defaults allow 10,000 request tokens per second with 100,000-token
+bursts for query, transaction, deployment, pre-authentication, content and
+Soracloud application routes. MCP and proof endpoints allow 600,000 tokens per
+minute with the same burst; content and proof egress allow 256 MiB/s with a
+1 GiB token burst. The SoraFS gateway replenishes 600,000 request tokens over
+60 seconds with a 600,000-token burst. Its integer token bucket retains constant
+state per client, capped at 4,096 tracked clients, and preserves configured bans;
+it does not allocate one timestamp per request. Weighted proof reads consume
+their full cost. Regressions exercise large
+single-client bursts through the real limiters and verify minimal configuration
+inherits these defaults. Bodyless application reads wait in a bounded queue for
+fanout memory before decoding, rather than immediately rejecting overlapping
+reads. Memory ownership, cancellation, queue capacity and deadlines remain
+covered independently of request-rate budgets.
+
+Both scopes verify current embedded commit certificates and portable proofs with
+real quorum signatures. Public proof, bundle and challenge-bound attestation
+handlers run against an actual current consensus node, checking the signed tip,
+node identity, resolved configuration and build identity. Missing certificates,
+corrupt certificates, stopped drivers and foreign signers fail closed. The SDK
+backpressure cases use these same current response types and preserve their
+original bounded deadline and challenge through retries.
+
+Current consensus selections include idle work wakeup, nonempty proposals at
+late views, bounded rebuild after oversized payloads, far-behind joiners and
+poisoned payloads. The application executor separately rejects both empty bytes
+and canonically encoded zero-transaction proposals, and real node tests submit
+work before and after restart.
 
 Both scopes reject pulse-only proposal work, including received and recovered
 bodies. An idle mandatory height defers session activation and signing until
@@ -39,10 +68,11 @@ genesis-anchored finality chains verify that certified scheduling transitions
 retain original validator keys and the authenticated beacon session, alongside
 a fresh verified pulse and exact fee-paid deployment effects.
 
-Both scopes qualify production beacon capability against the exact public session
-and validator seat, consumed runtime credentials, genesis-bound bootstrap and
-readiness before network fixtures. An uninitialized signer fails readiness while
-bootstrap ingress remains available. Setup uses real committed transactions to
+Both scopes check Core beacon capability against the exact public session and
+validator seat, consumed runtime credentials, and genesis-bound bootstrap before
+network fixtures. Torii readiness exercises the running consensus driver's actual
+state and leaves beacon setup ingress available; the separate Core capability
+checks reject an uninitialized signer. Setup uses real committed transactions to
 advance DKG phases; it never creates empty blocks or invents committed heights.
 The shipping Taira bootstrap executable is a separately authenticated artifact.
 The real four-peer fixture uses fresh native DKG custody and crosses the mandatory
@@ -55,8 +85,8 @@ assume one block per operation. Pulse verification derives its height and parent
 anchor from the signed genesis and accepts only a nonempty canonical carrier.
 One fresh ceremony serves this complete sequence in both scopes. Its generated custody lives only in a validated owner-only
 runtime directory outside Git; the isolated shipping Kagami and Taira launcher
-are explicit inputs, and a separate message-control daemon exercises the exact
-Core-only seam. The full launcher’s Linux/Inrou requirements remain enforced.
+are explicit inputs. The fixture's configured runtime-provider broker supplies
+the exact signer custody. The full launcher's Linux/Inrou requirements remain enforced.
 
 Both Core startup selections check the fixed-domain IPA parameter cache with
 concurrent cold initialization, canonical bytes/fingerprints, owned clone
@@ -265,6 +295,18 @@ warm target, profile and inherited locks; it retains all package defaults in the
 same Cargo graph as the other harnesses. No first-run or total runtime improvement
 is claimed without measurement.
 
+The source inventory preflight rejects every selected declaration absent from the
+captured packages and reports the complete missing list before Cargo. The native
+harness `--list` remains authoritative for exact module paths and compiled test
+registration. Run the lightweight current-checkout guard after test refactors:
+`python3 -B -m unittest discover -s pytests/scripts -p test_taira_release_check_source_inventory.py`.
+It scans both qualification scopes and checks that every current per-seat beacon
+bootstrap test remains selected. The current census covers authenticated genesis
+and rotation seats, bounded proof frames, one-shot attempt custody, exact provider
+inputs, and consumed configuration descriptors. QueuePlan controls exercise
+durable receipts, partial-claim deadlines, physical capacity, and canonical
+publication; they do not require the retired consensus capacity-handoff API.
+
 The combined native test build selects the exact `iroha_cli --bin iroha`
 and `irohad --lib` test harnesses. The daemon cases execute signed genesis
 and check the deployment account in its final staged state, including role and
@@ -345,9 +387,10 @@ only the dedicated proof-absence code plus HTTP 404 becomes retryable absence.
 The same library batch includes Rust SDK envelope verification and Torii's exact
 retained-payload, detached-signature and canonical response checks. The public
 HTTP contract fixture then runs before node compilation and the four-validator
-gate. It prepares and signs the exact QueuePlan payload through real routes;
-its synthetic ledger has no certified committee, so submission must fail without
-local enqueue. Separate execution overlays retain contract state assertions.
+gate. It prepares and signs the exact Ordinary payload through real routes;
+submission preserves its complete signature-bound envelope and requires durable
+single-route custody. Unsupported intent or actual multi-route execution fails
+before queue writes or accepted/pending receipts. Separate execution overlays retain contract state assertions.
 Only the four-validator and deployed checks establish canonical Applied state.
 
 Every Cargo-produced harness and native executable is copied under Cargo's
@@ -421,7 +464,7 @@ Kura replay and signed-snapshot recovery, with exact historical transaction,
 committee, permission and storage proofs retained on all four peers.
 
 Each public routing sequence submits three consecutive signature-bound
-`QueuePlanSynced` transactions and requires the same exact state-resolved Applied
+Ordinary single-route transactions and requires the same exact state-resolved Applied
 height in both local and global status on every validator. Between the second
 and third transactions, all four validators publish complete signed snapshots
 and restart with their retained storage and real custody. Every new process must
@@ -434,8 +477,24 @@ Dedicated service-owned Ordinary admission remains a separate contract. A sole
 native threshold-key lifecycle certificate also uses signed Ordinary admission
 so that its exact next-height authorization executes in the same global carrier.
 That ingress authenticates the current frozen-roster quorum certificate and
-preserves fee, signature, network, height and routing checks. Other public
-transactions still require QueuePlanSynced admission.
+preserves fee, signature, network, height and routing checks. The current driver
+does not consume QueuePlanSynced or multi-route work. Public single, entrypoint,
+batch and peer ingress reject those submissions with
+`unsupported_transaction_admission` before canonical retry lookup or durable
+custody. Receiver regressions cover installed and absent journals, future
+contexts, predecessor advancement and retained canonical registry records.
+The Core queue enforces the same contract before fee or journal ownership, including
+batch admission and startup replay. Transaction gossip rejects unsupported
+certificate carriers before persistence or deferred retries; a valid historical
+certificate cannot grant execution support. Regression tests check unchanged
+journal bytes, no queue or certificate custody, explicit unsupported replay failure,
+and successful durable admission of supported Ordinary work.
+Certificate verification and bounded transport component tests remain selected;
+they do not establish current multi-route execution support. In particular,
+Kagemusha top-up/redemption still require that unsupported admission contract and
+are not qualified by the basic DPN funding/deployment workflow. Their command
+wrappers reject before operation reservation, issuer signing or a Pending
+response, including when an identical operation already has an in-flight reservation.
 Global status can query other peers, so only the additional local observation
 establishes each validator's own application. Peer clients ignore ambient client
 identity and endpoint overrides. Each status read uses the SDK routed request

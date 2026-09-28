@@ -22,7 +22,7 @@ use iroha_data_model::{
     block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
     domain::Domain,
     isi::{InstructionBox, Log},
-    parameter::system::ConsensusMode,
+    parameter::system::{Parameter, SumeragiConsensusMode},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
@@ -99,6 +99,10 @@ pub struct TestChainConfig {
     pub genesis_key: KeyPair,
     /// Instructions of the genesis's ordinary transaction.
     pub genesis_instructions: Vec<InstructionBox>,
+    /// Explicit parameters carried by the authoritative signed genesis snapshot.
+    pub genesis_parameters: Vec<Parameter>,
+    /// Consensus mode carried by the signed genesis and used for execution.
+    pub consensus_mode: SumeragiConsensusMode,
     /// Creation time of the first genesis transaction in milliseconds.
     pub genesis_time_ms: u64,
 }
@@ -109,6 +113,7 @@ impl core::fmt::Debug for TestChainConfig {
             .field("chain_id", &self.chain_id)
             .field("genesis_account", &self.genesis_key.public_key())
             .field("genesis_instructions", &self.genesis_instructions.len())
+            .field("genesis_parameters", &self.genesis_parameters.len())
             .field("genesis_time_ms", &self.genesis_time_ms)
             .finish_non_exhaustive()
     }
@@ -123,6 +128,8 @@ impl TestChainConfig {
             world,
             genesis_key: KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519),
             genesis_instructions: Vec::new(),
+            genesis_parameters: Vec::new(),
+            consensus_mode: SumeragiConsensusMode::Permissioned,
             genesis_time_ms,
         }
     }
@@ -133,6 +140,7 @@ pub struct CertifiedTestChain {
     state: Arc<State>,
     kura: Arc<Kura>,
     genesis: SignedBlock,
+    validated_genesis: iroha_genesis::ValidatedGenesisBundle,
     genesis_account: AccountId,
     executor: StateExecutor,
     blocks: KuraBlockStore,
@@ -197,6 +205,8 @@ impl CertifiedTestChain {
             mut world,
             genesis_key,
             genesis_instructions,
+            genesis_parameters,
+            consensus_mode,
             genesis_time_ms,
         } = config;
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
@@ -229,11 +239,13 @@ impl CertifiedTestChain {
                 )
             })
             .collect::<Vec<_>>();
-        let genesis = match build_genesis(
+        let (genesis, manifest) = match build_genesis(
             &chain_id,
             &genesis_key,
             &validators,
             genesis_instructions,
+            genesis_parameters,
+            consensus_mode,
             genesis_time_ms,
         ) {
             Ok(genesis) => genesis,
@@ -269,7 +281,7 @@ impl CertifiedTestChain {
             &state,
             genesis.clone(),
             &genesis_account,
-            ConsensusMode::Permissioned,
+            consensus_mode.into(),
             None,
         ) {
             Ok(tip) => tip,
@@ -280,6 +292,13 @@ impl CertifiedTestChain {
                 });
             }
         };
+        let validated_genesis = iroha_genesis::validate_prepared_genesis_bundle(
+            &genesis.encode_wire().expect("fixture genesis framing"),
+            &manifest,
+            genesis_key.public_key(),
+            genesis.hash(),
+        )
+        .expect("fixture signed genesis and manifest agree");
         let crypto = Arc::new(BlsCrypto::new());
         crypto
             .admit_committee(
@@ -298,7 +317,7 @@ impl CertifiedTestChain {
             staging,
             events: tokio::sync::broadcast::channel(1024).0,
             genesis_account: genesis_account.clone(),
-            consensus_mode: ConsensusMode::Permissioned,
+            consensus_mode: consensus_mode.into(),
             applied: (GENESIS_HEIGHT, tip.block_hash),
             crypto: Some(Arc::clone(&crypto)),
         })
@@ -323,6 +342,7 @@ impl CertifiedTestChain {
             state,
             kura,
             genesis,
+            validated_genesis,
             genesis_account,
             executor,
             blocks,
@@ -353,6 +373,12 @@ impl CertifiedTestChain {
     #[must_use]
     pub fn genesis(&self) -> &SignedBlock {
         &self.genesis
+    }
+
+    /// The independently validated signed genesis and its exact source manifest binding.
+    #[must_use]
+    pub fn validated_genesis(&self) -> &iroha_genesis::ValidatedGenesisBundle {
+        &self.validated_genesis
     }
 
     /// The genesis account.
@@ -421,8 +447,21 @@ impl CertifiedTestChain {
     pub fn commit_with(
         &mut self,
         time_ms: Option<u64>,
+        transactions: Vec<SignedTransaction>,
+        signers: Signers,
+    ) -> Vec<bool> {
+        self.commit_with_pulse(time_ms, transactions, signers, None)
+    }
+
+    /// Commit real transaction work with a finalized current threshold pulse. The ordinary
+    /// executor verifies the pulse and certifies its actual state writes; this seam creates
+    /// no signer authority, pulse signature, admission exemption, or synthetic empty work.
+    pub fn commit_with_pulse(
+        &mut self,
+        time_ms: Option<u64>,
         mut transactions: Vec<SignedTransaction>,
         signers: Signers,
+        pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
     ) -> Vec<bool> {
         let submitted = transactions.len();
         let height = self.tip.0 + 1;
@@ -448,6 +487,11 @@ impl CertifiedTestChain {
             && inputs_time(&transactions) < Duration::from_millis(time_ms)
         {
             transactions.push(self.tick(time_ms - 1));
+        }
+        if transactions.is_empty() {
+            transactions.push(self.tick(
+                u64::try_from((parent_time + cadence).as_millis()).expect("fixture time fits") - 1,
+            ));
         }
         let block_time = inputs_time(&transactions);
         let (_, time_source) = TimeSource::new_mock(block_time);
@@ -475,17 +519,14 @@ impl CertifiedTestChain {
             view: 0,
             cadence,
         };
-        let proposal = payload::assemble(&self.state, assembly, &accepted).expect("assembly");
+        let proposal = payload::assemble_with_pulse(&self.state, assembly, &accepted, pulse)
+            .expect("assembly");
         assert_eq!(
             proposal.header().creation_time(),
             block_time,
             "the fixture predicts the canonical block time"
         );
-        let payload_bytes = if accepted.is_empty() {
-            Vec::new()
-        } else {
-            payload::encode(&proposal).expect("payload")
-        };
+        let payload_bytes = payload::encode(&proposal).expect("non-empty payload");
         let header = BlockHeader {
             instance: self.instance,
             height,
@@ -652,8 +693,10 @@ fn build_genesis(
     genesis_key: &KeyPair,
     validators: &[(PeerId, Vec<u8>)],
     instructions: Vec<InstructionBox>,
+    parameters: Vec<Parameter>,
+    consensus_mode: SumeragiConsensusMode,
     genesis_time_ms: u64,
-) -> Result<SignedBlock, String> {
+) -> Result<(SignedBlock, iroha_genesis::RawGenesisTransaction), String> {
     let entries = validators
         .iter()
         .map(|(peer, pop)| GenesisTopologyEntry::new(peer.clone(), pop.clone()))
@@ -672,21 +715,27 @@ fn build_genesis(
         .with_kagemusha_mint_finality_genesis_parameters(
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
         );
+    let builder = parameters
+        .into_iter()
+        .fold(builder, GenesisBuilder::append_parameter);
     let builder = instructions
         .into_iter()
         .fold(builder, GenesisBuilder::append_instruction);
-    builder
+    let raw = builder
         .build_raw()
-        .and_then(|raw| {
-            raw.build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
-                genesis_key,
-                None,
-                None,
-                genesis_time_ms,
-            )
-        })
-        .map(|genesis| genesis.0)
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| format!("{error:#}"))?
+        .with_consensus_mode(consensus_mode)
+        .with_consensus_meta();
+    let genesis = raw
+        .clone()
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+            genesis_key,
+            None,
+            None,
+            genesis_time_ms,
+        )
+        .map_err(|error| format!("{error:#}"))?;
+    Ok((genesis.0, raw))
 }
 
 #[cfg(test)]

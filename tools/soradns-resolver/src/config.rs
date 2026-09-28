@@ -6,13 +6,14 @@ use crate::{
         MAX_STATIC_RECORDS, MAX_STATIC_ZONE_RETAINED_BYTES, MAX_STATIC_ZONES, config_decode_limits,
         preflight_json, proof_bundle_decode_limits, read_bounded_file, read_bounded_file_async,
     },
-    rad::{ResolverAttestation, decode_rad_entries},
+    rad::decode_rad_entries,
 };
 use eyre::{Context, Result, bail};
 use hickory_proto::rr::{
     Name, RData, Record,
     rdata::{A, AAAA, CNAME, TXT},
 };
+use iroha_data_model::soradns::ResolverAttestationDocumentV1;
 use norito::{decode_from_bytes_with_limits, json};
 use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use std::{
@@ -433,7 +434,10 @@ pub(crate) enum RadSource {
     },
 }
 impl RadSource {
-    pub async fn fetch(&self, _client: &reqwest::Client) -> Result<Vec<ResolverAttestation>> {
+    pub async fn fetch(
+        &self,
+        _client: &reqwest::Client,
+    ) -> Result<Vec<ResolverAttestationDocumentV1>> {
         match self {
             Self::File {
                 path,

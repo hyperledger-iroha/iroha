@@ -1,8 +1,5 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-// Depending on the target architecture, some explicit intrisics could be
-// used instead of the functions defined here.
-#![allow(dead_code)]
 // ========================================================================
 // Floating-point operations: emulated
 // ========================================================================
@@ -207,7 +204,6 @@ impl FLR {
         Self((s << 63) + ((e as u64) << 52) + (m >> 2) + cc)
     }
     pub(crate) const ZERO: Self = Self(0);
-    pub(crate) const NZERO: Self = Self(1u64 << 63);
     pub(crate) const ONE: Self = Self::from_i64(1);
     #[inline(always)]
     pub(crate) const fn from_bits(bits: u64) -> Self {
@@ -250,25 +246,6 @@ impl FLR {
         // use make_z(), which will adjust the exponent in case m = 0.
         Self::make_z(s, e, m)
     }
-    // Encode to 8 bytes (IEEE-754 binary64 format, little-endian).
-    // This is meant for tests only; this function does not need to be
-    // constant-time.
-    #[allow(dead_code)]
-    pub(crate) fn encode(self) -> [u8; 8] {
-        self.0.to_le_bytes()
-    }
-    // Decode from 8 bytes (IEEE-754 binary64 format, little-endian).
-    // This is meant for tests only; this function does not need to be
-    // constant-time.
-    #[allow(dead_code)]
-    pub(crate) fn decode(src: &[u8]) -> Option<Self> {
-        match src.len() {
-            8 => Some(Self(u64::from_le_bytes(
-                *<&[u8; 8]>::try_from(src).unwrap(),
-            ))),
-            _ => None,
-        }
-    }
     // Return self / 2.
     #[inline]
     pub(crate) fn half(self) -> Self {
@@ -279,18 +256,6 @@ impl FLR {
         let x = self.0;
         let y = x.wrapping_sub(1u64 << 52);
         Self(y.wrapping_add(((x ^ y) >> 11) & (1u64 << 52)))
-    }
-    // Return self * 2.
-    // (used in some tests)
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn double(self) -> Self {
-        // We add 1 to the exponent, unless it was the minimal value,
-        // since such a value is for zero, and doubling zero does not
-        // change it.
-        let x = self.0;
-        let d = ((x & 0x7FF0000000000000) + 0x7FF0000000000000) >> 11;
-        Self(x.wrapping_add(d & (1u64 << 52)))
     }
     // Multiply this value by 2^63.
     #[inline]
@@ -307,7 +272,6 @@ impl FLR {
     // This is a helper function used in the implementation of the FFT
     // and included in the FLR API because different implementations might
     // do it very differently.
-    #[allow(dead_code)]
     pub(crate) fn slice_div2e(f: &mut [FLR], e: u32) {
         // In the emulated implementation, division by 2^e is done by
         // subtracting e from the exponent; we must just take care not to
@@ -589,12 +553,6 @@ impl FLR {
         let s = s & dm;
         q &= dm;
         *self = Self::make(s, e, q);
-    }
-    // Absolute value (used for tests, does not need to be constant-time).
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub(crate) fn abs(self) -> Self {
-        Self(self.0 & M63)
     }
     // Square root.
     pub(crate) fn sqrt(self) -> Self {

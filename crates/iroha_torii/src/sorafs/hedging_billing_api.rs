@@ -36,13 +36,20 @@ use std::{
     sync::{Arc, LazyLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(test)]
 pub(crate) const BILLING_STATUS_ROUTE_V1: &str = "/v1/sorafs/billing/status";
+#[cfg(test)]
 pub(crate) const BILLING_STATEMENTS_ROUTE_V1: &str = "/v1/sorafs/billing/statements";
+#[cfg(test)]
 pub(crate) const BILLING_STATEMENT_ROUTE_V1: &str = "/v1/sorafs/billing/statements/{statement_id}";
+#[cfg(test)]
 pub(crate) const BILLING_STATEMENT_ACKNOWLEDGEMENTS_ROUTE_V1: &str =
     "/v1/sorafs/billing/statements/{statement_id}/acknowledgements";
+#[cfg(test)]
 pub(crate) const BILLING_RECONCILIATION_ROUTE_V1: &str = "/v1/sorafs/billing/reconciliation";
+#[cfg(test)]
 pub(crate) const HEDGING_EXPOSURE_ROUTE_V1: &str = "/v1/sorafs/hedging/exposure";
+#[cfg(test)]
 pub(crate) const HEDGING_INTENTS_ROUTE_V1: &str = "/v1/sorafs/hedging/intents";
 pub(crate) const SORAFS_BILLING_MANAGER_ROLE_V1: &str = "sorafs_billing_manager";
 pub(crate) const SORAFS_TREASURY_OBSERVER_ROLE_V1: &str = "sorafs_treasury_observer";

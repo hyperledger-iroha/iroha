@@ -791,9 +791,9 @@ EXPECTED_ROWS = (('StateTelemetry',
   'explicit',
   '109b6ba3b68c7824434adcf5fcbf1822c543ab2ac7a3c7aeb6285b44afb16941'))
 
-EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (140, '9f02bd3b1adb965e081a12854c3ac83f9077be9a7d7ae4308efdff2a2112c931'),
+EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (125, '9e212737d19d4dba13c2382e08af353e4c53795543ff0d84c66c57ee75fc87c8'),
  'StreamingTelemetry': (16, 'e3c87c4656bea8817ad977df0211c5505d70dd214e8b1c34527a80cfd09dad46'),
- 'Telemetry': (199, '9343d3b045a89694ad582909795491164e28cab0a6ff6a9d008b4dd8a0f6efb0')}
+ 'Telemetry': (186, '688ad86367616a5df909120ac2ee0a68272def6c171a49c7dabcb8b5f350aad7')}
 
 RETIRED_CONSENSUS_VRF_METHODS = (
     "inc_vrf_commit_emitted",
@@ -844,7 +844,6 @@ EXCLUDED_DIRECT_METHODS = {
         "record_sorafs_fee_projection",
         "inc_sorafs_disputes",
         "record_musubi_governance_rejection",
-        "record_musubi_integrity_failure",
         "record_musubi_cursor_failure",
     },
     "StreamingTelemetry": {"record_content_key_update"},
@@ -1356,10 +1355,10 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
             {
                 "rows": 153,
                 "forward_rows": 61,
-                "source_lines": 11_842,
+                "source_lines": 11_770,
                 "provider_lines": 26,
-                "governed_lines": 11_868,
-                "net_reduction": 2_390,
+                "governed_lines": 11_796,
+                "net_reduction": 2_462,
             },
         )
         self.assertEqual(PREIMAGE_LINES - MAX_GOVERNED_LINES, 951)

@@ -38,6 +38,7 @@ pub trait KagemushaCurrentRecoveryOwnerV1: current_recovery_owner_sealed::Sealed
 #[derive(Clone, Copy)]
 pub struct KagemushaCurrentRecoverySelectionV1<'a> {
     enrollment: &'a KagemushaRecoveryEnrollmentBindingV1,
+    #[cfg(test)]
     credential_floor: &'a KagemushaAcceptedCredentialFloorV1,
     checkpoint: &'a DurabilityAnchorV1,
 }
@@ -49,6 +50,7 @@ impl<'a> KagemushaCurrentRecoverySelectionV1<'a> {
         self.enrollment
     }
 
+    #[cfg(test)]
     /// Original governed credential and its independently authenticated historical release.
     #[must_use]
     pub fn accepted_credential_floor(&self) -> &'a KagemushaAcceptedCredentialFloorV1 {
@@ -111,6 +113,7 @@ where
         }
         Ok(KagemushaCurrentRecoverySelectionV1 {
             enrollment: &self.recovery_metadata.enrollment,
+            #[cfg(test)]
             credential_floor: &self.recovery_metadata.accepted_credential,
             checkpoint: &checkpoint.anchor,
         })
@@ -141,6 +144,7 @@ impl KagemushaRecoveryJournalPrefixV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn follows(self, previous: Self) -> bool {
         (self == previous)
             || (self.sequence > previous.sequence
@@ -177,6 +181,7 @@ impl KagemushaRecoveryJournalsV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_successor(&self, previous: &Self) -> Result<(), KagemushaStateErrorV1> {
         self.validate()?;
         if !self.coordinator.follows(previous.coordinator)
@@ -224,6 +229,7 @@ impl KagemushaAcceptedCredentialFloorV1 {
             .map_err(|_| KagemushaStateErrorV1::InvalidHardwareProfile)
     }
 
+    #[cfg(test)]
     pub(super) fn validate_current(
         &self,
         state: &KagemushaStateV1,
@@ -246,6 +252,7 @@ impl KagemushaAcceptedCredentialFloorV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn advance(
         &self,
         state: &KagemushaStateV1,
@@ -291,6 +298,7 @@ impl KagemushaRecoveryCheckpointIdentityV1 {
         snapshot_commitment: [0; 32],
     };
 
+    #[cfg(test)]
     fn from_anchor(anchor: &DurabilityAnchorStatementV1) -> Self {
         Self {
             revision: anchor.metadata_revision,
@@ -357,6 +365,7 @@ pub struct KagemushaRecoveryMetadataV1 {
 }
 
 impl KagemushaRecoveryMetadataV1 {
+    #[cfg(test)]
     pub(super) fn initial(
         state: &KagemushaStateV1,
         release: &KagemushaStateProofReleaseV1,
@@ -452,6 +461,7 @@ pub struct KagemushaRecoveryCheckpointStatementV1 {
     pub successor: DurabilityAnchorStatementV1,
 }
 
+#[cfg(test)]
 /// Opaque proposal derived from one exact current machine. Preparing it changes no state.
 #[derive(Clone)]
 pub struct KagemushaRecoveryCheckpointCandidateV1 {
@@ -460,6 +470,7 @@ pub struct KagemushaRecoveryCheckpointCandidateV1 {
     pub(super) statement: KagemushaRecoveryCheckpointStatementV1,
 }
 
+#[cfg(test)]
 impl KagemushaRecoveryCheckpointCandidateV1 {
     /// Exact material the native owner must persist before requesting hardware CAS.
     #[must_use]
@@ -474,6 +485,7 @@ impl KagemushaRecoveryCheckpointCandidateV1 {
     }
 }
 
+#[cfg(test)]
 /// Exclusive publication owner. Once hardware publication is attempted, the old machine cannot
 /// escape on failure: recovery requires the persisted snapshot and a fresh hardware selection.
 pub struct KagemushaRecoveryCheckpointPublicationV1<R, G, H> {
@@ -481,6 +493,7 @@ pub struct KagemushaRecoveryCheckpointPublicationV1<R, G, H> {
     candidate: KagemushaRecoveryCheckpointCandidateV1,
 }
 
+#[cfg(test)]
 impl<R, G, H> KagemushaRecoveryCheckpointPublicationV1<R, G, H>
 where
     R: KagemushaRecursiveVerifierV1,
@@ -526,6 +539,7 @@ impl KagemushaStateSnapshotV1 {
         }
     }
 
+    #[cfg(test)]
     fn recompute_commitment(&mut self) -> Result<(), KagemushaStateErrorV1> {
         self.snapshot_commitment = canonical_poseidon_digest(
             SNAPSHOT_COMMITMENT_DOMAIN,
@@ -559,12 +573,14 @@ impl<R, G, H> KagemushaStateMachineV1<R, G, H> {
         &self.recovery_metadata.enrollment
     }
 
+    #[cfg(test)]
     /// Borrow the exact checkpointed credential floor; only opaque machines expose this view.
     #[must_use]
     pub fn accepted_credential_floor(&self) -> &KagemushaAcceptedCredentialFloorV1 {
         &self.recovery_metadata.accepted_credential
     }
 
+    #[cfg(test)]
     /// Borrow the original terminal certificate of the currently published checkpoint.
     /// Every returned machine has completed publication or authenticated restoration.
     #[must_use]
@@ -589,6 +605,7 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
+    #[cfg(test)]
     /// Propose a complete successor checkpoint while retaining the exact previous credential.
     pub fn prepare_recovery_checkpoint(
         &self,
@@ -602,6 +619,7 @@ where
         )
     }
 
+    #[cfg(test)]
     /// Propose a credential floor advance under the machine's actual authenticated release.
     /// This validates the issuer signature and exact scope but does not publish the credential.
     pub fn prepare_credential_checkpoint(
@@ -618,6 +636,7 @@ where
         self.prepare_checkpoint(operation_id, journals, floor)
     }
 
+    #[cfg(test)]
     fn prepare_checkpoint(
         &self,
         operation_id: DigestV1,
@@ -661,6 +680,7 @@ where
         })
     }
 
+    #[cfg(test)]
     /// Transfer this machine into an exclusive pending owner before issuing hardware CAS.
     /// Candidate staleness is checked before staging; no wallet methods are exposed while pending.
     pub fn stage_recovery_checkpoint(
@@ -690,6 +710,7 @@ where
     }
 
     // Only the two opaque publication owners invoke this after exclusive ownership transfer.
+    #[cfg(test)]
     pub(super) fn install_recovery_checkpoint(
         &mut self,
         candidate: &KagemushaRecoveryCheckpointCandidateV1,

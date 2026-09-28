@@ -1821,34 +1821,6 @@ pub trait SetReadOnly {
             })
             .map(|(id, _)| id.clone())
     }
-    /// Get [`ExecutableRef`] for given [`TriggerId`]. Returns `None` if `id` is not in the set.
-    fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
-        let event_type = self.ids().get(id)?;
-        let executable = match event_type {
-            TriggeringEventType::Data => {
-                self.data_triggers().get(id).map(|entry| &entry.executable)
-            }
-            TriggeringEventType::Pipeline => self
-                .pipeline_triggers()
-                .get(id)
-                .map(|entry| &entry.executable),
-            TriggeringEventType::Time => {
-                self.time_triggers().get(id).map(|entry| &entry.executable)
-            }
-            TriggeringEventType::ExecuteTrigger => self
-                .by_call_triggers()
-                .get(id)
-                .map(|entry| &entry.executable),
-        };
-        if executable.is_none() {
-            warn!(
-                trigger_id = %id,
-                ?event_type,
-                "trigger id missing from typed map while resolving executable"
-            );
-        }
-        executable
-    }
     /// Apply `f` to triggers whose action satisfies the predicate.
     ///
     /// Return an empty list if [`Set`] doesn't contain any such triggers.

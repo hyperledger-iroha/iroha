@@ -28,10 +28,6 @@ const DEVICE_KEY_REFERENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:device-key-refer
 /// The keys and signed frame are witness bytes here. A future caller must also
 /// prove their KeyMint provenance, the signature over this frame, and all other
 /// independently authenticated frame fields before enabling ordinary apps.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "KeyMint monetary fold remains closed")
-)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn constrain_keymint_one_use_head_stage_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,

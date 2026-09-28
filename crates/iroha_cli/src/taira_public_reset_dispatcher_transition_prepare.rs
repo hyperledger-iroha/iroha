@@ -1,4 +1,5 @@
 //! Native plan producer: qualified import plus explicit current typed occupied bindings.
+#[cfg(any(target_os = "linux", test))]
 use super::super::super::{EdgeAdmittedReleaseV1, ValidatorAdmittedReleaseV1};
 use super::*;
 
@@ -35,6 +36,7 @@ pub(in super::super::super) struct PrepareDispatcherTransition {
 }
 
 /// Existing current-type occupied bindings; their executable source may differ from configuration.
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(super) struct CurrentRuntime {
@@ -43,8 +45,11 @@ pub(super) struct CurrentRuntime {
     validators: Vec<ValidatorAdmittedReleaseV1>,
     edge: EdgeAdmittedReleaseV1,
 }
+#[cfg(any(target_os = "linux", test))]
 struct Observed(Vec<(Pin, File, super::super::super::FileSnapshot)>);
+#[cfg(any(target_os = "linux", test))]
 impl Observed {
+    #[cfg(any(target_os = "linux", test))]
     fn pin(&mut self, path: &Path, mode: Option<u32>, maximum: u64) -> Result<Pin> {
         validate_absolute_normal_path(path, "plan producer input")?;
         require_root_no_symlink_ancestors(path, "plan producer input")?;
@@ -67,6 +72,7 @@ impl Observed {
         self.0.push((value.clone(), file, snapshot));
         Ok(value)
     }
+    #[cfg(any(target_os = "linux", test))]
     fn revalidate(&self) -> Result<()> {
         for (pin, file, snapshot) in &self.0 {
             require_root_no_symlink_ancestors(Path::new(&pin.path), "plan producer input")?;
@@ -75,12 +81,14 @@ impl Observed {
         Ok(())
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn text<'a>(record: &'a Value, field: &str) -> Result<&'a str> {
     record
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("missing producer {field}"))
 }
+#[cfg(any(target_os = "linux", test))]
 fn candidate(import: &Path, expected: &str, observed: &mut Observed) -> Result<Candidate> {
     let proof = import.join("preparation");
     let preparation = observed.pin(&proof.join("result.json"), Some(0o400), 16 * 1024 * 1024)?;
@@ -129,6 +137,7 @@ fn candidate(import: &Path, expected: &str, observed: &mut Observed) -> Result<C
     )?;
     Ok(candidate)
 }
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn validate_runtime(runtime: &CurrentRuntime) -> Result<()> {
     need(
         runtime.schema == "iroha.taira.dispatcher-current-runtime.v1"
@@ -155,6 +164,7 @@ pub(super) fn validate_runtime(runtime: &CurrentRuntime) -> Result<()> {
     require_lower_sha256(&runtime.edge.cli_sha256, "edge CLI")?;
     require_lower_sha256(&runtime.edge.config_sha256, "edge configuration")
 }
+#[cfg(any(target_os = "linux", test))]
 fn selected_role(slug: &str, release: &str, files: Vec<Pin>) -> Result<OccupiedRole> {
     let directory = if slug == "taira-edge" { "edge" } else { slug };
     let state = format!("/var/lib/taira/{directory}");
@@ -185,6 +195,7 @@ fn selected_role(slug: &str, release: &str, files: Vec<Pin>) -> Result<OccupiedR
         files,
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn runtime_roles(runtime: &CurrentRuntime, observed: &mut Observed) -> Result<Vec<OccupiedRole>> {
     validate_runtime(runtime)?;
     let mut roles = Vec::new();
@@ -242,12 +253,14 @@ fn runtime_roles(runtime: &CurrentRuntime, observed: &mut Observed) -> Result<Ve
     Ok(roles)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn validate_rolled_back_inventory(
     bytes: &[u8],
     runtime: &CurrentRuntime,
     plan: &Plan,
 ) -> Result<()> {
-    let inventory: super::super::super::InventoryV1 = json::from_slice(bytes)?;
+    let (inventory, _chain_guard) =
+        super::super::super::history::decode(bytes, "rolled-back inventory")?;
     let predecessor = &plan.predecessor;
     need(
         inventory.schema == super::super::super::INVENTORY_SCHEMA_V1

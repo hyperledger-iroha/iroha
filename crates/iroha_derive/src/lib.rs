@@ -3,10 +3,8 @@
 //! Shared diagnostic and representation helpers live in the companion
 //! `iroha_derive_primitives` crate so other proc-macro crates can use them
 //! without depending on `iroha_derive` directly.
-#[cfg(feature = "config_base")]
 mod config_base;
 mod from_variant;
-#[cfg(feature = "futures")]
 mod futures;
 use manyhow::{Result, manyhow};
 use proc_macro2::TokenStream;
@@ -83,30 +81,6 @@ pub fn define_emitter_ext(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     }
     .into()
 }
-/// Helper macro to expand FFI functions
-#[manyhow]
-#[proc_macro_attribute]
-pub fn ffi_impl_opaque(args: TokenStream, item: TokenStream) -> Result<TokenStream> {
-    ffi_impl_opaque_impl(args, item).map_err(Into::into)
-}
-
-fn ffi_impl_opaque_impl(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
-    if !args.is_empty() {
-        return Err(syn::Error::new_spanned(
-            args,
-            "ffi_impl_opaque does not accept arguments",
-        ));
-    }
-    let item: syn::ItemImpl = syn::parse2(item)?;
-    Ok(quote! {
-        #[cfg_attr(
-            all(feature = "ffi_export", not(feature = "ffi_import")),
-            iroha_ffi::ffi_export
-        )]
-        #[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
-        #item
-    })
-}
 /// [`FromVariant`] is used for implementing `From<Variant> for Enum`
 /// and `TryFrom<Enum> for Variant`.
 ///
@@ -141,30 +115,18 @@ fn ffi_impl_opaque_impl(args: TokenStream, item: TokenStream) -> syn::Result<Tok
 pub fn from_variant_derive(input: TokenStream) -> Result<TokenStream> {
     from_variant::impl_from_variant(syn::parse2(input)?).map_err(Into::into)
 }
-/// Macro for wrapping future for getting telemetry info about poll times and numbers
-#[cfg(feature = "futures")]
+/// Macro for wrapping future for getting telemetry info about poll times and numbers.
+///
+/// The expansion delegates to `iroha_futures`, whose `telemetry` feature decides
+/// whether the body is instrumented.
 #[manyhow]
 #[proc_macro_attribute]
 pub fn telemetry_future(args: TokenStream, input: TokenStream) -> TokenStream {
     futures::telemetry_future_impl(&args, input)
 }
 /// Derive `iroha_config_base::read::ReadConfig` trait.
-#[cfg(feature = "config_base")]
 #[manyhow]
 #[proc_macro_derive(ReadConfig, attributes(config))]
 pub fn derive_read_config(input: TokenStream) -> TokenStream {
     config_base::derive_read_config_impl(input)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ffi_impl_opaque_rejects_arguments() {
-        let item = quote! { impl Example {} };
-        let error = ffi_impl_opaque_impl(quote! { unexpected }, item)
-            .expect_err("arguments must be rejected");
-        assert!(error.to_string().contains("does not accept arguments"));
-    }
 }

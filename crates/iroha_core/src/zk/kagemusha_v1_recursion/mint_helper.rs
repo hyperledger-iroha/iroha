@@ -8,12 +8,14 @@
 //! it as a host assertion would let an attacker choose a fresh roster and mint arbitrary value.
 
 use ff::{Field as _, PrimeField, WithSmallOrderMulGroup};
+#[cfg(test)]
+use halo2_base::gates::circuit::{BaseCircuitParams, BaseConfig};
 use halo2_base::{
     AssignedValue, Context,
     QuantumCell::{Constant, Existing},
     gates::{
         GateInstructions as _, RangeChip, RangeInstructions as _,
-        circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
+        circuit::builder::BaseCircuitBuilder,
     },
     utils::{BigPrimeField, CurveAffineExt},
 };
@@ -21,13 +23,14 @@ use halo2_ecc::{
     bigint::ProperCrtUint,
     fields::{FieldChip as _, fp::FpChip},
 };
+use halo2_proofs::halo2curves::{
+    CurveAffine,
+    group::{GroupEncoding, prime::PrimeCurveAffine as _},
+};
+#[cfg(test)]
 use halo2_proofs::{
     circuit::{Layouter, V1},
-    halo2curves::{
-        CurveAffine,
-        group::{GroupEncoding, prime::PrimeCurveAffine as _},
-        pasta::{EpAffine, EqAffine, Fp, Fq},
-    },
+    halo2curves::pasta::{EpAffine, Fp},
     plonk::{Circuit, ConstraintSystem, Error as PlonkError},
 };
 use iroha_data_model::{
@@ -52,10 +55,11 @@ use crate::zk::{
         KagemushaPoseidonChipV1, KagemushaPoseidonFieldV1, decode, digest_limbs, from_u128,
     },
     pasta_cycle_loader::{compressed_point_bytes, proper_uint_le_bytes},
-    pasta_dense_msm::PastaDenseMsmConfigV1,
     pasta_dense_msm::{PastaDenseMsmJobsV1, PastaDenseMsmSourceV1},
-    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
+    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
+#[cfg(test)]
+use crate::zk::{pasta_dense_msm::PastaDenseMsmConfigV1, pasta_sha256::PastaSha256ConfigV1};
 
 #[cfg(test)]
 mod bootstrap_gates_tests;
@@ -91,10 +95,6 @@ pub enum KagemushaMintAuthorityStepV1 {
     /// Prove one reserve receipt under the recursively authenticated current roster.
     FinalizedMint = 2,
 }
-
-/// Public cells of a finalized certificate before the recursive authority carrier is attached:
-/// statement digest limbs, amount, and the exact paired certificate-binding digest limbs.
-pub(super) const KAGEMUSHA_MINT_CERTIFICATE_PUBLIC_INSTANCE_COUNT_V1: usize = 5;
 
 /// Private inputs consumed by the fixed-shape mint-certificate component.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,7 +290,8 @@ where
     pub(super) dense: PastaDenseMsmJobsV1<C>,
 }
 
-/// Fixed Base/Table16/dense-MSM configuration shared by both mint-certificate parities.
+/// Fixed Base/Table16/dense-MSM configuration of the standalone mint-certificate circuit.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) struct KagemushaMintCertificateCircuitConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
@@ -299,6 +300,7 @@ pub(super) struct KagemushaMintCertificateCircuitConfigV1<F: halo2_base::utils::
 }
 
 /// Eq/Fp mint-certificate half. Pallas signatures are checked natively in the Fp circuit.
+#[cfg(test)]
 #[derive(Clone)]
 pub(super) struct KagemushaMintCertificateEqCircuitV1 {
     builder: BaseCircuitBuilder<Fp>,
@@ -306,14 +308,7 @@ pub(super) struct KagemushaMintCertificateEqCircuitV1 {
     dense_jobs: PastaDenseMsmJobsV1<EpAffine>,
 }
 
-/// Ep/Fq mint-certificate half. Vesta signatures are checked natively in the Fq circuit.
-#[derive(Clone)]
-pub(super) struct KagemushaMintCertificateEpCircuitV1 {
-    builder: BaseCircuitBuilder<Fq>,
-    sha_jobs: PastaSha256JobsV1<Fq>,
-    dense_jobs: PastaDenseMsmJobsV1<EqAffine>,
-}
-
+#[cfg(test)]
 macro_rules! impl_mint_certificate_circuit {
     ($circuit:ty, $field:ty, $signature_curve:ty, $label:literal) => {
         impl Circuit<$field> for $circuit {
@@ -390,89 +385,15 @@ macro_rules! impl_mint_certificate_circuit {
     };
 }
 
+#[cfg(test)]
 impl_mint_certificate_circuit!(
     KagemushaMintCertificateEqCircuitV1,
     Fp,
     EpAffine,
     "Kagemusha Eq mint certificate"
 );
-impl_mint_certificate_circuit!(
-    KagemushaMintCertificateEpCircuitV1,
-    Fq,
-    EqAffine,
-    "Kagemusha Ep mint certificate"
-);
 
-/// Build both fixed-shape certificate halves from the same exact finalized top-up evidence.
-#[expect(
-    dead_code,
-    reason = "Retain standalone certificate circuit construction for qualification of the shared certificate relation"
-)]
-pub(super) fn build_kagemusha_mint_certificate_pair_v1(
-    witness: KagemushaMintCertificateWitnessV1,
-) -> Result<
-    (
-        KagemushaMintCertificateEqCircuitV1,
-        KagemushaMintCertificateEpCircuitV1,
-    ),
-    String,
-> {
-    witness.validate_shape()?;
-    let mut eq_builder = mint_certificate_builder::<Fp>();
-    let (eq_assigned, eq_jobs) = constrain_kagemusha_mint_certificate_v1::<EpAffine>(
-        &mut eq_builder,
-        &witness,
-        KagemushaPastaParityV1::Eq,
-        KagemushaMintAuthorityStepV1::FinalizedMint,
-    )?;
-    eq_builder.assigned_instances = vec![
-        eq_assigned
-            .mint_instances
-            .into_iter()
-            .chain(eq_assigned.certificate_binding_digest)
-            .collect(),
-    ];
-    let mut ep_builder = mint_certificate_builder::<Fq>();
-    let (ep_assigned, ep_jobs) = constrain_kagemusha_mint_certificate_v1::<EqAffine>(
-        &mut ep_builder,
-        &witness,
-        KagemushaPastaParityV1::Ep,
-        KagemushaMintAuthorityStepV1::FinalizedMint,
-    )?;
-    ep_builder.assigned_instances = vec![
-        ep_assigned
-            .mint_instances
-            .into_iter()
-            .chain(ep_assigned.certificate_binding_digest)
-            .collect(),
-    ];
-    if eq_builder.assigned_instances[0].len() != KAGEMUSHA_MINT_CERTIFICATE_PUBLIC_INSTANCE_COUNT_V1
-        || ep_builder.assigned_instances[0].len()
-            != KAGEMUSHA_MINT_CERTIFICATE_PUBLIC_INSTANCE_COUNT_V1
-    {
-        return Err("Kagemusha mint-certificate public shape drifted".to_owned());
-    }
-    super::base_packing::finalize_base_params_v1(&mut eq_builder, MINIMUM_UNUSABLE_ROWS)?;
-    super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
-    let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
-    eq_jobs.sha.validate_capacity(usable_rows)?;
-    eq_jobs.dense.validate_capacity(usable_rows)?;
-    ep_jobs.sha.validate_capacity(usable_rows)?;
-    ep_jobs.dense.validate_capacity(usable_rows)?;
-    Ok((
-        KagemushaMintCertificateEqCircuitV1 {
-            builder: eq_builder,
-            sha_jobs: eq_jobs.sha,
-            dense_jobs: eq_jobs.dense,
-        },
-        KagemushaMintCertificateEpCircuitV1 {
-            builder: ep_builder,
-            sha_jobs: ep_jobs.sha,
-            dense_jobs: ep_jobs.dense,
-        },
-    ))
-}
-
+#[cfg(test)]
 fn mint_certificate_builder<F: KagemushaPoseidonFieldV1>() -> BaseCircuitBuilder<F> {
     BaseCircuitBuilder::new(false)
         .use_k(16)

@@ -28,6 +28,7 @@ impl PolynomialDomain {
     ///
     /// This entry takes a validated fixed geometry, never arbitrary root/order
     /// metadata. The caller's cap is checked without allocating the 8M lanes.
+    #[cfg(test)]
     pub(super) fn for_deep(
         geometry: &super::deep_geometry::DeepGeometry,
         max_workspace_bytes: usize,

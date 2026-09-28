@@ -16,7 +16,7 @@ use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
 };
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::engine::general_purpose::STANDARD as BASE64;
 use core::convert::TryInto;
 use flate2::{Compression as FlateCompression, write::GzEncoder};
 use http_body_util::BodyExt as _;
@@ -26,11 +26,9 @@ use iroha_config::parameters::actual::{
 use iroha_core::{da::LaneEpoch, state::StateReadOnly, telemetry::Telemetry};
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
 use iroha_data_model::{
-    Encode,
     account::AccountId,
     block::BlockHeader,
     da::{
-        commitment::DaCommitmentBundle,
         ingest::{DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1, DaStripeLayout},
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },

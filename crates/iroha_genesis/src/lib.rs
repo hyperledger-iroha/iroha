@@ -1011,6 +1011,7 @@ impl RawGenesisTx {
     }
 }
 /// Peer PoP entry used to merge PoPs into topology entries.
+#[cfg(test)]
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode,
 )]
@@ -1471,6 +1472,7 @@ impl RawGenesisTransaction {
             eyre!("invalid signed KAGEMUSHA mint-finality genesis parameters: {error}")
         })?;
         let parameters = self.effective_parameters()?;
+        let scheduled_epoch_length = parameters.sumeragi().epoch_length_blocks;
         let npos_parameter = parameters
             .custom()
             .get(&SumeragiNposParameters::parameter_id());
@@ -1494,6 +1496,11 @@ impl RawGenesisTransaction {
                 if parameters.epoch_length_blocks().get() < 3 {
                     return Err(eyre!(
                         "NPoS genesis requires epoch_length_blocks >= 3 for its committed beacon anchor and pre-boundary pulse"
+                    ));
+                }
+                if parameters.epoch_length_blocks() != scheduled_epoch_length {
+                    return Err(eyre!(
+                        "NPoS epoch_length_blocks must equal the signed Sumeragi epoch_length_blocks"
                     ));
                 }
                 Ok(())
@@ -1886,6 +1893,7 @@ impl RawGenesisTransaction {
     /// This deliberately refuses to rewrite a transaction that also carries parameters, IVM
     /// triggers, or topology. Callers can therefore perform a narrow transaction-boundary migration
     /// without silently moving any other genesis semantics.
+    #[cfg(test)]
     pub fn replace_instruction_only_transaction(
         &mut self,
         index: usize,
@@ -2734,11 +2742,6 @@ impl GenesisBuilder {
         self.current_tx_mut().instructions.push(instruction);
         self
     }
-    /// Entry an IVM trigger to the end of entries.
-    pub fn append_ivm_trigger(mut self, ivm_trigger: GenesisIvmTrigger) -> Self {
-        self.current_tx_mut().ivm_triggers.push(ivm_trigger);
-        self
-    }
     /// Overwrite the initial topology of the current transaction.
     pub fn set_topology<T: Into<GenesisTopologyEntry>>(mut self, topology: Vec<T>) -> Self {
         self.current_tx_mut().topology = topology.into_iter().map(Into::into).collect();
@@ -2749,6 +2752,7 @@ impl GenesisBuilder {
     /// # Panics
     ///
     /// Panics if the input contains duplicate peers or peers not present in the topology.
+    #[cfg(test)]
     pub fn set_topology_pop(mut self, topology_pop: Vec<GenesisPeerPop>) -> Self {
         if topology_pop.is_empty() {
             return self;
@@ -3172,6 +3176,11 @@ mod tests {
                 PathBuf::from("."),
             )
             .append_parameter(Parameter::Custom(parameters.into_custom_parameter()))
+            .append_parameter(Parameter::Sumeragi(
+                iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                    NonZeroU64::new(epoch_length).unwrap(),
+                ),
+            ))
             .set_topology(deterministic_test_genesis_topology_entries())
             .build_raw_for_test()
             .with_consensus_mode(SumeragiConsensusMode::Npos);
@@ -3186,6 +3195,32 @@ mod tests {
                     .expect("three heights admit the protocol anchor and pulse shape");
             }
         }
+    }
+
+    #[test]
+    fn genesis_rejects_contradictory_signed_epoch_lengths() {
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("contradictory-beacon-epoch"),
+            PathBuf::from("."),
+        )
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .append_parameter(Parameter::Sumeragi(
+            iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                NonZeroU64::new(11).unwrap(),
+            ),
+        ))
+        .set_topology(deterministic_test_genesis_topology_entries())
+        .build_raw_for_test()
+        .with_consensus_mode(SumeragiConsensusMode::Npos);
+        assert!(
+            manifest
+                .build_and_sign(&checked_genesis_fixture_keypair())
+                .expect_err("conflicting signed scheduling authority must never sign")
+                .to_string()
+                .contains("must equal the signed Sumeragi epoch_length_blocks")
+        );
     }
 
     #[test]
@@ -4207,11 +4242,11 @@ fn pack_genesis_batches(
     mut batches: Vec<Vec<InstructionBox>>,
     limit: usize,
 ) -> Vec<Vec<InstructionBox>> {
-    let pinned = usize::from(
-        batches
-            .first()
-            .is_some_and(|first| first.iter().any(|instruction| instruction.as_any().is::<Upgrade>())),
-    );
+    let pinned = usize::from(batches.first().is_some_and(|first| {
+        first
+            .iter()
+            .any(|instruction| instruction.as_any().is::<Upgrade>())
+    }));
     let limit = limit.max(pinned.saturating_add(1));
     while batches.len() > limit {
         let Some(at) = (pinned..batches.len().saturating_sub(1))
@@ -4243,7 +4278,12 @@ mod pack_genesis_batches_tests {
     fn messages(batches: &[Vec<InstructionBox>]) -> Vec<Vec<String>> {
         batches
             .iter()
-            .map(|batch| batch.iter().map(|instruction| format!("{instruction:?}")).collect())
+            .map(|batch| {
+                batch
+                    .iter()
+                    .map(|instruction| format!("{instruction:?}"))
+                    .collect()
+            })
             .collect()
     }
 

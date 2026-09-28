@@ -108,12 +108,6 @@ impl MultiSortKey {
     fn new(components: Vec<SortKeyComponent>) -> Self {
         Self { components }
     }
-    fn push(&mut self, component: SortKeyComponent) {
-        self.components.push(component);
-    }
-    fn is_empty(&self) -> bool {
-        self.components.is_empty()
-    }
 }
 #[cfg(feature = "app_api")]
 impl Ord for MultiSortKey {

@@ -20,6 +20,19 @@ export function toByteArray(bytes) {
   return Array.from(Buffer.from(bytes));
 }
 
+/** Compare the exact public projection, including closed governance record prototypes. */
+export function assertPublicInstructionProjection(actual, expected, context) {
+  const plain = expected.CastPlainBallot ?? expected.UpdatePlainConviction;
+  if (plain) {
+    const name = expected.CastPlainBallot ? "CastPlainBallot" : "UpdatePlainConviction";
+    assert.equal(Object.keys(expected).length, 1);
+    const payload = Object.assign(Object.create(null), plain);
+    assert.deepEqual(actual, Object.assign(Object.create(null), { [name]: payload }), context);
+    return;
+  }
+  assert.deepEqual(actual, expected, context);
+}
+
 /** Compare public object/binary adaptation with the native JSON codec owner. */
 export function assertNativeInstructionAdapterParity(instruction, context) {
   const adapterEncoded = Buffer.from(
@@ -35,7 +48,7 @@ export function assertNativeInstructionAdapterParity(instruction, context) {
     instruction,
     `${context} native decode`,
   );
-  assert.deepEqual(
+  assertPublicInstructionProjection(
     withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
       noritoDecodeInstruction(nativeEncoded, 753)),
     instruction,

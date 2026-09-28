@@ -7,10 +7,7 @@ use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, Method, Uri},
 };
-use iroha_core::{
-    queue::RoutingDecision,
-    state::{StateReadOnly as _, WorldReadOnly as _},
-};
+use iroha_core::{queue::RoutingDecision, state::StateReadOnly as _};
 use iroha_data_model::{
     account::{AccountId, address::chain_discriminant},
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
@@ -386,7 +383,7 @@ mod tests {
         },
     };
     use axum::{body::Bytes, http::StatusCode, response::IntoResponse as _};
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         Registrable as _,
         account::{Account, AccountAddress, AccountId},

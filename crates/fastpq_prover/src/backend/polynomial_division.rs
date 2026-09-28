@@ -157,6 +157,7 @@ impl VanishingDivisionPlan {
         )?;
         Ok(ExactQuotient {
             coefficients,
+            #[cfg(test)]
             degree_bound: self.quotient_degree_bound,
         })
     }
@@ -165,21 +166,18 @@ impl VanishingDivisionPlan {
 /// Owned exact quotient; secret coefficient values are not formatted by Debug.
 pub(super) struct ExactQuotient {
     coefficients: SecretPolynomial<F>,
+    #[cfg(test)]
     degree_bound: usize,
 }
 
 impl ExactQuotient {
-    /// Transfer the checked coefficients without removing their erasure guard.
-    pub(super) fn into_coefficients(self) -> SecretPolynomial<F> {
-        self.coefficients
-    }
-
     /// Borrow complete quotient coefficients including the caller-declared zero padding.
     pub(super) fn coefficients(&self) -> &[F] {
         &self.coefficients
     }
 
     /// Exclusive upper bound that passed full-input and zero-remainder checks.
+    #[cfg(test)]
     pub(super) const fn degree_bound(&self) -> usize {
         self.degree_bound
     }

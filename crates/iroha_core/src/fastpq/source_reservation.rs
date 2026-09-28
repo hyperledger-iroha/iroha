@@ -143,6 +143,7 @@ pub(crate) struct OccurrenceUsage {
 }
 
 impl OccurrenceUsage {
+    #[cfg(test)]
     /// Accept exact caller-measured counts after checked conversion into u64.
     ///
     /// The adapter must verify one transcript and M=S in its measurement result.
@@ -191,10 +192,13 @@ pub(crate) enum ReservationInvariant {
     /// A slot was replaced/rolled back or its generation is no longer live.
     StaleSlot,
     /// A checkpoint belongs to a different physical transaction.
+    #[cfg(test)]
     ForeignTransaction,
     /// This checkpoint's journal prefix was discarded or replaced.
+    #[cfg(test)]
     StaleCheckpoint,
     /// A nonempty occurrence must have positive delta and canonical frame counts.
+    #[cfg(test)]
     EmptyOccurrence,
     /// A complete-entry measurement is inconsistent with its one-frame shape.
     InvalidEntryBundleMeasurement,
@@ -438,9 +442,12 @@ impl ReservationLedger {
             ));
         }
         let generation = self.take_generation()?;
+        #[cfg(not(test))]
+        let _ = generation;
         Ok(ReservationTransaction {
             ledger: self,
             journal: Vec::new(),
+            #[cfg(test)]
             generation,
             committed: false,
         })
@@ -458,6 +465,7 @@ enum Undo {
         block_before: SourceUsage,
     },
     Slot {
+        #[cfg(test)]
         generation: u64,
         owner: u64,
         id: u64,
@@ -469,6 +477,7 @@ enum Undo {
 }
 
 impl Undo {
+    #[cfg(test)]
     fn generation(&self) -> u64 {
         match self {
             Self::Owner { id, .. } => *id,
@@ -482,10 +491,12 @@ impl Undo {
 pub(crate) struct ReservationTransaction<'a> {
     ledger: &'a mut ReservationLedger,
     journal: Vec<Undo>,
+    #[cfg(test)]
     generation: u64,
     committed: bool,
 }
 
+#[cfg(test)]
 /// Constant-size checkpoint bound to a retained prefix of one physical transaction.
 /// Ancestor savepoints survive inner rollback; discarded journal branches do not revive.
 pub(crate) struct ReservationCheckpoint {
@@ -644,6 +655,7 @@ impl ReservationTransaction<'_> {
         let next_slot_before = state.next_slot;
         let generation = self.ledger.take_generation()?;
         self.journal.push(Undo::Slot {
+            #[cfg(test)]
             generation,
             owner: owner.binding.id,
             id,
@@ -681,11 +693,13 @@ impl ReservationTransaction<'_> {
         Ok(self.validate_owner(owner)?.usage)
     }
 
+    #[cfg(test)]
     /// Exact block usage visible inside this physical scope.
     pub(crate) fn usage(&self) -> SourceUsage {
         self.ledger.usage
     }
 
+    #[cfg(test)]
     /// Save an undo offset; the corresponding WSV checkpoint remains adapter-owned.
     pub(crate) fn checkpoint(&self) -> ReservationCheckpoint {
         ReservationCheckpoint {
@@ -700,6 +714,7 @@ impl ReservationTransaction<'_> {
         }
     }
 
+    #[cfg(test)]
     /// Restore a retained checkpoint, preserving ancestors and invalidating discarded branches.
     /// Old live slots revive; undo needs no new generation and works even at exhaustion.
     pub(crate) fn rollback(
@@ -751,7 +766,8 @@ impl ReservationTransaction<'_> {
                     self.ledger.usage = block_before;
                 }
                 Undo::Slot {
-                    generation: _,
+                    #[cfg(test)]
+                        generation: _,
                     owner,
                     id,
                     previous,

@@ -98,6 +98,7 @@ impl<T: Copy + Zeroize> Drop for ProverSecretCopyValueV1<T> {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static PROVER_SECRET_COPY_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -172,6 +173,7 @@ impl<F: ProofScalar> Drop for ProverSecretScalarV1<F> {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static PROVER_SECRET_SCALAR_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -260,6 +262,7 @@ impl<P: ProofPoint> Drop for ProverSecretPointV1<P> {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static PROVER_SECRET_POINT_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -629,8 +632,10 @@ static PROVER_ED25519_SCALAR_MODULUS_LE_V1: [u8; 32] = [
 ];
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static PROVER_SECRET_EDWARDS_CANONICALITY_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    #[cfg(test)]
     static PROVER_SECRET_EDWARDS_WIDE_INPUT_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -835,6 +840,7 @@ impl Zeroize for FcmpInputRerandomizationV1 {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static FCMP_INPUT_RERANDOMIZATION_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
@@ -880,6 +886,7 @@ impl Zeroize for FcmpProverInputV1 {
 }
 #[cfg(test)]
 std::thread_local! {
+    #[cfg(test)]
     static FCMP_PROVER_INPUT_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }

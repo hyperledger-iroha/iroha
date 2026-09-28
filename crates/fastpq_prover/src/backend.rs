@@ -35,6 +35,7 @@ mod air_degree;
 mod air_expression;
 #[path = "backend/air_quotient.rs"]
 mod air_quotient;
+#[cfg(test)]
 #[path = "backend/coefficient_masking.rs"]
 mod coefficient_masking;
 #[path = "backend/masked_quotient.rs"]

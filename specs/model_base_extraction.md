@@ -77,6 +77,10 @@ fixtures and dirty source are preserved. External context/owned-value consumers 
 scalar backend/final-tree admission still require completion and qualification
 before the API replacement or account move.
 
+On 2026-09-28 the Iroha 2 `iroha_ffi` layer and every `ffi_export` feature were
+removed from the model, primitive and crypto owners. The FFI-configuration
+results above remain historical evidence; there is no FFI selection to qualify.
+
 ## Captured evidence
 
 The original compiler capture contains 189 complete frames across 105 nominal
@@ -159,8 +163,6 @@ replacement marker would merely conceal it.
   and every rejection message. Private settlement still wipes `AssetDefinitionId.aid_bytes`;
   migrate those sites to an owned discard operation rather than exposing the
   raw field across the new boundary.
-- Move Metadata FFI ownership out of the aggregate handle/export inventory.
-  There must be one canonical export owner.
 
 Base dependencies may include existing primitives, crypto, Norito/schema,
 derive utilities, normalization/hash/Base58 libraries and JSON `mv`. Forbid
@@ -183,7 +185,7 @@ dependencies and every shipping feature selection.
    parents. Preserve the captured headers when moving their source owners.
 4. Move definitions and migrate consumers atomically. Remove retired root,
    prelude, transparent/non-transparent and module import paths; add no shims.
-   Migrate registries, FFI, query projections, wildcard users and examples.
+   Migrate registries, query projections, wildcard users and examples.
 5. Check base features and fixtures, aggregate/schema consumers, SDK/CLI/config,
    Core/Torii/daemon, executor/genesis/P2P/SCCP, IVM/compiler, storage/Musubi,
    native bridges, Mochi, Python, integration tests and xtask. Compile wildcard

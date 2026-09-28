@@ -2,6 +2,7 @@
 //! This storage owner grants no source, opening, qPCS or production authority.
 use super::*;
 
+#[cfg(test)]
 impl WrittenQMaskSBlockFileV1 {
     pub(in crate::vega::zk_ams::mkhe) fn block_ordinal_v1(
         &self,
@@ -59,6 +60,7 @@ impl WrittenQMaskSBlockFileV1 {
     }
 }
 
+#[cfg(test)]
 struct SealedQMaskSFileLiveV1 {
     snapshot: ConfidentialSpoolSnapshotV1,
     reservation: OrderedStorageReservationV1,
@@ -66,12 +68,14 @@ struct SealedQMaskSFileLiveV1 {
 }
 /// The same actual unlinked S file/key, original memory and storage ledgers.
 /// There is no replacement snapshot, caller root, reset or generic read API.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct SealedQMaskSFileV1 {
     live: Option<SealedQMaskSFileLiveV1>,
     context: [u8; 32],
     digest: [u8; 32],
     next_block: usize,
 }
+#[cfg(test)]
 impl SealedQMaskSFileV1 {
     fn validate_v1(&self) -> Result<(), OrderedSnapshotErrorV1> {
         let live = self.live.as_ref().ok_or(OrderedSnapshotErrorV1::Poisoned)?;
@@ -159,6 +163,7 @@ impl SealedQMaskSFileV1 {
 }
 /// Borrowed actual eight-read lifetime; incomplete or failed consumption closes
 /// the file/key. No serializable permit or returned raw handle exists.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) struct QMaskSBlockReadV1<'a> {
     file: &'a mut SealedQMaskSFileV1,
     first_slot: u64,
@@ -179,9 +184,11 @@ const _: () = assert!(
         == core::mem::size_of::<ConfidentialSpoolChunkV1>()
 );
 impl QMaskSReadChunkV1<'_> {
+    #[cfg(test)]
     pub(in crate::vega::zk_ams::mkhe) fn len_v1(&self) -> u64 {
         self.chunk.len_v1()
     }
+    #[cfg(test)]
     pub(in crate::vega::zk_ams::mkhe) fn as_slice_v1(&self) -> &[u8] {
         self.chunk.as_slice_v1()
     }
@@ -195,6 +202,7 @@ impl Drop for QMaskSReadChunkV1<'_> {
         // before the parent read/file/memory owner can be released.
     }
 }
+#[cfg(test)]
 impl QMaskSBlockReadV1<'_> {
     pub(in crate::vega::zk_ams::mkhe) fn read_next_slot_v1(
         &mut self,
@@ -227,6 +235,7 @@ impl QMaskSBlockReadV1<'_> {
         Ok(())
     }
 }
+#[cfg(test)]
 impl Drop for QMaskSBlockReadV1<'_> {
     fn drop(&mut self) {
         if !self.finished {

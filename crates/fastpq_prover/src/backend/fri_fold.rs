@@ -9,20 +9,26 @@
 //! TODO: Wire this owner into the reviewed compact protocol's authenticated
 //! fibers and degree progression before replacing the existing binary profile.
 
+#[cfg(test)]
 use rayon::prelude::*;
 
 use super::polynomial_field::PolynomialField;
-use super::{FriDomain, GOLDILOCKS_MODULUS, field_inverse, field_pow, mul_mod};
+#[cfg(test)]
+use super::FriDomain;
+use super::{GOLDILOCKS_MODULUS, field_inverse, field_pow, mul_mod};
 use crate::{Error, Result, field::GoldilocksFp4V1};
 
 const MAX_ARITY: usize = 16;
+#[cfg(test)]
 const MAX_LAYER_JOBS: usize = 32;
+#[cfg(test)]
 const PARALLEL_OUTPUT_THRESHOLD: usize = 1024;
 
 /// Checked, fixed-size inverse transform for one multiplicative fiber shape.
 #[derive(Clone, Debug)]
 pub(super) struct FriFoldPlan {
     arity: usize,
+    #[cfg(test)]
     coset_generator: u64,
     inverse_arity: u64,
     inverse_twiddles: [u64; MAX_ARITY / 2],
@@ -58,6 +64,7 @@ impl FriFoldPlan {
         });
         Ok(Self {
             arity,
+            #[cfg(test)]
             coset_generator,
             inverse_arity: field_inverse(arity as u64),
             inverse_twiddles,
@@ -94,6 +101,10 @@ impl FriFoldPlan {
     /// `values[i + j * output.len()]` belongs to the fiber rooted at `domain[i]`.
     /// Each job owns a fixed 16-element stack workspace; no per-fiber allocation
     /// or inversion occurs. Serial and parallel execution use the same kernel.
+    ///
+    /// TODO: route complete-layer folding through this kernel once the compact
+    /// protocol replaces the existing binary FRI profile.
+    #[cfg(test)]
     pub(super) fn fold_layer_into(
         &self,
         values: &[GoldilocksFp4V1],

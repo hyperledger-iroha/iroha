@@ -188,10 +188,6 @@ const SIGNED_TRANSACTION_LIMITS: DecodeLimits = DecodeLimits::new(
 /// One exact native moderation mutation.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationNativeActionV1")]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "boxing a variant would change the canonical public Norito action shape"
-)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 
 pub enum ModerationNativeActionV1 {
@@ -1613,6 +1609,7 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
     /// # Errors
     ///
     /// Rejects bootstrap epochs and malformed, inert, or noncanonical rotation coordinates.
+    #[cfg(test)]
     pub fn rotation_authorization_message(
         &self,
         network_id: &iroha_data_model::NetworkId,
@@ -1649,6 +1646,7 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
     ///
     /// Rejects the same malformed transition coordinates as
     /// [`Self::rotation_authorization_message`].
+    #[cfg(test)]
     pub fn new_key_possession_message(
         &self,
         network_id: &iroha_data_model::NetworkId,
@@ -1893,6 +1891,7 @@ pub enum ModerationPanelNotificationDeadLetterReasonV1 {
 }
 /// Public persisted state of a panel notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum ModerationPanelNotificationStatusV1 {
     /// Awaiting its first attempt or a bounded retry delay.
     Pending {
@@ -2859,22 +2858,6 @@ impl ModerationOrchestratorV1 {
         self.snapshot()
             .and_then(|snapshot| snapshot.case(case_id, round_id).cloned())
     }
-    /// Return committed events strictly after an exclusive cursor.
-    #[must_use]
-    pub fn events_after(
-        &self,
-        after: Option<ModerationFinalizedEventCursorV1>,
-        limit: usize,
-    ) -> Vec<ModerationFinalizedEventV1> {
-        self.snapshot().map_or_else(Vec::new, |snapshot| {
-            snapshot
-                .events
-                .into_iter()
-                .filter(|event| after.is_none_or(|cursor| event.sequence > cursor.sequence))
-                .take(limit.min(self.config.max_events))
-                .collect()
-        })
-    }
     /// Return payload-free durable queue health after authenticating the public
     /// archive-head readback.
     ///
@@ -3302,6 +3285,7 @@ impl ModerationOrchestratorV1 {
     /// # Errors
     ///
     /// Fails after a durability fault or poisoned state lock.
+    #[cfg(test)]
     pub fn panel_notification_status(
         &self,
         notification_id: [u8; 32],
@@ -4288,6 +4272,7 @@ impl ModerationOrchestratorV1 {
     /// Fails closed on invalid bounds, an unpublished or substituted head,
     /// concurrent checkpoint changes, checkpoint fencing, or any archive
     /// validation failure encountered in the first page.
+    #[cfg(test)]
     pub fn audit_panel_notification_archive_full_history(
         &self,
         maximum_heads: u32,
@@ -4374,8 +4359,8 @@ impl ModerationOrchestratorV1 {
     /// Every page checks exact operation, generation, head digest, chain accumulator, signature,
     /// and predecessor coordinates. The initial audit reaches generation one; later audits verify
     /// only new generations plus the previously trusted boundary head. A separate
-    /// operator-controlled full-history rehearsal via
-    /// [`Self::audit_panel_notification_archive_full_history`] detects loss outside the
+    /// full-history rehearsal (`audit_panel_notification_archive_full_history`, compiled
+    /// only for tests until an operator command exposes it) detects loss outside the
     /// readiness-critical incremental suffix.
     ///
     /// # Errors
@@ -9094,6 +9079,7 @@ fn recover_expired_panel_notification_claims(
     }
     Ok(())
 }
+#[cfg(test)]
 fn panel_notification_status(
     entry: &StoredPanelNotificationV1,
 ) -> Result<ModerationPanelNotificationStatusV1, ModerationOrchestratorError> {

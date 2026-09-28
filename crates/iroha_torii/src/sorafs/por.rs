@@ -15,19 +15,21 @@ use iroha_futures::supervisor::ShutdownSignal;
 #[cfg(feature = "app_api")]
 use norito::json::{self, Value as JsonValue};
 use norito::{
-    codec::{Decode, Encode},
     decode_from_bytes, decode_from_bytes_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
     to_bytes,
 };
 use parking_lot::{MappedRwLockReadGuard, Mutex, RwLock, RwLockReadGuard};
+#[cfg(test)]
+use sorafs_manifest::por::AuditVerdictV1;
+#[cfg(test)]
+use sorafs_manifest::por::POR_CHALLENGE_STATUS_VERSION_V1;
 use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1,
-    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_CHALLENGE_STATUS_VERSION_V1,
-    POR_STATUS_CURSOR_VERSION_V1, POR_STATUS_EXPORT_PAGE_VERSION_V1, POR_STATUS_PAGE_VERSION_V1,
-    POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome, PorChallengePublicationV1,
-    PorChallengePublicationValidationError, PorChallengeStatusV1, PorChallengeV1,
-    PorChallengeValidationError, PorProviderSummaryV1, PorProviderSummaryValidationError,
+    AuditOutcomeV1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1,
+    POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_STATUS_CURSOR_VERSION_V1,
+    POR_STATUS_EXPORT_PAGE_VERSION_V1, POR_STATUS_PAGE_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1,
+    PorChallengeOutcome, PorChallengePublicationV1, PorChallengePublicationValidationError,
+    PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
     PorReportIsoWeek, PorReportIsoWeekValidationError, PorStatusCursorV1, PorStatusExportPageV1,
     PorStatusPageV1, PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
     ProviderVrfSubmissionValidationError, provider_vrf_input,
@@ -54,7 +56,7 @@ use std::{
 };
 #[cfg(feature = "app_api")]
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs as _},
+    net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
     time::Duration as StdDuration,
 };
@@ -327,6 +329,7 @@ impl Default for PorStatusIndexes {
     }
 }
 impl PorStatusIndexes {
+    #[cfg(test)]
     fn from_records(records: &DashMap<[u8; 32], ChallengeRecord>, generation: u64) -> Self {
         debug_assert_ne!(generation, 0, "PoR status generation is always non-zero");
         let mut indexes = Self {
@@ -397,15 +400,12 @@ impl PorStatusIndexes {
             index.remove(key);
         }
     }
+    #[cfg(test)]
     fn commit_insert(&mut self, status: &PorChallengeStatusV1, next_generation: u64) {
         self.insert_status(status);
         self.publish_generation(next_generation);
     }
     #[cfg(test)]
-    fn commit_remove(&mut self, status: &PorChallengeStatusV1, next_generation: u64) {
-        self.remove_status(status);
-        self.publish_generation(next_generation);
-    }
     fn commit_replace(
         &mut self,
         previous: &PorChallengeStatusV1,
@@ -420,6 +420,7 @@ impl PorStatusIndexes {
         debug_assert_eq!(self.generation.checked_add(1), Some(next_generation));
         self.generation = next_generation;
     }
+    #[cfg(test)]
     fn validate_against_records(
         &self,
         records: &DashMap<[u8; 32], ChallengeRecord>,
@@ -4593,13 +4594,7 @@ mod tests {
     mod runtime {
         use super::*;
         use crate::sorafs::por::{RandomnessProvider, VrfProvider};
-        use std::{
-            collections::HashMap,
-            sync::{
-                Arc,
-                atomic::{AtomicUsize, Ordering as AtomicOrdering},
-            },
-        };
+        use std::{collections::HashMap, sync::Arc};
         #[derive(Clone)]
         struct StaticRandomnessProvider {
             randomness: PorRandomness,
@@ -4676,60 +4671,6 @@ mod tests {
                 _now_secs: u64,
             ) -> bool {
                 true
-            }
-        }
-        struct FailOncePublisher {
-            attempts: AtomicUsize,
-            published: Mutex<Vec<PorChallengePublicationV1>>,
-        }
-        impl PorGovernancePublisher for FailOncePublisher {
-            fn is_ready(&self) -> bool {
-                true
-            }
-            fn publish_challenge(
-                &self,
-                publication: PorChallengePublicationV1,
-            ) -> Result<(), sorafs_node::GovernancePublishError> {
-                if self.attempts.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
-                    return Err(sorafs_node::GovernancePublishError::Io(
-                        std::io::Error::other("injected publication failure"),
-                    ));
-                }
-                self.published.lock().push(publication);
-                Ok(())
-            }
-            fn publish_weekly_report(
-                &self,
-                _report: PorWeeklyReportV1,
-            ) -> Result<(), sorafs_node::GovernancePublishError> {
-                Ok(())
-            }
-        }
-        struct FailOnceWeeklyPublisher {
-            attempts: AtomicUsize,
-            reports: Mutex<Vec<PorWeeklyReportV1>>,
-        }
-        impl PorGovernancePublisher for FailOnceWeeklyPublisher {
-            fn is_ready(&self) -> bool {
-                true
-            }
-            fn publish_challenge(
-                &self,
-                _publication: PorChallengePublicationV1,
-            ) -> Result<(), sorafs_node::GovernancePublishError> {
-                Ok(())
-            }
-            fn publish_weekly_report(
-                &self,
-                report: PorWeeklyReportV1,
-            ) -> Result<(), sorafs_node::GovernancePublishError> {
-                self.reports.lock().push(report);
-                if self.attempts.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
-                    return Err(sorafs_node::GovernancePublishError::Io(
-                        std::io::Error::other("injected weekly publication failure"),
-                    ));
-                }
-                Ok(())
             }
         }
         struct NotReadyPublisher;

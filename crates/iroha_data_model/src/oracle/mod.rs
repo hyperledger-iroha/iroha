@@ -49,14 +49,6 @@ pub const DEFI_ORACLE_DOMAIN_COVER_POLICY: u32 = 4;
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct DefiOracleAttestationKey {
     /// `DeFi` oracle domain (`1=perps_market`, `2=options_series`,
     /// `3=options_shout`, `4=cover_policy`).
@@ -107,14 +99,6 @@ impl DefiOracleAttestationKey {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct DefiOracleAttestationSource {
     /// Source feed identifier.
     pub feed_id: FeedId,
@@ -144,14 +128,6 @@ pub struct DefiOracleAttestationSource {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 pub struct DefiOracleAttestation {
     /// Domain and subject id this attestation is valid for.
@@ -193,14 +169,6 @@ pub struct DefiOracleAttestation {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct FeedId(pub Name);
 impl FeedId {
     /// Borrow the feed identifier as a string slice.
@@ -238,14 +206,6 @@ impl FromStr for FeedId {
     Default,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 pub struct FeedConfigVersion(pub u32);
 impl From<u32> for FeedConfigVersion {
@@ -484,14 +444,6 @@ impl OracleChangeStatus {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 pub struct OracleChangeId(pub Hash);
 impl OracleChangeId {
@@ -1007,14 +959,6 @@ impl ConnectorResponse {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 pub struct KeyedHash {
     /// Identifier for the pepper/secret used to compute the hash.
@@ -1723,14 +1667,6 @@ pub struct OracleReward {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct OracleProviderKey {
     /// Feed identifier.
     pub feed_id: FeedId,
@@ -1861,14 +1797,6 @@ pub struct OracleProviderStatsRecord {
     Default,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 pub struct OracleDisputeId(pub u64);
 /// Resolution status for a dispute.

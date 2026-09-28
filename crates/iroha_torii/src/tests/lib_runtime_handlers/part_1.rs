@@ -8,10 +8,9 @@ use axum::{
     response::IntoResponse,
     routing::any,
 };
-use base64::Engine as _;
 use futures::executor;
 use iroha_config::parameters::{
-    actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile},
+    actual::{NoritoRpcTransport, TelemetryProfile},
     defaults,
 };
 use iroha_core::{
@@ -26,7 +25,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     NetworkId, Registrable, ValidationFail,
-    account::{Account, AccountAlias, AccountId, OpaqueAccountId},
+    account::{Account, AccountAlias, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
         BlockHeader, BlockSignature, SignedBlock,
@@ -43,11 +42,11 @@ use iroha_data_model::{
     domain::Domain,
     events::{
         pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
-        trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
+        trigger_completed::TriggerCompletedOutcome,
     },
     isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
     level::Level,
-    nexus::{AxtPolicySnapshot, AxtRejectReason, UniversalAccountId},
+    nexus::{AxtRejectReason, UniversalAccountId},
     parameter::{Parameter, system::SumeragiNposParameters},
     peer::Peer,
     permission::Permission,
@@ -56,7 +55,7 @@ use iroha_data_model::{
         SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
     },
     transaction::{
-        Executable, ExecutionStep, IvmBytecode, IvmProved,
+        ExecutionStep,
         error::TransactionRejectionReason,
         signed::{
             SealedTransactionReveal, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -66,7 +65,7 @@ use iroha_data_model::{
     trigger::{DataTriggerSequence, DataTriggerStep, TriggerId},
 };
 use iroha_executor_data_model::permission::account::{
-    AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
+    AccountAliasPermissionScope, CanResolveAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
 use iroha_model_base::chain::ChainId;
@@ -75,7 +74,7 @@ use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
-use iroha_test_samples::ALICE_ID;
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii_shared::configuration::Configuration;
 use norito::codec::Encode;
 use std::{
@@ -88,7 +87,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tower::ServiceExt as _;
 fn query_conversion_message(err: &Error) -> Option<&str> {
     match err {
         Error::Query(ValidationFail::QueryFailed(
@@ -187,7 +185,6 @@ async fn api_version_negotiates_text_success_and_typed_unavailable() {
     );
 }
 
-
 #[tokio::test]
 async fn readiness_rejects_empty_queue_startup_reconciliation() {
     let app = mk_app_state_for_tests();
@@ -250,16 +247,200 @@ async fn readiness_rejects_empty_queue_startup_reconciliation() {
     );
 }
 
-fn mk_app_state_for_tests_with_chain_id(chain_id: ChainId) -> SharedAppState {
-    mk_app_state_for_tests_with_world_and_options_and_chain_id(
-        World::default(),
-        None,
-        None,
-        None,
-        None,
-        chain_id,
-    )
+/// A real production consensus instance for the HTTP readiness boundary. The
+/// transport is disconnected; the driver, genesis execution, Kura and safety
+/// records use the node's normal startup path. This observer cannot manufacture
+/// a quorum or a committed block merely to make readiness pass.
+pub(crate) struct ReadinessNode {
+    pub(crate) app: SharedAppState,
+    node: Option<iroha_core::sumeragi::node::RunningNode>,
+    _directory: tempfile::TempDir,
 }
+
+impl ReadinessNode {
+    pub(crate) fn start() -> Self {
+        Self::start_at_tip(false)
+    }
+
+    pub(crate) fn start_at_tip(with_transaction: bool) -> Self {
+        use iroha_core::{
+            governance::manifest::LaneManifestRegistry,
+            sumeragi::{
+                driver::traits::{Frame, Net, NoObserver},
+                node::{NodeConfig, NodeInputs},
+                test_chain::{CertifiedTestChain, TestChainConfig},
+            },
+        };
+        struct DisconnectedTransport;
+        impl Net for DisconnectedTransport {
+            fn send(&self, _: &iroha_sumeragi::types::PublicKey, _: &Frame) {}
+        }
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+            .expect("signed genesis fixture");
+        if with_transaction {
+            // Real Log transaction, ordinary executor and three real BLS Commit votes.
+            chain.commit_at(20_000, Vec::new());
+        }
+        let genesis_account = chain.genesis_account().clone();
+        let clock_account = AccountId::new(
+            KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let world = World::with(
+            [
+                Domain::new(DomainId::parse_fully_qualified("genesis.universal").unwrap())
+                    .build(&genesis_account),
+            ],
+            [
+                Account::new(genesis_account.clone()).build(&genesis_account),
+                Account::new(clock_account.clone()).build(&clock_account),
+            ],
+            [],
+        );
+        let kura = if with_transaction {
+            Arc::clone(chain.kura())
+        } else {
+            Kura::blank_kura_for_testing()
+        };
+        let state = Arc::new(IrohaState::new_with_chain_and_network_id_for_testing(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            chain.state().chain_id_ref().clone(),
+            chain.network_id(),
+        ));
+        let nexus = state.nexus_snapshot();
+        state.install_lane_manifests(&Arc::new(
+            LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+        ));
+        let mut app = mk_app_state_for_tests();
+        let directory = tempfile::tempdir().expect("production readiness node files");
+        let node_key = KeyPair::from_seed(vec![0xD9; 32], Algorithm::BlsNormal);
+        let node = iroha_core::sumeragi::node::start(NodeInputs {
+            state: Arc::clone(&state),
+            kura: Arc::clone(&kura),
+            queue: Arc::clone(&app.queue),
+            events: tokio::sync::broadcast::channel(16).0,
+            net: Arc::new(DisconnectedTransport),
+            key_pair: node_key.clone(),
+            chain_id: state.chain_id_ref().to_string(),
+            genesis: Some(chain.genesis().clone()),
+            genesis_account,
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+            config: NodeConfig {
+                records_dir: directory.path().join("records"),
+                installation_log: directory.path().join("keys/installation.log"),
+                bodies_dir: directory.path().join("bodies"),
+                local: Default::default(),
+                assert_fresh_key: true,
+                retired_keys: Vec::new(),
+            },
+            observer: Arc::new(NoObserver),
+            driver: Default::default(),
+        })
+        .expect("production driver startup");
+        let app_mut = Arc::get_mut(&mut app).expect("exclusive app fixture");
+        app_mut.state = state;
+        app_mut.kura = kura;
+        app_mut.sumeragi = Some(node.handle());
+        app_mut.torii_proxy_bridge_signer = node_key;
+        Self {
+            app,
+            node: Some(node),
+            _directory: directory,
+        }
+    }
+
+    pub(crate) fn stop(&mut self) {
+        if let Some(node) = self.node.take() {
+            node.driver.shutdown();
+        }
+    }
+
+    async fn response(&self) -> AxResponse {
+        axum::Router::new()
+            .route("/readyz", axum::routing::get(handler_readyz))
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+            .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+            .with_state(Arc::clone(&self.app))
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/readyz")
+                    .header(axum::http::header::ACCEPT, "text/plain, application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("HTTP readiness response")
+    }
+}
+
+impl Drop for ReadinessNode {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+#[tokio::test]
+async fn readyz_rejects_stopped_consensus_driver() {
+    let mut fixture = ReadinessNode::start();
+    assert_eq!(fixture.response().await.status(), StatusCode::OK);
+    fixture.stop();
+    assert!(!fixture.app.sumeragi.as_ref().unwrap().ready());
+    let response = fixture.response().await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let envelope: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        envelope.get("code").and_then(norito::json::Value::as_str),
+        Some("service_unavailable")
+    );
+}
+
+#[tokio::test]
+async fn readyz_tracks_live_consensus_without_gating_beacon_setup() {
+    use iroha_core::state::WorldReadOnly as _;
+    let fixture = ReadinessNode::start();
+    assert!(
+        fixture
+            .app
+            .state
+            .view()
+            .world()
+            .active_global_beacon_key_session()
+            .is_none()
+    );
+    let handle = fixture.app.sumeragi.as_ref().unwrap();
+    assert!(handle.ready());
+    assert_eq!(handle.status().unwrap().committed_height, 1);
+    let response = fixture.response().await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "beacon installation must be reachable through a live consensus driver"
+    );
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap()
+            .as_ref(),
+        b"Ready"
+    );
+}
+
 pub fn mk_app_state_for_tests_with_iso_bridge(
     iso: Option<iroha_config::parameters::actual::IsoBridge>,
 ) -> SharedAppState {
@@ -320,7 +501,9 @@ pub(crate) fn app_auth_test_guard(
     config: crate::app_auth::CanonicalRequestAuthConfig,
 ) -> impl Drop {
     static TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    struct Guard(MutexGuard<'static, ()>);
+    struct Guard {
+        _lock: MutexGuard<'static, ()>,
+    }
     impl Drop for Guard {
         fn drop(&mut self) {
             crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::default())
@@ -331,7 +514,7 @@ pub(crate) fn app_auth_test_guard(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     crate::app_auth::configure(config).expect("valid app-auth test config");
-    Guard(guard)
+    Guard { _lock: guard }
 }
 pub(crate) fn world_with_account(account_id: &AccountId) -> World {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1207,7 +1390,6 @@ impl iroha_data_model::query::builder::QueryExecutor for CapturingIterableQueryE
     }
 }
 fn build_find_triggers_query_for_test() -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1217,7 +1399,6 @@ fn build_find_triggers_query_for_test() -> iroha_data_model::query::QueryWithPar
     executor.into_query()
 }
 fn build_find_active_trigger_ids_query_for_test() -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1227,7 +1408,6 @@ fn build_find_active_trigger_ids_query_for_test() -> iroha_data_model::query::Qu
     executor.into_query()
 }
 pub(crate) fn build_find_account_ids_query_for_test() -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1237,7 +1417,6 @@ pub(crate) fn build_find_account_ids_query_for_test() -> iroha_data_model::query
     executor.into_query()
 }
 fn build_find_peers_query_for_test() -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1249,7 +1428,6 @@ fn build_find_peers_query_for_test() -> iroha_data_model::query::QueryWithParams
 fn build_find_permissions_by_account_query_for_test(
     account_id: AccountId,
 ) -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1261,7 +1439,6 @@ fn build_find_permissions_by_account_query_for_test(
 fn build_find_roles_by_account_query_for_test(
     account_id: AccountId,
 ) -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1273,7 +1450,6 @@ fn build_find_roles_by_account_query_for_test(
 fn build_find_domains_by_account_query_for_test(
     account_id: AccountId,
 ) -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1285,7 +1461,6 @@ fn build_find_domains_by_account_query_for_test(
 fn build_find_assets_by_account_query_for_test(
     account_id: AccountId,
 ) -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1297,7 +1472,6 @@ fn build_find_assets_by_account_query_for_test(
 fn build_find_accounts_with_asset_query_for_test(
     asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
 ) -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1309,7 +1483,6 @@ fn build_find_accounts_with_asset_query_for_test(
 fn build_find_nfts_by_account_query_for_test(
     account_id: AccountId,
 ) -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1319,7 +1492,6 @@ fn build_find_nfts_by_account_query_for_test(
     executor.into_query()
 }
 fn build_find_transactions_query_for_test() -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::builder::QueryBuilderExt;
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -1331,9 +1503,7 @@ fn build_find_transactions_query_for_test() -> iroha_data_model::query::QueryWit
 fn build_exact_transaction_details_query_for_test(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> iroha_data_model::query::QueryWithParams {
-    use iroha_data_model::query::{
-        CommittedTxFilters, builder::QueryBuilderExt, dsl::CompoundPredicate,
-    };
+    use iroha_data_model::query::{CommittedTxFilters, dsl::CompoundPredicate};
     let executor = CapturingIterableQueryExecutor::default();
     let _ = iroha_data_model::query::builder::QueryBuilder::new(
         &executor,
@@ -2067,7 +2237,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let sorafs_gateway_config = iroha_config::parameters::actual::SorafsGateway::default();
     let sorafs_site_bindings = None;
     let telemetry = routing::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
-    let telemetry_profile = telemetry.profile();
     let iso_bridge = iso
         .as_ref()
         .and_then(|cfg| {
@@ -2083,7 +2252,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let da_replay_cache = Arc::new(iroha_core::da::ReplayCache::new(
         iroha_core::da::ReplayCacheConfig::new(),
     ));
-    let da_replay_store = Arc::new(da::ReplayCursorStore::in_memory());
     let da_ingest = iroha_config::parameters::actual::DaIngest::default();
     let da_ingest_compute_inflight = Arc::new(tokio::sync::Semaphore::new(
         da_ingest.max_concurrent_compute_jobs.get(),
@@ -2093,11 +2261,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         Algorithm::Secp256k1,
         "derive Torii DA receipt fixture signer",
     );
-    let alias_service = iso.as_ref().and_then(|cfg| {
-        alias_service_from_iso_config(cfg, AliasAttester::new(da_receipt_signer.clone()))
-    });
     let da_receipt_log = Arc::new(da::DaReceiptLog::in_memory(
-        Arc::clone(&da_replay_store),
+        Arc::new(da::ReplayCursorStore::in_memory()),
         da_receipt_signer.public_key().clone(),
     ));
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -2233,6 +2398,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         )),
         query_fanout_inflight,
         #[cfg(feature = "app_api")]
+        app_routed_read_waiters: Arc::new(tokio::sync::Semaphore::new(
+            defaults::torii::QUERY_MAX_INFLIGHT.get(),
+        )),
+        #[cfg(feature = "app_api")]
         app_api_routed_read_body_read_timeout: Duration::from_millis(
             defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
         ),
@@ -2299,7 +2468,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
         require_api_token: false,
         api_token_digests: api_token_digests.clone(),
-        webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
         zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
         operator_auth,
         operator_signatures,
@@ -2335,18 +2503,15 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         high_load_subscription_tx_threshold: usize::MAX,
         online_peers: peers,
         iso_bridge,
-        alias_service,
         #[cfg(feature = "app_api")]
         identifier_resolver: None,
         #[cfg(feature = "app_api")]
         tx_history_access_policy: Arc::new(TxHistoryAccessPolicy::default()),
         telemetry,
-        telemetry_profile,
         zk_prover_keys_dir: defaults::torii::zk_prover_keys_dir(),
         zk_ivm_prove_jobs,
         zk_ivm_prove_job_budget,
         soracloud_public_inflight,
-        soracloud_public_inflight_total,
         sns_name_cache: Arc::new(sns::SnsNameRecordCache::new()),
         zk_ivm_prove_inflight,
         zk_ivm_prove_slots,
@@ -2364,7 +2529,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         peer_telemetry,
         da_replay_cache,
-        da_replay_store,
         da_receipt_log,
         da_replay_lifecycle_lock: Arc::new(parking_lot::Mutex::new(())),
         da_receipt_signer,
@@ -2504,12 +2668,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         #[cfg(feature = "push")]
         push: push_bridge,
         #[cfg(feature = "push")]
-        push_rate_limiter: limits::RateLimiter::new(
-            push_cfg
-                .rate_per_minute
-                .map(|v| v.get().saturating_add(59) / 60),
-            push_cfg.burst.map(std::num::NonZeroU32::get),
-        ),
+        push_rate_limiter: super::push_registration_rate_limiter(&push_cfg),
     })
 }
 #[cfg(feature = "telemetry")]

@@ -40,8 +40,6 @@ const MESSAGE_PROFILE_KEYS: &[&str] = &[
     "amount_minor_units",
 ];
 const AMOUNT_MINOR_UNITS_KEYS: &[&str] = &["currency", "minor_units"];
-/// Default profile used when Torii configuration does not select a rail.
-pub const DEFAULT_PROFILE_ID: &str = "generic-iso20022";
 
 const DEFAULT_PROFILES_JSON: &str = include_str!("default_profiles.json");
 

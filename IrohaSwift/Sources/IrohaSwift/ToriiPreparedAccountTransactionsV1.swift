@@ -171,7 +171,7 @@ enum ToriiPreparedAccountProtocolV1 {
     do {
       inspected = try ToriiCanonicalTransactionDraft.inspectVersionedSignedTransaction(
         wire,
-        expectedAdmissionIntent: .queuePlanSynced,
+        expectedAdmissionIntent: .ordinary,
         context: "prepared transaction"
       )
     } catch {
@@ -211,7 +211,7 @@ enum ToriiPreparedAccountProtocolV1 {
     }
     return try ToriiCanonicalTransactionDraft.inspectVersionedSignedTransaction(
       wire,
-      expectedAdmissionIntent: .queuePlanSynced,
+      expectedAdmissionIntent: .ordinary,
       context: "prepared transaction"
     )
   }

@@ -1,12 +1,22 @@
 //! Read-only producer for one fresh topology intent after a durable dispatcher apply.
-use super::super::{admission, storage};
+#[cfg(any(target_os = "linux", test))]
+use super::super::admission;
+#[cfg(target_os = "linux")]
+use super::super::storage;
 use super::*;
+#[cfg(any(target_os = "linux", test))]
 use crate::taira_public_reset as reset;
+#[cfg(target_os = "linux")]
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+#[cfg(any(target_os = "linux", test))]
+use reset::history::TerminalInventory;
+#[cfg(any(target_os = "linux", test))]
 use reset::{
-    BUILD_PROFILE, BUILD_TARGET, CHAIN_ID, EdgeInitialStateV1, FaucetPolicyV1, FeeIntentV1,
-    RevisionV1, SourceManifestV1, ValidatorClientV1, ValidatorInitialStateV1,
+    BUILD_PROFILE, BUILD_TARGET, CHAIN_ID, FaucetPolicyV1, RevisionV1, SourceManifestV1,
+    ValidatorClientV1,
 };
+#[cfg(target_os = "linux")]
+use reset::{EdgeInitialStateV1, FeeIntentV1, ValidatorInitialStateV1};
 
 /// Live predecessor identity comes from the sealed plan, stopped capture and selected inventory.
 #[derive(clap::Args, Debug)]
@@ -52,6 +62,7 @@ pub(in super::super::super::super) struct PrepareTopologyIntent {
     output: PathBuf,
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn absolute(path: &Path, label: &str) -> Result<String> {
     validate_absolute_normal_path(path, label)?;
     path.to_str()
@@ -59,6 +70,7 @@ fn absolute(path: &Path, label: &str) -> Result<String> {
         .ok_or_else(|| eyre!("{label} must be UTF-8"))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn artifact(
     role: &str,
     local: &Path,
@@ -72,7 +84,8 @@ fn artifact(
     })
 }
 
-fn bind_predecessor(old: &InventoryV1, runtime: &CurrentRuntime, plan: &Plan) -> Result<()> {
+#[cfg(any(target_os = "linux", test))]
+fn bind_predecessor(old: &TerminalInventory, runtime: &CurrentRuntime, plan: &Plan) -> Result<()> {
     need(
         old.validators.len() == 4
             && old.validator_clients.len() == 4
@@ -157,10 +170,11 @@ fn bind_predecessor(old: &InventoryV1, runtime: &CurrentRuntime, plan: &Plan) ->
 /// release is again the selected network after a complete rollback. Do not use
 /// the failed reset's candidate revision, genesis or client identities as the
 /// source of the successor topology.
+#[cfg(any(target_os = "linux", test))]
 fn bind_selected_inventory(
-    selected: &InventoryV1,
+    selected: &TerminalInventory,
     selected_sha256: &str,
-    predecessor: &InventoryV1,
+    predecessor: &TerminalInventory,
     runtime: &CurrentRuntime,
     plan: &Plan,
 ) -> Result<()> {
@@ -175,10 +189,11 @@ fn bind_selected_inventory(
     bind_predecessor(selected, runtime, plan)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn bind_inventory_lineage(
-    selected: &InventoryV1,
+    selected: &TerminalInventory,
     selected_sha256: &str,
-    predecessor: &InventoryV1,
+    predecessor: &TerminalInventory,
     runtime: &CurrentRuntime,
     predecessor_sha256: &str,
     rolled_back: bool,
@@ -212,8 +227,9 @@ fn bind_inventory_lineage(
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn distinct_new_clients(
-    old: &InventoryV1,
+    old: &TerminalInventory,
     new: &[ValidatorClientV1],
     faucet: &FaucetPolicyV1,
     new_canary: &str,
@@ -254,8 +270,13 @@ fn distinct_new_clients(
 mod tests {
     use super::*;
 
-    fn lineage_fixture() -> (InventoryV1, InventoryV1, CurrentRuntime) {
-        let mut selected = reset::sample_inventory_fixture();
+    fn terminal_fixture() -> TerminalInventory {
+        let bytes = reset::canonical_inventory_bytes(&reset::sample_inventory_fixture()).unwrap();
+        reset::history::decode(&bytes, "fixture").unwrap().0
+    }
+
+    fn lineage_fixture() -> (TerminalInventory, TerminalInventory, CurrentRuntime) {
+        let mut selected = terminal_fixture();
         selected.revision.commit = "4".repeat(40);
         selected.revision.build_id = selected.revision.commit.clone();
         let mut predecessor = selected.clone();
@@ -485,7 +506,7 @@ mod tests {
 
     #[test]
     fn topology_candidate_rejects_reused_or_duplicate_account_peer_and_faucet_identities() {
-        let old = reset::sample_inventory_fixture();
+        let old = terminal_fixture();
         let mut clients = old.validator_clients.clone();
         for (index, client) in clients.iter_mut().enumerate() {
             client.account_id = format!("new-account-{index}");
@@ -520,6 +541,7 @@ mod tests {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn daemon_identity(
     path: &Path,
     release: &str,
@@ -572,6 +594,7 @@ fn daemon_identity(
     Ok((config.common.peer.id.to_string(), origin, policy))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn source_revision(
     source_manifest: &Path,
     import_root: &Path,
@@ -673,29 +696,21 @@ impl PrepareTopologyIntent {
             )?;
             let inventory_bytes = admission::read(&inventory_pin)?;
             let (predecessor, _chain_guard) =
-                reset::decode_inventory(&inventory_bytes, "retained inventory")?;
-            reset::validate_inventory_for_controller(
-                &predecessor,
-                reset::ControllerAdmission::AbandonOriginalTarget,
-            )?;
+                reset::history::decode(&inventory_bytes, "retained inventory")?;
             let selected_pin = observed.pin(&self.selected_inventory, None, MAX_PROOF)?;
             need(
                 selected_pin.sha256 == self.expected_selected_inventory_sha256,
                 "selected inventory digest differs",
             )?;
             let (old, _selected_chain_guard) =
-                reset::decode_inventory(&admission::read(&selected_pin)?, "selected inventory")?;
-            reset::validate_inventory_for_controller(
-                &old,
-                reset::ControllerAdmission::AbandonOriginalTarget,
-            )?;
+                reset::history::decode(&admission::read(&selected_pin)?, "selected inventory")?;
             let selected_authorization_pin =
                 observed.pin(&self.selected_authorization, Some(0o600), MAX_PROOF)?;
             let selected_authorization: reset::AuthorizationEnvelopeV1 =
                 json::from_slice(&admission::read(&selected_authorization_pin)?)?;
             let trusted: reset::TrustedKeyV1 =
                 json::from_slice(&admission::read(&plan.trusted_public_key)?)?;
-            reset::verify_authorization_at_signed_instant(
+            reset::history::verify_authorization(
                 &old,
                 &selected_pin.sha256,
                 &selected_authorization,

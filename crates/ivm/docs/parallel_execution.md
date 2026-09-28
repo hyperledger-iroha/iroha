@@ -1,38 +1,30 @@
-# Deterministic Parallel Block Execution
+# Transaction Concurrency and Declared Access Sets
 
-IVM executes each contract's instruction stream sequentially. The block scheduler may execute
-independent transactions concurrently, but consensus-visible results always follow block order.
+IVM executes each contract's instruction stream sequentially and has no in-VM block scheduler.
+Transaction-level concurrency belongs to the host: the node pipeline in `iroha_core` derives
+deterministic access sets, orders conflicting transactions, and commits results in canonical block
+order.
 
 ## State access sets
 
-Each transaction carries the state keys and register tags it may read or write. The dependency
-graph places an edge between transactions whose declared accesses conflict. Missing or
-conservative access information reduces concurrency; it never changes transaction semantics.
+`ivm::parallel::StateAccessSet` carries the state keys and register tags a transaction may read or
+write. Hosts receive the declared set through `IVMHost::begin_tx` and return the observed accesses
+from `IVMHost::finish_tx` when `IVMHost::access_logging_supported` is true. Callers that execute a
+transaction atomically take `IVMHost::checkpoint` first and restore it when execution fails or the
+observed accesses exceed the declaration, so a failed transaction leaves no host side effects.
 
-## Scheduling
+Missing or conservative access information reduces host concurrency; it never changes transaction
+semantics.
 
-The scheduler releases transactions only after their graph dependencies complete. Independent
-transactions run in isolated ExecutionContext values on a lazily created Rayon pool. Ordinary
-single-contract execution does not create scheduler threads.
+## Thread limits
 
-The pool size may adapt within configured bounds. This affects throughput only. Transaction
-results, gas, and state updates do not depend on thread count, completion timing, or host CPU
-features.
-
-## Commit
-
-Workers return buffered StateUpdate values instead of mutating shared state. The coordinator holds
-completed outputs until every lower transaction index has completed, then publishes each successful
-batch in original block order. State::apply sorts each batch by key and holds one RwLock write guard
-for the complete batch, so readers cannot observe a partial commit.
-
-Failed transactions publish no writes. Dependency edges serialize transactions whose declared
-access sets conflict; independent transactions may finish in any order, but publication remains in
-canonical block order.
+`ivm::set_scheduler_thread_limits` records the operator's `concurrency.scheduler_min_threads` and
+`concurrency.scheduler_max_threads` bounds (0 means the physical core count), which VM construction
+reports in the startup banner. `ivm::init_global_rayon` and `ivm::apply_stack_sizes` size the host
+Rayon pool and its worker stacks. These settings affect throughput only.
 
 ## Determinism and gas
 
-Every transaction owns its gas meter and runs the same sequential interpreter used outside the
-block scheduler. Scheduling work is not consensus-metered, and hardware capabilities cannot alter
-the gas exhaustion point. Tests compare parallel block execution with sequential execution and
-exercise conflict ordering, atomic publication, and dynamic pool limits.
+Every transaction owns its gas meter and runs the same sequential interpreter. Host scheduling work
+is not consensus-metered, and thread count, completion timing, or CPU features cannot alter
+transaction results, gas, or state updates.

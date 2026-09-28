@@ -6,18 +6,12 @@
 //! encoder for host-side frame assembly. Decode uses the shared frame decoder and falls back to the
 //! CPU zstd decoder for frames the in-crate decoder does not yet support.
 use std::{io::Cursor, ptr, slice};
-#[allow(dead_code)]
-#[path = "../../gpuzstd_metal/src/bitstream.rs"]
-mod bitstream;
-#[allow(dead_code)]
-#[path = "../../gpuzstd_metal/src/fse.rs"]
-mod fse;
-#[allow(dead_code)]
-#[path = "../../gpuzstd_metal/src/huffman.rs"]
-mod huffman;
-#[allow(dead_code)]
-#[path = "../../gpuzstd_metal/src/zstd_frame.rs"]
-mod zstd_frame;
+
+/// Deterministic zstd sequence emitted by CUDA match-finding kernels.
+///
+/// This is the shared `#[repr(C)]` layout consumed by the frame encoder.
+pub use gpuzstd_metal::GpuZstdSequence;
+use gpuzstd_metal::zstd_frame;
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
 const RC_NO_SPACE: i32 = 2;
@@ -29,19 +23,6 @@ const CHUNK_SIZE: u32 = 32 * 1024;
 const MIN_MATCH: u32 = 3;
 #[cfg_attr(not(gpuzstd_cuda_available), allow(dead_code))]
 const MAX_MATCH: u32 = 64;
-/// Deterministic zstd sequence emitted by CUDA match-finding kernels.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct GpuZstdSequence {
-    /// Literal bytes preceding the match.
-    pub lit_len: u32,
-    /// Match length in bytes, or zero for the final literal-only tail.
-    pub match_len: u32,
-    /// Backward match offset in bytes.
-    pub offset: u32,
-    /// Reserved for ABI-compatible future extension; must be zero.
-    pub reserved: u32,
-}
 #[cfg(gpuzstd_cuda_available)]
 unsafe extern "C" {
     fn gpuzstd_cuda_count_sequences(

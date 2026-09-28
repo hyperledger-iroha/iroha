@@ -40,6 +40,10 @@ pub(super) struct MaterializeValidatorConfig {
     /// Final Torii listener as canonical IP:PORT; its port must match the generated config.
     #[arg(long, value_name = "IP:PORT", value_parser = checked_torii_bind_address)]
     torii_bind_address: std::net::SocketAddr,
+    /// Additional socket-observed proxy hop permitted to forward client addresses.
+    /// Repeat for each approved host; loopback proxies are included automatically.
+    #[arg(long, value_name = "IP", value_parser = checked_trusted_proxy_ip)]
+    trusted_proxy_ip: Vec<std::net::IpAddr>,
     /// Fresh owner-private output; an existing file is never replaced.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
@@ -76,6 +80,20 @@ fn checked_torii_bind_address(value: &str) -> Result<std::net::SocketAddr, Strin
     Ok(address)
 }
 
+fn checked_trusted_proxy_ip(value: &str) -> Result<std::net::IpAddr, String> {
+    let address = value
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| "trusted proxy must be one canonical unicast IP address".to_owned())?;
+    if address.to_string() != value
+        || address.is_unspecified()
+        || address.is_multicast()
+        || matches!(address, std::net::IpAddr::V4(address) if address.is_broadcast())
+        || matches!(address, std::net::IpAddr::V6(address) if address.to_ipv4_mapped().is_some())
+    {
+        return Err("trusted proxy must be one canonical unicast IP address".to_owned());
+    }
+    Ok(address)
+}
 /// Consume private bytes only through native descriptor custody and create a new private file.
 pub(super) fn materialize(args: &MaterializeValidatorConfig) -> Result<()> {
     validate_absolute_normal_path(&args.localnet_dir, "generated network directory")?;
@@ -112,6 +130,7 @@ pub(super) fn materialize(args: &MaterializeValidatorConfig) -> Result<()> {
         &source_operator_public_key,
         &args.operator_public_key,
         args.torii_bind_address,
+        &args.trusted_proxy_ip,
     )?;
     inputs::write_new_private(&args.output, &output)
 }
@@ -215,11 +234,14 @@ fn state_paths(peer: usize) -> Vec<(Vec<&'static str>, PathBuf, &'static str)> {
 
 /// Replace localnet-only admission with the finite public Torii policy.
 ///
-/// The public edge connects over loopback and sets the socket-observed client
-/// in `X-Forwarded-For`. Torii must trust that exact proxy hop to give
+/// Public edges set the socket-observed client in `X-Forwarded-For`. Torii
+/// trusts loopback and explicitly selected proxy hosts to give
 /// public callers distinct rate-limit identities. Localnet bypasses are removed
 /// entirely so malformed forwarded chains cannot inherit a loopback exemption.
-fn project_public_torii_ingress(torii: &mut toml::Table) -> Result<()> {
+fn project_public_torii_ingress(
+    torii: &mut toml::Table,
+    trusted_proxy_ips: &[std::net::IpAddr],
+) -> Result<()> {
     use iroha_config::parameters::defaults::torii;
 
     for (field, configured) in [
@@ -261,16 +283,20 @@ fn project_public_torii_ingress(torii: &mut toml::Table) -> Result<()> {
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| eyre!("generated Torii transport must be a table"))?;
+    let mut proxies = vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()];
+    for address in trusted_proxy_ips {
+        checked_trusted_proxy_ip(&address.to_string()).map_err(|error| eyre!(error))?;
+        let host = format!("{address}/{}", if address.is_ipv4() { 32 } else { 128 });
+        if !proxies.contains(&host) {
+            proxies.push(host);
+        }
+    }
     transport.insert(
         "trusted_proxy_cidrs".into(),
-        toml::Value::Array(vec![
-            toml::Value::String("127.0.0.1/32".to_owned()),
-            toml::Value::String("::1/128".to_owned()),
-        ]),
+        toml::Value::Array(proxies.into_iter().map(toml::Value::String).collect()),
     );
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn project_config(
     bytes: &[u8],
@@ -281,6 +307,7 @@ fn project_config(
     source_operator_key: &PublicKey,
     operator_key: &PublicKey,
     torii_bind_address: std::net::SocketAddr,
+    trusted_proxy_ips: &[std::net::IpAddr],
 ) -> Result<Zeroizing<Vec<u8>>> {
     validate_absolute_normal_path(source_root, "generated network directory")?;
     validate_absolute_normal_path(genesis_file, "installed signed genesis")?;
@@ -414,7 +441,7 @@ fn project_config(
                 iroha_primitives::addr::SocketAddr::from(torii_bind_address).to_literal(),
             ),
         );
-        project_public_torii_ingress(torii)?;
+        project_public_torii_ingress(torii, trusted_proxy_ips)?;
         let generated_signatures = torii
             .get("operator_signatures")
             .and_then(toml::Value::as_table)
@@ -609,6 +636,7 @@ mod tests {
             &source_operator(),
             &operator(),
             torii_bind_address,
+            &[],
         )?;
         Ok(toml::from_str(std::str::from_utf8(&output)?)?)
     }
@@ -721,6 +749,41 @@ mod tests {
             public["transport"]["trusted_proxy_cidrs"],
             toml::Value::Array(vec!["127.0.0.1/32".into(), "::1/128".into()])
         );
+    }
+
+    #[test]
+    fn materialization_trusts_only_explicit_proxy_hosts_without_rate_bypass() {
+        let mut torii = toml::Table::new();
+        let ips = ["192.168.64.1", "2001:db8::1", "192.168.64.1", "127.0.0.1"]
+            .map(|ip| checked_trusted_proxy_ip(ip).unwrap());
+        project_public_torii_ingress(&mut torii, &ips).unwrap();
+        assert_eq!(
+            torii["transport"]["trusted_proxy_cidrs"],
+            toml::Value::Array(vec![
+                "127.0.0.1/32".into(),
+                "::1/128".into(),
+                "192.168.64.1/32".into(),
+                "2001:db8::1/128".into(),
+            ])
+        );
+        assert_eq!(torii["preauth_allow_cidrs"], toml::Value::Array(Vec::new()));
+        assert_eq!(
+            torii["api_rate_limit_bypass_cidrs"],
+            toml::Value::Array(Vec::new())
+        );
+        for invalid in [
+            "0.0.0.0",
+            "::",
+            "224.0.0.1",
+            "ff02::1",
+            "255.255.255.255",
+            "192.168.64.0/24",
+            "192.168.64.1:8080",
+            "localhost",
+            "::ffff:192.168.64.1",
+        ] {
+            assert!(checked_trusted_proxy_ip(invalid).is_err(), "{invalid}");
+        }
     }
 
     #[test]
@@ -982,6 +1045,14 @@ mod tests {
         assert_eq!(parsed.args.validator, VALIDATOR_SLUGS[0]);
         assert_eq!(parsed.args.network_id, identity());
         assert_eq!(parsed.args.torii_bind_address, ([0, 0, 0, 0], 8080).into());
+        assert!(parsed.args.trusted_proxy_ip.is_empty());
+        let mut with_proxy = arguments.clone();
+        with_proxy.extend(["--trusted-proxy-ip".to_owned(), "192.168.64.1".to_owned()]);
+        let proxy = <Command as clap::Parser>::try_parse_from(with_proxy).unwrap();
+        assert_eq!(
+            proxy.args.trusted_proxy_ip,
+            ["192.168.64.1".parse::<std::net::IpAddr>().unwrap()]
+        );
         let full_arguments = ["iroha", "taira", "public-reset"]
             .into_iter()
             .map(str::to_owned)

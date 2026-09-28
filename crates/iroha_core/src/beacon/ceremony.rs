@@ -32,48 +32,60 @@
 //! logical clock for a deal made before the network starts. A failed ceremony
 //! is never resumed: every seat is one-shot, and a new deal starts fresh seats.
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use std::collections::BTreeSet;
 
-use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
-use iroha_data_model::{
-    NetworkId,
-    consensus::{
-        GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconDkgSessionV1,
-        GlobalThresholdBeaconKeySessionV1,
-    },
-    isi::consensus_keys::{
-        ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1,
-        ThresholdKeyLifecycleSignatureV1,
-    },
-};
+use iroha_crypto::{Hash, Signature};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_crypto::{KeyPair, PublicKey};
+use iroha_data_model::NetworkId;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1;
 use iroha_model_base::peer::PeerId;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
 };
 use thiserror::Error;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use zeroize::Zeroizing;
-
-use super::{
-    AdaptiveGlobalThresholdBeaconDkgCryptoV1, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    GlobalThresholdBeaconDkgStateV1, LocalGlobalThresholdBeaconDkgSeatV1,
-    credential::{
-        ConsensusThresholdCredentialErrorV1, RuntimeGlobalBeaconShareProvisioningV1,
-        encode_global_beacon_partial_signer_credential_v1,
-        global_beacon_partial_signer_inventory_digest_v1,
-        global_beacon_partial_signer_public_inventory_digest_v1,
-    },
-    global_threshold_beacon_roster_hash_v1,
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use {
+    iroha_data_model::consensus::GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+    iroha_data_model::consensus::GlobalThresholdBeaconDkgSessionV1,
+    iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleActionV1,
+    iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
+    iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleSignatureV1,
 };
+
+use super::credential::ConsensusThresholdCredentialErrorV1;
+use crate::state::ThresholdKeyLifecycleCertificateErrorV1;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use crate::state::{
     THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-    THRESHOLD_KEY_LIFECYCLE_PUBLIC_STATE_MAX_BYTES_V1, ThresholdKeyLifecycleCertificateErrorV1,
+    THRESHOLD_KEY_LIFECYCLE_PUBLIC_STATE_MAX_BYTES_V1,
     threshold_key_lifecycle_certificate_preimage_v1, verify_threshold_key_lifecycle_certificate_v1,
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use {
+    super::AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+    super::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    super::GlobalThresholdBeaconDkgStateV1, super::LocalGlobalThresholdBeaconDkgSeatV1,
+    super::credential::global_beacon_partial_signer_public_inventory_digest_v1,
+    super::global_threshold_beacon_roster_hash_v1,
+};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use {
+    super::credential::RuntimeGlobalBeaconShareProvisioningV1,
+    super::credential::encode_global_beacon_partial_signer_credential_v1,
+    super::credential::global_beacon_partial_signer_inventory_digest_v1,
+};
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Maximum number of effective heights one install-range signing call covers.
 pub const GLOBAL_BEACON_INSTALL_RANGE_MAX_HEIGHTS_V1: u16 = 64;
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Nominal genesis phase windows: start, commitments end, deliveries end and
 /// acceptances end. The transcript finalizes at the last one.
 pub const GLOBAL_BEACON_GENESIS_DKG_WINDOWS_V1: [u64; 4] = [1, 2, 3, 4];
@@ -134,6 +146,7 @@ pub fn global_beacon_genesis_attempt_id_v1(network_id: NetworkId) -> [u8; 32] {
     .into()
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Build the bootstrap DKG session of an exact `3f + 1` genesis roster.
 ///
 /// The session has threshold `f + 1`, authority generation 0, the network's
@@ -175,6 +188,7 @@ pub fn global_beacon_genesis_dkg_session_v1(
     Ok(session)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Validated public inputs of one beacon deal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalBeaconCeremonyPlanV1 {
@@ -184,6 +198,7 @@ pub struct GlobalBeaconCeremonyPlanV1 {
     provider_revision: u64,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl GlobalBeaconCeremonyPlanV1 {
     /// Validate one deal plan.
     ///
@@ -253,6 +268,7 @@ impl GlobalBeaconCeremonyPlanV1 {
         self.provider_revision
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Encode one seat's runtime credential from its aggregated private share.
     ///
     /// `components` is the seat's own
@@ -307,6 +323,7 @@ impl GlobalBeaconCeremonyPlanV1 {
         })
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Verify a finalized record and its public seat bindings against this plan.
     ///
     /// # Errors
@@ -377,6 +394,7 @@ pub struct GlobalBeaconSeatBindingV1 {
     pub policy_digest: [u8; 32],
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// One dealt seat: its public binding and its zeroizing runtime credential.
 pub struct GlobalBeaconSeatCredentialV1 {
     /// Public provider binding rendered into the seat's node configuration.
@@ -385,6 +403,7 @@ pub struct GlobalBeaconSeatCredentialV1 {
     pub credential: Zeroizing<Vec<u8>>,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Result of a completed deal: one finalized, not yet active record and every seat.
 pub struct DealtGlobalBeaconV1 {
     /// Finalized public key-session record, installed by a lifecycle certificate.
@@ -393,6 +412,7 @@ pub struct DealtGlobalBeaconV1 {
     pub seats: Vec<GlobalBeaconSeatCredentialV1>,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Run every seat of `plan` in process against the session's nominal phase windows.
 ///
 /// `signers[i]` is the validator key of seat `i + 1`. Each seat publishes its
@@ -527,6 +547,7 @@ pub struct GlobalBeaconInstallRangeSignaturesV1 {
     pub signatures: Vec<Signature>,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Public install context shared by every host signer and the controller assembler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalBeaconInstallContextV1 {
@@ -536,6 +557,7 @@ pub struct GlobalBeaconInstallContextV1 {
     quorum: u16,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl GlobalBeaconInstallContextV1 {
     /// Bind a finalized, inactive record to the exact ordered authorization roster.
     ///
@@ -674,6 +696,7 @@ impl GlobalBeaconInstallContextV1 {
         })
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Sign install-certificate preimages for `count` consecutive effective heights.
     ///
     /// # Errors
@@ -735,6 +758,7 @@ impl GlobalBeaconInstallContextV1 {
         Ok(certificate)
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Assemble the certificate for `effective_height` from exactly `2f + 1` hosts' ranges.
     ///
     /// Range order is irrelevant: the selected signatures are placed in
@@ -783,6 +807,7 @@ impl GlobalBeaconInstallContextV1 {
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn exact_committee_size(roster: &[PeerId]) -> Result<u16, GlobalBeaconCeremonyErrorV1> {
     let committee_size =
         u16::try_from(roster.len()).map_err(|_| GlobalBeaconCeremonyErrorV1::InvalidPlan)?;
@@ -795,6 +820,7 @@ fn exact_committee_size(roster: &[PeerId]) -> Result<u16, GlobalBeaconCeremonyEr
     Ok(committee_size)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn seat_index(offset: usize) -> Result<u16, GlobalBeaconCeremonyErrorV1> {
     offset
         .checked_add(1)

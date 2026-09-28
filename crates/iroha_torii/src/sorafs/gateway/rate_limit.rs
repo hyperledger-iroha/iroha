@@ -1,11 +1,8 @@
-//! Lightweight rolling-window rate limiter for the SoraFS gateway.
+//! Constant-memory token budgets for the SoraFS gateway.
 use blake3::Hasher;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 const MAX_CLIENT_BUCKETS: usize = 4_096;
 /// Fingerprint derived from client connection metadata (e.g., IP address).
@@ -35,9 +32,9 @@ impl ClientFingerprint {
 /// Configuration for the gateway rate limiter.
 #[derive(Clone, Copy, Debug)]
 pub struct GatewayRateLimitConfig {
-    /// Maximum requests permitted within the rolling window. `None` disables limiting.
+    /// Maximum burst and tokens replenished per window. `None` disables limiting.
     pub max_requests: Option<u32>,
-    /// Length of the rolling window used for accounting.
+    /// Time required to replenish the complete token budget.
     pub window: Duration,
     /// Duration for which a client is temporarily banned after exceeding the limit.
     pub ban_duration: Option<Duration>,
@@ -56,16 +53,17 @@ impl GatewayRateLimitConfig {
 impl Default for GatewayRateLimitConfig {
     fn default() -> Self {
         Self {
-            max_requests: Some(120),
-            window: Duration::from_mins(1),
-            ban_duration: Some(Duration::from_secs(30)),
+            max_requests:
+                iroha_config::parameters::defaults::sorafs::gateway::rate_limit::MAX_REQUESTS,
+            window: iroha_config::parameters::defaults::sorafs::gateway::rate_limit::WINDOW,
+            ban_duration: iroha_config::parameters::defaults::sorafs::gateway::rate_limit::BAN,
         }
     }
 }
 /// Error returned when a client exceeds the configured limits.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum RateLimitError {
-    /// The client has exhausted the allowance for the current window.
+    /// The client has exhausted its token budget.
     #[error("rate limited; retry after {retry_after:?}")]
     Limited {
         /// Suggested retry-after period.
@@ -78,17 +76,20 @@ pub enum RateLimitError {
         retry_after: Option<Duration>,
     },
 }
-#[derive(Debug, Default)]
-struct ClientWindow {
-    events: VecDeque<Instant>,
-    ban_until: Option<Instant>,
-    last_seen: Option<Instant>,
+#[derive(Debug)]
+struct ClientBucket {
+    // One request costs window.as_nanos() credits; each elapsed nanosecond adds
+    // max_requests credits. This retains fractional tokens without floating point.
+    credits: u128,
+    last_refill: Instant,
+    ban_started: Option<Instant>,
+    last_seen: Instant,
 }
-/// Rolling-window rate limiter keyed by [`ClientFingerprint`].
+/// Constant-memory token bucket keyed by [`ClientFingerprint`].
 #[derive(Debug)]
 pub struct GatewayRateLimiter {
     config: GatewayRateLimitConfig,
-    buckets: DashMap<ClientFingerprint, ClientWindow>,
+    buckets: DashMap<ClientFingerprint, ClientBucket>,
     bucket_admission: Mutex<()>,
 }
 impl GatewayRateLimiter {
@@ -115,14 +116,14 @@ impl GatewayRateLimiter {
         let Some(max_requests) = self.config.max_requests else {
             return Ok(());
         };
-        if let Some(mut window) = self.buckets.get_mut(client) {
-            return self.check_window(&mut window, now, max_requests);
+        if let Some(mut bucket) = self.buckets.get_mut(client) {
+            return self.check_bucket(&mut bucket, now, max_requests);
         }
         // Only first-seen fingerprints enter this critical section. It makes the hard bucket
         // bound race-free without serializing normal requests from known clients.
         let _admission = self.bucket_admission.lock();
-        if let Some(mut window) = self.buckets.get_mut(client) {
-            return self.check_window(&mut window, now, max_requests);
+        if let Some(mut bucket) = self.buckets.get_mut(client) {
+            return self.check_bucket(&mut bucket, now, max_requests);
         }
         self.prune_inactive(now);
         if self.buckets.len() >= MAX_CLIENT_BUCKETS {
@@ -139,71 +140,82 @@ impl GatewayRateLimiter {
                 self.buckets.remove(&oldest);
             }
         }
-        let mut window = ClientWindow::default();
-        window.events.push_back(now);
-        window.last_seen = Some(now);
-        self.buckets.insert(*client, window);
-        Ok(())
+        let mut bucket = ClientBucket {
+            credits: self.capacity(max_requests),
+            last_refill: now,
+            ban_started: None,
+            last_seen: now,
+        };
+        let result = self.check_bucket(&mut bucket, now, max_requests);
+        self.buckets.insert(*client, bucket);
+        result
     }
-    fn check_window(
+    fn request_cost(&self) -> u128 {
+        // Normalize a zero interval to a nanosecond, keeping the credit cost
+        // positive without division by zero.
+        self.config.window.as_nanos().max(1)
+    }
+    fn capacity(&self, max_requests: u32) -> u128 {
+        self.request_cost().saturating_mul(u128::from(max_requests))
+    }
+    fn active_ban(&self, bucket: &ClientBucket, now: Instant) -> Option<Duration> {
+        let duration = self.config.ban_duration?;
+        let elapsed = now.saturating_duration_since(bucket.ban_started?);
+        (elapsed < duration).then(|| duration.saturating_sub(elapsed))
+    }
+    fn check_bucket(
         &self,
-        window: &mut ClientWindow,
+        bucket: &mut ClientBucket,
         now: Instant,
         max_requests: u32,
     ) -> Result<(), RateLimitError> {
-        window.last_seen = Some(now);
-        if let Some(ban_until) = window.ban_until {
-            if ban_until > now {
-                let retry_after = ban_until.saturating_duration_since(now);
-                return Err(RateLimitError::Banned {
-                    retry_after: Some(retry_after),
-                });
-            }
-            window.ban_until = None;
+        // Concurrent callers can acquire the bucket out of timestamp order. Never
+        // refill twice over the same interval or shorten a ban for those callers.
+        let now = now.max(bucket.last_seen);
+        bucket.last_seen = now;
+        if let Some(retry_after) = self.active_ban(bucket, now) {
+            return Err(RateLimitError::Banned {
+                retry_after: Some(retry_after),
+            });
         }
-        while let Some(&front) = window.events.front() {
-            if now.saturating_duration_since(front) > self.config.window {
-                window.events.pop_front();
-            } else {
-                break;
-            }
+        bucket.ban_started = None;
+        let elapsed = now.saturating_duration_since(bucket.last_refill);
+        let replenished = elapsed.as_nanos().saturating_mul(u128::from(max_requests));
+        bucket.credits = bucket
+            .credits
+            .saturating_add(replenished)
+            .min(self.capacity(max_requests));
+        bucket.last_refill = now;
+        let cost = self.request_cost();
+        if bucket.credits >= cost {
+            bucket.credits -= cost;
+            return Ok(());
         }
-        if window.events.len() as u32 >= max_requests {
-            let retry_after = window
-                .events
-                .front()
-                .map(|oldest| {
-                    self.config
-                        .window
-                        .saturating_sub(now.saturating_duration_since(*oldest))
-                })
-                .unwrap_or_else(|| self.config.window);
-            if let Some(ban_duration) = self.config.ban_duration {
-                window.ban_until = Some(now + ban_duration);
-                return Err(RateLimitError::Banned {
-                    retry_after: Some(ban_duration),
-                });
-            }
-            return Err(RateLimitError::Limited { retry_after });
+        if let Some(ban_duration) = self.config.ban_duration {
+            // Store the starting instant, avoiding Instant + Duration overflow for
+            // large configured bans while retaining exact expiry semantics.
+            bucket.ban_started = Some(now);
+            return Err(RateLimitError::Banned {
+                retry_after: Some(ban_duration),
+            });
         }
-        window.events.push_back(now);
-        Ok(())
+        let retry_after = if max_requests == 0 {
+            self.config.window.max(Duration::from_nanos(1))
+        } else {
+            let nanos = (cost - bucket.credits).div_ceil(u128::from(max_requests));
+            // The wait is at most one configured window, so it fits Duration.
+            Duration::new(
+                u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX),
+                (nanos % 1_000_000_000) as u32,
+            )
+        };
+        Err(RateLimitError::Limited { retry_after })
     }
     fn prune_inactive(&self, now: Instant) {
-        let inactive = self
-            .buckets
-            .iter()
-            .filter_map(|entry| {
-                let ban_active = entry.ban_until.is_some_and(|until| until > now);
-                let event_active = entry.events.back().is_some_and(|event| {
-                    now.saturating_duration_since(*event) <= self.config.window
-                });
-                (!ban_active && !event_active).then_some(*entry.key())
-            })
-            .collect::<Vec<_>>();
-        for fingerprint in inactive {
-            self.buckets.remove(&fingerprint);
-        }
+        self.buckets.retain(|_, bucket| {
+            self.active_ban(bucket, now).is_some()
+                || now.saturating_duration_since(bucket.last_seen) <= self.config.window
+        });
     }
 }
 #[cfg(test)]
@@ -218,22 +230,40 @@ mod tests {
         });
         let client = ClientFingerprint::from_identifier("client-1");
         let start = Instant::now();
-        assert!(limiter.check(&client, start).is_ok());
+        for _ in 0..3 {
+            assert!(limiter.check(&client, start).is_ok());
+        }
+        assert_eq!(
+            limiter.check(&client, start),
+            Err(RateLimitError::Limited {
+                retry_after: Duration::from_nanos(1_666_666_667),
+            })
+        );
         assert!(
             limiter
                 .check(&client, start + Duration::from_secs(1))
+                .is_err()
+        );
+        assert!(
+            limiter
+                .check(&client, start + Duration::from_nanos(1_666_666_666))
+                .is_err()
+        );
+        assert!(
+            limiter
+                .check(&client, start + Duration::from_nanos(1_666_666_667))
                 .is_ok()
         );
         assert!(
             limiter
-                .check(&client, start + Duration::from_secs(2))
+                .check(&client, start + Duration::from_nanos(3_333_333_333))
+                .is_err()
+        );
+        assert!(
+            limiter
+                .check(&client, start + Duration::from_nanos(3_333_333_334))
                 .is_ok()
         );
-        // Fourth request exceeds limit.
-        let err = limiter
-            .check(&client, start + Duration::from_secs(3))
-            .expect_err("expected limit to trigger");
-        assert!(matches!(err, RateLimitError::Limited { .. }));
     }
     #[test]
     fn rate_limiter_bans_when_configured() {
@@ -248,7 +278,23 @@ mod tests {
         let err = limiter
             .check(&client, now + Duration::from_millis(100))
             .expect_err("expected ban");
-        assert!(matches!(err, RateLimitError::Banned { .. }));
+        assert_eq!(
+            err,
+            RateLimitError::Banned {
+                retry_after: Some(Duration::from_secs(30))
+            }
+        );
+        assert_eq!(
+            limiter.check(&client, now + Duration::from_millis(30_099)),
+            Err(RateLimitError::Banned {
+                retry_after: Some(Duration::from_millis(1))
+            })
+        );
+        assert!(
+            limiter
+                .check(&client, now + Duration::from_millis(30_100))
+                .is_ok()
+        );
     }
     #[test]
     fn rate_limiter_bounds_first_seen_client_state() {
@@ -263,5 +309,134 @@ mod tests {
             assert!(limiter.check(&client, now).is_ok());
         }
         assert_eq!(limiter.buckets.len(), MAX_CLIENT_BUCKETS);
+    }
+    #[test]
+    fn rate_limiter_caps_idle_credit_and_keeps_clients_independent() {
+        let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(2),
+            window: Duration::from_secs(1),
+            ban_duration: None,
+        });
+        let first = ClientFingerprint::from_identifier("first");
+        let second = ClientFingerprint::from_identifier("second");
+        let start = Instant::now();
+        assert!(limiter.check(&first, start).is_ok());
+        let later = start + Duration::from_secs(1_000);
+        assert!(limiter.check(&first, later).is_ok());
+        assert!(limiter.check(&first, later).is_ok());
+        assert!(limiter.check(&first, later).is_err());
+        assert!(limiter.check(&second, later).is_ok());
+        assert!(limiter.check(&second, later).is_ok());
+        assert!(limiter.check(&second, later).is_err());
+        // A stale timestamp must not enable a second refill of the same interval.
+        assert!(limiter.check(&first, start).is_err());
+        assert!(limiter.check(&first, later).is_err());
+        assert!(
+            limiter
+                .check(&first, later + Duration::from_millis(500))
+                .is_ok()
+        );
+    }
+    #[test]
+    fn rate_limiter_handles_zero_and_extreme_budgets_without_overflow() {
+        let client = ClientFingerprint::from_identifier("extreme");
+        let now = Instant::now();
+        let zero = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(0),
+            window: Duration::ZERO,
+            ban_duration: None,
+        });
+        assert_eq!(
+            zero.check(&client, now),
+            Err(RateLimitError::Limited {
+                retry_after: Duration::from_nanos(1),
+            })
+        );
+        let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(u32::MAX),
+            window: Duration::MAX,
+            ban_duration: None,
+        });
+        assert!(limiter.check(&client, now).is_ok());
+        limiter.buckets.get_mut(&client).unwrap().credits = 0;
+        let wait_nanos = Duration::MAX.as_nanos().div_ceil(u128::from(u32::MAX));
+        assert_eq!(
+            limiter.check(&client, now),
+            Err(RateLimitError::Limited {
+                retry_after: Duration::new(
+                    (wait_nanos / 1_000_000_000) as u64,
+                    (wait_nanos % 1_000_000_000) as u32
+                ),
+            })
+        );
+        let ban = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(0),
+            window: Duration::MAX,
+            ban_duration: Some(Duration::MAX),
+        });
+        assert_eq!(
+            ban.check(&client, now),
+            Err(RateLimitError::Banned {
+                retry_after: Some(Duration::MAX)
+            })
+        );
+        assert_eq!(
+            ban.check(&client, now),
+            Err(RateLimitError::Banned {
+                retry_after: Some(Duration::MAX)
+            })
+        );
+        let fast = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(u32::MAX),
+            window: Duration::ZERO,
+            ban_duration: None,
+        });
+        assert!(fast.check(&client, now).is_ok());
+        fast.buckets.get_mut(&client).unwrap().credits = 0;
+        assert!(fast.check(&client, now + Duration::from_nanos(1)).is_ok());
+        assert_eq!(
+            fast.buckets.get(&client).unwrap().credits,
+            u128::from(u32::MAX) - 1
+        );
+    }
+    #[test]
+    fn rate_limiter_default_admits_large_solo_burst_with_one_fixed_bucket() {
+        let limiter = GatewayRateLimiter::new_default();
+        assert_eq!(limiter.config.max_requests, Some(600_000));
+        assert_eq!(limiter.config.window, Duration::from_secs(60));
+        assert_eq!(limiter.config.ban_duration, Some(Duration::from_secs(30)));
+        let client = ClientFingerprint::from_identifier("solo-public-client");
+        let now = Instant::now();
+        for request in 0..600_000 {
+            assert!(limiter.check(&client, now).is_ok(), "request {request}");
+        }
+        assert_eq!(limiter.buckets.len(), 1);
+        assert_eq!(limiter.buckets.get(&client).unwrap().credits, 0);
+        assert!(matches!(
+            limiter.check(&client, now),
+            Err(RateLimitError::Banned { .. })
+        ));
+    }
+    #[test]
+    fn rate_limiter_reclaims_idle_buckets_but_retains_active_bans() {
+        let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(1),
+            window: Duration::from_secs(1),
+            ban_duration: Some(Duration::from_secs(30)),
+        });
+        let idle = ClientFingerprint::from_identifier("idle");
+        let banned = ClientFingerprint::from_identifier("banned");
+        let now = Instant::now();
+        assert!(limiter.check(&idle, now).is_ok());
+        assert!(limiter.check(&banned, now).is_ok());
+        assert!(limiter.check(&banned, now).is_err());
+        limiter.prune_inactive(now + Duration::from_secs(2));
+        assert!(!limiter.buckets.contains_key(&idle));
+        assert!(limiter.buckets.contains_key(&banned));
+        limiter.prune_inactive(now + Duration::from_secs(30));
+        assert!(limiter.buckets.is_empty());
+        let disabled = GatewayRateLimiter::new(GatewayRateLimitConfig::disabled());
+        assert!(disabled.check(&idle, now).is_ok());
+        assert!(disabled.buckets.is_empty());
     }
 }

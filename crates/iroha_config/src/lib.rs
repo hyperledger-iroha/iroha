@@ -14,6 +14,8 @@ mod torii;
 /// This installs a minimal `log` logger that prints only messages originating from modules under
 /// `iroha_config_base::*` to stderr at `TRACE` level. It is used early (before the global tracing
 /// subscriber is set) to observe config parsing behavior when `--trace-config` is passed.
+/// `iroha_config_base` emits these records through the `log` macros directly; the workspace does
+/// not enable tracing's `log` forwarding, so `tracing` events never reach this logger.
 ///
 /// # Errors
 /// Returns an error if a global logger is already installed via `log`.

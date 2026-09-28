@@ -1,5 +1,8 @@
 //! On-chain oracle instruction handlers.
 use super::prelude::*;
+use crate::state::{
+    oracle_stage_deadline as stage_deadline, seed_oracle_change_stages as seed_change_stages,
+};
 use crate::{
     oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
     state::{StateTransaction, WorldTransaction},
@@ -24,10 +27,10 @@ use iroha_data_model::{
         DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT, DEFI_ORACLE_DOMAIN_PERPS_MARKET, DefiOracleAttestation,
         DefiOracleAttestationSource, FeedConfigVersion, FeedEventOutcome, FeedId, FeedSlot,
         Observation, ObservationOutcome, OracleChangeEvidence, OracleChangeFailure,
-        OracleChangeProposal, OracleChangeStage, OracleChangeStageFailure, OracleChangeStageRecord,
-        OracleChangeStatus, OracleDispute, OracleDisputeId, OracleDisputeOutcome,
-        OracleDisputeStatus, OraclePenalty, OraclePenaltyKind, OracleProviderKey,
-        OracleProviderStats, OracleReward, TwitterBindingAttestation, TwitterBindingRecord,
+        OracleChangeProposal, OracleChangeStage, OracleChangeStageFailure, OracleChangeStatus,
+        OracleDispute, OracleDisputeId, OracleDisputeOutcome, OracleDisputeStatus, OraclePenalty,
+        OraclePenaltyKind, OracleProviderKey, OracleProviderStats, OracleReward,
+        TwitterBindingAttestation, TwitterBindingRecord,
     },
     permission::{Permission as DataPermission, Permissions},
     prelude::*,
@@ -385,61 +388,6 @@ fn validate_feed_registration(
         }
     }
     Ok(())
-}
-fn stage_deadline(
-    stage: iroha_data_model::oracle::OracleChangeStage,
-    cfg: &iroha_config::parameters::actual::OracleGovernance,
-    started_at: u64,
-) -> Option<u64> {
-    let sla = match stage {
-        iroha_data_model::oracle::OracleChangeStage::Intake => cfg.intake_sla_blocks,
-        iroha_data_model::oracle::OracleChangeStage::RulesCommittee => cfg.rules_sla_blocks,
-        iroha_data_model::oracle::OracleChangeStage::CopReview => cfg.cop_sla_blocks,
-        iroha_data_model::oracle::OracleChangeStage::TechnicalAudit => cfg.technical_sla_blocks,
-        iroha_data_model::oracle::OracleChangeStage::PolicyJury => cfg.policy_jury_sla_blocks,
-        iroha_data_model::oracle::OracleChangeStage::Enactment => cfg.enact_sla_blocks,
-    };
-    if sla == 0 {
-        None
-    } else {
-        Some(started_at.saturating_add(sla))
-    }
-}
-fn seed_change_stages(
-    created_at: u64,
-    cfg: &iroha_config::parameters::actual::OracleGovernance,
-) -> Vec<OracleChangeStageRecord> {
-    use iroha_data_model::oracle::OracleChangeStage as Stage;
-    let mut stages = Vec::with_capacity(6);
-    stages.push(OracleChangeStageRecord {
-        stage: Stage::Intake,
-        approvals: BTreeSet::new(),
-        rejections: BTreeSet::new(),
-        evidence: Vec::new(),
-        started_at: Some(created_at),
-        deadline: stage_deadline(Stage::Intake, cfg, created_at),
-        completed_at: None,
-        failure: None,
-    });
-    for stage in [
-        Stage::RulesCommittee,
-        Stage::CopReview,
-        Stage::TechnicalAudit,
-        Stage::PolicyJury,
-        Stage::Enactment,
-    ] {
-        stages.push(OracleChangeStageRecord {
-            stage,
-            approvals: BTreeSet::new(),
-            rejections: BTreeSet::new(),
-            evidence: Vec::new(),
-            started_at: None,
-            deadline: None,
-            completed_at: None,
-            failure: None,
-        });
-    }
-    stages
 }
 fn required_votes(
     stage: iroha_data_model::oracle::OracleChangeStage,

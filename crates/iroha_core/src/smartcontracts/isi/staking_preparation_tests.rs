@@ -185,7 +185,98 @@ fn global_staking_eligibility_uses_unequal_authenticated_intervals() {
 }
 
 #[test]
-fn global_staking_preparation_does_not_invent_missing_incumbent_finality() {
+fn global_staking_eligibility_follows_the_committed_npos_epochs() {
+    let mut state = setup_state();
+    set_epoch_length(&mut state, 10);
+    let view = state.view();
+    // Epoch 1 is [11, 20]: a key ready before its last height joins after the next epoch;
+    // a key ready at the boundary misses the election that boundary freezes.
+    for (execution, ready, expected) in [
+        (1, 1, 21),
+        (15, 15, 31),
+        (15, 19, 31),
+        (15, 20, 41),
+        (20, 20, 41),
+        (15, 25, 41),
+        (15, 30, 51),
+    ] {
+        assert_eq!(
+            validator_eligibility_height(&view, LaneId::SINGLE, execution, ready).unwrap(),
+            expected,
+            "execution {execution}, key ready {ready}"
+        );
+        assert_eq!(
+            validator_eligibility_height(&view, LaneId::SINGLE, execution, ready).unwrap(),
+            validator_eligibility_height(&view, LaneId::new(1), execution, ready).unwrap(),
+            "without frozen preparations the global lane uses the same epochs as other lanes"
+        );
+    }
+    assert!(validator_eligibility_height(&view, LaneId::SINGLE, 15, 14).is_err());
+    assert!(validator_eligibility_height(&view, LaneId::SINGLE, 0, 0).is_err());
+}
+
+#[test]
+fn global_staking_eligibility_requires_committed_npos_parameters() {
+    let state = State::new_with_nexus_for_testing(
+        World::default(),
+        iroha_config::parameters::actual::Nexus::default(),
+        LiveQueryStore::start_test(),
+    );
+    let error = validator_eligibility_height(&state.view(), LaneId::SINGLE, 2, 2).unwrap_err();
+    assert!(
+        error.to_string().contains("committed NPoS parameters"),
+        "{error}"
+    );
+}
+
+#[test]
+fn global_staking_eligibility_keeps_a_frozen_preparation_interval() {
+    let network = crate::state::validator_committee::tests::fixture(4)
+        .transition
+        .preparation
+        .network_id;
+    let state_on = |network| {
+        let world = crate::state::validator_committee::tests::fixture(4).world;
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(Parameter::Custom(
+            SumeragiNposParameters {
+                epoch_length_blocks: NonZeroU64::new(10).unwrap(),
+                evidence_horizon_blocks: 1,
+                slashing_delay_blocks: 1,
+                ..SumeragiNposParameters::default()
+            }
+            .into_custom_parameter(),
+        ));
+        parameters.commit();
+        State::new_with_chain_and_network_id_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            iroha_model_base::chain::ChainId::from("staking-frozen-preparation"),
+            network,
+        )
+    };
+    // The fixture froze epoch 2 = [21, 30]; while epoch 1 = [11, 20] executes, the next free
+    // election is the one after it.
+    let state = state_on(network);
+    let view = state.view();
+    assert_eq!(
+        validator_eligibility_height(&view, LaneId::SINGLE, 15, 15).unwrap(),
+        31
+    );
+    assert_eq!(
+        validator_eligibility_height(&view, LaneId::SINGLE, 20, 20).unwrap(),
+        41
+    );
+    // A preparation of another network is not this chain's frozen interval.
+    let foreign = state_on(iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::new(b"staking-foreign-network")),
+    ));
+    assert!(validator_eligibility_height(&foreign.view(), LaneId::SINGLE, 15, 15).is_err());
+}
+
+#[test]
+fn global_staking_preparation_rejects_a_zero_validity_window() {
     use iroha_data_model::nexus::{
         PublicLanePreparationOperationV1, PublicLanePreparationRequestV1, PublicLanePrepareClaimV1,
     };
@@ -194,12 +285,6 @@ fn global_staking_preparation_does_not_invent_missing_incumbent_finality() {
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
     let (_, recipient, _, _) = configure_reward_fixture(&mut stx, LaneId::SINGLE, 100);
-    let error = validator_eligibility_height(&stx, LaneId::SINGLE, 2, 2).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("authenticated incumbent finality")
-    );
     let request = PublicLanePreparationRequestV1 {
         lane_id: LaneId::SINGLE,
         valid_for_blocks: 0,

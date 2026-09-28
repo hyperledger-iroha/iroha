@@ -639,7 +639,7 @@ async fn tools_list_list_changed_tracks_toolset_version() {
             .and_then(Value::as_bool),
         Some(false)
     );
-    let different_version = norito::json!({ "toolset_version": "different" });
+    let different_version = norito::json!({ "toolsetVersion": "different" });
     let different_response =
         handle_tools_list(None, &app, different_version.as_object().expect("map"));
     assert_eq!(

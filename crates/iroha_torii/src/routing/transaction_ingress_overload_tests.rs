@@ -7,8 +7,6 @@ mod transaction_ingress_overload_tests {
         queue::Queue,
         state::{State, World},
     };
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::prelude::*;
     use iroha_logger::Level;
     use std::{
         num::{NonZeroU64, NonZeroUsize},

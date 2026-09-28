@@ -19,6 +19,20 @@ provenance; neither the receipt nor readback claims that provenance was replaced
 An owned domain acquired through the canonical paid `EnsureAlias` flow supplies
 only the exact alias scope needed within that domain.
 
+Deployment does not automatically grant mutable entrypoint access. The current
+account owner in the canonical contract lifecycle may grant or revoke an exact
+`CanInvokeContractEntrypoint` token for that contract address and selector without
+`CanManageSmartContractCode`. An original deployer, alias holder, pending owner,
+or Parliament identity does not gain this account-owner authority. Existing
+exact-token holders and code managers retain their separate delegation rights;
+transferring ownership does not implicitly revoke previously issued tokens.
+
+An owner calling a guarded entrypoint first submits the exact self-grant and
+waits for `Applied`, then prepares and signs the call. Invocation always requires
+the exact token. It does not grant additional permissions to the contract body:
+address-scoped contract state is distinct from the caller's account metadata,
+which remains protected by its normal authorization rules.
+
 `execute` and `resume` receive one explicit typed progress observer. It sees the
 authenticated plan before dispatch, durable submitting/recovering stages by exact
 hash, Applied evidence only after it is persisted, and the start of final

@@ -29,14 +29,6 @@ pub const DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY: &str = "iroha:domain_asset_usa
     DeriveFast,
 )]
 #[norito(no_fast_from_json)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct AssetIssuerUsagePolicyV1 {
     /// When `true`, every participating subject must have an explicit binding.
     #[norito(default)]
@@ -67,14 +59,6 @@ impl AssetIssuerUsagePolicyV1 {
     DeriveFast,
 )]
 #[norito(no_fast_from_json)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct AssetSubjectBindingV1 {
     /// Domain memberships that may authorize this subject. Empty set means domain-neutral.
     /// Non-empty sets are matched against the subject's dataspace-qualified account aliases;
@@ -112,14 +96,6 @@ impl AssetSubjectBindingV1 {
     DeriveFast,
 )]
 #[norito(no_fast_from_json)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 pub struct DomainAssetUsagePolicyV1 {
     /// Optional allow-list. Empty means "allow any unless denied".
     #[norito(default)]

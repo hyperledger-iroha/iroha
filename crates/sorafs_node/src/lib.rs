@@ -30,6 +30,8 @@ pub mod potr;
 pub mod proof_outcome_forwarder;
 pub mod provider_attestation_clock;
 pub mod provider_attestation_journal;
+// The file-backed journal adapter compiles only for tests until a daemon path opens it.
+#[cfg(test)]
 pub mod provider_attestation_journal_file_store;
 pub mod provider_ingest_outbox;
 pub mod provider_ingest_runtime;
@@ -62,11 +64,11 @@ pub fn validate_private_local_storage_acl(
 ) -> std::io::Result<()> {
     #[cfg(windows)]
     {
-        return governance_rooted_fs::validate_retained_private_storage_acl(handle, path);
+        governance_rooted_fs::validate_retained_private_storage_acl(handle, path)
     }
     #[cfg(unix)]
     {
-        return governance_rooted_fs::validate_retained_directory_acl(handle, path);
+        governance_rooted_fs::validate_retained_directory_acl(handle, path)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -165,12 +167,11 @@ pub use moderation::{
     ModerationAuthenticatedScreeningAdmissionError, ModerationAuthenticatedScreeningEvidenceV1,
     ModerationAuthenticatedScreeningOutcomeV1, ModerationAuthenticatedScreeningRequestV1,
     ModerationCorpusRegistryRecord, ModerationEvidenceViewerAccessEventRecord,
-    ModerationEvidenceViewerAccessInput, ModerationEvidenceViewerAccessKind,
-    ModerationEvidenceViewerAuditKindCount, ModerationEvidenceViewerAuditReport,
-    ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerError,
-    ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
-    ModerationEvidenceViewerSnapshot, ModerationModelRegistryError,
-    ModerationModelRegistryReadView, ModerationModelRegistrySnapshot,
+    ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerAuditKindCount,
+    ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
+    ModerationEvidenceViewerError, ModerationEvidenceViewerSessionInput,
+    ModerationEvidenceViewerSessionRecord, ModerationEvidenceViewerSnapshot,
+    ModerationModelRegistryError, ModerationModelRegistryReadView, ModerationModelRegistrySnapshot,
     ModerationQuarantineKeyOperationErrorV1, ModerationQuarantineKeyProviderBindingV1,
     ModerationQuarantineKeyProviderQualificationErrorV1,
     ModerationQuarantineKeyProviderQualificationV1,
@@ -259,6 +260,7 @@ pub use provider_attestation_journal::{
     musubi_provider_attestation_inventory_handoff_id_v1,
     validate_musubi_provider_attestation_inventory_binding_v1,
 };
+#[cfg(test)]
 pub use provider_attestation_journal_file_store::{
     MusubiProviderAttestationJournalFileBindingV1, MusubiProviderAttestationJournalFileStoreV1,
 };
@@ -480,6 +482,8 @@ const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
 #[cfg(test)]
 use crate::metering::ReplicationUsageSample;
+#[cfg(test)]
+use crate::moderation::{ModerationEvidenceViewerAccessInput, rewrap_moderation_quarantine_object};
 use crate::{
     capacity::CapacityRuntimeCheckpointV1,
     metering::{CapacityMeter, MeteringSnapshot},
@@ -489,9 +493,9 @@ use crate::{
         ModerationQuarantineObjectRuntime, ModerationScreeningRuntime,
         decode_moderation_quarantine_object_envelope, moderation_quarantine_object_relative_path,
         normalize_moderation_quarantine_object_input, open_moderation_quarantine_object,
-        open_moderation_quarantine_object_range, rewrap_moderation_quarantine_object,
-        seal_moderation_quarantine_object, validate_moderation_quarantine_key_wrapper,
-        validate_quarantine_object_envelope, validate_relative_object_path,
+        open_moderation_quarantine_object_range, seal_moderation_quarantine_object,
+        validate_moderation_quarantine_key_wrapper, validate_quarantine_object_envelope,
+        validate_relative_object_path,
     },
     potr::PotrTracker,
     scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
@@ -511,6 +515,8 @@ use capacity::{
 };
 use config::{GcConfig, RepairConfig, StorageConfig};
 #[cfg(test)]
+use iroha_data_model::sorafs::gar::GarEnforcementReceiptV1;
+#[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use iroha_data_model::{
     NetworkId,
@@ -518,7 +524,6 @@ use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
-        gar::GarEnforcementReceiptV1,
         moderation::{AdversarialCorpusManifestV1, ModerationReproManifestV1},
         moderation_ledger::{
             REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1, RepairFinalizedCursorV1,
@@ -540,21 +545,21 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
 use orderbook_transaction_forwarder::{
     ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1, OrderbookOperationV1,
-    OrderbookTransactionContextV1, OrderbookTransactionDeadLetterV1,
-    OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarder,
-    OrderbookTransactionForwarderError, OrderbookTransactionForwarderPolicyV1,
-    OrderbookTransactionPendingV1, OrderbookTransactionSigningRequestV1,
+    OrderbookTransactionContextV1, OrderbookTransactionEnqueueResultV1,
+    OrderbookTransactionForwarder, OrderbookTransactionForwarderError,
+    OrderbookTransactionForwarderPolicyV1, OrderbookTransactionPendingV1,
+    OrderbookTransactionSigningRequestV1,
 };
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use repair_transaction_forwarder::{
     REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1, RepairOperationV1, RepairTransactionContextV1,
-    RepairTransactionDeadLetterV1, RepairTransactionEnqueueResultV1, RepairTransactionForwarder,
-    RepairTransactionForwarderError, RepairTransactionForwarderPolicyV1,
-    RepairTransactionPendingV1, RepairTransactionSigningRequestV1,
+    RepairTransactionEnqueueResultV1, RepairTransactionForwarder, RepairTransactionForwarderError,
+    RepairTransactionForwarderPolicyV1, RepairTransactionPendingV1,
+    RepairTransactionSigningRequestV1,
 };
 use reserve_transaction_forwarder::{
     RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1, ReserveOperationV1, ReserveTransactionContextV1,
-    ReserveTransactionDeadLetterV1, ReserveTransactionEnqueueResultV1, ReserveTransactionForwarder,
+    ReserveTransactionEnqueueResultV1, ReserveTransactionForwarder,
     ReserveTransactionForwarderError, ReserveTransactionForwarderPolicyV1,
     ReserveTransactionPendingV1, ReserveTransactionReconciliationV1,
     ReserveTransactionSigningRequestV1,
@@ -573,11 +578,11 @@ use sorafs_manifest::reputation::signed::{
 };
 use sorafs_manifest::{
     AdmissionRecord, AppealFinanceReconciliationSummaryV1, ManifestV1,
-    ReconciliationValidationError, ReputationScoringEvidenceV1, ReputationSnapshotEventV1,
-    ReputationSnapshotTrustPolicyV1, ReputationSnapshotV1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-    SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
-    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
-    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
+    ReconciliationValidationError, ReputationSnapshotEventV1, ReputationSnapshotTrustPolicyV1,
+    ReputationSnapshotV1, SORAFS_RECONCILIATION_REPORT_VERSION_V1, SignedReputationSnapshotV1,
+    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
+    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
+    SorafsReconciliationReportV1,
     capacity::CapacityTelemetryV1,
     deal::{DealSettlementV1, XorQuantity},
     governance_dag_submission_account_digest_v1,
@@ -586,7 +591,6 @@ use sorafs_manifest::{
         PorWeeklyReportV1, decode_por_challenge_publication_v1, decode_por_weekly_report_v1,
     },
     potr::PotrReceiptV1,
-    proof_stream::ProofStreamTier,
     repair::{
         GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1, GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1,
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1,
@@ -607,7 +611,6 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
-pub use transparency::moderation_ballot_governance_event_source_entry;
 pub use transparency::{
     PRIVACY_AGGREGATE_MAX_POPULATIONS_V1, PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1,
     PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1, PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow,
@@ -629,8 +632,7 @@ pub use transparency::{
     TransparencyLeaderLeaseReleaseRequestV1, TransparencyLeaderLeaseRenewRequestV1,
     TransparencyLeaderLeaseScopeV1, TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
     TransparencyRuntimeProviderBindingV1, TransparencyRuntimeProviderQualificationErrorV1,
-    TransparencyRuntimeProviderQualificationV1, appeal_finance_report_source_entry,
-    appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
+    TransparencyRuntimeProviderQualificationV1,
     moderation_evidence_viewer_audit_report_source_entry, privacy_aggregate_cycle_id,
     privacy_metric_schema_digest, privacy_population_inventory_digest,
     proof_token_issuance_from_base64, proof_token_issuance_from_frame,
@@ -3188,6 +3190,7 @@ impl<T> BoundedEventHistory<T> {
             limit: limit.max(1),
         }
     }
+    #[cfg(test)]
     fn append(&mut self, build: impl FnOnce(u64) -> T) -> Result<T, GovernancePublishError>
     where
         T: Clone,
@@ -3228,6 +3231,7 @@ impl<T> BoundedEventHistory<T> {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn replay(
         &self,
         since_sequence: Option<u64>,
@@ -4737,14 +4741,6 @@ struct AdmittedReputationSnapshotV1 {
     envelope: SignedReputationSnapshotV1,
 }
 include!("lib/auxiliary_runtime_checkpoint.rs");
-/// Unsigned deterministic reputation material intended for external governance signing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReputationSnapshotSigningMaterialV1 {
-    /// Canonical snapshot reproduced by the scoring evidence.
-    pub snapshot: ReputationSnapshotV1,
-    /// Complete provider inputs and trust edges required to replay the snapshot.
-    pub scoring_evidence: ReputationScoringEvidenceV1,
-}
 /// Error type returned by storage-related operations on [`NodeHandle`].
 #[derive(Debug, Error)]
 pub enum NodeStorageError {
@@ -4818,34 +4814,6 @@ pub type FinalizedProviderIngestRuntimeResultV1<
     ProviderIngestRuntimeV1<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>,
     FinalizedProviderIngestError,
 >;
-/// Errors returned by the embedded admission-bound PDP provider service.
-#[derive(Debug, Error)]
-pub enum NodePdpError {
-    /// Storage and the durable provider protocol are disabled.
-    #[error("SoraFS PDP provider service is disabled for this node")]
-    Disabled,
-    /// Durable challenge/proof lifecycle processing failed.
-    #[error(transparent)]
-    Protocol(#[from] PdpProviderProtocolError),
-    /// Stored manifest or witness access failed.
-    #[error(transparent)]
-    Storage(#[from] StorageError),
-    /// Provider proof construction or signing failed.
-    #[error(transparent)]
-    ProofBuild(#[from] PdpProofBuildError),
-    /// The retained manifest has no PDP commitment.
-    #[error("stored SoraFS manifest has no PDP commitment")]
-    CommitmentUnavailable,
-    /// The queued challenge does not bind the retained manifest commitment.
-    #[error("PDP challenge commitment does not match retained storage")]
-    CommitmentMismatch,
-    /// The active council admission does not authorise the locally configured signing key.
-    #[error("configured PDP provider signing key is not authorised by active admission")]
-    SigningKeyNotAdmitted,
-    /// The configured provider signing key could not be loaded safely.
-    #[error("failed to load configured PDP provider signing key: {0}")]
-    SigningKey(String),
-}
 /// Errors that prevent a SoraFS node handle from starting with trustworthy state.
 #[derive(Debug, Error)]
 pub enum NodeInitError {
@@ -6793,22 +6761,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .pending_after(after_sequence, limit)
     }
-    /// Return payload-free terminal proof-outcome deliveries for operator reconciliation.
-    pub fn proof_outcome_dead_letters(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<ProofOutcomeDeadLetterV1>, ProofOutcomeOutboxError> {
-        self.proof_outcome_outbox.dead_letters(limit)
-    }
-    /// Restore one explicitly selected proof-outcome dead letter for governed replay.
-    pub fn retry_proof_outcome_dead_letter(
-        &self,
-        operation_id: [u8; 32],
-        expected_outcome_digest: [u8; 32],
-    ) -> Result<(), ProofOutcomeOutboxError> {
-        self.proof_outcome_outbox
-            .retry_dead_letter(operation_id, expected_outcome_digest)
-    }
     /// Durably claim one proof outcome for isolated runtime signing.
     pub fn claim_proof_outcome_for_signing(
         &self,
@@ -6901,13 +6853,6 @@ impl NodeHandle {
     ) -> Result<Vec<RepairTransactionPendingV1>, RepairTransactionForwarderError> {
         self.repair_transaction_forwarder
             .pending_after(after_sequence, limit)
-    }
-    /// Return payload-free terminal repair-transaction dead letters.
-    pub fn repair_transaction_dead_letters(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<RepairTransactionDeadLetterV1>, RepairTransactionForwarderError> {
-        self.repair_transaction_forwarder.dead_letters(limit)
     }
     /// Claim one native repair operation for isolated runtime signing.
     pub fn claim_repair_transaction_for_signing(
@@ -7024,18 +6969,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .enqueue_unsigned_operation(operation, context)
     }
-    /// Durably enqueue one canonical signed native orderbook transaction.
-    ///
-    /// The forwarder binds both the exact governed authority and active chain
-    /// identity from the finalized context before persisting any bytes.
-    pub fn enqueue_signed_orderbook_transaction(
-        &self,
-        signed_transaction_bytes: &[u8],
-        context: &OrderbookTransactionContextV1,
-    ) -> Result<OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarderError> {
-        self.orderbook_transaction_forwarder
-            .enqueue_signed_transaction(signed_transaction_bytes, context)
-    }
     /// Return the oldest bounded page of pending native orderbook transactions.
     pub fn pending_orderbook_transactions(
         &self,
@@ -7059,13 +6992,6 @@ impl NodeHandle {
     ) -> Result<OrderbookTransactionSigningRequestV1, OrderbookTransactionForwarderError> {
         self.orderbook_transaction_forwarder
             .operation_for_reconciliation(operation_id)
-    }
-    /// Return payload-free terminal orderbook-transaction dead letters.
-    pub fn orderbook_transaction_dead_letters(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<OrderbookTransactionDeadLetterV1>, OrderbookTransactionForwarderError> {
-        self.orderbook_transaction_forwarder.dead_letters(limit)
     }
     /// Claim one native orderbook operation for isolated runtime signing.
     pub fn claim_orderbook_transaction_for_signing(
@@ -7174,18 +7100,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .enqueue_unsigned_operation(operation, context)
     }
-    /// Durably enqueue one canonical signed native reserve/rent transaction.
-    ///
-    /// The forwarder binds both the exact governed authority and active chain
-    /// identity from the finalized context before persisting any bytes.
-    pub fn enqueue_signed_reserve_transaction(
-        &self,
-        signed_transaction_bytes: &[u8],
-        context: &ReserveTransactionContextV1,
-    ) -> Result<ReserveTransactionEnqueueResultV1, ReserveTransactionForwarderError> {
-        self.reserve_transaction_forwarder
-            .enqueue_signed_transaction(signed_transaction_bytes, context)
-    }
     /// Return the oldest bounded page of pending native reserve/rent transactions.
     pub fn pending_reserve_transactions(
         &self,
@@ -7209,13 +7123,6 @@ impl NodeHandle {
     ) -> Result<ReserveTransactionReconciliationV1, ReserveTransactionForwarderError> {
         self.reserve_transaction_forwarder
             .operation_for_reconciliation(operation_id)
-    }
-    /// Return payload-free terminal reserve-transaction dead letters.
-    pub fn reserve_transaction_dead_letters(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<ReserveTransactionDeadLetterV1>, ReserveTransactionForwarderError> {
-        self.reserve_transaction_forwarder.dead_letters(limit)
     }
     /// Claim one native reserve/rent operation for isolated runtime signing.
     pub fn claim_reserve_transaction_for_signing(
@@ -7531,6 +7438,7 @@ impl NodeHandle {
     ///
     /// Startup-installed signed publishers cannot be cleared; use
     /// [`Self::try_clear_governance_publisher`] when the caller needs the explicit failure.
+    #[cfg(test)]
     pub fn clear_governance_publisher(&self) {
         if let Err(err) = self.try_clear_governance_publisher() {
             iroha_logger::error!(%err, "failed to clear SoraFS governance publisher");
@@ -7542,6 +7450,7 @@ impl NodeHandle {
     ///
     /// Returns an error when a signed startup publisher is pinned or the active
     /// publisher lock is poisoned.
+    #[cfg(test)]
     pub fn try_clear_governance_publisher(&self) -> Result<(), GovernancePublishError> {
         if self.startup_governance_publisher.is_some() {
             return Err(GovernancePublishError::other(
@@ -8118,6 +8027,7 @@ impl NodeHandle {
     /// The local snapshot, head linkage, replay event, and publication intent are committed
     /// together before external delivery. Retrying the exact same snapshot id is idempotent and
     /// retries publication; conflicting ids or non-monotonic heads are rejected.
+    #[cfg(test)]
     pub fn publish_signed_reputation_snapshot(
         &self,
         envelope: SignedReputationSnapshotV1,
@@ -8456,34 +8366,10 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-    /// Derive and publish a proof-token issuance summary from an issued `SFGT` frame.
+    /// Derive and publish a proof-token issuance summary from a URL-safe base64 `SFGT` frame.
     ///
     /// The frame signature is verified with `signer_key` before publication.
     /// Runtime digest keys are deliberately not accepted or persisted here.
-    pub fn publish_proof_token_frame_issuance(
-        &self,
-        encoded_token: &[u8],
-        signer_key: [u8; 32],
-        evidence_digest: Option<[u8; 32]>,
-        policy_digest: Option<[u8; 32]>,
-        metadata: Vec<ModerationLedgerMetadataV1>,
-    ) -> Result<ProofTokenIssuanceV1, GovernancePublishError> {
-        let issuance = transparency::proof_token_issuance_from_frame(
-            encoded_token,
-            signer_key,
-            evidence_digest,
-            policy_digest,
-            metadata,
-        )
-        .map_err(|err| {
-            GovernancePublishError::other(format!("ingest proof-token issuance: {err}"))
-        })?;
-        self.publish_proof_token_issuance(issuance.clone())?;
-        Ok(issuance)
-    }
-    /// Derive and publish a proof-token issuance summary from URL-safe base64.
-    ///
-    /// This is the transport-friendly counterpart to [`Self::publish_proof_token_frame_issuance`].
     pub fn publish_proof_token_base64_issuance(
         &self,
         token_b64: &str,
@@ -8590,6 +8476,7 @@ impl NodeHandle {
         Ok(())
     }
     /// Derive and record a transparency source entry from a GAR enforcement receipt.
+    #[cfg(test)]
     pub fn record_gar_enforcement_receipt_transparency_entry(
         &self,
         receipt: &GarEnforcementReceiptV1,
@@ -8617,6 +8504,7 @@ impl NodeHandle {
         self.record_transparency_ledger_source_entry(entry)
     }
     /// Derive and record a transparency source entry from an appeal finance report.
+    #[cfg(test)]
     pub fn record_appeal_finance_report_transparency_entry(
         &self,
         report: &SoraFsAppealFinanceReportV1,
@@ -8629,6 +8517,7 @@ impl NodeHandle {
         self.record_transparency_ledger_source_entry(entry)
     }
     /// Derive and record a transparency source entry from an appeal finance settlement receipt.
+    #[cfg(test)]
     pub fn record_appeal_finance_settlement_receipt_transparency_entry(
         &self,
         receipt: &SoraFsAppealFinanceSettlementReceiptV1,
@@ -10275,6 +10164,7 @@ impl NodeHandle {
         })
     }
     /// Return reputation snapshot events after `since_sequence`, capped by `limit`.
+    #[cfg(test)]
     #[must_use]
     pub fn reputation_events_since(
         &self,
@@ -10284,6 +10174,7 @@ impl NodeHandle {
         self.reputation_events_replay(since_sequence, limit).events
     }
     /// Return a gap-aware bounded replay of reputation snapshot events.
+    #[cfg(test)]
     #[must_use]
     pub fn reputation_events_replay(
         &self,
@@ -10447,6 +10338,7 @@ impl NodeHandle {
     ///
     /// Returns an error if the snapshot is internally inconsistent or the
     /// registry lock is poisoned.
+    #[cfg(test)]
     pub fn restore_moderation_model_registry_snapshot(
         &self,
         snapshot: ModerationModelRegistrySnapshot,
@@ -10494,6 +10386,7 @@ impl NodeHandle {
     ///
     /// Returns an error if the authority lock is poisoned or the candidate
     /// policy rolls back/equivocates against the active policy.
+    #[cfg(test)]
     pub fn install_moderation_screening_authority(
         &self,
         authority: ModerationScreeningAuthorityV1,
@@ -11076,6 +10969,7 @@ impl NodeHandle {
     /// # Errors
     ///
     /// Returns an error if the snapshot is internally inconsistent or the runtime lock is poisoned.
+    #[cfg(test)]
     pub fn restore_moderation_screening_snapshot(
         &self,
         snapshot: ModerationScreeningSnapshot,
@@ -11151,6 +11045,7 @@ impl NodeHandle {
     ///
     /// Returns an error if the snapshot is internally inconsistent, references
     /// an unknown quarantine id, or the object index lock is poisoned.
+    #[cfg(test)]
     pub fn restore_moderation_quarantine_object_snapshot(
         &self,
         snapshot: ModerationQuarantineObjectSnapshot,
@@ -11213,6 +11108,7 @@ impl NodeHandle {
     /// Returns an error if the quarantine/object reference is unknown, the
     /// session metadata is invalid or conflicts with existing local state, the
     /// checkpoint cannot be persisted, or the state lock is poisoned.
+    #[cfg(test)]
     pub fn create_moderation_evidence_viewer_session(
         &self,
         input: ModerationEvidenceViewerSessionInput,
@@ -11265,6 +11161,7 @@ impl NodeHandle {
     /// Returns an error if the session is unknown, the event arrives outside the
     /// active session window, the event carries raw payload/token/body markers,
     /// the checkpoint cannot be persisted, or the state lock is poisoned.
+    #[cfg(test)]
     pub fn record_moderation_evidence_viewer_access(
         &self,
         input: ModerationEvidenceViewerAccessInput,
@@ -11329,6 +11226,7 @@ impl NodeHandle {
     ///
     /// Returns an error if the snapshot is internally inconsistent, references missing quarantine
     /// object state, cannot be persisted, or the state lock is poisoned.
+    #[cfg(test)]
     pub fn restore_moderation_evidence_viewer_snapshot(
         &self,
         snapshot: ModerationEvidenceViewerSnapshot,
@@ -13035,6 +12933,7 @@ impl NodeHandle {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn validate_moderation_screening_snapshot_downstream_refs(
         &self,
         snapshot: &ModerationScreeningSnapshot,
@@ -13078,6 +12977,7 @@ impl NodeHandle {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn validate_moderation_quarantine_snapshot_viewer_refs(
         &self,
         snapshot: &ModerationQuarantineObjectSnapshot,
@@ -15138,6 +15038,7 @@ impl NodeHandle {
         Ok((outcome, authority_update))
     }
     /// Attach stripe layout and chunk-role metadata to a stored manifest.
+    #[cfg(test)]
     pub fn attach_stripe_layout(
         &self,
         manifest_id: &str,
@@ -15227,37 +15128,12 @@ impl NodeHandle {
     ) -> Result<Option<PotrAdmissionPolicyBindingV1>, PotrTrackerError> {
         self.potr.admission_policy_floor(provider_id)
     }
-    /// Retrieve PoTR receipts matching the manifest/provider filters.
-    pub fn potr_receipts(
-        &self,
-        manifest_digest: &[u8; 32],
-        provider_id: &[u8; 32],
-        tier: Option<ProofStreamTier>,
-    ) -> Result<Vec<PotrReceiptV1>, PotrTrackerError> {
-        self.potr.receipts_for(manifest_digest, provider_id, tier)
-    }
     /// Return status for one exact final signed PoTR receipt.
     pub fn potr_receipt_status(
         &self,
         receipt_digest: &[u8; 32],
     ) -> Result<Option<PotrReceiptStatusV1>, PotrTrackerError> {
         self.potr.status(receipt_digest)
-    }
-    /// Export a bounded sequence-ordered page of PoTR receipt statuses.
-    pub fn export_potr_receipt_statuses(
-        &self,
-        after_sequence: u64,
-        limit: usize,
-    ) -> Result<Vec<PotrReceiptStatusV1>, PotrTrackerError> {
-        self.potr.export_statuses(after_sequence, limit)
-    }
-    /// Export a bounded sequence-ordered page of exact final signed receipts.
-    pub fn export_potr_receipts(
-        &self,
-        after_sequence: u64,
-        limit: usize,
-    ) -> Result<Vec<PotrReceiptV1>, PotrTrackerError> {
-        self.potr.export_receipts(after_sequence, limit)
     }
     /// Returns a clone of the persistent storage backend when enabled.
     #[must_use]

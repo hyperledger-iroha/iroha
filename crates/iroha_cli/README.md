@@ -691,7 +691,7 @@ Raw `ledger domain register` is reserved for genesis/bootstrap and is not expose
 To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id`:
 
 ```bash
-iroha ledger account register \
+iroha account register \
   --id "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
 ```
 
@@ -716,7 +716,7 @@ iroha ledger asset get --id "<ASSET_ID>"
 
 This query returns the quantity of the selected account-scoped asset.
 
-You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ledger ENTITY list filter PREDICATE` pattern, where ENTITY is asset, account or domain and PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
+You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ledger ENTITY list filter PREDICATE` pattern for ledger entities such as asset or domain, and `iroha account list filter PREDICATE` for accounts, where PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
 
 Here are some examples of filtering:
 
@@ -724,7 +724,7 @@ Here are some examples of filtering:
 # Filter domains by id
 iroha ledger domain list filter '{"Atom": {"Id": {"Atom": {"Equals": "wonderland"}}}}'
 # Filter accounts by domain
-iroha ledger account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}' 
+iroha account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}' 
 # Filter asset by domain
 iroha ledger asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}, {"Atom": {"Id": {"Account": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}]}'
 ```
@@ -746,13 +746,13 @@ They do not own another project manifest or package build workflow.
 Use `--file` to specify a path to the IVM bytecode file (typically a `.to` file produced by compiling Kotodama `.ko` source):
 
 ```bash
-iroha ledger transaction ivm --file /path/to/contract.to
+iroha tx ivm --file /path/to/contract.to
 ```
 
 Or skip `--file` to read IVM bytecode from standard input:
 
 ```bash
-cat /path/to/contract.to | iroha ledger transaction ivm
+cat /path/to/contract.to | iroha tx ivm
 ```
 
 These subcommands submit the provided IVM bytecode as an `Executable` to be executed outside a trigger context.
@@ -761,10 +761,10 @@ These subcommands submit the provided IVM bytecode as an `Executable` to be exec
 
 The reference implementation of the Rust client, `iroha`, is often used for diagnosing problems in other implementations.
 
-To test transactions in the JSON format (used in the genesis block and by other SDKs), pipe the transaction into the client and add the `transaction stdin` subcommand to the arguments:
+To test transactions in the JSON format (used in the genesis block and by other SDKs), pipe the transaction into the client and add the `tx stdin` subcommand to the arguments:
 
 ```bash
-cat fuzz/cli_dsl/transaction_log_message.json | iroha ledger transaction stdin
+cat fuzz/cli_dsl/transaction_log_message.json | iroha tx stdin
 ```
 
 ### Request arbitrary query
@@ -786,7 +786,7 @@ cargo run --bin iroha --features ids_projection -- \
 
 # List only account identifiers with sorting/pagination
 cargo run --bin iroha --features ids_projection -- \
-  ledger account list all --select ids --sort-by-metadata-key rank --order desc --offset 10 --limit 5
+  account list all --select ids --sort-by-metadata-key rank --order desc --offset 10 --limit 5
 ```
 
 Expected output format is the same JSON as for full objects, but the entries are now identifier values, for example:

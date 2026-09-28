@@ -26,7 +26,6 @@ mod model {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[schema(transparent)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::id::model::NetworkId")]
     pub struct NetworkId(HashOf<BlockHeader>);
@@ -151,7 +150,6 @@ mod model {
     #[norito(tag = "kind", content = "content")]
     #[enum_ref(derive(FromVariant))]
     #[allow(clippy::enum_variant_names)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::id::model::IdBox")]
     pub enum IdBox {

@@ -1,5 +1,21 @@
 error: Should return `Result`. Found MyNotResult
- --> tests/ui_fail/not_return_result.rs:8:54
+ --> tests/ui_fail/not_return_result.rs:5:54
   |
-8 | fn execute(_state_transaction: &StateTransaction) -> MyNotResult {
+5 | fn execute(_state_transaction: &StateTransaction) -> MyNotResult {
   |                                                      ^^^^^^^^^^^
+
+error[E0599]: no method named `metrics` found for reference `&StateTransaction` in the current scope
+ --> tests/ui_fail/not_return_result.rs:4:1
+  |
+4 | #[metrics(+"test_query", "another_test_query_without_timing")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&StateTransaction`
+  |
+  = note: this error originates in the attribute macro `metrics` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `is_ok` found for enum `Option<T>` in the current scope
+ --> tests/ui_fail/not_return_result.rs:4:1
+  |
+4 | #[metrics(+"test_query", "another_test_query_without_timing")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `Option<_>`
+  |
+  = note: this error originates in the attribute macro `metrics` (in Nightly builds, run with -Z macro-backtrace for more info)

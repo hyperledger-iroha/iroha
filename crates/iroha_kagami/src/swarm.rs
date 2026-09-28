@@ -599,28 +599,6 @@ fn validate_prepared_network_projection(
     );
     Ok(())
 }
-#[cfg(unix)]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == right.nlink()
-        && left.size() == right.size()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-#[cfg(not(unix))]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_file() == right.is_file()
-        && left.is_dir() == right.is_dir()
-        && left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeFileCustody {
     Public,
@@ -670,7 +648,7 @@ fn read_runtime_file_bounded_with_custody(
     ensure!(
         !lexical.file_type().is_symlink()
             && before.is_file()
-            && same_file_snapshot(&lexical, &before),
+            && crate::secure_fs::same_file_snapshot(&lexical, &before),
         "prepared {label} {} changed while opening or is not a regular file",
         path.display()
     );
@@ -722,7 +700,7 @@ fn read_runtime_file_bounded_with_custody(
         .metadata()
         .wrap_err_with(|| format!("reinspect prepared {label} {}", path.display()))?;
     ensure!(
-        same_file_snapshot(&before, &after) && u64::try_from(raw.len()).ok() == Some(before.len()),
+        crate::secure_fs::same_file_snapshot(&before, &after) && u64::try_from(raw.len()).ok() == Some(before.len()),
         "prepared {label} {} changed while being read",
         path.display()
     );
@@ -919,7 +897,7 @@ fn collect_runtime_directory(
             )
         })?;
         ensure!(
-            same_file_snapshot(&before, &after),
+            crate::secure_fs::same_file_snapshot(&before, &after),
             "prepared {label} directory {} changed while being captured",
             directory.display()
         );
@@ -1200,7 +1178,7 @@ fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result
         ensure!(
             !lexical.file_type().is_symlink()
                 && before.is_dir()
-                && same_file_snapshot(&lexical, &before)
+                && crate::secure_fs::same_file_snapshot(&lexical, &before)
                 && before.uid() == rustix::process::geteuid().as_raw(),
             "prepared runtime projection directory {} changed while opening or is not owner-held",
             directory.display()
@@ -1232,7 +1210,7 @@ fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result
             )
         })?;
         ensure!(
-            same_file_snapshot(&after, &linked) && after.mode() & 0o777 == 0o700,
+            crate::secure_fs::same_file_snapshot(&after, &linked) && after.mode() & 0o777 == 0o700,
             "prepared runtime projection directory {} changed while being protected",
             directory.display()
         );
@@ -1261,7 +1239,7 @@ fn validate_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Res
     ensure!(
         !lexical.file_type().is_symlink()
             && before.is_file()
-            && same_file_snapshot(&lexical, &before),
+            && crate::secure_fs::same_file_snapshot(&lexical, &before),
         "prepared runtime projection {} changed while opening or is not a regular file",
         path.display()
     );
@@ -1289,7 +1267,7 @@ fn validate_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Res
         .metadata()
         .wrap_err_with(|| format!("reinspect prepared runtime projection {}", path.display()))?;
     ensure!(
-        existing.as_slice() == content && same_file_snapshot(&before, &after_read),
+        existing.as_slice() == content && crate::secure_fs::same_file_snapshot(&before, &after_read),
         "content-addressed prepared runtime projection {} changed or has different bytes",
         path.display()
     );
@@ -1316,7 +1294,7 @@ fn validate_read_only_projection(path: &Path, content: &[u8]) -> color_eyre::Res
         let linked = fs::symlink_metadata(path)
             .wrap_err_with(|| format!("reinspect linked runtime projection {}", path.display()))?;
         ensure!(
-            same_file_snapshot(&protected, &linked)
+            crate::secure_fs::same_file_snapshot(&protected, &linked)
                 && protected.mode() & 0o777 == u32::from(CONTAINER_PROJECTION_FILE_MODE),
             "prepared runtime projection {} changed while being protected",
             path.display()

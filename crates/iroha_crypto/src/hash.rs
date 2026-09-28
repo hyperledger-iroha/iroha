@@ -361,21 +361,17 @@ impl<T> From<HashOf<T>> for Hash {
         hash
     }
 }
-crate::ffi::ffi_item! {
-    /// Represents hash of Iroha entities like `Block` or `Transaction`. Currently supports only blake2b-32.
-    #[derive(Debug, Display, Deref, DerefMut, TypeId)]
-    #[debug("{{ {} {_0} }}", core::any::type_name::<Self>())]
-    #[display("{_0}")]
-    #[repr(transparent)]
-    pub struct HashOf<T>(
-        #[deref]
-        #[deref_mut]
-        Hash,
-        PhantomData<T>,
-    );
-    // SAFETY: `HashOf` has no trap representation in `Hash`
-    ffi_type(unsafe {robust})
-}
+/// Represents hash of Iroha entities like `Block` or `Transaction`. Currently supports only blake2b-32.
+#[derive(Debug, Display, Deref, DerefMut, TypeId)]
+#[debug("{{ {} {_0} }}", core::any::type_name::<Self>())]
+#[display("{_0}")]
+#[repr(transparent)]
+pub struct HashOf<T>(
+    #[deref]
+    #[deref_mut]
+    Hash,
+    PhantomData<T>,
+);
 impl<T> Clone for HashOf<T> {
     fn clone(&self) -> Self {
         *self
@@ -535,22 +531,6 @@ impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (hash, used) = <Hash as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok((HashOf(hash, PhantomData), used))
-    }
-}
-#[cfg(feature = "ffi_export")]
-mod ffi {
-    //! Manual implementations of FFI related functionality
-    use super::*;
-    // NOTE: Hash is FFI serialized as an array (a pointer in a function call, by value when part of a struct)
-    iroha_ffi::ffi_type! {
-        unsafe impl Transparent for Hash {
-            type Target = [u8; Hash::LENGTH];
-            validation_fn=unsafe {Hash::is_lsb_1},
-            niche_value = [0; Hash::LENGTH]
-        }
-    }
-    impl iroha_ffi::WrapperTypeOf<Hash> for [u8; Hash::LENGTH] {
-        type Type = Hash;
     }
 }
 #[cfg(test)]

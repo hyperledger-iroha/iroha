@@ -196,14 +196,6 @@ pub enum TaikaiAnchorReceiptError {
 /// Identifier assigned to a Taikai event (e.g., a live stream or conference day).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
 pub struct TaikaiEventId(pub Name);
 impl TaikaiEventId {
@@ -226,14 +218,6 @@ impl fmt::Display for TaikaiEventId {
 /// Identifier assigned to a logical stream within an event (e.g., stage feed).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
 pub struct TaikaiStreamId(pub Name);
 impl TaikaiStreamId {
@@ -256,14 +240,6 @@ impl fmt::Display for TaikaiStreamId {
 /// Identifier assigned to a rendition (ladder rung) within a stream.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
 pub struct TaikaiRenditionId(pub Name);
 impl TaikaiRenditionId {
@@ -290,14 +266,6 @@ pub type TaikaiAliasBinding = ManifestAliasBinding;
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
 pub struct SegmentTimestamp(pub u64);
 impl SegmentTimestamp {
@@ -317,14 +285,6 @@ impl SegmentTimestamp {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
 pub struct SegmentDuration(pub u32);
 impl SegmentDuration {

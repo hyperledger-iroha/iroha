@@ -21,7 +21,6 @@ iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
-iroha_config_base = { workspace = true }
 iroha_telemetry = { workspace = true }
 aead = { version = "0.6.0-rc.3", default-features = false }
 soranet_pq = { workspace = true }
@@ -42,7 +41,7 @@ derive_more = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 base64 = { workspace = true }
-socket2 = "0.5.10"
+socket2 = "0.6.3"
 # Authenticated transports. TLS-over-TCP is mandatory in the first release;
 # QUIC is the only optional transport.
 quinn = { version = "0.11.9", optional = true }
@@ -50,17 +49,13 @@ rcgen = "0.14.5"
 rustls = { version = "0.23.35", default-features = false, features = ["ring", "std"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 
-# Protected-lockfile pin only. The target predicate is impossible, so Snow is
-# neither selectable nor compiled as part of the first-release transport.
-[target.'cfg(any())'.dependencies]
-snow = "0.10"
-
 [features]
 # Expose opaque reply-route minting only to dependent-crate test builds.
 test-fixtures = []
 # Optional QUIC transport; TLS-over-TCP remains the mandatory fallback.
 quic = ["dep:quinn"]
 [dev-dependencies]
+iroha_config_base = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "time", "macros"] }
 tempfile = { workspace = true }
 

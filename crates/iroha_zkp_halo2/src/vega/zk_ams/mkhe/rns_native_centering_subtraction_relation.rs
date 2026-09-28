@@ -18,32 +18,38 @@
 //! also remain unverified and must exclude every proof/transcript/root axis
 //! from this stage.
 
+#[cfg(test)]
 use core::marker::PhantomData;
 
+use super::rns_native_radix_complement_linear_relation::RNS_NATIVE_RADIX_COMPLEMENT_LINEAR_RESIDUAL_MAX_BYTES_V1;
+#[cfg(test)]
 use super::{
     rns_native_cross_field_inventory::ComparatorSubtractionCommitmentsV1,
-    rns_native_radix_complement_linear_relation::{
-        RNS_NATIVE_RADIX_COMPLEMENT_LINEAR_RESIDUAL_MAX_BYTES_V1,
-        RnsNativeRadixComplementLinearPrerequisiteV1,
-    },
+    rns_native_radix_complement_linear_relation::RnsNativeRadixComplementLinearPrerequisiteV1,
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
     rns_native_transcript::ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
 };
+use crate::vega::VEGA_T256_SCALAR_MODULUS_BE_V1;
+#[cfg(test)]
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
         VerifierTranscript,
     },
     vega::{
-        VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+        VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
         bulletproof_t256::{ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, ZkAmsT256BulletproofSuiteV1},
         sponge::Keccak256,
     },
 };
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
+#[cfg(test)]
 const FLAGS_V1: u8 = 0;
+#[cfg(test)]
 const MAGIC_V1: [u8; 4] = *b"ZRS4";
+#[cfg(test)]
 const STATEMENT_V1: u8 = 4;
 const DIGEST_BYTES_V1: usize = 32;
 const POINT_BYTES_V1: usize = 33;
@@ -81,23 +87,36 @@ pub(super) const RNS_NATIVE_CENTERING_SUBTRACTION_RESIDUAL_MAX_BYTES_V1: usize =
         - RECORD_SET_BYTES_V1
         - CODEC_DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const CIRCUIT_LANGUAGE_V1: &[u8] = b"statement=4;groups=344;coordinates=16384;B=2^15;K=(pT+1)/2;raw-owner=(D_0..D_16,Delta_0..Delta_16,beta_0..beta_16);derived-E_0=C_D0-C_Delta0+B*C_beta0;derived-E_h=C_Dh-C_Deltah-C_beta(h-1)+B*C_beta_h-for-h=1..16;commitments=E_0..E_16;constraints=for-h=0..16,for-v=0..16383:E_h[v]-K_h=0;padded-gates=16384;no-random-aggregate";
+#[cfg(test)]
 const FIELD_BOUNDARY_LANGUAGE_V1: &[u8] = b"statement5-already-fixes-beta_0..beta_16-in-{0,1};these-are-T256-field-equalities-only;D-and-Delta-digit-membership-in-[0,32768)-not-yet-verified;therefore-no-integer-no-wrap-centering-comparator-or-canonical-range-claim";
+#[cfg(test)]
 const SOLE_Z_ORDER_LANGUAGE_V1: &[u8] = b"future-global-A-slot-order-is-role-major-and-not-yet-authenticated;sole-z-must-exclude-added-inventory-root,S3/S5/S8/S10-11/S2/S4-proof-and-transcript-roots,residuals,bindings,codec-digests,and-all-inverse-commitments";
+#[cfg(test)]
 const REMAINING_BOUNDARY_V1: &[u8] = b"not-yet-verified:radix-digit-membership-and-inverses,difference-digit-membership-and-inverses,integer-no-wrap-centering-order,small-source-membership-and-inverses,q-mask-digit-membership-and-inverses,qPCS-S-same-opening,source-and-packing-same-opening,global-slot-permutation,sole-z,global-lookup";
+#[cfg(test)]
 const TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.transcript";
+#[cfg(test)]
 const TRANSCRIPT_SCHEMA_V1: &[u8] = b"ZRS4/direct-coefficient/transcript/v1";
+#[cfg(test)]
 const CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.challenge";
+#[cfg(test)]
 const CIRCUIT_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.circuit-manifest";
+#[cfg(test)]
 const PROOF_SET_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.proof-set-root";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.residual";
+#[cfg(test)]
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.codec";
+#[cfg(test)]
 const VERIFIED_TRANSCRIPTS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.verified-transcripts";
+#[cfg(test)]
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-centering-subtraction.prerequisite";
 
@@ -135,6 +154,7 @@ const fn centering_threshold_be_v1() -> [u8; 32] {
     threshold
 }
 
+#[cfg(test)]
 const fn radix_low_digits_be_v1(encoded: [u8; 32]) -> [u16; RADIX_LOW_DIGITS_V1] {
     let mut digits = [0_u16; RADIX_LOW_DIGITS_V1];
     let mut digit = 0_usize;
@@ -151,6 +171,7 @@ const fn radix_low_digits_be_v1(encoded: [u8; 32]) -> [u16; RADIX_LOW_DIGITS_V1]
 }
 
 const CENTERING_THRESHOLD_BE_V1: [u8; 32] = centering_threshold_be_v1();
+#[cfg(test)]
 const CENTERING_THRESHOLD_DIGITS_V1: [u16; RADIX_LOW_DIGITS_V1] =
     radix_low_digits_be_v1(CENTERING_THRESHOLD_BE_V1);
 
@@ -188,6 +209,7 @@ const _: () = {
     assert!(!RELEASE_READY_V1);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeCenteringSubtractionErrorV1 {
     ProofCapExceeded,
@@ -201,20 +223,24 @@ pub(super) enum RnsNativeCenteringSubtractionErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeCenteringSubtractionErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeCenteringSubtractionErrorV1 {}
 
+#[cfg(test)]
 impl From<GeneralizedBulletproofErrorV1> for RnsNativeCenteringSubtractionErrorV1 {
     fn from(_: GeneralizedBulletproofErrorV1) -> Self {
         Self::Algebra
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct UpstreamBindingV1 {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
@@ -232,6 +258,7 @@ struct UpstreamBindingV1 {
     statement2_verified_transcript_root: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl UpstreamBindingV1 {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeRadixComplementLinearPrerequisiteV1<'_, '_, S>,
@@ -282,6 +309,7 @@ impl UpstreamBindingV1 {
     }
 }
 
+#[cfg(test)]
 fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     for (ordinal, digest) in digests.iter().enumerate() {
         if *digest == [0; DIGEST_BYTES_V1] || digests[..ordinal].contains(digest) {
@@ -291,6 +319,7 @@ fn unique_nonzero_digests_v1(digests: &[[u8; DIGEST_BYTES_V1]]) -> bool {
     true
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct CenteringSubtractionRawCommitmentsV1 {
     difference_digits: [Point; RADIX_LOW_DIGITS_V1],
@@ -298,12 +327,14 @@ struct CenteringSubtractionRawCommitmentsV1 {
     borrows: [Point; BORROWS_V1],
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct CenteringSubtractionCoreCommitmentsV1 {
     raw: CenteringSubtractionRawCommitmentsV1,
     derived: [Point; COMMITMENTS_PER_CORE_V1],
 }
 
+#[cfg(test)]
 fn raw_commitments_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeRadixComplementLinearPrerequisiteV1<'_, '_, S>,
     group: usize,
@@ -321,6 +352,7 @@ fn raw_commitments_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     })
 }
 
+#[cfg(test)]
 fn derived_subtraction_commitment_v1(
     raw: CenteringSubtractionRawCommitmentsV1,
     digit: usize,
@@ -339,6 +371,7 @@ fn derived_subtraction_commitment_v1(
     Ok(result)
 }
 
+#[cfg(test)]
 impl CenteringSubtractionCoreCommitmentsV1 {
     fn new_v1(
         raw: CenteringSubtractionRawCommitmentsV1,
@@ -363,6 +396,7 @@ impl CenteringSubtractionCoreCommitmentsV1 {
     }
 }
 
+#[cfg(test)]
 fn core_commitments_v1<F>(
     group: usize,
     commitment_at: &mut F,
@@ -378,11 +412,13 @@ where
     )
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -423,11 +459,13 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ExactCoreViewV1<'a> {
     bytes: &'a [u8],
 }
 
+#[cfg(test)]
 impl<'a> ExactCoreViewV1<'a> {
     fn parse_v1(bytes: &'a [u8]) -> Result<Self, RnsNativeCenteringSubtractionErrorV1> {
         if bytes.len() != CORE_BYTES_V1 {
@@ -459,6 +497,7 @@ impl<'a> ExactCoreViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct CenteringSubtractionProofSetViewV1<'a> {
     records: &'a [u8],
@@ -468,6 +507,7 @@ struct CenteringSubtractionProofSetViewV1<'a> {
     codec_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl<'a> CenteringSubtractionProofSetViewV1<'a> {
     fn from_prerequisite_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         previous: &RnsNativeRadixComplementLinearPrerequisiteV1<'_, 'a, S>,
@@ -598,6 +638,7 @@ impl<'a> CenteringSubtractionProofSetViewV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn record_at_v1(
     records: &[u8],
     group: usize,
@@ -630,6 +671,7 @@ fn record_at_v1(
     Ok(&record[RECORD_HEADER_BYTES_V1..])
 }
 
+#[cfg(test)]
 fn encode_point_v1(
     point: Point,
 ) -> Result<[u8; POINT_BYTES_V1], RnsNativeCenteringSubtractionErrorV1> {
@@ -640,12 +682,14 @@ fn encode_point_v1(
     Ok(encoded)
 }
 
+#[cfg(test)]
 fn absorb_upstream_v1(hash: &mut Keccak256, upstream: UpstreamBindingV1) {
     for digest in upstream.digests_v1() {
         hash.update(&digest);
     }
 }
 
+#[cfg(test)]
 fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CIRCUIT_MANIFEST_DOMAIN_V1);
@@ -681,6 +725,7 @@ fn circuit_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn absorb_raw_owner_v1(
     hash: &mut Keccak256,
     group: usize,
@@ -705,6 +750,7 @@ fn absorb_raw_owner_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn canonical_proof_set_root_v1<F>(
     upstream: UpstreamBindingV1,
     records: &[u8],
@@ -739,6 +785,7 @@ where
     Ok(digest)
 }
 
+#[cfg(test)]
 fn canonical_residual_digest_v1(
     upstream: UpstreamBindingV1,
     proof_set_root: [u8; DIGEST_BYTES_V1],
@@ -765,6 +812,7 @@ fn canonical_residual_digest_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
@@ -773,6 +821,7 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
+#[cfg(test)]
 fn centering_subtraction_constraints_v1(
     coordinates: usize,
     padded_gates: usize,
@@ -818,6 +867,7 @@ fn centering_subtraction_constraints_v1(
     Ok(constraints)
 }
 
+#[cfg(test)]
 fn build_centering_subtraction_statement_v1<S>(
     coordinates: usize,
     padded_gates: usize,
@@ -834,6 +884,7 @@ where
     )?)
 }
 
+#[cfg(test)]
 fn append_frame_v1(
     state: &mut Vec<u8>,
     value: &[u8],
@@ -847,6 +898,7 @@ fn append_frame_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn initial_transcript_state_v1(
     upstream: UpstreamBindingV1,
     group: usize,
@@ -910,12 +962,14 @@ fn initial_transcript_state_v1(
     Ok(state)
 }
 
+#[cfg(test)]
 fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(bytes);
     hash.finalize()
 }
 
+#[cfg(test)]
 fn derive_challenge_v1(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -948,6 +1002,7 @@ fn derive_challenge_v1(
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
 
+#[cfg(test)]
 struct CenteringSubtractionVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -959,6 +1014,7 @@ where
     suite: PhantomData<S>,
 }
 
+#[cfg(test)]
 impl<'a, S> CenteringSubtractionVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -1012,6 +1068,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<S> VerifierTranscript<S> for CenteringSubtractionVerifierTranscriptV1<'_, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -1045,6 +1102,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeRadixComplementLinearPrerequisiteV1<'_, '_, S>,
     view: CenteringSubtractionProofSetViewV1<'_>,
@@ -1082,6 +1140,7 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 ///
 /// This is not digit membership, integer no-wrap, a canonical comparator,
 /// global lookup, readiness, release, or authorization evidence.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the statement-2 owner and unverified downstream residual must advance exactly once"
@@ -1099,6 +1158,7 @@ pub(super) struct RnsNativeCenteringSubtractionPrerequisiteV1<
     binding_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "private accessors await digit membership, sole-z, and global-lookup consumers"
@@ -1156,6 +1216,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
 /// Consume statement 2 and verify all 344 statement-4 subtraction cores
 /// sequentially.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the private statement-4 entry awaits digit membership, lookup, and sole-z consumers"

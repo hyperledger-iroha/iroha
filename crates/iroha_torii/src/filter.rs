@@ -6,10 +6,13 @@
 //! - Validate operators vs value types and field path form.
 //! - Map to an internal validated form; mapping to typed predicates is left for
 //!   endpoint-specific adapters.
+#[cfg(test)]
+use norito::codec::Decode;
+#[cfg(test)]
+use norito::codec::Encode;
 use norito::{
     Error as NoritoError,
-    codec::{Decode, Encode},
-    json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Map, Value},
+    json::{FastJsonWrite, JsonDeserialize, JsonSerialize, Map, Value},
 };
 /// A field path such as `authority`, `timestamp_ms`, or `metadata.display_name`.
 #[derive(norito::NoritoSchema)]

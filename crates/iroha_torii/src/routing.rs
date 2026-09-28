@@ -42,7 +42,6 @@ macro_rules! derived_items {
 }
 
 use axum::{
-    Json,
     body::Body,
     extract::{State, ws::WebSocket},
     http::{StatusCode, header},
@@ -55,13 +54,11 @@ use core::str::FromStr;
 use eyre::eyre;
 use hex::ToHex;
 use iroha_config::parameters::{
-    actual::{
-        LaneRoutingPolicy as ActualLaneRoutingPolicy, NexusFeeSettlementMode, TelemetryProfile,
-    },
+    actual::{NexusFeeSettlementMode, TelemetryProfile},
     defaults,
 };
 #[cfg(feature = "app_api")]
-use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
+use iroha_version::codec::DecodeVersioned as _;
 use std::{
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -84,21 +81,16 @@ use iroha_core::smartcontracts::isi::sorafs::manifest_pin_policy_constraints_fro
 #[cfg(feature = "app_api")]
 use iroha_core::smartcontracts::triggers::set::SetReadOnly;
 use iroha_core::{
-    alias::{authority_can_manage_account_alias, authority_can_resolve_account_alias},
+    alias::authority_can_resolve_account_alias,
     nexus::{
         portfolio,
         space_directory::{
-            SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord,
-            SpaceDirectoryManifestSet, UaidDataspaceBindings,
+            SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord, UaidDataspaceBindings,
         },
     },
     query::store::LiveQueryStoreHandle,
     queue::{Queue, RoutingDecision, RoutingPlan},
-    sns::{
-        LeaseQuote, SnsNamespace, get_name_record,
-        quote_account_alias_registration_with_configured_fee_asset,
-        quote_account_alias_renewal_with_configured_fee_asset, resolve_active_account_alias,
-    },
+    sns::resolve_active_account_alias,
     state::{
         AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus,
         ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
@@ -108,39 +100,35 @@ use iroha_core::{
     telemetry::Telemetry,
     time,
     torii::zk::proofs::{
-        ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
-        ProofQueryBudget, ProofQueryError,
+        ProofFilters as CoreProofFilters, ProofListParams as CoreProofListParams, ProofQueryBudget,
+        ProofQueryError,
     },
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SIGNATURE_LIMIT_REASON_PREFIX,
         SignatureRejectionCode, SignatureVerificationFail,
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
-use iroha_data_model::sorafs::capacity::ProviderId;
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 #[cfg(feature = "telemetry")]
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
 };
 use iroha_data_model::{
     self,
-    account::AccountAddressErrorCode,
     block::{
         BlockHeader, SignedBlock,
-        consensus::{EvidencePenaltyStatus, EvidenceRecord, LaneBlockCommitment},
+        consensus::{EvidencePenaltyStatus, EvidenceRecord},
     },
     consensus::ConsensusKeyRecord,
     nexus::{
-        Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
-        LaneConfig, LaneLifecycleStatusV1, LaneRelayEnvelope, ManifestEffect, ManifestEntry,
-        ManifestVersion, PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, UniversalAccountId,
+        DataSpaceCatalog, LaneLifecycleStatusV1, PublicLaneRewardRecord, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        UniversalAccountId,
     },
     prelude::*,
     proof::VerifyingKeyId,
     query::{QueryRequestWithAuthority, QueryResponse, SignedQuery, SignedQueryValidationError},
-    repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    repo::{RepoAgreement, RepoAgreementId},
     smart_contract::manifest,
     transaction::{
         executable::Executable,
@@ -175,19 +163,15 @@ use iroha_torii_shared::sumeragi_evidence_api::{
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
-    core::DecodeFromSlice,
     json::{self, Map, Value},
     to_bytes,
 };
-#[cfg(feature = "telemetry")]
-use prometheus::core::Collector;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
-    panic::AssertUnwindSafe,
     sync::OnceLock,
 };
 pub mod debug_match_flag {
@@ -206,20 +190,16 @@ pub mod debug_match_flag {
 use crate::bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache};
 use crate::sorafs::{
     PorCoordinatorError, QuotaExceeded, SorafsAction, SorafsQuotaEnforcer,
-    por::{
-        POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusFilter, PorStatusPageCursor,
-        PorStatusPageLimits,
-    },
+    por::{PorStatusFilter, PorStatusPageCursor, PorStatusPageLimits},
 };
 #[cfg(feature = "app_api")]
 use crate::{
     explorer::{
         ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
     },
-    filter::FieldPath,
     utils::JsonValueBody,
 };
-use crate::{json_array, json_entry, json_object, json_value};
+use crate::{json_entry, json_object, json_value};
 
 /// Current dataspace visibility resolved for one Torii read principal.
 ///
@@ -258,6 +238,7 @@ impl DataspaceReadVisibility {
         self.exact_account.as_ref()
     }
 
+    #[cfg(any(test, feature = "bench"))]
     pub(crate) fn all() -> Self {
         Self {
             visible_dataspaces: BTreeSet::new(),
@@ -515,7 +496,7 @@ use iroha_data_model::{
         consensus_v2::SumeragiV2QcResponse,
     },
     events::{
-        EventBox, SharedDataEvent,
+        EventBox,
         pipeline::{BlockStatus, PipelineEventBox},
     },
     query::error::QueryExecutionFail,
@@ -525,15 +506,12 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use sorafs_manifest::{
-    ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
-    PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
+    ManifestV1, ManifestValidationError, PinPolicyConstraints as ManifestPinPolicyConstraints,
     capacity::{CapacityDeclarationV1, CapacityDeclarationValidationError},
     por::{
-        AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditVerdictV1,
-        POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_PROOF_MAX_CANONICAL_BYTES_V1,
-        PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1, PorReportIsoWeek,
-        PorStatusExportPageV1, PorStatusPageV1, PorWeeklyReportV1, decode_audit_verdict_v1,
-        decode_por_proof_v1,
+        AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditVerdictV1, POR_PROOF_MAX_CANONICAL_BYTES_V1,
+        PorChallengeOutcome, PorProofV1, PorReportIsoWeek, PorStatusExportPageV1, PorStatusPageV1,
+        PorWeeklyReportV1, decode_audit_verdict_v1, decode_por_proof_v1,
     },
     validate_manifest,
 };
@@ -648,7 +626,7 @@ pub(crate) struct PipelinePreflightResponse {
 fn json_string(value: Value) -> String {
     norito::json::to_string(&value).expect("serialize request body")
 }
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, all(feature = "telemetry", feature = "test-fixtures")))]
 fn checked_routing_fixture_keypair(
     seed: u8,
     algorithm: Algorithm,
@@ -718,42 +696,13 @@ mod debug_toggle_override {
     }
     #[cfg(not(test))]
     mod state {
-        pub(super) fn set_torii(_active: bool) -> bool {
-            false
-        }
         pub(super) fn torii_active() -> bool {
-            false
-        }
-        pub(super) fn set_iroha(_active: bool) -> bool {
             false
         }
     }
 }
 fn torii_debug_match_enabled() -> bool {
     debug_match_flag::enabled(debug_toggle_override::torii_override_active())
-}
-/// Compute start/end bounds for paginating a collection of length `len`.
-///
-/// - `offset` values that exceed `usize::MAX` (on the current platform) or the
-///   collection length clamp to the end of the collection, yielding an empty
-///   slice.
-/// - When `cap` is provided, user-supplied limits are clamped to that maximum.
-fn pagination_bounds(
-    len: usize,
-    offset: u64,
-    limit: Option<u64>,
-    cap: Option<u64>,
-) -> (usize, usize) {
-    let start = match usize::try_from(offset) {
-        Ok(off) => off.min(len),
-        Err(_) => len,
-    };
-    let limited = limit.map(|lim| cap.map_or(lim, |cap_lim| lim.min(cap_lim)));
-    let end = limited
-        .and_then(|lim| usize::try_from(lim).ok())
-        .map(|lim| start.saturating_add(lim).min(len))
-        .unwrap_or(len);
-    (start, end)
 }
 /// Optional `from`/`limit` window applied to newest-first histories.
 #[derive(norito::NoritoSchema)]
@@ -1021,6 +970,7 @@ impl QueryProjectionArchiveHotCache {
                 .saturating_sub(query_projection_archive_cache_weight(&evicted));
         }
     }
+    #[cfg(test)]
     fn clear(&mut self) {
         self.entries.clear();
         self.insertion_order.clear();
@@ -1073,13 +1023,6 @@ fn query_projection_archive_from_hot_cache(
             None
         }
     }
-}
-#[cfg(all(feature = "app_api", test))]
-/// Return the cached archive sharing `archive`'s immutable snapshot key.
-pub(crate) fn query_projection_archive_from_hot_cache_for_tests(
-    archive: &QueryProjectionShardArchive,
-) -> Option<QueryProjectionShardArchive> {
-    query_projection_archive_from_hot_cache(&query_projection_archive_cache_key(archive))
 }
 pub(crate) fn cache_query_projection_archive_for_query(archive: QueryProjectionShardArchive) {
     match QUERY_PROJECTION_ARCHIVE_CACHE.write() {
@@ -1348,9 +1291,6 @@ fn insert_page_metadata<T>(
         "count_mode".into(),
         norito::json::Value::from(count_mode.label()),
     );
-}
-fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResult<T>) {
-    insert_page_metadata(top, page, AppCountMode::Bounded);
 }
 #[cfg(all(test, feature = "app_api"))]
 mod streaming_pager_tests {
@@ -2653,29 +2593,6 @@ fn kaigi_signal_authority_is_allowed_from_batch(
         .and_then(Clone::clone)
         .is_some_and(|active| allowed_active_lineages.contains(&active))
 }
-fn kaigi_signal_carrier_timestamp_ms(
-    state: &CoreState,
-    block_hash: &HashOf<BlockHeader>,
-    cache: &mut Option<(HashOf<BlockHeader>, u64)>,
-) -> Result<u64, iroha_data_model::query::error::QueryExecutionFail> {
-    if let Some((cached_hash, cached_timestamp_ms)) = cache.as_ref()
-        && cached_hash == block_hash
-    {
-        return Ok(*cached_timestamp_ms);
-    }
-    let block = state.block_by_hash(*block_hash).ok_or_else(|| {
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-            "Kaigi signal carrier block `{block_hash}` is unavailable"
-        ))
-    })?;
-    let timestamp_ms = u64::try_from(block.header().creation_time().as_millis()).map_err(|_| {
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-            "Kaigi signal carrier block timestamp exceeds u64 milliseconds".to_owned(),
-        )
-    })?;
-    *cache = Some((*block_hash, timestamp_ms));
-    Ok(timestamp_ms)
-}
 fn kaigi_signal_carrier_is_within_call_lifecycle(
     record: &iroha_data_model::kaigi::KaigiRecord,
     carrier_timestamp_ms: u64,
@@ -2790,6 +2707,7 @@ fn kaigi_signal_from_metadata(
         metadata: IrohaJson::from(signal_json),
     })
 }
+#[cfg(test)]
 fn kaigi_signal_from_transaction(
     tx: &iroha_data_model::query::CommittedTransaction,
     reveal_authorities: bool,
@@ -2880,24 +2798,6 @@ pub struct RetailRecipientRouteResponseDto {
     pub alias_fqn: String,
     /// Canonical FI identifier derived from the alias domain.
     pub fi_id: String,
-}
-( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
-/// Response payload returned by `/v1/retail/recipients/lookup`.
-pub struct RetailRecipientLookupResponseDto {
-    /// Whether the bank confirmed the account, alias, FI, and recipient name.
-    pub resolved: bool,
-    /// Canonical recipient account id confirmed by the lookup service.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
-    /// Canonical bank alias FQN confirmed by the lookup service.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub alias_fqn: Option<String>,
-    /// Canonical FI identifier confirmed by the lookup service.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub fi_id: Option<String>,
-    /// Human-readable recipient name confirmed by the bank.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub full_name: Option<String>,
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
@@ -3070,6 +2970,7 @@ pub struct ContractAliasResolveResponseDto {
     pub source: String,
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
+#[cfg(test)]
 pub struct AliasErrorResponseDto {
     pub error: String,
 }
@@ -3613,6 +3514,7 @@ impl MaybeTelemetry {
         Self::from_profile(None, TelemetryProfile::Disabled)
     }
     /// Build a telemetry handle suitable for tests.
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn for_tests() -> Self {
         #[cfg(feature = "telemetry")]
         {
@@ -3623,7 +3525,7 @@ impl MaybeTelemetry {
             MaybeTelemetry::disabled()
         }
     }
-    #[cfg(feature = "telemetry")]
+    #[cfg(all(feature = "telemetry", any(test, feature = "test-fixtures")))]
     fn for_tests_with_nexus(nexus: Option<iroha_config::parameters::actual::Nexus>) -> Self {
         use iroha_core::{
             kura::Kura,
@@ -3741,17 +3643,35 @@ impl MaybeTelemetry {
         MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
     }
 }
+#[cfg(test)]
+use crate::filter::FieldPath;
 #[cfg(feature = "app_api")]
 use crate::filter::{FilterExpr, QueryEnvelope, Selector};
-use crate::{JsonBody, JsonOnly, NoritoJson, NoritoQuery};
+#[cfg(test)]
+use crate::sorafs::por::POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1;
+use crate::{JsonBody, NoritoJson, NoritoQuery};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use core::convert::Infallible;
 use futures::stream;
+#[cfg(test)]
+use iroha_config::parameters::actual::LaneRoutingPolicy as ActualLaneRoutingPolicy;
+#[cfg(test)]
+use iroha_core::nexus::space_directory::SpaceDirectoryManifestSet;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
     EventFilterBox,
     pipeline::{BlockEventFilter, TransactionEventFilter, TransactionStatus},
 };
+#[cfg(test)]
+use iroha_data_model::nexus::PublicLaneRewardRole;
+#[cfg(test)]
+use iroha_data_model::nexus::PublicLaneRewardShare;
+#[cfg(test)]
+use sorafs_manifest::PinPolicy as ManifestPinPolicy;
+#[cfg(test)]
+use sorafs_manifest::StorageClass as ManifestStorageClass;
+#[cfg(test)]
+use sorafs_manifest::por::POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1;
 #[inline]
 fn norito_internal_error(err: json::Error) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -4538,10 +4458,6 @@ fn read_app_query_limits(lock: &RwLock<AppQueryLimits>) -> AppQueryLimits {
     }
 }
 #[cfg(test)]
-pub fn reset_app_query_limits_for_tests() {
-    set_app_query_limits(AppQueryLimits::default());
-}
-#[cfg(test)]
 mod app_query_limits_tests {
     use super::{AppQueryLimits, read_app_query_limits};
     use std::panic::{self, AssertUnwindSafe};
@@ -4898,6 +4814,7 @@ where
 }
 
 /// GET /v1/zk/proofs — list proofs with filters
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn handle_list_proofs(
     state: Arc<CoreState>,
     limits: ProofApiLimits,
@@ -5114,6 +5031,7 @@ async fn handle_list_proofs_with_admission(
     Ok(application_json_response(body))
 }
 /// GET /v1/zk/proofs/count — return count for filters
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn handle_count_proofs(
     state: Arc<CoreState>,
     limits: ProofApiLimits,
@@ -5565,7 +5483,6 @@ fn fill_connect_session_random_bytes<R: rand::rand_core::TryCryptoRng + ?Sized>(
     bytes: &mut [u8],
     rng: &mut R,
 ) -> Result<(), crate::Error> {
-    use rand::rand_core::TryRngCore as _;
     rng.try_fill_bytes(bytes).map_err(|err| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "failed to generate Connect session {label}: {err}"
@@ -6013,6 +5930,7 @@ pub struct ProofFindByIdQueryDto {
     pub signed_query_b64: String,
 }
 /// Decode and constrain a locally signed `FindProofRecordById` query.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn signed_find_proof_by_id(
     dto: &ProofFindByIdQueryDto,
 ) -> Result<iroha_data_model::query::SignedQuery> {
@@ -6193,8 +6111,8 @@ pub(crate) async fn handle_v1_bridge_finality(
         admission,
         "bridge finality verification worker failed",
         move || {
-            let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height)
-                .map_err(map_bridge_finality_error)?;
+            let proof = iroha_core::sumeragi::finality::build_proof(&state.view(), height)
+                .map_err(map_current_finality_error)?;
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(proof).into_response());
             }
@@ -6213,7 +6131,9 @@ pub(crate) async fn handle_v1_bridge_finality(
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_attestation(
     state: Arc<CoreState>,
-    status: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    status: iroha_data_model::sumeragi::SumeragiStatus,
+    identity: iroha_core::sumeragi::node::NodeIdentity,
+    build_fingerprint: iroha_crypto::Hash,
     height: Option<u64>,
     challenge: [u8; 32],
     signer: KeyPair,
@@ -6227,11 +6147,17 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
             let view = state.view();
             let height =
                 height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(u64::MAX).max(1));
-            let status_height = status.last_committed_height;
+            let status_height = status.committed_height;
             let network_id = *view.network_id();
-            let node_id = PeerId::new(signer.public_key().clone());
-            let attestation = match iroha_core::bridge::build_finality_attestation(
-                &view, status, height, challenge, &signer,
+            let node_id = identity.node_id.clone();
+            let attestation = match iroha_core::sumeragi::finality::build_attestation(
+                &view,
+                status,
+                &identity,
+                build_fingerprint,
+                height,
+                challenge,
+                &signer,
             ) {
                 Ok(attestation) => attestation,
                 Err(err) => {
@@ -6254,7 +6180,7 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
     )
     .await
 }
-/// GET /v1/bridge/finality/bundle/{height} — Compact commitment + exact v2 proof for a block.
+/// GET /v1/bridge/finality/bundle/{height} — Network-bound current certificate proof.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
@@ -6266,8 +6192,8 @@ pub(crate) async fn handle_v1_bridge_finality_bundle(
         admission,
         "bridge finality bundle worker failed",
         move || {
-            let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
-                .map_err(map_bridge_finality_error)?;
+            let bundle = iroha_core::sumeragi::finality::build_bundle(&state.view(), height)
+                .map_err(map_current_finality_error)?;
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(bundle).into_response());
             }
@@ -6276,24 +6202,25 @@ pub(crate) async fn handle_v1_bridge_finality_bundle(
     )
     .await
 }
-fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
+fn map_current_finality_error(err: iroha_core::sumeragi::finality::ProofError) -> Error {
+    use iroha_core::sumeragi::{certified_chain::ChainReadError, finality::ProofError};
     match err {
-        iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
-        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactNotFound(_) => {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        }
-        iroha_core::bridge::BridgeFinalityError::FinalityArtifactRead { .. }
-        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. } => Error::Query(
-            iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
-        ),
+        ProofError::Chain(
+            ChainReadError::NotCommitted { .. }
+            | ChainReadError::NotInView { .. }
+            | ChainReadError::MissingCertificate { .. },
+        ) => Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )),
+        _ => Error::Query(iroha_data_model::ValidationFail::InternalError(
+            err.to_string(),
+        )),
     }
 }
 /// Expose only exact snapshot-height races as bound progress. All proof, identity,
 /// hash, and signature failures retain their fixed error classification.
 fn bridge_finality_attestation_error_response(
-    err: iroha_core::bridge::BridgeFinalityAttestationBuildError,
+    err: iroha_core::sumeragi::finality::AttestationBuildError,
     requested_height: u64,
     status_height: u64,
     challenge: [u8; 32],
@@ -6301,8 +6228,7 @@ fn bridge_finality_attestation_error_response(
     network_id: iroha_data_model::NetworkId,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    use iroha_core::bridge::BridgeFinalityAttestationBuildError as BuildError;
-    use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
+    use iroha_core::sumeragi::finality::AttestationBuildError as BuildError;
     use iroha_torii_shared::{
         bridge_attestation::FinalityAttestationFailureReason as Reason,
         bridge_finality::BridgeFinalityAttestationTipMismatchV1,
@@ -6316,7 +6242,7 @@ fn bridge_finality_attestation_error_response(
         // Core checks requested == immutable state tip before reading either proof.
         // This exact later error follows proof, network, node and status validation;
         // it therefore identifies only the independently sampled status height race.
-        BuildError::InvalidBody(ValidationError::StatusHeightMismatch) => Some(requested_height),
+        BuildError::StatusHeightMismatch => Some(requested_height),
         _ => None,
     };
     if let Some(applied_height) = applied_height {
@@ -6357,10 +6283,11 @@ fn bridge_finality_attestation_error_response(
 #[cfg(test)]
 mod bridge_finality_attestation_progress_tests {
     use super::*;
-    use iroha_core::bridge::{
-        BridgeFinalityAttestationBuildError as BuildError, BridgeFinalityError,
+    use iroha_core::sumeragi::{
+        certified_chain::ChainReadError,
+        finality::{AttestationBuildError as BuildError, ProofError},
     };
-    use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
+    use iroha_data_model::sumeragi_finality::FinalityError;
     use iroha_torii_shared::{
         bridge_attestation::{
             FINALITY_ATTESTATION_FAILURE_MAX_BYTES, FinalityAttestationFailure,
@@ -6419,7 +6346,7 @@ mod bridge_finality_attestation_progress_tests {
             ] {
                 let (node_id, network_id) = identity();
                 let error = if status_race {
-                    BuildError::InvalidBody(ValidationError::StatusHeightMismatch)
+                    BuildError::StatusHeightMismatch
                 } else {
                     BuildError::HeightIsNotDurableTip {
                         requested,
@@ -6471,63 +6398,43 @@ mod bridge_finality_attestation_progress_tests {
         let mut failures = vec![
             BuildError::EmptyState,
             BuildError::HeightOverflow,
-            BuildError::InvalidSignerAlgorithm,
+            BuildError::InvalidSigner,
             BuildError::Signing("signing failed".to_owned()),
+            BuildError::RestartRequired,
+            BuildError::InvalidStatus,
+            BuildError::InvalidBody(FinalityError("changed identity or signature".into())),
         ];
         for error in [
-            BridgeFinalityError::InvalidHeight(0),
-            BridgeFinalityError::FinalityArtifactNotFound(10),
-            BridgeFinalityError::FinalityArtifactRead {
-                height: 10,
-                reason: "corrupt certificate".to_owned(),
-            },
-            BridgeFinalityError::FinalityArtifactMismatch { height: 10 },
+            ProofError::Chain(ChainReadError::NotCommitted { height: 10 }),
+            ProofError::Chain(ChainReadError::MissingCertificate { height: 10 }),
+            ProofError::Chain(ChainReadError::HeaderMismatch { height: 10 }),
+            ProofError::UnverifiedCommittee(10),
+            ProofError::Portable(FinalityError("invalid certificate".into())),
         ] {
             failures.push(BuildError::FinalityProof(error.clone()));
             failures.push(BuildError::GenesisFinalityProof(error));
         }
-        for error in [
-            ValidationError::ZeroChallenge,
-            ValidationError::NodeFingerprintMismatch,
-            ValidationError::StatusNodeMismatch,
-            ValidationError::InvalidStatus,
-            ValidationError::RestartRequired,
-            ValidationError::ProtocolVersionMismatch,
-            ValidationError::StatusSubjectMismatch,
-            ValidationError::StatusCommitMissing,
-            ValidationError::StatusCommitMismatch,
-            ValidationError::InvalidNodeSignature,
-        ] {
-            failures.push(BuildError::InvalidBody(error));
-        }
-        let left = HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"committed"));
-        let right = HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"foreign proof"));
-        failures.push(BuildError::FinalityTipMismatch {
-            committed_tip_hash: left,
-            proof_block_hash: right,
-        });
-        failures.push(BuildError::GenesisFinalityMismatch {
-            committed_genesis_hash: left,
-            proof_block_hash: right,
-        });
         for error in failures {
             let (node_id, network_id) = identity();
             let expected_reason = match &error {
-                BuildError::HeightOverflow
-                | BuildError::InvalidSignerAlgorithm
-                | BuildError::Signing(_) => Reason::InternalFailure,
-                BuildError::InvalidBody(ValidationError::RestartRequired) => {
-                    Reason::RestartRequired
+                BuildError::HeightOverflow | BuildError::InvalidSigner | BuildError::Signing(_) => {
+                    Reason::InternalFailure
                 }
-                BuildError::FinalityProof(BridgeFinalityError::FinalityArtifactMismatch {
-                    ..
-                })
+                BuildError::RestartRequired => Reason::RestartRequired,
+                BuildError::FinalityProof(
+                    ProofError::Chain(
+                        ChainReadError::NotCommitted { .. }
+                        | ChainReadError::MissingCertificate { .. },
+                    )
+                    | ProofError::UnverifiedCommittee(_),
+                )
                 | BuildError::GenesisFinalityProof(
-                    BridgeFinalityError::FinalityArtifactMismatch { .. },
-                ) => Reason::ConflictingState,
-                BuildError::FinalityProof(_) | BuildError::GenesisFinalityProof(_) => {
-                    Reason::FinalityUnavailable
-                }
+                    ProofError::Chain(
+                        ChainReadError::NotCommitted { .. }
+                        | ChainReadError::MissingCertificate { .. },
+                    )
+                    | ProofError::UnverifiedCommittee(_),
+                ) => Reason::FinalityUnavailable,
                 _ => Reason::ConflictingState,
             };
             let response = bridge_finality_attestation_error_response(
@@ -6620,7 +6527,7 @@ mod bridge_finality_attestation_progress_tests {
                 requested: 11,
                 committed: 9,
             },
-            BuildError::InvalidBody(ValidationError::StatusHeightMismatch),
+            BuildError::StatusHeightMismatch,
         ] {
             let (node_id, network_id) = identity();
             let response = bridge_finality_attestation_error_response(
@@ -6751,9 +6658,6 @@ pub async fn handle_v1_sumeragi_params(
 }
 fn usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
-}
-fn duration_ms_u64(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 pub(crate) fn build_pipeline_preflight_response(
     state: &CoreState,
@@ -7399,6 +7303,7 @@ fn handle_v1_zk_roots_sync(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 /// Execute the roots query on a blocking worker.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn handle_v1_zk_roots(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
@@ -7554,6 +7459,7 @@ fn handle_v1_zk_merkle_path_sync(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 /// Execute confidential-tree integrity checks and path construction on a blocking worker.
+#[cfg(test)]
 pub async fn handle_v1_zk_merkle_path(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
@@ -8358,8 +8264,6 @@ mod zk_roots_selector_tests {
     use super::*;
     use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
     use http_body_util::BodyExt as _;
-    use iroha_primitives::json::Json;
-    use nonzero_ext::nonzero;
     use std::str::FromStr;
     fn selector_state_without_zk() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId)
     {
@@ -9612,6 +9516,7 @@ pub fn accept_transaction_for_ingress(
     #[cfg(feature = "telemetry")]
     let decode_started = std::time::Instant::now();
     let tx = tx.into();
+    super::require_current_transaction_admission(tx.admission_intent())?;
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
         telemetry,
@@ -9746,6 +9651,7 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
     precheck_rejection: Option<AcceptTransactionFail>,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     reject_emergency_fast_transaction_ingress(state.as_ref())?;
+    super::require_current_transaction_admission(tx.signed().admission_intent())?;
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -9854,13 +9760,6 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
         }
     }
 }
-pub(crate) fn push_accepted_transaction_for_ingress(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-) -> Result<RoutingDecision> {
-    push_accepted_transaction_for_ingress_with_routing_plan(queue, state, accepted_tx, None)
-}
 pub(crate) fn reject_ingress_if_queue_capacity_saturated(
     queue: &Queue,
     state: &CoreState,
@@ -9951,6 +9850,8 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
     routing_plan: RoutingPlan,
     expected_admission_binding: &iroha_core::torii_proxy::QueuePlanAdmissionBindingV1,
 ) -> Result<queue::QueuePlanDurableAdmissionV1> {
+    super::require_current_transaction_admission(accepted_tx.entrypoint().admission_intent())?;
+    super::require_current_transaction_route(&routing_plan)?;
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -10029,17 +9930,22 @@ fn push_accepted_transaction_for_ingress_with_durability(
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing: IngressRouting,
 ) -> Result<RoutingDecision> {
-    if accepted_tx.entrypoint().admission_intent()
-        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    {
-        return Err(Error::PushIntoQueue {
-            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
-                reason:
-                    "QueuePlanSynced transaction requires the globally certified admission path"
-                        .to_owned(),
-            }),
-            backpressure: queue.current_backpressure(),
-        });
+    super::require_current_transaction_admission(accepted_tx.entrypoint().admission_intent())?;
+    match &routing {
+        IngressRouting::Derived => {
+            let plan = queue
+                .route_plan_with_state(&accepted_tx, state.as_ref())
+                .map_err(|error| Error::PushIntoQueue {
+                    source: Box::new(queue::Error::UnresolvedRoute {
+                        reason: error.to_string(),
+                    }),
+                    backpressure: queue.current_backpressure(),
+                })?;
+            super::require_current_transaction_route(&plan)?;
+        }
+        IngressRouting::Planned(plan) | IngressRouting::StrictDurable(plan) => {
+            super::require_current_transaction_route(plan)?;
+        }
     }
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
@@ -10301,6 +10207,7 @@ mod lane_admission_latency_tests {
     }
 }
 /// Execute a signed query while honoring pagination/cursor overrides and telemetry policies.
+#[cfg(any(test, feature = "test-fixtures", feature = "bench"))]
 #[iroha_futures::telemetry_future]
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub async fn handle_queries_with_opts(
@@ -12610,7 +12517,6 @@ pub async fn handle_get_contract_state(
 #[cfg(all(test, feature = "app_api"))]
 mod contract_state_tests {
     use super::*;
-    use base64::Engine as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use ivm::pointer_abi::PointerType;
     use std::collections::BTreeMap;
@@ -13807,6 +13713,7 @@ fn bound_signed_contract_arguments(
 const ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES: usize = 512;
 const ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES: usize = 64;
 const ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES: usize = 30;
+#[cfg(test)]
 const ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES: usize = 192;
 const ASSET_TRANSFER_MAX_MEMO_BYTES: usize = 256;
 const ASSET_TRANSFER_MAX_TTL_MS: u64 = 10 * 60 * 1_000;
@@ -13895,6 +13802,7 @@ fn exact_asset_transfer_scope(raw: &str) -> Result<iroha_data_model::asset::Asse
         DataSpaceId::new(dataspace),
     ))
 }
+#[cfg(test)]
 fn exact_asset_transfer_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES {
         return Err(conversion_error(format!(
@@ -15223,7 +15131,7 @@ pub(crate) fn prepare_contract_call_request(
     };
     let builder = builder
         .with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
         )
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
@@ -15232,7 +15140,7 @@ pub(crate) fn prepare_contract_call_request(
         let (payload, canonical_bytes) = decode_app_api_transaction_payload_b64(encoded)?;
         if &payload != builder.payload() || canonical_bytes != builder.encode_payload() {
             return Err(conversion_error(
-                "prepared contract call payload does not match the exact requested invocation, metadata, fee payment, and QueuePlanSynced admission".to_owned(),
+                "prepared contract call payload does not match the exact requested invocation, metadata, fee payment, and Ordinary admission".to_owned(),
             ));
         }
         // Keep the retained signed fee limits and payload bytes; admission validates them live.
@@ -15241,6 +15149,9 @@ pub(crate) fn prepare_contract_call_request(
     } else {
         quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), "/v1/contracts/call")?
     };
+    validate_current_prepared_transaction_payload(
+        builder.payload(), queue.as_ref(), state.as_ref(),
+    )?;
     let fee_payment = builder.payload().fee_payment.clone();
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
@@ -15726,6 +15637,7 @@ fn ensure_contract_entrypoint_kind<'a>(
     }
     Ok(descriptor)
 }
+#[cfg(test)]
 fn ensure_public_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -17514,6 +17426,7 @@ fn multisig_immediate_execution_routing_plan(
         context,
     )
 }
+#[cfg(test)]
 fn derive_multisig_contract_call_trigger_id(
     multisig_account_id: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -17580,6 +17493,7 @@ fn multisig_account_state_contract_key(
     ))
     .expect("multisig account state contract key")
 }
+#[cfg(test)]
 fn multisig_signatory_index_contract_key(
     signatory_account_id: &iroha_data_model::account::AccountId,
 ) -> StatePath {
@@ -18296,41 +18210,6 @@ fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> 
             return Err(Error::AppQueryValidation {
                 code: "multisig_status_invalid",
                 message: format!("status[{index}] duplicates `{status}`"),
-            });
-        }
-    }
-    Ok(normalized)
-}
-fn requested_multisig_operation_types(operation_types: &[String]) -> Result<BTreeSet<String>> {
-    const OPERATION_TYPE_COUNT: usize = 32;
-    const OPERATION_TYPE_MAX_BYTES: usize = 128;
-    if operation_types.len() > OPERATION_TYPE_COUNT {
-        return Err(Error::AppQueryValidation {
-            code: "multisig_operation_type_invalid",
-            message: format!("operation_type must contain at most {OPERATION_TYPE_COUNT} entries"),
-        });
-    }
-    let mut normalized = BTreeSet::new();
-    for (index, operation_type) in operation_types.iter().enumerate() {
-        let mut bytes = operation_type.bytes();
-        let has_canonical_prefix = bytes.next().is_some_and(|byte| byte.is_ascii_uppercase());
-        let has_canonical_suffix =
-            bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
-        if operation_type.len() > OPERATION_TYPE_MAX_BYTES
-            || !has_canonical_prefix
-            || !has_canonical_suffix
-        {
-            return Err(Error::AppQueryValidation {
-                code: "multisig_operation_type_invalid",
-                message: format!(
-                    "operation_type[{index}] must match [A-Z][A-Z0-9_]* and be no longer than {OPERATION_TYPE_MAX_BYTES} bytes"
-                ),
-            });
-        }
-        if !normalized.insert(operation_type.clone()) {
-            return Err(Error::AppQueryValidation {
-                code: "multisig_operation_type_invalid",
-                message: format!("operation_type[{index}] is duplicated"),
             });
         }
     }
@@ -20177,33 +20056,6 @@ mod contract_entrypoint_validation_tests {
             other => panic!("expected conversion error, got {other:?}"),
         }
     }
-    fn expect_app_validation(err: Error, expected_code: &str) -> String {
-        match err {
-            Error::AppQueryValidation { code, message } => {
-                assert_eq!(code, expected_code);
-                message
-            }
-            other => panic!("expected app validation error, got {other:?}"),
-        }
-    }
-    fn expect_app_not_found(err: Error, expected_code: &str) -> String {
-        match err {
-            Error::AppNotFound { code, message } => {
-                assert_eq!(code, expected_code);
-                message
-            }
-            other => panic!("expected app not-found error, got {other:?}"),
-        }
-    }
-    fn expect_app_conflict(err: Error, expected_code: &str) -> String {
-        match err {
-            Error::AppConflict { code, message } => {
-                assert_eq!(code, expected_code);
-                message
-            }
-            other => panic!("expected app conflict error, got {other:?}"),
-        }
-    }
     routing_test! { sync ensure_public_contract_entrypoint_rejects_missing_manifest_entrypoints
         let manifest = manifest_with_entrypoints(None);
         let err = ensure_public_contract_entrypoint(&manifest, "main")
@@ -20352,18 +20204,7 @@ mod contract_payload_normalization_tests {
     use iroha_data_model::smart_contract::manifest::{
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor,
     };
-    use iroha_data_model::{
-        ValidationFail,
-        nexus::{LaneCatalog, LaneConfig},
-        query::error::QueryExecutionFail,
-        smart_contract::{
-            ContractAddress,
-            entrypoint::{
-                EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1, EntrypointValueKindV1,
-                EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
-            },
-        },
-    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail, smart_contract::{ContractAddress, entrypoint::{EntrypointArgumentFieldV1, EntrypointArgumentSchemaV1, EntrypointValueKindV1, EntrypointValueTypeNodeV1, EntrypointValueTypeV1}}};
     use iroha_model_base::topology::DataSpaceId;
     const SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
     const SIGNED_512_MIN: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
@@ -20780,7 +20621,6 @@ seiyaku ZkIvmPayloadNormalizeTest {
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_selector_tests {
     use super::*;
-    use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_core::{
         kura::Kura,
@@ -20790,7 +20630,6 @@ mod multisig_selector_tests {
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{State, World},
     };
-    use iroha_crypto::Algorithm;
     use iroha_data_model::{
         ValidationFail,
         account::{MultisigMember, MultisigPolicy},
@@ -20905,39 +20744,6 @@ mod multisig_selector_tests {
     }
     fn install_paynet_routing_state(state: &State) {
         let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
-        let mut nexus = state.nexus.write();
-        nexus.routing_policy = paynet_routing_policy();
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-        nexus.lane_catalog = lane_catalog;
-        nexus.dataspace_catalog = dataspace_catalog;
-    }
-    fn install_sbp_routing_state(state: &State) {
-        let sbp_dataspace_id = DataSpaceId::new(10);
-        let sbp_lane_id = LaneId::new(1);
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: sbp_dataspace_id,
-                alias: "sbp".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("valid SBP dataspace catalog");
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("lane count"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: sbp_lane_id,
-                    dataspace_id: sbp_dataspace_id,
-                    alias: "sbp".to_owned(),
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("valid SBP lane catalog");
         let mut nexus = state.nexus.write();
         nexus.routing_policy = paynet_routing_policy();
         nexus.lane_config =
@@ -21393,12 +21199,6 @@ mod multisig_selector_tests {
         block
             .commit_world_overlay_for_testing()
             .expect("commit block");
-    }
-    fn expect_not_found(err: Error) {
-        match err {
-            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {}
-            other => panic!("expected not found error, got {other:?}"),
-        }
     }
     fn expect_conversion(err: Error) -> String {
         match err {
@@ -21894,7 +21694,7 @@ mod multisig_selector_tests {
         ).expect("decode payload");
         let builder = dm::TransactionBuilder::decode_payload(&draft).expect("decode transaction");
         assert_eq!(builder.payload().admission_intent(),
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
     }
     fn public_contract_call_fixture() -> (Arc<State>, Arc<Queue>, KeyPair, ContractCallDto) {
         let key = checked_multisig_selector_keypair(0x6c, "derive public contract-call key");
@@ -21938,7 +21738,7 @@ mod multisig_selector_tests {
         request.transaction_payload_b64 = Some(encoded);
         (request, builder)
     }
-    routing_test! { sync contract_call_detached_submission_retains_exact_queue_plan_payload
+    routing_test! { sync contract_call_detached_submission_retains_exact_current_payload
         let (state, queue, key, request) = public_contract_call_fixture();
         let (request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
         let prepared = prepare_contract_call_request(queue.clone(), state, request)
@@ -21946,7 +21746,7 @@ mod multisig_selector_tests {
         let transaction = prepared.transaction.expect("detached transaction");
         transaction.verify_signature().expect("retained signature verifies");
         assert_eq!(transaction, builder.clone().try_sign(key.private_key()).expect("exact expected signature"));
-        assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+        assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
         assert_eq!(transaction.creation_time(), Duration::from_millis(prepared.response.creation_time_ms));
         assert_eq!(builder.payload().creation_time_ms, prepared.response.creation_time_ms);
         assert!(!prepared.response.submitted, "preparation cannot claim public admission");
@@ -21978,15 +21778,15 @@ mod multisig_selector_tests {
     routing_test! { sync contract_call_detached_submission_rejects_changed_or_noncanonical_payload
         let (state, queue, key, request) = public_contract_call_fixture();
         let (exact, builder) = detached_public_contract_call(&state, &queue, &key, &request);
-        let ordinary = builder.clone().with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+        let retired = builder.clone().with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
         );
-        let signature = Signature::try_new(key.private_key(), &ordinary.payload_hash_bytes()).expect("sign other intent");
+        let signature = Signature::try_new(key.private_key(), &retired.payload_hash_bytes()).expect("sign other intent");
         let mut changed = exact.clone();
-        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(ordinary.encode_payload()));
+        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(retired.encode_payload()));
         changed.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
         let error = prepare_contract_call_request(queue.clone(), state.clone(), changed)
-            .expect_err("even a valid Ordinary signature cannot enter the public contract surface");
+            .expect_err("even a valid retired-admission signature cannot enter the public contract surface");
         assert!(expect_conversion(error).contains("exact requested invocation"));
         let mut bytes = builder.encode_payload();
         bytes.push(0);
@@ -21996,11 +21796,11 @@ mod multisig_selector_tests {
         let mut replaced_signature = exact;
         replaced_signature.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
         let error = prepare_contract_call_request(queue.clone(), state, replaced_signature)
-            .expect_err("a signature over another intent cannot authenticate retained QP bytes");
+            .expect_err("a signature over another intent cannot authenticate retained current bytes");
         assert!(expect_conversion(error).contains("detached signature verification failed"));
         assert_eq!(queue.active_len(), 0);
     }
-    routing_test! { async contract_call_detached_handler_requires_certified_public_admission
+    routing_test! { async contract_call_detached_handler_requires_durable_public_admission
         let (state, queue, key, request) = public_contract_call_fixture();
         let (request, _) = detached_public_contract_call(&state, &queue, &key, &request);
         let mut app = crate::mk_app_state_for_tests();
@@ -22017,7 +21817,7 @@ mod multisig_selector_tests {
         let bytes = response.into_body().collect().await.expect("response body").to_bytes();
         let error: iroha_torii_shared::ErrorEnvelope = norito::decode_from_bytes(&bytes).expect("public error envelope");
         #[cfg(feature = "connect")]
-        assert_eq!(error.code(), "route_unavailable");
+        assert_eq!(error.code(), "queue_plan_journal_unavailable");
         #[cfg(not(feature = "connect"))]
         assert_eq!(error.code(), "queue_plan_synced_transport_unavailable");
         assert_eq!(queue.active_len(), 0, "no local enqueue can mask absent public admission authority");
@@ -22125,7 +21925,7 @@ mod multisig_selector_tests {
         assert_eq!(builder.encode_payload(), bytes);
         assert_eq!(builder.payload().creation_time_ms, response.creation_time_ms);
         assert_eq!(builder.payload().admission_intent(),
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary);
         let signing_message = base64::engine::general_purpose::STANDARD.decode(
             response.signing_message_b64.as_deref().expect("signing message"),
         ).expect("canonical signing message base64");
@@ -24282,9 +24082,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     NoritoJson(req): NoritoJson<MultisigContractCallProposeDto>,
 ) -> Result<Response> {
     use iroha_data_model::prelude as dm;
-    use iroha_executor_data_model::isi::multisig::{
-        MultisigApprove, MultisigCancel, MultisigPropose,
-    };
+    use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
     let MultisigContractCallProposeDto {
         selector,
         signer_account_id,
@@ -26177,6 +25975,7 @@ pub async fn handle_post_asset_transfer_control_get(
 }
 }
 /// Fetch proof verification record by proof id.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_proof_record(
     state: Arc<CoreState>,
@@ -27923,14 +27722,6 @@ pub struct ContractViewErrorResponseDto {
     #[norito(default)]
     pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
-( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-pub struct ContractViewBatchGetParams {
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-}
 ( Debug, Clone, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
 /// Selects a multisig authority either by its active concrete account id or by stable alias.
@@ -29209,12 +29000,6 @@ pub(crate) fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Resul
         .try_into()
         .map_err(|_| conversion_error(format!("`{field}` must be {N} bytes (got {len})")))
 }
-fn parse_hash_hex(value: &str, field: &str) -> Result<Hash, Error> {
-    Hash::from_str(value).map_err(|err| conversion_error(format!("invalid {field}: {err}")))
-}
-fn missing_field_error(field: &str) -> Error {
-    conversion_error(format!("`{field}` is required"))
-}
 #[cfg(feature = "app_api")]
 fn observe_sorafs_metering(telemetry: &MaybeTelemetry, sorafs_node: &sorafs_node::NodeHandle) {
     let usage = sorafs_node.capacity_usage();
@@ -29272,9 +29057,6 @@ fn observe_sorafs_metering(telemetry: &MaybeTelemetry, sorafs_node: &sorafs_node
             );
         }
     });
-}
-fn provider_id_from_hex(value: &str) -> Result<ProviderId, Error> {
-    parse_hex_array::<32>(value, "provider_id_hex").map(ProviderId::new)
 }
 fn capacity_declaration_validation_error(err: CapacityDeclarationValidationError) -> Error {
     sorafs_pin_validation_error(
@@ -29595,6 +29377,7 @@ fn validate_sorafs_pin_alias_binding(
     Ok(())
 }
 }
+#[cfg(test)]
 fn convert_manifest_policy(
     policy: &ManifestPinPolicy,
 ) -> iroha_data_model::sorafs::pin_registry::PinPolicy {
@@ -29900,14 +29683,6 @@ mod sorafs_pin_tests {
         #[cfg(not(feature = "telemetry"))]
         let telemetry = MaybeTelemetry::disabled();
         (queue, state, telemetry)
-    }
-    fn conversion_message(err: Error) -> String {
-        match err {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        }
     }
     fn app_validation_error(err: Error) -> (&'static str, String) {
         match err {
@@ -30301,7 +30076,6 @@ mod sorafs_pin_tests {
 #[cfg(all(test, feature = "app_api"))]
 mod sorafs_capacity_tests {
     use super::*;
-    use base64::Engine as _;
     use iroha_data_model::{
         prelude as dm,
         sorafs::capacity::{CapacityDeclarationRecord, CapacityTelemetryRecord, ProviderId},
@@ -30313,7 +30087,7 @@ mod sorafs_capacity_tests {
         capacity::{CapacityDeclarationV1, ChunkerCommitmentV1, PricingScheduleV1},
         por::{
             AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
-            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
+            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1,
             derive_challenge_id, derive_challenge_seed,
         },
     };
@@ -33994,7 +33768,7 @@ fn validate_tx_filter_adapter_for_endpoint(
     const MAX_SET: usize = 256;
     use FilterExpr as F;
     use iroha_crypto::HashOf;
-    use iroha_data_model::{prelude as dm, query::error::QueryExecutionFail, transaction::signed};
+    use iroha_data_model::{prelude as dm, transaction::signed};
     fn invalid_field_path(field: &str, endpoint: &'static str) -> Error {
         Error::AppQueryValidation {
             code: "invalid_field_path",
@@ -34724,8 +34498,6 @@ pub const ENDPOINT_ACCOUNTS_ONBOARDING_CURRENT_STATE: &str =
     "/v1/accounts/onboarding/current-state";
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
 pub const ENDPOINT_ACCOUNTS_FAUCET_PREPARE: &str = "/v1/accounts/faucet/prepare";
-pub const ENDPOINT_ACCOUNTS_FAUCET_POLICY: &str = "/v1/accounts/faucet/policy";
-pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
@@ -34733,14 +34505,16 @@ pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE: &str = "/v1/contracts/call/m
 pub const ENDPOINT_MULTISIG_PROPOSE: &str = "/v1/multisig/propose";
 pub const ENDPOINT_MULTISIG_APPROVE: &str = "/v1/multisig/approve";
 pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
+#[cfg(test)]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
+#[cfg(test)]
 pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
+#[cfg(test)]
 pub const ENDPOINT_MULTISIG_PROPOSALS_RESOLVE: &str = "/v1/multisig/proposals/resolve";
 pub const ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET: &str = "/v1/accounts/recovery/policy/set";
 pub const ENDPOINT_ACCOUNT_RECOVERY_PROPOSE: &str = "/v1/accounts/recovery/propose";
 pub const ENDPOINT_ACCOUNT_RECOVERY_APPROVE: &str = "/v1/accounts/recovery/approve";
 pub const ENDPOINT_ACCOUNT_RECOVERY_FINALIZE: &str = "/v1/accounts/recovery/finalize";
-pub const ENDPOINT_ACCOUNT_RECOVERY_STATUS: &str = "/v1/accounts/recovery/status";
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
@@ -34748,10 +34522,7 @@ pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/tran
 pub const ENDPOINT_ACCOUNTS_HISTORY: &str = "/v1/accounts/{account_id}/history";
 pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
 pub const ENDPOINT_CONTRACTS_EVENTS: &str = "/v1/contracts/events";
-pub const ENDPOINT_CONTRACTS_EVENTS_SSE: &str = "/v1/contracts/events/sse";
-pub const ENDPOINT_CONTRACTS_VIEW_BATCH: &str = "/v1/contracts/view/batch";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS: &str = "/v1/contracts/rollups/swaps/fills";
-pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_CANDLES: &str = "/v1/contracts/rollups/swaps/candles";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY: &str =
     "/v1/contracts/rollups/trader/activity";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT: &str = "/v1/contracts/rollups/trader/account";
@@ -34768,7 +34539,6 @@ pub const ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY: &str =
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 pub const ENDPOINT_ACCOUNTS_ASSETS: &str = "/v1/accounts/{account_id}/assets";
 pub const ENDPOINT_ACCOUNTS_ASSETS_QUERY: &str = "/v1/accounts/{account_id}/assets/query";
-pub const ENDPOINT_ACCOUNTS_PORTFOLIO: &str = "/v1/accounts/{uaid}/portfolio";
 const ENDPOINT_DOMAINS_LIST: &str = "/v1/domains";
 const ENDPOINT_DOMAINS_QUERY: &str = "/v1/domains/query";
 }
@@ -34780,7 +34550,6 @@ pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH: &str = "/v1/space-directory
 const ENDPOINT_REPO_AGREEMENTS_LIST: &str = "/v1/repo/agreements";
 const ENDPOINT_REPO_AGREEMENTS_QUERY: &str = "/v1/repo/agreements/query";
 const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v1/assets/definitions";
-const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 pub const ENDPOINT_ASSET_HOLDERS: &str = "/v1/assets/{definition_id}/holders";
 pub const ENDPOINT_ASSET_HOLDERS_QUERY: &str = "/v1/assets/{definition_id}/holders/query";
@@ -34841,6 +34610,7 @@ pub struct NexusDataspacesAccountSummaryQueryParams {
     pub reserved: Option<String>,
 }
 }
+#[cfg(test)]
 pub fn parse_account_path_segment(
     literal: &str,
     telemetry: &MaybeTelemetry,
@@ -35005,6 +34775,7 @@ fn canonicalize_filter_account_literals(
         }
     }
 }
+#[cfg(test)]
 fn canonicalize_accounts_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
@@ -35408,6 +35179,7 @@ fn committed_transaction_is_visible(
         *transaction.entrypoint_hash(),
     )
 }
+#[cfg(test)]
 fn committed_transaction_is_visible_in_block(
     visibility: &DataspaceReadVisibility,
     transaction: &iroha_data_model::query::CommittedTransaction,
@@ -35433,6 +35205,7 @@ app_api_items! {
 ///
 /// Supported filter fields: `authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`,
 /// `metadata.<key>`, and `asset_id` (matches asset ids referenced by instruction payloads).
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions(
     state: Arc<CoreState>,
@@ -35450,6 +35223,7 @@ pub async fn handle_v1_account_transactions(
     .await
 }
 /// POST /v1/accounts/{account_id}/transactions/query` with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions_with_policy(
     state: Arc<CoreState>,
@@ -35824,6 +35598,7 @@ pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
 /// Returns committed transactions without requiring clients to first discover
 /// and fan out over every account. Supported filter fields match the account
 /// transaction query endpoint.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_transactions_query(
     state: Arc<CoreState>,
@@ -35833,6 +35608,7 @@ pub async fn handle_v1_transactions_query(
     handle_v1_transactions_query_with_policy(state, NoritoJson(envelope), telemetry, None).await
 }
 /// POST `/v1/transactions/query` with configurable asset enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_transactions_query_with_policy(
     state: Arc<CoreState>,
@@ -36133,6 +35909,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     response
 }
 /// GET /v1/accounts/{account_id}/transactions — Convenience JSON endpoint.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions_get(
     state: Arc<CoreState>,
@@ -36150,6 +35927,7 @@ pub async fn handle_v1_account_transactions_get(
     .await
 }
 /// GET `/v1/accounts/{account_id}/transactions` with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_transactions_get_with_policy(
     state: Arc<CoreState>,
@@ -36301,25 +36079,6 @@ fn account_history_projection_matches_asset_selector(
                 || projection.asset_id.as_deref() == Some(definition.as_str())
         }
     }
-}
-/// GET `/v1/accounts/{account_id}/history` — indexed account activity history.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_account_history_get_with_policy(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(params): crate::NoritoQuery<AccountHistoryGetParams>,
-    telemetry: MaybeTelemetry,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
-) -> Result<impl IntoResponse> {
-    handle_v1_account_history_get_with_visibility_policy(
-        state,
-        axum::extract::Path(account_id),
-        crate::NoritoQuery(params),
-        telemetry,
-        allowed_asset_definition_id,
-        DataspaceReadVisibility::all(),
-    )
-    .await
 }
 pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
     state: Arc<CoreState>,
@@ -36571,6 +36330,15 @@ pub async fn handle_v1_transactions_history_get(
     visibility_owner.finish()?;
     response
 }
+/// Bench entry point for `/v1/contracts/activity` with unrestricted dataspace visibility.
+#[cfg(all(feature = "app_api", feature = "bench"))]
+pub async fn handle_v1_contracts_activity_get_for_bench(
+    state: Arc<CoreState>,
+    query: crate::NoritoQuery<ContractActivityGetParams>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    handle_v1_contracts_activity_get(state, DataspaceReadVisibility::all(), query, telemetry).await
+}
 /// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_contracts_activity_get(
@@ -36746,14 +36514,7 @@ pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResp
 mod sse_filter_tests {
     use super::*;
     use iroha_crypto::Hash;
-    use iroha_data_model::{
-        block::BlockHeader,
-        events::{
-            EventBox, SharedDataEvent,
-            data::prelude::DataEvent,
-            pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
-        },
-    };
+    use iroha_data_model::{block::BlockHeader, events::{EventBox, pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus}}};
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use nonzero_ext::nonzero;
     routing_test! { sync tx_status_eq_builds_matching_filter
@@ -38047,7 +37808,6 @@ mod tx_query_filter_tests {
         assert!(!filter_tx(&expr, &tx_b));
     }
     routing_test! { sync tx_predicate_from_filter_applies_without_feature
-        use iroha_data_model::query::dsl::EvaluatePredicate;
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, true);
@@ -41093,14 +40853,7 @@ include!("tests/routing_app_api_integration.rs");
 #[cfg(test)]
 mod query_endpoint_tests {
     use axum::http::StatusCode;
-    use iroha_core::{
-        block::BlockBuilder,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Execute as _,
-        state::{State, World},
-        sumeragi::network_topology::Topology,
-    };
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     // prelude already imported via super::*
     use super::*;
     use tower::ServiceExt; // Router::oneshot
@@ -41313,12 +41066,7 @@ mod query_endpoint_tests {
     }
     routing_test! { async proofs_roundtrip_and_query_via_torii
         use axum::extract::Path as AxumPath;
-        use iroha_core::{
-            kura::Kura,
-            query::store::LiveQueryStore,
-            smartcontracts::Execute as _,
-            state::{State, World},
-        };
+        use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute as _, state::World};
         use iroha_data_model::prelude as dm;
         // Minimal in-memory state
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -41783,6 +41531,7 @@ pub(crate) fn handle_v1_events_sse(
 ///
 /// Production routes must use the scoped handler so that every event is
 /// filtered against the caller's current dataspace visibility.
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn handle_v1_events_sse_for_tests(
     events: EventsSender,
@@ -42893,24 +42642,6 @@ pub async fn handle_v1_kaigi_relays(
     };
     Ok(respond_kaigi_json_document_with_format(&payload, format))
 }
-#[cfg(all(feature = "app_api", feature = "telemetry"))]
-/// GET `/v1/kaigi/relays/{relay_id}` — detailed metadata and metrics for a relay.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_kaigi_relay_detail(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    axum::extract::Path(relay_id_str): axum::extract::Path<String>,
-    crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
-) -> Result<impl IntoResponse> {
-    handle_v1_kaigi_relay_detail_with_policy(
-        state,
-        telemetry,
-        axum::extract::Path(relay_id_str),
-        crate::NoritoQuery(params),
-        crate::utils::ResponseFormat::Json,
-    )
-    .await
-}
 /// GET `/v1/kaigi/relays/{relay_id}` with configurable address enforcement.
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[iroha_futures::telemetry_future]
@@ -43633,182 +43364,11 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
     }
 }
 }
-fn settlement_order_label(
-    order: iroha_data_model::isi::settlement::SettlementExecutionOrder,
-) -> &'static str {
-    match order {
-        iroha_data_model::isi::settlement::SettlementExecutionOrder::DeliveryThenPayment => {
-            "delivery_then_payment"
-        }
-        iroha_data_model::isi::settlement::SettlementExecutionOrder::PaymentThenDelivery => {
-            "payment_then_delivery"
-        }
-    }
-}
-fn settlement_atomicity_label(
-    atomicity: iroha_data_model::isi::settlement::SettlementAtomicity,
-) -> &'static str {
-    match atomicity {
-        iroha_data_model::isi::settlement::SettlementAtomicity::AllOrNothing => "all_or_nothing",
-        iroha_data_model::isi::settlement::SettlementAtomicity::CommitFirstLeg => {
-            "commit_first_leg"
-        }
-        iroha_data_model::isi::settlement::SettlementAtomicity::CommitSecondLeg => {
-            "commit_second_leg"
-        }
-    }
-}
-fn settlement_counts_to_value(
-    map: &std::collections::BTreeMap<String, u64>,
-) -> norito::json::Value {
-    let mut obj = norito::json::Map::new();
-    for (key, value) in map {
-        obj.insert(key.clone(), norito::json::Value::from(*value));
-    }
-    norito::json::Value::Object(obj)
-}
-fn dvp_last_event_json(
-    event: &iroha_core::status::DvpSettlementEventSnapshot,
-) -> norito::json::Value {
-    let settlement_id = event
-        .settlement_id
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let failure_reason = event
-        .failure_reason
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let plan = json_object(vec![
-        json_entry("order", settlement_order_label(event.plan_order)),
-        json_entry(
-            "atomicity",
-            settlement_atomicity_label(event.plan_atomicity),
-        ),
-    ]);
-    let legs = json_object(vec![
-        json_entry("delivery_committed", event.delivery_committed),
-        json_entry("payment_committed", event.payment_committed),
-    ]);
-    json_object(vec![
-        json_entry("observed_at_ms", event.observed_at_ms),
-        json_entry("settlement_id", settlement_id),
-        json_entry("plan", plan),
-        json_entry("outcome", event.outcome.as_str()),
-        json_entry("failure_reason", failure_reason),
-        json_entry("final_state", event.final_state_label.clone()),
-        json_entry("legs", legs),
-    ])
-}
-fn pvp_last_event_json(
-    event: &iroha_core::status::PvpSettlementEventSnapshot,
-) -> norito::json::Value {
-    let settlement_id = event
-        .settlement_id
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let failure_reason = event
-        .failure_reason
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let plan = json_object(vec![
-        json_entry("order", settlement_order_label(event.plan_order)),
-        json_entry(
-            "atomicity",
-            settlement_atomicity_label(event.plan_atomicity),
-        ),
-    ]);
-    let legs = json_object(vec![
-        json_entry("primary_committed", event.primary_committed),
-        json_entry("counter_committed", event.counter_committed),
-    ]);
-    let fx_window = event.fx_window_ms.map(Value::from).unwrap_or(Value::Null);
-    json_object(vec![
-        json_entry("observed_at_ms", event.observed_at_ms),
-        json_entry("settlement_id", settlement_id),
-        json_entry("plan", plan),
-        json_entry("outcome", event.outcome.as_str()),
-        json_entry("failure_reason", failure_reason),
-        json_entry("final_state", event.final_state_label.clone()),
-        json_entry("legs", legs),
-        json_entry("fx_window_ms", fx_window),
-    ])
-}
-fn settlement_snapshot_value(
-    settlement: &iroha_core::status::SettlementStatusSnapshot,
-) -> norito::json::Value {
-    let dvp_last = settlement
-        .dvp
-        .last_event
-        .as_ref()
-        .map(dvp_last_event_json)
-        .unwrap_or(Value::Null);
-    let pvp_last = settlement
-        .pvp
-        .last_event
-        .as_ref()
-        .map(pvp_last_event_json)
-        .unwrap_or(Value::Null);
-    let dvp = json_object(vec![
-        json_entry("success_total", settlement.dvp.success_total),
-        json_entry("failure_total", settlement.dvp.failure_total),
-        json_entry(
-            "final_state_totals",
-            settlement_counts_to_value(&settlement.dvp.final_state_totals),
-        ),
-        json_entry(
-            "failure_reasons",
-            settlement_counts_to_value(&settlement.dvp.failure_reasons),
-        ),
-        json_entry("last_event", dvp_last),
-    ]);
-    let pvp = json_object(vec![
-        json_entry("success_total", settlement.pvp.success_total),
-        json_entry("failure_total", settlement.pvp.failure_total),
-        json_entry(
-            "final_state_totals",
-            settlement_counts_to_value(&settlement.pvp.final_state_totals),
-        ),
-        json_entry(
-            "failure_reasons",
-            settlement_counts_to_value(&settlement.pvp.failure_reasons),
-        ),
-        json_entry("last_event", pvp_last),
-    ]);
-    json_object(vec![json_entry("dvp", dvp), json_entry("pvp", pvp)])
-}
-fn hash_with_prefix<H>(hash: H) -> String
-where
-    H: norito::json::JsonSerialize,
-{
-    json::to_value(&hash)
-        .expect("serialize hash for status snapshot json")
-        .as_str()
-        .expect("serialized hash should be a JSON string")
-        .to_owned()
-}
 fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> u32 {
     qc.signers_bitmap
         .iter()
         .map(|byte| byte.count_ones())
         .sum::<u32>()
-}
-fn lane_block_qc_summary_json(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> Value {
-    let signer_count = lane_block_qc_signer_count(qc);
-    json_object(vec![
-        json_entry("phase", format!("{:?}", qc.body.phase).to_ascii_lowercase()),
-        json_entry("validator_set_hash_version", qc.validator_set_hash_version),
-        json_entry(
-            "validator_set_hash",
-            hash_with_prefix(qc.validator_set_hash),
-        ),
-        json_entry("validator_count", u64::from(qc.body.validator_count)),
-        json_entry("min_quorum", u64::from(qc.body.min_quorum)),
-        json_entry("signer_count", u64::from(signer_count)),
-    ])
 }
 fn committed_lane_block_wire(
     entry: &iroha_core::status::CommittedLaneBlockSnapshot,
@@ -43832,43 +43392,6 @@ fn committed_lane_block_wire(
         prepare_qc_signer_count: lane_block_qc_signer_count(&entry.prepare_qc),
         commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
     }
-}
-fn committed_lane_block_json(entry: &iroha_core::status::CommittedLaneBlockSnapshot) -> Value {
-    json_object(vec![
-        json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
-        json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
-        json_entry(
-            "lane_incarnation",
-            hash_with_prefix(entry.proposal.descriptor.lane_incarnation),
-        ),
-        json_entry("lane_block_height", entry.lane_block_height),
-        json_entry("lane_block_view", entry.lane_block_view),
-        json_entry("descriptor_hash", hash_with_prefix(entry.descriptor_hash)),
-        json_entry("proposal_hash", hash_with_prefix(entry.proposal_hash)),
-        json_entry("execution_status", entry.execution_status.as_str()),
-        json_entry(
-            "executable_payload_available",
-            entry.executable_payload_available(),
-        ),
-        json_entry(
-            "subject_hash",
-            hash_with_prefix(entry.proposal.descriptor.subject_hash),
-        ),
-        json_entry(
-            "payload_ownership_hash",
-            hash_with_prefix(entry.proposal.descriptor.payload_ownership_hash),
-        ),
-        json_entry(
-            "rbc_instance_hash",
-            hash_with_prefix(entry.proposal.descriptor.rbc_instance_hash),
-        ),
-        json_entry("qc_mode_tag", entry.proposal.descriptor.qc_mode_tag.clone()),
-        json_entry("prepare_qc", lane_block_qc_summary_json(&entry.prepare_qc)),
-        json_entry("commit_qc", lane_block_qc_summary_json(&entry.commit_qc)),
-    ])
-}
-fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
-    json_value(entry)
 }
 /// GET /v1/sumeragi/status — latest authoritative Sumeragi v2 snapshot.
 ///
@@ -44092,10 +43615,7 @@ pub fn handle_v1_sumeragi_status_sse(
                             break Some((Ok(event), (ticker, sumeragi_handle)));
                         }
                         Err(error) => {
-                            iroha_logger::error!(
-                                ?error,
-                                "failed to serialize the Sumeragi status"
-                            );
+                            iroha_logger::error!(?error, "failed to serialize the Sumeragi status");
                         }
                     }
                 }
@@ -44786,7 +44306,6 @@ mod sse_stream_tests {
         atomic::{AtomicBool, Ordering},
     };
     use axum::body::Body;
-    use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -45103,7 +44622,6 @@ mod cursor_mode_tests {
         smartcontracts::isi::query::QueryLimits,
         state::{State, World},
     };
-    use iroha_data_model::prelude::*;
     use iroha_data_model::query::{
         QueryItemKind, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, SelectorTuple},
@@ -45309,7 +44827,6 @@ mod validation_fee_torii_ingress_tests {
             time::{ExecutionTime, TimeEventFilter},
         },
         isi::Transfer,
-        prelude::*,
         smart_contract::{
             ContractAddress,
             manifest::{TriggerCallback, TriggerDescriptor},
@@ -45337,7 +44854,7 @@ mod validation_fee_torii_ingress_tests {
         json::Json,
         numeric::{NumericSpec, Quantity},
     };
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
     use std::{
         collections::BTreeMap,
         num::{NonZeroU16, NonZeroU64, NonZeroUsize},
@@ -46984,13 +46501,7 @@ mod validation_fee_torii_ingress_tests {
 #[cfg(all(test, feature = "telemetry"))]
 mod lane_admission_metrics_tests {
     use super::*;
-    use iroha_core::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        queue::Queue,
-        state::{State, World},
-    };
-    use iroha_data_model::prelude::*;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::World};
     use iroha_logger::Level;
     use std::sync::Arc;
     routing_test! { async transaction_ingress_records_latency_histogram
@@ -47050,12 +46561,9 @@ mod hot_path_load_profile_tests {
         telemetry::{StateTelemetry, Telemetry},
     };
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{
-        prelude::*,
-        query::{
-            QueryRequest, SingularQueryBox, executor::prelude::FindParameters,
-            runtime::prelude::FindAbiVersion,
-        },
+    use iroha_data_model::query::{
+        QueryRequest, SingularQueryBox, executor::prelude::FindParameters,
+        runtime::prelude::FindAbiVersion,
     };
     use iroha_logger::Level;
     use iroha_telemetry::metrics::Metrics;
@@ -47586,6 +47094,9 @@ pub struct ContractRollupSwapsFillsParams {
     #[norito(default)]
     pub scan_limit: Option<u64>,
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    // TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
+    // once these projections report exact totals.
+    #[allow(dead_code)]
     #[norito(default)]
     pub count_mode: Option<String>,
 }
@@ -47611,6 +47122,9 @@ pub struct ContractRollupSwapsCandlesParams {
     #[norito(default)]
     pub bucket_ms: Option<u64>,
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    // TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
+    // once these projections report exact totals.
+    #[allow(dead_code)]
     #[norito(default)]
     pub count_mode: Option<String>,
 }
@@ -48607,11 +48121,6 @@ fn format_signed_asset_amount(value: f64, symbol: &str) -> String {
         ""
     };
     format!("{sign}{} {}", compact_number(value.abs(), 4), symbol)
-}
-fn format_percent_ratio(value: Option<f64>) -> String {
-    value
-        .map(|raw| format!("{}%", compact_number(raw * 100.0, 2)))
-        .unwrap_or_else(|| "-".to_owned())
 }
 fn asset_ticker(asset_id: &str) -> String {
     asset_id
@@ -51912,88 +51421,10 @@ pub(crate) struct PrimaryAliasProjection {
     pub(crate) domain: Option<String>,
     pub(crate) has_primary_alias: bool,
 }
-fn primary_alias_projection_from_alias(
-    alias: &iroha_data_model::account::rekey::AccountAlias,
-    catalog: &DataSpaceCatalog,
-) -> PrimaryAliasProjection {
-    let dataspace = catalog
-        .by_id(alias.dataspace)
-        .map(|entry| entry.alias.to_ascii_lowercase());
-    let domain_segment = alias
-        .domain
-        .as_ref()
-        .map(|domain| domain.to_string().to_ascii_lowercase());
-    let domain = dataspace.as_ref().map(|dataspace_alias| {
-        domain_segment.as_ref().map_or_else(
-            || dataspace_alias.clone(),
-            |segment| format!("{segment}.{dataspace_alias}"),
-        )
-    });
-    PrimaryAliasProjection {
-        literal: alias.to_literal(catalog).ok(),
-        name: Some(alias.label.as_ref().to_ascii_lowercase()),
-        dataspace,
-        domain,
-        has_primary_alias: true,
-    }
-}
-fn primary_alias_projection_from_binding_record(
-    binding: &iroha_data_model::query::account::AccountAliasBindingRecord,
-) -> PrimaryAliasProjection {
-    let dataspace = binding.dataspace.to_ascii_lowercase();
-    let name = binding
-        .alias
-        .split_once('@')
-        .map(|(label, _)| label.to_ascii_lowercase());
-    let domain = binding
-        .domain
-        .as_ref()
-        .map(|segment| format!("{}.{}", segment.to_ascii_lowercase(), dataspace))
-        .unwrap_or_else(|| dataspace.clone());
-    PrimaryAliasProjection {
-        literal: Some(binding.alias.to_ascii_lowercase()),
-        name,
-        dataspace: Some(dataspace),
-        domain: Some(domain),
-        has_primary_alias: true,
-    }
-}
 pub(crate) fn primary_alias_projection_for_account_id(
     _state: &CoreState,
     _account_id: &AccountId,
 ) -> PrimaryAliasProjection {
-    PrimaryAliasProjection::default()
-}
-fn primary_alias_projection_for_account_id_in_world(
-    world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
-    account_id: &AccountId,
-    now_ms: u64,
-) -> PrimaryAliasProjection {
-    if let Some(account) = world.accounts().get(account_id) {
-        let labels = world
-            .account_aliases_by_account()
-            .get(account_id)
-            .cloned()
-            .unwrap_or_default();
-        let active_labels = labels
-            .into_iter()
-            .filter(|label| {
-                matches!(
-                    resolve_active_account_alias(world, catalog, label, now_ms),
-                    Ok(Some(ref resolved)) if resolved == account_id
-                )
-            })
-            .collect::<BTreeSet<_>>();
-        if let Some(primary) = account
-            .as_ref()
-            .label()
-            .filter(|label| active_labels.contains(label))
-            .or_else(|| active_labels.iter().next())
-        {
-            return primary_alias_projection_from_alias(primary, &catalog);
-        }
-    }
     PrimaryAliasProjection::default()
 }
 fn primary_alias_projection_batch_for_account_ids(
@@ -52279,27 +51710,8 @@ struct AccountPermissionListItem {
     name: String,
     payload: norito::json::Value,
 }
-/// List all effective permissions granted to an account with optional pagination.
-///
-/// Effective permissions include both direct account grants and grants inherited from every role
-/// assigned to the account. Security inventory consumers must not treat direct grants alone as the
-/// account's authority.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_account_permissions(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_account_permissions_with_policy(
-        state,
-        axum::extract::Path(account_id),
-        crate::NoritoQuery(p),
-        telemetry,
-    )
-    .await
-}
 /// List permissions with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_permissions_with_policy(
     state: Arc<CoreState>,
@@ -52391,6 +51803,7 @@ pub(crate) async fn handle_v1_account_permissions_with_visibility(
     })
 }
 /// List assets for an account with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets(
     state: Arc<CoreState>,
@@ -52407,6 +51820,7 @@ pub async fn handle_v1_account_assets(
     .await
 }
 /// List assets with configurable address enforcement.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets_with_policy(
     state: Arc<CoreState>,
@@ -53212,6 +52626,7 @@ fn domain_projection_retained_bytes(domain: &DomainProj) -> usize {
     retained_json_text_bytes(&domain.id)
 }
 /// GET /v1/domains — List domains with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_domains(
     state: Arc<CoreState>,
@@ -53302,6 +52717,7 @@ fn domain_sort_key(id: &str, selectors: &[DomainSortSelector]) -> MultiSortKey {
 /// POST /v1/domains/query — JSON envelope with optional pagination/sort.
 ///
 /// Phase 1: ignores `filter`/`select` and applies deterministic sorting by id if requested.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_domains_query(
     state: Arc<CoreState>,
@@ -53875,10 +53291,6 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
         }
     }
 }
-fn account_filter_object(expr: &FilterExpr, account: &iroha_data_model::account::Account) -> bool {
-    let id = account.id().to_string();
-    filter_metadata_object(expr, &id, account.metadata())
-}
 fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool {
     use FilterExpr as F;
     let field_str = |field: &str| -> Option<&str> {
@@ -53968,17 +53380,6 @@ fn account_from_key_value(
     iroha_data_model::account::Account {
         id: id.clone(),
         metadata: details.metadata,
-        label: None,
-        uaid: details.uaid,
-        opaque_ids: details.opaque_ids,
-    }
-}
-fn account_read_response_from_world_entry(
-    entry: iroha_data_model::account::AccountEntry<'_>,
-) -> iroha_torii_shared::AccountReadResponse {
-    let details = entry.value().clone().into_inner();
-    iroha_torii_shared::AccountReadResponse {
-        account_id: entry.id().clone(),
         label: None,
         uaid: details.uaid,
         opaque_ids: details.opaque_ids,
@@ -55366,7 +54767,7 @@ mod prepared_transaction_signature_fixture_tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary)
         .with_metadata(metadata)
         .with_instructions(instructions);
         builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
@@ -55885,18 +55286,6 @@ fn faucet_invalid_request(reason: &str) -> Error {
 }
 const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
-fn leading_zero_bits(bytes: &[u8]) -> u32 {
-    let mut total = 0u32;
-    for byte in bytes {
-        if *byte == 0 {
-            total += 8;
-            continue;
-        }
-        total += byte.leading_zeros();
-        break;
-    }
-    total
-}
 fn adaptive_faucet_pow_extra_bits(
     recent_claims: u64,
     claims_per_extra_bit: u64,
@@ -56170,7 +55559,7 @@ fn verify_faucet_pow(
     );
     let scrypt_params = faucet_pow_scrypt_params(faucet)?;
     let digest = faucet_pow_digest(&challenge, &scrypt_params, &nonce_bytes)?;
-    if leading_zero_bits(&digest) < u32::from(effective_difficulty_bits) {
+    if crate::utils::leading_zero_bits(&digest) < u32::from(effective_difficulty_bits) {
         return Err(faucet_invalid_request("invalid faucet pow solution"));
     }
     Ok(())
@@ -56969,10 +56358,36 @@ fn revalidate_onboarding_prepared_work(
     })
 }
 
-fn prepared_submit_outcome(
+pub(crate) fn validate_current_prepared_transaction_payload(
+    payload: &iroha_data_model::transaction::TransactionPayload,
+    queue: &Queue,
+    state: &CoreState,
+) -> Result<()> {
+    if payload.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+    {
+        return Err(prepared_transaction_invalid("prepared transaction requires Ordinary admission"));
+    }
+    let plan = queue.route_payload_plan_with_state(payload, state)
+        .map_err(|error| conversion_error(format!("prepared transaction route is unavailable: {error}")))?;
+    if !matches!(plan, RoutingPlan::Single(_)) {
+        return Err(Error::AppQueryValidation {
+            code: "prepared_transaction_route_unsupported",
+            message: "current prepared transactions require one authoritative route".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn prepared_submit_outcome(
     app: &crate::SharedAppState,
     transaction: &SignedTransaction,
 ) -> Result<Option<&'static str>> {
+    if transaction.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+    {
+        return Err(prepared_transaction_invalid("prepared transaction requires Ordinary admission"));
+    }
     let transaction_hash = transaction.hash();
     let entrypoint_hash =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
@@ -56985,15 +56400,7 @@ fn prepared_submit_outcome(
             })?;
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
-    // A local Queue entry or cached Queued event is only one authority's claim.
-    // It cannot acknowledge a QueuePlanSynced prepared mutation before the
-    // global f+1 certificate has been durably persisted. Its replay must enter
-    // the same strict public admission path as a fresh submission.
-    if transaction.admission_intent()
-        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    {
-        return Ok(None);
-    }
+    // A queue/cache observation reports Pending only; it never proves application.
     if let Some(status) = app.pipeline_status_cache.lookup(&transaction_hash) {
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
@@ -57006,14 +56413,16 @@ fn prepared_submit_outcome(
     Ok(None)
 }
 
-/// Admit one exact prepared transaction through the public QueuePlan quorum owner.
-/// An accepted response means the complete certificate crossed its durable
-/// publication boundary; local Queue custody alone is not a public success.
-async fn submit_prepared_queue_plan_transaction(
+/// Admit an exact single-route prepared transaction through ordinary durable ingress.
+/// Accepted means pending local custody; only authenticated execution proves application.
+pub(crate) async fn submit_current_prepared_transaction(
     app: &crate::SharedAppState,
     transaction: SignedTransaction,
     telemetry: &MaybeTelemetry,
 ) -> Result<Response> {
+    validate_current_prepared_transaction_payload(
+        transaction.payload(), app.queue.as_ref(), app.state.as_ref(),
+    )?;
     let compute_permit = crate::try_acquire_transaction_ingress_compute(
         &app.transaction_ingress_compute_inflight,
     )?;
@@ -57036,66 +56445,8 @@ async fn submit_prepared_queue_plan_transaction(
     .await
 }
 
-#[cfg(feature = "connect")]
-pub(crate) async fn certified_prepared_queue_plan_response(
-    app: &crate::SharedAppState,
-    transaction: &SignedTransaction,
-) -> Result<Option<Response>> {
-    let compute_permit = crate::try_acquire_transaction_ingress_compute(
-        &app.transaction_ingress_compute_inflight,
-    )?;
-    let app = app.clone();
-    let transaction = transaction.clone();
-    let (response, compute_permit) = crate::run_transaction_ingress_compute_job(
-        compute_permit,
-        "prepared_transaction_retry_worker_failed",
-        move || {
-            let Some(authenticated) = crate::AuthenticatedQueuePlanRetry::from_signed(
-                app.state.network_id_ref(),
-                &transaction,
-            )? else {
-                return Ok(None);
-            };
-            if let Some(response) = crate::canonical_queue_plan_submission_response(
-                app.as_ref(),
-                &authenticated,
-                true,
-                crate::utils::ResponseFormat::Json,
-            ) {
-                return Ok(Some(response));
-            }
-            let entrypoint_hash = authenticated.entrypoint_hash();
-            let signed_transaction_hash = authenticated.signed_transaction_hash();
-            match app.state.pending_queue_plan_admission_for_transaction(
-                entrypoint_hash,
-                signed_transaction_hash,
-            ) {
-                Ok(false) => Ok(crate::canonical_queue_plan_submission_response(
-                    app.as_ref(),
-                    &authenticated,
-                    true,
-                    crate::utils::ResponseFormat::Json,
-                )),
-                Ok(true) => Ok(Some(crate::transaction_submission_receipt_response(
-                    app.as_ref(),
-                    entrypoint_hash,
-                    Some(signed_transaction_hash),
-                    true,
-                    crate::utils::ResponseFormat::Json,
-                ))),
-                Err(error) => Ok(Some(crate::queue_plan_admission_registry_conflict_response(
-                    entrypoint_hash,
-                    format!("pending QueuePlan admission cannot be authenticated: {error}"),
-                ))),
-            }
-        },
-    )
-    .await?;
-    drop(compute_permit);
-    Ok(response)
-}
 
-fn prepared_queue_plan_submit_response(
+fn prepared_transaction_submit_response(
     submission: Response,
     binding: PreparedOperationBindingV1,
     operation: &str,
@@ -57115,7 +56466,7 @@ fn prepared_queue_plan_submit_response(
 }
 
 #[cfg(all(test, feature = "app_api"))]
-routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptance
+routing_test! { async prepared_transaction_submit_response_requires_real_acceptance
     let binding = PreparedOperationBindingV1 {
         schema: PreparedOperationBindingV1::SCHEMA.to_owned(),
         semantic_hash_hex: "11".repeat(32),
@@ -57127,9 +56478,9 @@ routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptan
     *accepted.status_mut() = StatusCode::ACCEPTED;
     accepted.headers_mut().insert(
         axum::http::HeaderName::from_static("x-iroha-entrypoint-hash"),
-        axum::http::HeaderValue::from_static("certified-entrypoint"),
+        axum::http::HeaderValue::from_static("admitted-entrypoint"),
     );
-    let accepted = prepared_queue_plan_submit_response(
+    let accepted = prepared_transaction_submit_response(
         accepted,
         binding.clone(),
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -57141,7 +56492,7 @@ routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptan
             .headers()
             .get("x-iroha-entrypoint-hash")
             .and_then(|value| value.to_str().ok()),
-        Some("certified-entrypoint")
+        Some("admitted-entrypoint")
     );
     let body = axum::body::to_bytes(accepted.into_body(), usize::MAX)
         .await
@@ -57153,7 +56504,7 @@ routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptan
 
     let mut unavailable = Response::new(Body::from("quorum unavailable"));
     *unavailable.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-    let unavailable = prepared_queue_plan_submit_response(
+    let unavailable = prepared_transaction_submit_response(
         unavailable,
         binding,
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -57278,7 +56629,7 @@ pub async fn handle_v1_accounts_onboard_prepare(
         request.fee_payment.clone(),
     )
     .with_admission_intent(
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
     )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
@@ -57291,6 +56642,9 @@ pub async fn handle_v1_accounts_onboard_prepare(
         app.queue.as_ref(),
         app.state.as_ref(),
         ENDPOINT_ACCOUNTS_ONBOARD_PREPARE,
+    )?;
+    validate_current_prepared_transaction_payload(
+        transaction.payload(), app.queue.as_ref(), app.state.as_ref(),
     )?;
     let (transaction_hash_hex, signed_transaction_wire_hex, signed_transaction_wire_sha256) =
         canonical_prepared_transaction_wire(&transaction)?;
@@ -57368,10 +56722,10 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         &prepared.signed_transaction_wire_sha256,
     )?;
     if transaction.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
     {
         return Err(prepared_transaction_invalid(
-            "prepared onboarding transaction requires QueuePlanSynced admission",
+            "prepared onboarding transaction requires Ordinary admission",
         ));
     }
     // A known hash is still scoped to the credential that prepared its signed receipt. Only the
@@ -57392,18 +56746,7 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
             ),
         ));
     }
-    // A certified retry has already crossed the durable f+1 boundary. Serve it before
-    // the live expiry and state checks, which apply only to fresh admission.
-    #[cfg(feature = "connect")]
-    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
-        let response = prepared_queue_plan_submit_response(
-            submission,
-            prepared.binding,
-            AccountOnboardingPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-        );
-        return Ok((response.status(), response));
-    }
+
     validate_prepared_mutation_binding(
         &prepared.binding,
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -57438,8 +56781,8 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
             "prepared onboarding transaction no longer matches its receipt, binding, result identity, or exact fee intent",
         ));
     }
-    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
-    let response = prepared_queue_plan_submit_response(
+    let submission = submit_current_prepared_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_transaction_submit_response(
         submission,
         prepared.binding,
         AccountOnboardingPreparedTransactionDto::OPERATION,
@@ -57720,7 +57063,7 @@ pub async fn handle_v1_accounts_faucet_prepare(
         request.fee_payment.clone(),
     )
     .with_admission_intent(
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
     )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
@@ -57733,6 +57076,9 @@ pub async fn handle_v1_accounts_faucet_prepare(
         app.queue.as_ref(),
         app.state.as_ref(),
         ENDPOINT_ACCOUNTS_FAUCET_PREPARE,
+    )?;
+    validate_current_prepared_transaction_payload(
+        transaction.payload(), app.queue.as_ref(), app.state.as_ref(),
     )?;
     let (transaction_hash_hex, signed_transaction_wire_hex, signed_transaction_wire_sha256) =
         canonical_prepared_transaction_wire(&transaction)?;
@@ -57812,10 +57158,10 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
         &prepared.signed_transaction_wire_sha256,
     )?;
     if transaction.admission_intent()
-        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+        != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
     {
         return Err(prepared_transaction_invalid(
-            "prepared faucet transaction requires QueuePlanSynced admission",
+            "prepared faucet transaction requires Ordinary admission",
         ));
     }
     if let Some(outcome) = prepared_submit_outcome(&app, &transaction)? {
@@ -57829,16 +57175,7 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
             ),
         ));
     }
-    #[cfg(feature = "connect")]
-    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
-        let response = prepared_queue_plan_submit_response(
-            submission,
-            prepared.binding,
-            AccountFaucetPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-        );
-        return Ok((response.status(), response));
-    }
+
     validate_prepared_mutation_binding(
         &prepared.binding,
         AccountFaucetPreparedTransactionDto::OPERATION,
@@ -57876,8 +57213,8 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
             "prepared faucet transaction no longer matches its claim, binding, result identity, or exact fee intent",
         ));
     }
-    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
-    let response = prepared_queue_plan_submit_response(
+    let submission = submit_current_prepared_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_transaction_submit_response(
         submission,
         prepared.binding,
         AccountFaucetPreparedTransactionDto::OPERATION,
@@ -57969,34 +57306,8 @@ pub async fn handle_v1_account_aliases(
     };
     Ok(infallible_pretty_json_response(&payload, "{}"))
 }
-pub async fn handle_v1_account_get(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    accept: Option<axum::http::HeaderValue>,
-    telemetry: MaybeTelemetry,
-) -> Result<Response, Error> {
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
-    let (account_id, _) = parse_account_path_segment_with_state(
-        state.as_ref(),
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_GET,
-    )?;
-    let world = state.world_view();
-    let response = world
-        .account(&account_id)
-        .map(account_read_response_from_world_entry)
-        .map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
-    Ok(crate::utils::respond_with_format(response, format))
-}
 /// GET /v1/accounts — List accounts with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts(
     state: Arc<CoreState>,
@@ -58084,6 +57395,7 @@ pub(crate) async fn handle_v1_accounts_with_visibility(
     })
 }
 /// POST /v1/accounts/query — JSON envelope with optional pagination/sort.
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts_query(
     state: Arc<CoreState>,
@@ -58215,23 +57527,6 @@ pub(crate) async fn handle_v1_accounts_query_with_visibility(
         insert_primary_alias_fields(&mut row, &item.primary_alias);
         row
     })
-}
-/// GET /v1/accounts/{uaid}/portfolio — aggregated holdings for a UAID.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_accounts_portfolio(
-    state: Arc<CoreState>,
-    axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    asset_id: Option<AssetId>,
-    _telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_accounts_portfolio_with_visibility(
-        state,
-        axum::extract::Path(raw_uaid),
-        asset_id,
-        _telemetry,
-        DataspaceReadVisibility::all(),
-    )
-    .await
 }
 pub(crate) async fn handle_v1_accounts_portfolio_with_visibility(
     state: Arc<CoreState>,
@@ -58560,23 +57855,6 @@ fn commitments_summary_json(
     );
     map.insert("details".into(), Value::Array(details));
     Value::Object(map)
-}
-/// GET /v1/nexus/dataspaces/accounts/{literal}/summary — joined dataspace view by account literal.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_nexus_dataspaces_account_summary(
-    state: Arc<CoreState>,
-    axum::extract::Path(raw_literal): axum::extract::Path<String>,
-    crate::NoritoQuery(_query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_nexus_dataspaces_account_summary_with_visibility(
-        state,
-        axum::extract::Path(raw_literal),
-        crate::NoritoQuery(_query),
-        telemetry,
-        DataspaceReadVisibility::all(),
-    )
-    .await
 }
 pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
     state: Arc<CoreState>,
@@ -58951,6 +58229,7 @@ impl DataspaceAliasLookup {
 }
 app_api_items! {
 /// GET /v1/space-directory/uaids/{uaid} — UAID dataspace bindings snapshot.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_space_directory_bindings(
     state: Arc<CoreState>,
@@ -58986,6 +58265,7 @@ pub async fn handle_v1_space_directory_bindings(
     pretty_json_response(&Value::Object(root))
 }
 /// GET /v1/space-directory/uaids/{uaid}/manifests — UAID manifest inventory.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_space_directory_manifests(
     state: Arc<CoreState>,
@@ -60183,7 +59463,7 @@ mod asset_definitions_query_tests {
         state::{State, World},
     };
     use iroha_crypto::Algorithm;
-    use iroha_data_model::{Registrable as _, prelude as dm};
+    use iroha_data_model::prelude as dm;
     use std::sync::Arc;
     fn checked_asset_definition_authority(seed: u8, context: &'static str) -> dm::AccountId {
         dm::AccountId::new(
@@ -60520,15 +59800,6 @@ mod asset_definitions_query_tests {
         assert_eq!(items, vec!["newer", "older"]);
     }
 }
-pub async fn handle_v1_explorer_accounts(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    domain: Option<DomainId>,
-    definition: Option<AssetDefinitionId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_accounts_sync(state, visibility, pagination, domain, definition)
-}
 pub(crate) async fn handle_v1_explorer_accounts_admitted(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -60559,14 +59830,6 @@ fn handle_v1_explorer_accounts_sync(
     )
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
-}
-pub async fn handle_v1_explorer_domains(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_domains_sync(state, visibility, pagination, owned_by)
 }
 pub(crate) async fn handle_v1_explorer_domains_admitted(
     state: Arc<CoreState>,
@@ -60606,6 +59869,7 @@ fn explorer_circulating_quantity(
         ))
     })
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -60682,23 +59946,6 @@ fn handle_v1_explorer_asset_definitions_sync(
     }
     Ok(JsonBody(page).into_response())
 }
-pub async fn handle_v1_explorer_assets(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-    definition: Option<AssetDefinitionId>,
-    asset_id: Option<AssetId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_assets_sync(
-        state,
-        visibility,
-        pagination,
-        owned_by,
-        definition,
-        asset_id,
-    )
-}
 pub(crate) async fn handle_v1_explorer_assets_admitted(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -60740,15 +59987,6 @@ fn handle_v1_explorer_assets_sync(
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
-pub async fn handle_v1_explorer_nfts(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-    domain: Option<DomainId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_nfts_sync(state, visibility, pagination, owned_by, domain)
-}
 pub(crate) async fn handle_v1_explorer_nfts_admitted(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -60779,15 +60017,6 @@ fn handle_v1_explorer_nfts_sync(
     )
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
-}
-pub async fn handle_v1_explorer_rwas(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-    domain: Option<DomainId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_rwas_sync(state, visibility, pagination, owned_by, domain)
 }
 pub(crate) async fn handle_v1_explorer_rwas_admitted(
     state: Arc<CoreState>,
@@ -60820,6 +60049,7 @@ fn handle_v1_explorer_rwas_sync(
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -61386,6 +60616,7 @@ fn instruction_history_filter_digest(
     )
 }
 app_api_items! {
+#[cfg(test)]
 pub async fn handle_v1_explorer_transactions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -61467,20 +60698,6 @@ fn handle_v1_explorer_transactions_sync(
     );
     response
 }
-pub async fn handle_v1_explorer_transactions_latest(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    authority: Option<AccountId>,
-    block: Option<u64>,
-    status: Option<ExplorerTransactionStatusFilter>,
-    asset_id: Option<iroha_data_model::asset::AssetId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_transactions_latest_sync(
-        state, telemetry, visibility, pagination, authority, block, status, asset_id,
-    )
-}
 pub(crate) async fn handle_v1_explorer_transactions_latest_admitted(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -61559,6 +60776,7 @@ pub struct ExplorerInstructionQuery {
     pub kind: Option<ExplorerInstructionKind>,
     pub asset_id: Option<iroha_data_model::asset::AssetId>,
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_instructions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -61640,15 +60858,6 @@ fn handle_v1_explorer_instructions_sync(
         &response,
     );
     response
-}
-pub async fn handle_v1_explorer_instructions_latest(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    query: ExplorerInstructionQuery,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_instructions_latest_sync(state, telemetry, visibility, pagination, query)
 }
 pub(crate) async fn handle_v1_explorer_instructions_latest_admitted(
     state: Arc<CoreState>,
@@ -62359,6 +61568,7 @@ pub async fn handle_v1_explorer_domain_detail(
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
+#[cfg(test)]
 pub async fn handle_v1_explorer_asset_definition_detail(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -62739,10 +61949,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         false,
         "explorer asset econometrics",
     )?;
-    use iroha_data_model::{
-        isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
-        transaction::executable::Executable,
-    };
+    use iroha_data_model::isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox};
     use iroha_primitives::numeric::Quantity;
     const HOUR_MS: u64 = 60 * 60 * 1000;
     const DAY_MS: u64 = 24 * HOUR_MS;
@@ -62765,7 +61972,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     #[derive(Clone)]
     struct VelocityAcc {
         key: &'static str,
-        window_ms: u64,
         start_ms: u64,
         transfers: u64,
         unique_senders: u64,
@@ -62775,7 +61981,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     #[derive(Clone)]
     struct IssuanceAcc {
         key: &'static str,
-        window_ms: u64,
         start_ms: u64,
         mint_count: u64,
         burn_count: u64,
@@ -62792,7 +61997,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         .iter()
         .map(|(key, window_ms)| VelocityAcc {
             key: *key,
-            window_ms: *window_ms,
             start_ms: now_ms.saturating_sub(*window_ms),
             transfers: 0,
             unique_senders: 0,
@@ -62807,7 +62011,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         .iter()
         .map(|(key, window_ms)| IssuanceAcc {
             key: *key,
-            window_ms: *window_ms,
             start_ms: now_ms.saturating_sub(*window_ms),
             mint_count: 0,
             burn_count: 0,
@@ -63463,18 +62666,10 @@ mod explorer_asset_definition_snapshot_tests {
     use super::*;
     use axum::http::StatusCode;
     use http_body_util::BodyExt;
-    use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Execute as _,
-        state::{State, World},
-        sumeragi::network_topology::Topology,
-        tx::AcceptedTransaction,
-    };
+    use iroha_core::{block::BlockBuilder, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute as _, state::{State, World}, sumeragi::network_topology::Topology};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude as dm;
-    use std::{borrow::Cow, sync::Arc};
+    use std::sync::Arc;
     fn checked_snapshot_keypair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
     }
@@ -64553,6 +63748,7 @@ fn asset_definition_alias_binding_for(
         .map(|binding| asset_alias_binding_dto(binding, now_ms))
 }
 /// GET /v1/assets/definitions — List asset definitions as full objects.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_assets_definitions(
     state: Arc<CoreState>,
@@ -64620,31 +63816,9 @@ pub(crate) async fn handle_v1_assets_definitions_with_visibility(
         asset_definition_to_json_value(&item.definition, item.alias_binding.as_ref())
     })
 }
-/// GET /v1/assets/definitions/{asset} — Fetch a single asset definition by id or alias.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_asset_definition(
-    state: Arc<CoreState>,
-    axum::extract::Path(asset): axum::extract::Path<String>,
-) -> Result<impl IntoResponse> {
-    let world = state.world_view();
-    let now_ms = asset_alias_observation_time_ms(&state);
-    let definition_id = resolve_asset_definition_selector(&world, &asset, now_ms)?;
-    let definition = world.asset_definition(&definition_id).map_err(|_| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))
-    })?;
-    let alias_binding = world
-        .asset_definition_alias_bindings()
-        .get(&definition_id)
-        .map(|binding| asset_alias_binding_dto(binding, now_ms));
-    pretty_json_response(&asset_definition_to_json_value(
-        &definition,
-        alias_binding.as_ref(),
-    )?)
-}
 /// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort and
 /// full asset-definition objects in the response.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_assets_definitions_query(
     state: Arc<CoreState>,
@@ -65914,6 +65088,7 @@ fn nfts_for_filter<'a>(
     )
 }
 /// GET /v1/nfts — List NFTs with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_nfts(
     state: Arc<CoreState>,
@@ -65978,6 +65153,7 @@ pub(crate) async fn handle_v1_nfts_with_visibility(
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
 /// POST /v1/nfts/query — JSON envelope with optional pagination/sort.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_nfts_query(
     state: Arc<CoreState>,
@@ -66182,6 +65358,7 @@ fn rwas_for_filter<'a>(
     )
 }
 /// GET /v1/rwas — List RWA lots with basic pagination.
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_rwas(
     state: Arc<CoreState>,
@@ -66239,19 +65416,6 @@ pub(crate) async fn handle_v1_rwas_with_visibility(
         count_mode,
     );
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
-}
-/// POST /v1/rwas/query — JSON envelope with optional pagination/sort.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_rwas_query(
-    state: Arc<CoreState>,
-    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
-) -> Result<impl IntoResponse> {
-    handle_v1_rwas_query_with_visibility(
-        state,
-        NoritoJson(envelope),
-        DataspaceReadVisibility::all(),
-    )
-    .await
 }
 pub(crate) async fn handle_v1_rwas_query_with_visibility(
     state: Arc<CoreState>,
@@ -66410,21 +65574,6 @@ fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<Subs
         .try_into_any_norito::<SubscriptionInvoice>()
         .map_err(|err| conversion_error(format!("invalid subscription invoice metadata: {err}")))?;
     Ok(Some(invoice))
-}
-fn subscription_status_label(status: SubscriptionStatus) -> &'static str {
-    match status {
-        SubscriptionStatus::Active => "active",
-        SubscriptionStatus::Paused => "paused",
-        SubscriptionStatus::PastDue => "past_due",
-        SubscriptionStatus::Canceled => "canceled",
-        SubscriptionStatus::Suspended => "suspended",
-    }
-}
-fn subscription_invoice_status_label(status: SubscriptionInvoiceStatus) -> &'static str {
-    match status {
-        SubscriptionInvoiceStatus::Paid => "paid",
-        SubscriptionInvoiceStatus::Failed => "failed",
-    }
 }
 fn name_status_label(status: &NameStatus) -> &'static str {
     match status {
@@ -67537,6 +66686,7 @@ mod subscription_api_tests {
 include!("routing/adapter_filter_tests.rs");
 app_api_items! {
 /// POST /v1/accounts/{account_id}/assets/query — JSON envelope with pagination/sort
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets_query(
     state: Arc<CoreState>,
@@ -67553,6 +66703,7 @@ pub async fn handle_v1_account_assets_query(
     .await
 }
 /// POST assets query with configurable address enforcement.
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_account_assets_query_with_policy(
     state: Arc<CoreState>,
@@ -67798,6 +66949,7 @@ fn asset_holder_projection_retained_bytes(item: &AssetHolderListItem) -> usize {
     }
     retained.saturating_add(512)
 }
+#[cfg(test)]
 fn accumulate_asset_holder_quantity(
     map: &mut BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
@@ -68050,6 +67202,7 @@ pub(crate) fn asset_balance_scope_literal(
         }
     }
 }
+#[cfg(test)]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_asset_holders(
     state: Arc<CoreState>,
@@ -68157,6 +67310,7 @@ pub(crate) async fn handle_v1_asset_holders_with_visibility(
 }
 /// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
 /// Supports filter fields: `account_id`, `asset`, `asset_alias`, `scope`, and `quantity`.
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_asset_holders_query(
     state: Arc<CoreState>,
@@ -68173,6 +67327,7 @@ pub async fn handle_v1_asset_holders_query(
     )
     .await
 }
+#[cfg(any(test, feature = "bench"))]
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_asset_holders_query_with_app(
     app: Option<crate::SharedAppState>,
@@ -68475,12 +67630,6 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
         },
     }
 }
-fn aggregate_validation_error(message: impl Into<String>) -> Error {
-    Error::AppQueryValidation {
-        code: "unsupported_aggregate_shape",
-        message: message.into(),
-    }
-}
 fn projection_archive_unavailable_error(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "projection_archive_unavailable",
@@ -68489,15 +67638,6 @@ fn projection_archive_unavailable_error(message: impl Into<String>) -> Error {
 }
 fn asset_holder_live_aggregate_enabled() -> bool {
     cfg!(test)
-}
-fn is_valid_aggregate_alias(alias: &str) -> bool {
-    let mut chars = alias.chars();
-    match chars.next() {
-        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {
-            chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        }
-        _ => false,
-    }
 }
 fn json_value_to_numeric(value: &Value) -> Option<iroha_primitives::numeric::Numeric> {
     value
@@ -68566,287 +67706,6 @@ fn evaluate_filter_on_aggregate_row(
         F::Exists(field) => aggregate_field_value(row, &field.0).is_some(),
         F::IsNull(field) => aggregate_field_value(row, &field.0).is_none_or(Value::is_null),
     }
-}
-fn validate_aggregate_filter_fields(
-    expr: &crate::filter::FilterExpr,
-    allowed_fields: &BTreeSet<String>,
-) -> Result<()> {
-    use crate::filter::FilterExpr as F;
-    let validate_field = |field: &crate::filter::FieldPath| -> Result<()> {
-        if allowed_fields.contains(&field.0) {
-            Ok(())
-        } else {
-            Err(aggregate_validation_error(format!(
-                "aggregate field `{}` is not allowed",
-                field.0
-            )))
-        }
-    };
-    match expr {
-        F::And(list) | F::Or(list) => {
-            for nested in list {
-                validate_aggregate_filter_fields(nested, allowed_fields)?;
-            }
-            Ok(())
-        }
-        F::Not(inner) => validate_aggregate_filter_fields(inner, allowed_fields),
-        F::Eq(field, _)
-        | F::Ne(field, _)
-        | F::Lt(field, _)
-        | F::Lte(field, _)
-        | F::Gt(field, _)
-        | F::Gte(field, _)
-        | F::In(field, _)
-        | F::Nin(field, _)
-        | F::Exists(field)
-        | F::IsNull(field) => validate_field(field),
-    }
-}
-fn validate_aggregate_sort_fields(
-    sort: &[crate::filter::SortKey],
-    allowed_fields: &BTreeSet<String>,
-) -> Result<()> {
-    for key in sort {
-        if !allowed_fields.contains(&key.key.0) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate sort key `{}` is not allowed",
-                key.key.0
-            )));
-        }
-    }
-    Ok(())
-}
-enum AggregateMetricState {
-    Count(u64),
-    // Exact for the currently allowed distinct fields: accounts emit unique `id`
-    // rows, and asset-holder rows are reduced in `account_id` order.
-    DistinctCount {
-        last_value: Option<String>,
-        count: u64,
-    },
-    Sum(Option<iroha_primitives::numeric::Numeric>),
-    Min(Option<iroha_primitives::numeric::Numeric>),
-    Max(Option<iroha_primitives::numeric::Numeric>),
-    Avg {
-        sum: Option<iroha_primitives::numeric::Numeric>,
-        count: u64,
-    },
-}
-impl AggregateMetricState {
-    fn new(metric: &crate::filter::AggregateMetric) -> Result<Self> {
-        use crate::filter::AggregateFn as FnKind;
-        match metric.r#fn {
-            FnKind::Count => Ok(Self::Count(0)),
-            FnKind::DistinctCount => Ok(Self::DistinctCount {
-                last_value: None,
-                count: 0,
-            }),
-            FnKind::Sum => Ok(Self::Sum(None)),
-            FnKind::Min => Ok(Self::Min(None)),
-            FnKind::Max => Ok(Self::Max(None)),
-            FnKind::Avg => Ok(Self::Avg {
-                sum: None,
-                count: 0,
-            }),
-        }
-    }
-    fn update(
-        &mut self,
-        metric: &crate::filter::AggregateMetric,
-        row: &norito::json::Map,
-    ) -> Result<()> {
-        use crate::filter::AggregateFn as FnKind;
-        match (self, metric.r#fn) {
-            (Self::Count(total), FnKind::Count) => {
-                *total = total.saturating_add(1);
-                Ok(())
-            }
-            (Self::DistinctCount { last_value, count }, FnKind::DistinctCount) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("distinct_count requires a field"))?;
-                if let Some(value) = aggregate_field_value(row, &field.0) {
-                    let encoded = norito::json::to_json(value).map_err(|err| {
-                        Error::Query(iroha_data_model::ValidationFail::InternalError(
-                            err.to_string(),
-                        ))
-                    })?;
-                    if last_value.as_ref() != Some(&encoded) {
-                        *count = count.saturating_add(1);
-                        *last_value = Some(encoded);
-                    }
-                }
-                Ok(())
-            }
-            (Self::Sum(total), FnKind::Sum) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("sum requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    *total = Some(match total.take() {
-                        Some(existing) => existing.checked_add(value).ok_or_else(|| {
-                            aggregate_validation_error("aggregate sum overflowed")
-                        })?,
-                        None => value,
-                    });
-                }
-                Ok(())
-            }
-            (Self::Min(current), FnKind::Min) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("min requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    if current.as_ref().is_none_or(|existing| value < *existing) {
-                        *current = Some(value);
-                    }
-                }
-                Ok(())
-            }
-            (Self::Max(current), FnKind::Max) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("max requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    if current.as_ref().is_none_or(|existing| value > *existing) {
-                        *current = Some(value);
-                    }
-                }
-                Ok(())
-            }
-            (Self::Avg { sum, count }, FnKind::Avg) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("avg requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    *sum = Some(match sum.take() {
-                        Some(existing) => existing.checked_add(value).ok_or_else(|| {
-                            aggregate_validation_error("aggregate avg overflowed")
-                        })?,
-                        None => value,
-                    });
-                    *count = count.saturating_add(1);
-                }
-                Ok(())
-            }
-            _ => Err(aggregate_validation_error(
-                "aggregate metric state mismatch",
-            )),
-        }
-    }
-    fn finalize(self) -> Result<Value> {
-        match self {
-            Self::Count(total) => Ok(Value::from(total)),
-            Self::DistinctCount { count, .. } => Ok(Value::from(count)),
-            Self::Sum(total) | Self::Min(total) | Self::Max(total) => Ok(total
-                .map(|value| Value::from(value.to_string()))
-                .unwrap_or(Value::Null)),
-            Self::Avg { sum, count } => {
-                let Some(sum) = sum else {
-                    return Ok(Value::Null);
-                };
-                let divisor = iroha_primitives::numeric::Numeric::new(count, 0);
-                let scale = sum.scale().max(6);
-                let avg = sum
-                    .try_decimal_div_round(
-                        &divisor,
-                        scale,
-                        iroha_primitives::numeric::RoundingMode::TowardZero,
-                    )
-                    .map_err(|_| aggregate_validation_error("aggregate avg overflowed"))?;
-                Ok(Value::from(avg.to_string()))
-            }
-        }
-    }
-}
-struct AggregateGroupState {
-    group_values: Vec<(String, Value)>,
-    metrics: Vec<AggregateMetricState>,
-}
-fn aggregate_rows(
-    rows: impl IntoIterator<Item = norito::json::Map>,
-    aggregate: &crate::filter::AggregateSpec,
-) -> Result<Vec<norito::json::Map>> {
-    let mut grouped: BTreeMap<Vec<String>, AggregateGroupState> = BTreeMap::new();
-    for row in rows {
-        let group_values: Vec<(String, Value)> = aggregate
-            .group_by
-            .iter()
-            .map(|field| {
-                (
-                    field.0.clone(),
-                    row.get(&field.0).cloned().unwrap_or(Value::Null),
-                )
-            })
-            .collect();
-        let group_key: Vec<String> = group_values
-            .iter()
-            .map(|(_, value)| norito::json::to_json(value).unwrap_or_else(|_| "null".to_owned()))
-            .collect();
-        let entry = grouped
-            .entry(group_key)
-            .or_insert_with(|| AggregateGroupState {
-                group_values: group_values.clone(),
-                metrics: aggregate
-                    .metrics
-                    .iter()
-                    .map(AggregateMetricState::new)
-                    .collect::<Result<Vec<_>>>()
-                    .expect("metric validation should happen before execution"),
-            });
-        for (state, metric) in entry.metrics.iter_mut().zip(&aggregate.metrics) {
-            state.update(metric, &row)?;
-        }
-    }
-    grouped
-        .into_values()
-        .map(|state| {
-            let mut row = norito::json::Map::new();
-            for (field, value) in state.group_values {
-                row.insert(field, value);
-            }
-            for (metric, value) in aggregate.metrics.iter().zip(state.metrics) {
-                row.insert(metric.alias.clone(), value.finalize()?);
-            }
-            Ok(row)
-        })
-        .collect()
-}
-fn sort_aggregate_rows_in_place(rows: &mut [norito::json::Map], sort: &[crate::filter::SortKey]) {
-    rows.sort_by(|left, right| {
-        for key in sort {
-            let left_value = left.get(&key.key.0).unwrap_or(&Value::Null);
-            let right_value = right.get(&key.key.0).unwrap_or(&Value::Null);
-            let ordering = compare_json_values(left_value, right_value).unwrap_or_else(|| {
-                let left_json =
-                    norito::json::to_json(left_value).unwrap_or_else(|_| "null".to_owned());
-                let right_json =
-                    norito::json::to_json(right_value).unwrap_or_else(|_| "null".to_owned());
-                left_json.cmp(&right_json)
-            });
-            if ordering != Ordering::Equal {
-                return if matches!(key.order, crate::filter::Order::Asc) {
-                    ordering
-                } else {
-                    ordering.reverse()
-                };
-            }
-        }
-        Ordering::Equal
-    });
 }
 fn query_index_snapshot(state: &CoreState) -> (u64, Option<String>) {
     let snapshot = state.query_index_status_snapshot();
@@ -68951,339 +67810,6 @@ fn asset_holder_item_to_query_row(item: &AssetHolderListItem) -> Map {
     row.insert("quantity".into(), Value::from(item.quantity.to_string()));
     insert_primary_alias_fields(&mut row, &item.primary_alias);
     row
-}
-fn build_aggregate_response(
-    state: &CoreState,
-    mut rows: Vec<norito::json::Map>,
-    sort: &[crate::filter::SortKey],
-    pagination: EffectivePagination,
-    having: Option<&crate::filter::FilterExpr>,
-    indexed_snapshot: Option<(u64, Option<String>)>,
-    query_source: &'static str,
-) -> Result<Response, Error> {
-    if let Some(expr) = having {
-        rows.retain(|row| evaluate_filter_on_aggregate_row(expr, row));
-    }
-    if !sort.is_empty() {
-        sort_aggregate_rows_in_place(&mut rows, sort);
-    }
-    let total = rows.len();
-    let offset = usize::try_from(pagination.offset).unwrap_or(usize::MAX);
-    let limit = usize::try_from(pagination.limit.unwrap_or(pagination.cap)).unwrap_or(usize::MAX);
-    let items = rows
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect::<Vec<_>>();
-    let (indexed_height, indexed_block_hash) =
-        indexed_snapshot.unwrap_or_else(|| query_index_snapshot(state));
-    let mut top = norito::json::Map::new();
-    top.insert(
-        "items".into(),
-        Value::Array(items.into_iter().map(Value::Object).collect()),
-    );
-    top.insert("total".into(), Value::from(total as u64));
-    top.insert("indexed_height".into(), Value::from(indexed_height));
-    top.insert(
-        "indexed_block_hash".into(),
-        indexed_block_hash.map_or(Value::Null, Value::from),
-    );
-    top.insert("query_source".into(), Value::from(query_source));
-    pretty_json_response(&top)
-}
-fn validate_accounts_aggregate_request(
-    aggregate: &crate::filter::AggregateSpec,
-    sort: &[crate::filter::SortKey],
-) -> Result<BTreeSet<String>> {
-    use crate::filter::AggregateFn as FnKind;
-    if aggregate.group_by.len() > 4 {
-        return Err(aggregate_validation_error(
-            "aggregate group_by supports at most four fields",
-        ));
-    }
-    if aggregate.metrics.is_empty() || aggregate.metrics.len() > 8 {
-        return Err(aggregate_validation_error(
-            "aggregate metrics requires between one and eight metrics",
-        ));
-    }
-    let allowed_group_fields = BTreeSet::from([
-        "primary_alias_domain".to_owned(),
-        "primary_alias_dataspace".to_owned(),
-        "has_primary_alias".to_owned(),
-    ]);
-    let mut allowed_result_fields = BTreeSet::new();
-    for field in &aggregate.group_by {
-        if !allowed_group_fields.contains(&field.0) {
-            return Err(aggregate_validation_error(format!(
-                "accounts aggregate group_by field `{}` is not supported",
-                field.0
-            )));
-        }
-        allowed_result_fields.insert(field.0.clone());
-    }
-    for metric in &aggregate.metrics {
-        if !is_valid_aggregate_alias(&metric.alias) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is invalid",
-                metric.alias
-            )));
-        }
-        if !allowed_result_fields.insert(metric.alias.clone()) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is duplicated",
-                metric.alias
-            )));
-        }
-        match metric.r#fn {
-            FnKind::Count => {
-                if metric.field.is_some() {
-                    return Err(aggregate_validation_error("count must not declare a field"));
-                }
-            }
-            FnKind::DistinctCount => match metric.field.as_ref().map(|field| field.0.as_str()) {
-                Some("id") => {}
-                _ => {
-                    return Err(aggregate_validation_error(
-                        "accounts aggregate distinct_count only supports field `id`",
-                    ));
-                }
-            },
-            _ => {
-                return Err(aggregate_validation_error(
-                    "accounts aggregate only supports `count` and `distinct_count(id)` metrics",
-                ));
-            }
-        }
-    }
-    validate_aggregate_sort_fields(sort, &allowed_result_fields)?;
-    if let Some(having) = aggregate.having.as_ref() {
-        validate_aggregate_filter_fields(having, &allowed_result_fields)?;
-    }
-    Ok(allowed_result_fields)
-}
-fn validate_asset_holders_aggregate_request(
-    aggregate: &crate::filter::AggregateSpec,
-    sort: &[crate::filter::SortKey],
-) -> Result<BTreeSet<String>> {
-    use crate::filter::AggregateFn as FnKind;
-    if aggregate.group_by.len() > 4 {
-        return Err(aggregate_validation_error(
-            "aggregate group_by supports at most four fields",
-        ));
-    }
-    if aggregate.metrics.is_empty() || aggregate.metrics.len() > 8 {
-        return Err(aggregate_validation_error(
-            "aggregate metrics requires between one and eight metrics",
-        ));
-    }
-    let allowed_group_fields = BTreeSet::from([
-        "scope".to_owned(),
-        "primary_alias_domain".to_owned(),
-        "primary_alias_dataspace".to_owned(),
-        "has_primary_alias".to_owned(),
-    ]);
-    let mut allowed_result_fields = BTreeSet::new();
-    for field in &aggregate.group_by {
-        if !allowed_group_fields.contains(&field.0) {
-            return Err(aggregate_validation_error(format!(
-                "asset holders aggregate group_by field `{}` is not supported",
-                field.0
-            )));
-        }
-        allowed_result_fields.insert(field.0.clone());
-    }
-    for metric in &aggregate.metrics {
-        if !is_valid_aggregate_alias(&metric.alias) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is invalid",
-                metric.alias
-            )));
-        }
-        if !allowed_result_fields.insert(metric.alias.clone()) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is duplicated",
-                metric.alias
-            )));
-        }
-        match metric.r#fn {
-            FnKind::Count => {
-                if metric.field.is_some() {
-                    return Err(aggregate_validation_error("count must not declare a field"));
-                }
-            }
-            FnKind::DistinctCount => match metric.field.as_ref().map(|field| field.0.as_str()) {
-                Some("account_id") => {}
-                _ => {
-                    return Err(aggregate_validation_error(
-                        "asset holders distinct_count only supports field `account_id`",
-                    ));
-                }
-            },
-            FnKind::Sum | FnKind::Min | FnKind::Max | FnKind::Avg => {
-                match metric.field.as_ref().map(|field| field.0.as_str()) {
-                    Some("quantity") => {}
-                    _ => {
-                        return Err(aggregate_validation_error(
-                            "numeric aggregate metrics only support field `quantity`",
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    validate_aggregate_sort_fields(sort, &allowed_result_fields)?;
-    if let Some(having) = aggregate.having.as_ref() {
-        validate_aggregate_filter_fields(having, &allowed_result_fields)?;
-    }
-    Ok(allowed_result_fields)
-}
-fn handle_v1_accounts_query_aggregate(
-    state: Arc<CoreState>,
-    accounts: Vec<iroha_data_model::account::Account>,
-    envelope: crate::filter::QueryEnvelope,
-) -> Result<Response, Error> {
-    let crate::filter::QueryEnvelope {
-        filter,
-        select,
-        aggregate,
-        sort,
-        pagination,
-        ..
-    } = envelope;
-    if select.is_some() {
-        return Err(aggregate_validation_error(
-            "select is not supported when aggregate is present",
-        ));
-    }
-    let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
-    validate_accounts_aggregate_request(&aggregate, &sort)?;
-    let rows = accounts.into_iter().filter_map(|account| {
-        let projected = AccountListItem {
-            canonical_id: account.id().to_string(),
-            display_id: crate::account_literal::display_literal(account.id()),
-            primary_alias: primary_alias_projection_for_account_id(state.as_ref(), account.id()),
-        };
-        if let Some(expr) = filter.as_ref()
-            && !account_filter_projection(expr, &projected)
-        {
-            return None;
-        }
-        Some(account_list_item_to_query_row(&projected))
-    });
-    let aggregated = aggregate_rows(rows, &aggregate)?;
-    let cap = app_query_page_cap(&state);
-    let pagination = enforce_app_pagination(
-        pagination.limit,
-        pagination.offset,
-        cap,
-        ENDPOINT_ACCOUNTS_QUERY,
-    )?;
-    build_aggregate_response(
-        state.as_ref(),
-        aggregated,
-        &sort,
-        pagination,
-        aggregate.having.as_ref(),
-        None,
-        "live",
-    )
-}
-async fn handle_v1_asset_holders_query_aggregate(
-    app: Option<&crate::SharedAppState>,
-    state: Arc<CoreState>,
-    def_id: AssetDefinitionId,
-    asset_alias: Option<String>,
-    filter: Option<crate::filter::FilterExpr>,
-    aggregate: Option<crate::filter::AggregateSpec>,
-    sort: Vec<crate::filter::SortKey>,
-    pagination: EffectivePagination,
-    visibility: DataspaceReadVisibility,
-) -> Result<Response, Error> {
-    let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
-    validate_asset_holders_aggregate_request(&aggregate, &sort)?;
-    if let Some((rows, indexed_snapshot, query_source)) = asset_holder_projection_query_rows(
-        app,
-        state.as_ref(),
-        &def_id,
-        asset_alias.as_ref(),
-        filter.as_ref(),
-        &visibility,
-    )
-    .await?
-    {
-        let aggregated = aggregate_rows(rows, &aggregate)?;
-        return build_aggregate_response(
-            state.as_ref(),
-            aggregated,
-            &sort,
-            pagination,
-            aggregate.having.as_ref(),
-            Some(indexed_snapshot),
-            query_source,
-        );
-    }
-    if !asset_holder_live_aggregate_enabled() {
-        return Err(projection_archive_unavailable_error(
-            "asset holder aggregate requires a complete published query projection archive; live holder scans are disabled",
-        ));
-    }
-    iroha_logger::warn!(
-        asset_definition_id = %def_id,
-        "serving asset holder aggregate from live state because projection archive cache is incomplete"
-    );
-    let world = state.world_view();
-    let mut map: BTreeMap<
-        (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Quantity,
-    > = BTreeMap::new();
-    for asset in world.asset_entries_by_definition_iter(&def_id) {
-        if !visibility.allows_asset(&world, asset.id()) {
-            continue;
-        }
-        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None)?;
-    }
-    let alias_cache: BTreeMap<_, _> = map
-        .keys()
-        .map(|(account_id, _)| {
-            (
-                account_id.clone(),
-                primary_alias_projection_for_account_id(state.as_ref(), account_id),
-            )
-        })
-        .collect();
-    drop(world);
-    let asset = def_id.to_string();
-    let rows = map
-        .into_iter()
-        .filter_map(|((account_id, scope), quantity)| {
-            let canonical_id = account_id.to_string();
-            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-            let projected = AssetHolderListItem {
-                account_id: account_id.clone(),
-                canonical_id,
-                asset: asset.clone(),
-                asset_alias: asset_alias.clone(),
-                scope: asset_balance_scope_literal(&scope),
-                quantity,
-                primary_alias,
-            };
-            if let Some(expr) = filter.as_ref()
-                && !filter_asset_holder_item(expr, &projected)
-            {
-                return None;
-            }
-            Some(asset_holder_item_to_query_row(&projected))
-        });
-    let aggregated = aggregate_rows(rows, &aggregate)?;
-    build_aggregate_response(
-        state.as_ref(),
-        aggregated,
-        &sort,
-        pagination,
-        aggregate.having.as_ref(),
-        None,
-        "live_debug",
-    )
 }
 fn asset_holder_projection_row_to_query_row(
     asset: &str,
@@ -69452,6 +67978,7 @@ async fn asset_holder_projection_query_rows(
         query_source,
     )))
 }
+#[cfg(test)]
 pub(crate) fn query_projection_archive_storage_artifacts(
     archive: &QueryProjectionShardArchive,
 ) -> Result<
@@ -70019,6 +68546,7 @@ pub mod event {
     }
     /// Subscribes `stream` for `events` filtered by filter that is
     /// received through the `stream`
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[iroha_futures::telemetry_future]
     pub async fn handle_events_stream(events: EventsSender, stream: WebSocket) -> eyre::Result<()> {
         handle_events_stream_with_receiver(
@@ -70030,6 +68558,7 @@ pub mod event {
     }
     /// Subscribe a pre-registered receiver to the event stream, ensuring buffered events
     /// emitted during the WebSocket upgrade are not dropped.
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[iroha_futures::telemetry_future]
     pub async fn handle_events_stream_with_receiver(
         mut events_rx: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,

@@ -20,16 +20,18 @@ async fn telemetry_separation_custom() {
     info!("This will be logged in bunyan-readable format");
     let telemetry = Event {
         target: "test",
+        // Event fields keep their emitted order and tracing's integer type;
+        // default lane/dataspace scopes are appended only when absent.
         fields: Fields(vec![
             ("level", norito::json!("INFO")),
+            ("a", norito::json::Value::from(2_i64)),
+            ("c", norito::json!(true)),
+            ("d", norito::json!("this won't be logged")),
             ("lane_id", norito::json!(u64::from(LaneId::SINGLE.as_u32()))),
             (
                 "dataspace_id",
                 norito::json!(DataSpaceId::UNIVERSAL.as_u64()),
             ),
-            ("a", norito::json!(2)),
-            ("c", norito::json!(true)),
-            ("d", norito::json!("this won't be logged")),
         ]),
     };
     let output = time::timeout(Duration::from_millis(10), receiver.recv())

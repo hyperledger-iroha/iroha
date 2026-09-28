@@ -23,7 +23,6 @@ mod model {
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub enum Executable {
         /// Ordered set of instructions.
         #[debug("Instructions(..)")]
@@ -55,7 +54,6 @@ mod model {
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub enum ExecutableBatchItem {
         /// Execute one native Iroha Special Instruction.
         Instruction(InstructionBox),
@@ -73,7 +71,6 @@ mod model {
     #[debug("IVM bytecode(len = {})", self.0.len())]
     #[repr(transparent)]
     // SAFETY: `IvmBytecode` has no trap representation in `Vec<u8>`
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct IvmBytecode(
         /// Raw Kotodama bytecode blob.
         pub(super) Vec<u8>,
@@ -84,7 +81,6 @@ mod model {
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct IvmProved {
         /// Raw Kotodama bytecode blob.
         pub bytecode: IvmBytecode,

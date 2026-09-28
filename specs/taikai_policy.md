@@ -166,8 +166,9 @@ boundaries. All three commitments must be non-zero:
    directories whose identity or membership metadata changes during traversal.
 
 A single archive is encoded as one `F` record whose canonical path is its base
-name. Both `iroha app taikai rpt-attest` and `cargo xtask taikai-rpt-verify`
-implement this same framing.
+name. `iroha app taikai rpt-attest` and `cargo xtask taikai-rpt-verify` share
+one implementation of this framing, `sorafs_car::taikai_bundle`, which also owns
+the hardened policy-document reader and its 1 MiB document limit.
 
 ### Workflow
 

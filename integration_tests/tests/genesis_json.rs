@@ -10,7 +10,7 @@ use iroha_genesis::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::peer::PeerId;
-use iroha_primitives::{json::Json, numeric::NumericSpec};
+use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::{borrow::Cow, io::Write, path::PathBuf};
@@ -84,19 +84,6 @@ fn complete_test_genesis_builder_for_topology(
 
 fn complete_test_genesis_builder(builder: GenesisBuilder) -> GenesisBuilder {
     complete_test_genesis_builder_for_topology(builder, deterministic_test_genesis_topology())
-}
-
-fn has_legacy_domain_scoped_permission_grants(raw: &RawGenesisTransaction) -> bool {
-    raw.instructions().any(|instruction| {
-        let Some(grant_box) = instruction.as_any().downcast_ref::<GrantBox>() else {
-            return false;
-        };
-        let GrantBox::Permission(grant) = grant_box else {
-            return false;
-        };
-        matches!(grant.object().name(), "CanRegisterAccount")
-            && grant.object().payload() == &Json::default()
-    })
 }
 
 fn load_raw_genesis_transaction() -> RawGenesisTransaction {
@@ -218,38 +205,6 @@ fn missing_genesis_file_fails() {
     init_instruction_registry();
     let path = PathBuf::from("this_file_should_not_exist.json");
     assert!(RawGenesisTransaction::from_path(path).is_err());
-}
-#[test]
-fn legacy_domain_scoped_permission_grants_are_detected() {
-    init_instruction_registry();
-    let chain = iroha_test_network::chain_id();
-    let legacy = complete_test_genesis_builder(
-        GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from(".")).append_instruction(
-            Grant::account_permission(
-                Permission::new(
-                    "CanRegisterAccount".parse().expect("permission name"),
-                    Json::default(),
-                ),
-                ALICE_ID.clone(),
-            ),
-        ),
-    )
-    .build_raw()
-    .expect("build complete legacy-permission genesis fixture");
-    assert!(has_legacy_domain_scoped_permission_grants(&legacy));
-    let typed = complete_test_genesis_builder(
-        GenesisBuilder::new_without_executor(chain, PathBuf::from(".")).append_instruction(
-            Grant::account_permission(
-                iroha_executor_data_model::permission::account::CanRegisterAccount {
-                    domain: DomainId::try_new("wonderland", "universal").expect("domain id"),
-                },
-                ALICE_ID.clone(),
-            ),
-        ),
-    )
-    .build_raw()
-    .expect("build complete typed-permission genesis fixture");
-    assert!(!has_legacy_domain_scoped_permission_grants(&typed));
 }
 #[test]
 fn genesis_norito_bytes_roundtrip_network() -> Result<()> {

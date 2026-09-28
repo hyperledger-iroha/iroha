@@ -184,20 +184,16 @@ fn derive_fingerprints(
         ));
     }
     validate_taira_genesis_mode(metadata.mode)?;
-    let shared = config
-        .sumeragi
-        .v2_config(
-            std::time::Duration::from_millis(metadata.block_cadence_ms.get()),
-            metadata.mode.into(),
-        )
-        .map_err(|_| eyre!("validator signed consensus configuration is invalid"))?;
-    shared
-        .validate_ingress_roster_capacity(4)
-        .map_err(|_| eyre!("validator cannot admit the four-member roster"))?;
+    let config_fingerprint = iroha_core::sumeragi::node::configuration_fingerprint(
+        4,
+        &config.sumeragi.local,
+        &iroha_core::sumeragi::driver::DriverConfig::default(),
+        &config.sumeragi.retired_keys,
+    );
     Ok((
         Hash::new(config.common.peer.id.encode()).to_string(),
         build_identity.build_fingerprint().to_string(),
-        shared.fingerprint().to_string(),
+        config_fingerprint.to_string(),
     ))
 }
 

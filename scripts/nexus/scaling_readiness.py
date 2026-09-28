@@ -26,7 +26,7 @@ MAX_DIAGNOSTIC_BYTES = 16 * 1024
 MAX_TRIAL_NS = 7200 * 1_000_000_000
 RETRY_NS = 100_000_000
 _FIELDS = frozenset(('version', 'state', 'reason', 'challenge', 'node_id',
-                    'network_id', 'genesis_hash', 'context_id', 'attestation_norito_base64'))
+                    'network_id', 'genesis_hash', 'consensus_instance', 'genesis_execution_hash', 'attestation_norito_base64'))
 _PENDING = frozenset(('consensus_uninitialized', 'genesis_uncommitted'))
 
 
@@ -61,7 +61,8 @@ class ReadyReceipt:
     node_id: str
     network_id: str
     genesis_hash: str
-    context_id: str
+    consensus_instance: str
+    genesis_execution_hash: str
     challenge: str
     cli_sha256: str
     cli_process: ProcessIdentity
@@ -145,7 +146,9 @@ an unreaped original child. Only typed pending reports permit another invocation
                 'bridge', 'genesis-readiness', '--challenge', challenge,
                 '--node-public-key', role.node_public_key,
                 '--genesis-hash', self._inputs.genesis_hash[5:69],
-                '--context-id', self._inputs.context_id[5:69],
+                '--signed-genesis', str(self._inputs._directory / 'genesis.signed.nrt'),
+                '--genesis-manifest', str(self._inputs._directory / 'genesis.json'),
+                '--genesis-public-key', self._inputs.genesis_public_key,
                 '--request-timeout-ms', str(timeout_ms))
         result = self._commands.run(role.peer_id, argv, (fd,), MAX_REPORT_BYTES)
         return result.stdout, result.process
@@ -158,16 +161,28 @@ an unreaped original child. Only typed pending reports permit another invocation
         _require(type(value) is dict and value.keys() == _FIELDS, 'readiness_report_fields')
         role = self._inputs.roles[index]
         expected = {'challenge': challenge, 'node_id': role.node_public_key,
-                    'network_id': self._inputs.network_id, 'genesis_hash': self._inputs.genesis_hash,
-                    'context_id': self._inputs.context_id}
+                    'network_id': self._inputs.network_id, 'genesis_hash': self._inputs.genesis_hash}
         _require(type(value['version']) is int and value['version'] == 1
                  and all(type(value[name]) is str and value[name] == item
                          for name, item in expected.items()), 'readiness_report_binding')
+        instance = value['consensus_instance']
+        _require(type(instance) is str and len(instance) == 64
+                 and all(ch in '0123456789abcdef' for ch in instance)
+                 and instance != '0' * 64, 'readiness_instance_invalid')
+        _require(not self._receipts or instance == self._receipts[0].consensus_instance,
+                 'readiness_instance_changed')
         if value['state'] == 'pending':
             _require(type(value['reason']) is str and value['reason'] in _PENDING
-                     and value['attestation_norito_base64'] is None, 'readiness_pending_invalid')
+                     and value['attestation_norito_base64'] is None
+                     and value['genesis_execution_hash'] is None, 'readiness_pending_invalid')
             return None
         _require(value['state'] == 'ready' and value['reason'] is None, 'readiness_terminal_failure')
+        execution_hash = value['genesis_execution_hash']
+        _require(type(execution_hash) is str and len(execution_hash) == 64
+                 and all(ch in '0123456789abcdef' for ch in execution_hash)
+                 and execution_hash != '0' * 64, 'readiness_execution_invalid')
+        _require(not self._receipts or execution_hash == self._receipts[0].genesis_execution_hash,
+                 'readiness_execution_changed')
         encoded = value['attestation_norito_base64']
         _require(type(encoded) is str and 0 < len(encoded) <= ((MAX_ATTESTATION_BYTES + 2) // 3) * 4,
                  'readiness_attestation_invalid')
@@ -176,7 +191,7 @@ an unreaped original child. Only typed pending reports permit another invocation
                  and base64.b64encode(attestation).decode('ascii') == encoded,
                  'readiness_attestation_invalid')
         return ReadyReceipt(role.peer_id, identity, role.node_public_key,
-            self._inputs.network_id, self._inputs.genesis_hash, self._inputs.context_id,
+            self._inputs.network_id, self._inputs.genesis_hash, instance, execution_hash,
             challenge, self._image.sha256, cli_identity, role.client_config_sha256, self._inputs.anchors_sha256,
             hashlib.sha256(raw).hexdigest(), attestation)
 

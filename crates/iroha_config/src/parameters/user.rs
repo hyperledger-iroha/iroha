@@ -33267,12 +33267,12 @@ impl SorafsGatewayUntrustedHosting {
         }
     }
 }
-/// User-level rolling-window rate limit configuration.
+/// User-level gateway token-budget configuration.
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsGatewayRateLimit {
-    /// Maximum requests permitted within the rolling window.
+    /// Maximum burst and tokens replenished per window.
     pub max_requests: Option<u32>,
-    /// Duration of the rolling window.
+    /// Time required to replenish the complete token budget.
     #[config(default = "defaults::sorafs::gateway::rate_limit::WINDOW")]
     pub window: Duration,
     /// Optional temporary ban duration applied after repeated violations.

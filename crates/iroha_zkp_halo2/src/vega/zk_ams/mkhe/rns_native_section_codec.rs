@@ -15,35 +15,46 @@
     reason = "fixed-cardinality transport records intentionally retain complete canonical metadata"
 )]
 
+use super::rns_native_proof_hash::RnsNativeDigestIdentityV1 as DigestIdentityV1;
+#[cfg(test)]
 use super::rns_native_proof_hash::{
-    RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
-    decode_proof_digest_v1,
+    RnsNativeProofDigestV1 as ProofDigestV1, decode_proof_digest_v1,
 };
+#[cfg(test)]
 use super::{
     rns_native_cross_field_inventory::{
         RnsNativeCrossFieldInventoryErrorV1, RnsNativePreQpcsCrossProofLeaseIssuerV1,
         RnsNativePreQpcsCrossProofLeaseV1, RnsNativePreQpcsQMaskInventoryPreflightV1,
     },
     rns_native_profile::{
-        ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_POINT_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1, ZkAmsMkheRnsNativeFamilyV1,
-        zk_ams_mkhe_rns_native_profile_manifest_v1,
+        ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
     },
     rns_native_transcript::{
         ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeOpeningCommitmentV1,
     },
-    rns_native_wire::{ZkAmsMkheRnsNativeProofEnvelopeV1, ZkAmsMkheRnsNativeProofSectionKindV1},
+    rns_native_wire::ZkAmsMkheRnsNativeProofEnvelopeV1,
 };
+use super::{
+    rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_POINT_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_RLWE_EQUATION_COUNT_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1,
+    },
+    rns_native_wire::ZkAmsMkheRnsNativeProofSectionKindV1,
+};
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
 
 #[cfg(test)]
 use std::cell::Cell;
 
+#[cfg(test)]
 const TERMINAL_TAG_V1: [u8; 4] = *b"ZATB";
+#[cfg(test)]
 const RNS_QPCS_TAG_V1: [u8; 4] = *b"ZARQ";
+#[cfg(test)]
 const CROSS_LOOKUP_TAG_V1: [u8; 4] = *b"ZACG";
 const PROOF_BODY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-section-proof-body";
 const CODEC_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-section-codec";
@@ -62,6 +73,7 @@ const QUERY_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1 as usize;
 const FRI_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize;
 const SUMCHECK_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1 as usize;
 
+#[cfg(test)]
 const TERMINAL_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + 1
     + 2 * PROOF_DIGEST_BYTES_V1
@@ -109,6 +121,7 @@ const CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1: usize =
 const CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1: usize =
     MAX_SECTION_DIGESTS_V1 * core::mem::size_of::<DigestIdentityV1>();
 /// Canonical schema version shared by all three typed section codecs.
+#[cfg(test)]
 pub const ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1: u8 = 1;
 
 const _: () = {
@@ -169,6 +182,7 @@ fn cross_lookup_unbound_audit_counters_v1() -> CrossLookupUnboundAuditCountersV1
 }
 
 /// Failure while constructing, encoding, or decoding a typed proof section.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZkAmsMkheRnsNativeSectionCodecErrorV1 {
     /// The outer section exceeded its governed cap before parsing or allocation.
@@ -187,6 +201,7 @@ pub enum ZkAmsMkheRnsNativeSectionCodecErrorV1 {
     Integrity,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for ZkAmsMkheRnsNativeSectionCodecErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
@@ -201,8 +216,10 @@ impl core::fmt::Display for ZkAmsMkheRnsNativeSectionCodecErrorV1 {
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for ZkAmsMkheRnsNativeSectionCodecErrorV1 {}
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SectionHeaderV1 {
     profile_manifest_digest: [u8; 32],
@@ -212,6 +229,7 @@ struct SectionHeaderV1 {
     transcript_digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 fn canonical_header_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
 ) -> Result<SectionHeaderV1, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
@@ -238,6 +256,7 @@ fn canonical_header_v1(
     Ok(header)
 }
 
+#[cfg(test)]
 fn insert_header_digests_v1(
     registry: &mut DigestRegistryV1,
     header: SectionHeaderV1,
@@ -254,6 +273,7 @@ fn insert_header_digests_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn family_from_ordinal_v1(ordinal: usize) -> Option<(ZkAmsMkheRnsNativeFamilyV1, u8)> {
     match ordinal {
         0 => Some((ZkAmsMkheRnsNativeFamilyV1::X, 0)),
@@ -275,6 +295,7 @@ fn family_from_ordinal_v1(ordinal: usize) -> Option<(ZkAmsMkheRnsNativeFamilyV1,
     }
 }
 
+#[cfg(test)]
 fn exact_digest_array_v1<const N: usize>(
     values: &[ProofDigestV1],
 ) -> Result<[ProofDigestV1; N], ZkAmsMkheRnsNativeSectionCodecErrorV1> {
@@ -284,6 +305,7 @@ fn exact_digest_array_v1<const N: usize>(
     Ok(*exact)
 }
 
+#[cfg(test)]
 fn tag_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1) -> [u8; 4] {
     match kind {
         ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge => TERMINAL_TAG_V1,
@@ -292,6 +314,7 @@ fn tag_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1) -> [u8; 4] {
     }
 }
 
+#[cfg(test)]
 fn encoded_len_v1(
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
     fixed_bytes: usize,
@@ -311,6 +334,7 @@ fn encoded_len_v1(
     Ok(total)
 }
 
+#[cfg(test)]
 fn preflight_v1(
     bytes: &[u8],
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -329,6 +353,7 @@ fn preflight_v1(
 
 // Public exact-transport integrity only. This never supplies a STARK oracle,
 // Merkle parent, Fiat-Shamir state, or field challenge.
+#[cfg(test)]
 fn proof_body_digest_v1(
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
     proof: &[u8],
@@ -345,6 +370,7 @@ fn proof_body_digest_v1(
 
 // Public exact section transport identity; all proof fields are separately
 // typed and canonical-decoded before this checksum can admit their envelope.
+#[cfg(test)]
 fn codec_digest_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1, prefix: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DIGEST_DOMAIN_V1);
@@ -353,6 +379,7 @@ fn codec_digest_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1, prefix: &[u8]) ->
     hash.finalize()
 }
 
+#[cfg(test)]
 fn write_header_v1(
     bytes: &mut Vec<u8>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -379,6 +406,7 @@ fn write_header_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn write_indexed_u8_v1(
     bytes: &mut Vec<u8>,
     values: &[ProofDigestV1],
@@ -392,6 +420,7 @@ fn write_indexed_u8_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn write_indexed_u16_v1(
     bytes: &mut Vec<u8>,
     values: &[ProofDigestV1],
@@ -407,6 +436,7 @@ fn write_indexed_u16_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn finish_encoding_v1(
     mut bytes: Vec<u8>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -423,6 +453,7 @@ fn finish_encoding_v1(
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn begin_encoding_v1(
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
     fixed_bytes: usize,
@@ -439,6 +470,7 @@ fn begin_encoding_v1(
     Ok((bytes, total, proof_digest))
 }
 
+#[cfg(test)]
 fn write_proof_v1(
     bytes: &mut Vec<u8>,
     proof: &[u8],
@@ -454,11 +486,13 @@ fn write_proof_v1(
     Ok(())
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -505,6 +539,7 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn read_unbound_header_v1(
     decoder: &mut DecoderV1<'_>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -526,6 +561,7 @@ fn read_unbound_header_v1(
     })
 }
 
+#[cfg(test)]
 fn read_header_v1(
     decoder: &mut DecoderV1<'_>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -539,6 +575,7 @@ fn read_header_v1(
     Ok(actual)
 }
 
+#[cfg(test)]
 fn read_indexed_u8_v1<const N: usize>(
     decoder: &mut DecoderV1<'_>,
     registry: &mut DigestRegistryV1,
@@ -554,6 +591,7 @@ fn read_indexed_u8_v1<const N: usize>(
     Ok(values)
 }
 
+#[cfg(test)]
 fn read_indexed_u16_v1<const N: usize>(
     decoder: &mut DecoderV1<'_>,
     registry: &mut DigestRegistryV1,
@@ -569,6 +607,7 @@ fn read_indexed_u16_v1<const N: usize>(
     Ok(values)
 }
 
+#[cfg(test)]
 fn read_proof_v1<'a>(
     decoder: &mut DecoderV1<'a>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -588,6 +627,7 @@ fn read_proof_v1<'a>(
     Ok((proof, expected_digest))
 }
 
+#[cfg(test)]
 fn finish_decoding_v1(
     decoder: &mut DecoderV1<'_>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
@@ -605,11 +645,13 @@ fn finish_decoding_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 struct DigestRegistryV1 {
     digests: [DigestIdentityV1; MAX_SECTION_DIGESTS_V1],
     len: usize,
 }
 
+#[cfg(test)]
 impl DigestRegistryV1 {
     const fn new() -> Self {
         Self {
@@ -639,6 +681,7 @@ impl DigestRegistryV1 {
 /// Borrowed, typed terminal mapping/Hyrax/cross-basis proof section.
 ///
 /// This is a canonical transport view, not a verified proof or authorization.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
     header: SectionHeaderV1,
@@ -652,6 +695,7 @@ pub struct ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
     proof_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
     /// Construct a canonical terminal transport view for one exact transcript.
     ///
@@ -847,6 +891,7 @@ impl<'a> ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
 ///
 /// Fixed arrays make the two equations, forty limbs, 160 queries, and eighteen
 /// FRI layers explicit. This view conveys transport validity only.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     header: SectionHeaderV1,
@@ -865,6 +910,7 @@ pub struct ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     proof_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     /// Construct a canonical RNS/qPCS transport view for one exact transcript.
     ///
@@ -1120,6 +1166,7 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     }
 }
 
+#[cfg(test)]
 struct UnboundCrossFieldGlobalLookupSectionV1<'a> {
     header: SectionHeaderV1,
     cross_field_challenge_seed: ProofDigestV1,
@@ -1134,6 +1181,7 @@ struct UnboundCrossFieldGlobalLookupSectionV1<'a> {
     codec_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl<'a> UnboundCrossFieldGlobalLookupSectionV1<'a> {
     fn bind_final_context_v1(
         self,
@@ -1169,6 +1217,7 @@ impl<'a> UnboundCrossFieldGlobalLookupSectionV1<'a> {
     }
 }
 
+#[cfg(test)]
 fn validate_unbound_cross_lookup_static_header_v1(
     header: SectionHeaderV1,
 ) -> Result<(), ZkAmsMkheRnsNativeSectionCodecErrorV1> {
@@ -1194,6 +1243,7 @@ fn validate_unbound_cross_lookup_static_header_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn decode_unbound_cross_field_global_lookup_v1(
     bytes: &[u8],
 ) -> Result<UnboundCrossFieldGlobalLookupSectionV1<'_>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
@@ -1268,6 +1318,7 @@ fn decode_unbound_cross_field_global_lookup_v1(
 ///
 /// The five evaluation points, forty limbs, and twenty-nine sumcheck rounds
 /// are explicit ordered records. This view conveys transport validity only.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
     header: SectionHeaderV1,
@@ -1282,6 +1333,7 @@ pub struct ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
     proof_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
     /// Construct a canonical cross-field/lookup view for one exact transcript.
     ///
@@ -1437,6 +1489,7 @@ const _: () = {
 ///
 /// It authenticates canonical transport structure only. Final transcript
 /// context and every algebraic claim remain unverified.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -1450,6 +1503,7 @@ pub(super) struct RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
 }
 
 /// Move-only final-transcript binder for one exact envelope section.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the provisional final-context binding must be consumed once"
@@ -1465,6 +1519,7 @@ pub(super) struct RnsNativePendingCrossFieldGlobalLookupContextV1<'env> {
 ///
 /// The lease has no raw accessor. Its only consuming transition performs the
 /// provisional inventory preflight while retaining this whole-section identity.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the exact envelope and proof identities must remain inseparable"
@@ -1479,6 +1534,7 @@ pub(super) struct RnsNativeSealedCrossProofLeaseV1<'env> {
 }
 
 /// Unforgeable purpose token passed only to the inventory module.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the sealed lease must return for one exact final identity check"
@@ -1488,6 +1544,7 @@ pub(super) struct RnsNativeSealedCrossProofInventoryPermitV1<'env> {
 }
 
 /// Move-only, final-context-bound wrapper over the exact envelope section.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the bound section must be consumed with its sealed inventory lease"
@@ -1500,6 +1557,7 @@ pub(super) struct RnsNativeBoundCrossFieldGlobalLookupV1<'env> {
     codec_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl<'env> RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
     /// Split the single parsed owner into the pending final-context binder and
     /// the sealed proof lease. Neither child grants proof authority.
@@ -1533,6 +1591,7 @@ impl<'env> RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
     }
 }
 
+#[cfg(test)]
 impl<'env> RnsNativePendingCrossFieldGlobalLookupContextV1<'env> {
     /// Consume the pending owner and bind its stored 288 context bytes to the
     /// final transcript without parsing or hashing the section again.
@@ -1552,6 +1611,7 @@ impl<'env> RnsNativePendingCrossFieldGlobalLookupContextV1<'env> {
     }
 }
 
+#[cfg(test)]
 impl<'env> RnsNativeSealedCrossProofLeaseV1<'env> {
     /// Consume the sealed section identity into the one-pass inner inventory
     /// preflight. Raw proof bytes never leave this purpose-specific transition.
@@ -1580,6 +1640,7 @@ impl<'env> RnsNativeSealedCrossProofLeaseV1<'env> {
 ///
 /// Rejects every section cap, static context, geometry, order, alias, proof,
 /// codec, descriptor, or envelope-identity mismatch.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the source contract is implemented before the final claimed-qPCS carrier consumes it"
@@ -1620,6 +1681,7 @@ pub(super) fn preflight_rns_native_cross_field_global_lookup_from_envelope_v1(
 /// Consume the final-context-bound section and the unforgeable inventory
 /// permit, requiring exact Envelope, whole-section, and inner-proof identity.
 /// No section or proof hash is recomputed here.
+#[cfg(test)]
 pub(super) fn authenticate_bound_cross_field_global_lookup_for_inventory_v1<'env>(
     bound: RnsNativeBoundCrossFieldGlobalLookupV1<'env>,
     permit: RnsNativeSealedCrossProofInventoryPermitV1<'env>,
@@ -1668,6 +1730,7 @@ pub(super) fn authenticate_bound_cross_field_global_lookup_for_inventory_v1<'env
 }
 
 /// Internal classification for one atomic three-section decode.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CompositeSectionSetErrorV1 {
     /// One typed section failed before cryptographic verification.
@@ -1677,6 +1740,7 @@ pub(super) enum CompositeSectionSetErrorV1 {
 }
 
 /// Decode the complete three-section set and reject cross-section digest reuse.
+#[cfg(test)]
 pub(super) fn validate_composite_section_set_exact_v1(
     terminal_bytes: &[u8],
     rns_qpcs_bytes: &[u8],

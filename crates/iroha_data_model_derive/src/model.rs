@@ -1,7 +1,7 @@
 use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{Attribute, Meta, Token, parse_quote, punctuated::Punctuated};
+use syn::{Attribute, parse_quote};
 /// Implementation of the `#[model]` attribute.
 pub fn impl_model(emitter: &mut Emitter, input: &syn::ItemMod) -> TokenStream {
     let syn::ItemMod {
@@ -97,7 +97,7 @@ fn process_struct(
                     #fields
                 }
             };
-            expose_ffi(attrs, &item)
+            emit_with_attrs(&attrs, &item)
         }
         syn::Fields::Unnamed(fields) => {
             for (idx, field) in fields.unnamed.iter_mut().enumerate() {
@@ -112,13 +112,13 @@ fn process_struct(
             let item = quote! {
                 pub struct #ident #impl_generics( #fields ) #where_clause;
             };
-            expose_ffi(attrs, &item)
+            emit_with_attrs(&attrs, &item)
         }
         syn::Fields::Unit => {
             let item = quote! {
                 pub struct #ident #impl_generics #where_clause;
             };
-            expose_ffi(attrs, &item)
+            emit_with_attrs(&attrs, &item)
         }
     }
 }
@@ -146,7 +146,7 @@ fn process_enum(
             #variants
         }
     };
-    expose_ffi(attrs, &item)
+    emit_with_attrs(&attrs, &item)
 }
 fn process_union(
     mut item: syn::DataUnion,
@@ -178,108 +178,13 @@ fn process_union(
             #(#fields),*
         }
     };
-    expose_ffi(attrs, &item)
+    emit_with_attrs(&attrs, &item)
 }
-fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
-    let (ffi_type, attrs) = match extract_ffi_type(attrs) {
-        Ok(extracted) => extracted,
-        Err(error) => return error.into_compile_error(),
-    };
-    let Some(ffi_type) = ffi_type else {
-        return quote! {
-            #(#attrs)*
-            #item
-        };
-    };
-    let (ffi_type, export_accessors): (Meta, bool) = match ffi_type {
-        // A bare marker opts the model item into FFI generation without
-        // promising a stable structural layout. Keep that default fail-closed
-        // by exporting the item through the opaque representation. Opaque
-        // model items deliberately expose no field accessors.
-        Meta::Path(_) => (parse_quote!(ffi_type(opaque)), false),
-        ffi_type @ Meta::List(_) => (ffi_type, true),
-        ffi_type @ Meta::NameValue(_) => {
-            return syn::Error::new_spanned(
-                ffi_type,
-                "`ffi_type` must be bare or use list-form representation arguments",
-            )
-            .into_compile_error();
-        }
-    };
-    let ffi_export = export_accessors.then(|| {
-        quote! {
-            #[cfg_attr(feature = "ffi_export", iroha_ffi::ffi_export)]
-        }
-    });
+fn emit_with_attrs(attrs: &[syn::Attribute], item: &TokenStream) -> TokenStream {
     quote! {
-        #[cfg_attr(feature = "ffi_export", derive(iroha_ffi::FfiType))]
-        #ffi_export
-        #[cfg_attr(feature = "ffi_export", #ffi_type)]
         #(#attrs)*
         #item
     }
-}
-/// Extract the `ffi_type` helper attribute consumed by the generated `FfiType` derive.
-///
-/// Model declarations gate this helper with `cfg_attr` so it is not visible
-/// when FFI generation is disabled. The model macro owns that feature split,
-/// so it removes the source wrapper and restores the helper only for exports.
-fn extract_ffi_type(attrs: Vec<Attribute>) -> syn::Result<(Option<Meta>, Vec<Attribute>)> {
-    let mut ffi_type = None;
-    let mut retained = Vec::with_capacity(attrs.len());
-    for attr in attrs {
-        if attr.path().is_ident("ffi_type") {
-            set_ffi_type(&mut ffi_type, attr.meta)?;
-            continue;
-        }
-        if attr.path().is_ident("cfg_attr") {
-            let nested = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-            let mut nested = nested.into_iter();
-            let Some(predicate) = nested.next() else {
-                retained.push(attr);
-                continue;
-            };
-            let mut remaining = Punctuated::<Meta, Token![,]>::new();
-            let mut extracted = None;
-            for meta in nested {
-                if meta.path().is_ident("ffi_type") {
-                    set_ffi_type(&mut extracted, meta)?;
-                } else {
-                    remaining.push(meta);
-                }
-            }
-            if let Some(extracted) = extracted {
-                let ffi_features: [Meta; 2] = [
-                    parse_quote!(any(feature = "ffi_export", feature = "ffi_import")),
-                    parse_quote!(any(feature = "ffi_import", feature = "ffi_export")),
-                ];
-                if !ffi_features.contains(&predicate) {
-                    return Err(syn::Error::new_spanned(
-                        predicate,
-                        "`ffi_type` on a model item must be gated by \
-                         `any(feature = \"ffi_export\", feature = \"ffi_import\")`",
-                    ));
-                }
-                set_ffi_type(&mut ffi_type, extracted)?;
-                if !remaining.is_empty() {
-                    retained.push(parse_quote!(#[cfg_attr(#predicate, #remaining)]));
-                }
-                continue;
-            }
-        }
-        retained.push(attr);
-    }
-    Ok((ffi_type, retained))
-}
-fn set_ffi_type(slot: &mut Option<Meta>, ffi_type: Meta) -> syn::Result<()> {
-    if slot.is_some() {
-        return Err(syn::Error::new_spanned(
-            ffi_type,
-            "a model item may declare `ffi_type` only once",
-        ));
-    }
-    *slot = Some(ffi_type);
-    Ok(())
 }
 fn ensure_doc(attrs: &mut Vec<Attribute>, default: impl AsRef<str>) {
     let has_doc = attrs.iter().any(|attr| attr.path().is_ident("doc"));
@@ -318,13 +223,8 @@ fn ensure_field_docs(fields: &mut syn::Fields, owner: &syn::Ident, variant: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-    };
     use syn::{
-        Attribute, Expr, File, Item, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility,
-        parse::Parser as _, parse_quote,
+        Attribute, Expr, Item, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility, parse_quote,
     };
     fn doc_strings(attrs: &[Attribute]) -> Vec<String> {
         attrs
@@ -541,411 +441,5 @@ mod tests {
                 "unexpected union visibility for {name}"
             );
         }
-    }
-    #[test]
-    fn wrapped_ffi_type_emits_one_item_with_export_attributes() {
-        let input: syn::DeriveInput = parse_quote! {
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-            pub struct Sample;
-        };
-        let output: File = syn::parse2(process_pub_item(input)).expect("FFI model output");
-        let [Item::Struct(item)] = output.items.as_slice() else {
-            panic!("an FFI model must emit exactly one struct")
-        };
-        let rendered = output.to_token_stream().to_string();
-        let payloads = export_cfg_payloads(&item.attrs);
-        assert_eq!(
-            payloads,
-            [
-                normalized_meta(&parse_quote!(derive(iroha_ffi::FfiType))),
-                normalized_meta(&parse_quote!(ffi_type(opaque))),
-            ],
-            "a bare marker must configure one opaque export:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("iroha_ffi :: ffi_export"),
-            "default opaque models must not generate field accessors:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("ffi_import"),
-            "generated model output must not retain the removed import branch:\n{rendered}"
-        );
-    }
-    #[test]
-    fn wrapped_ffi_type_preserves_all_representation_policies() {
-        assert_ffi_policy(
-            parse_quote! {
-                #[cfg_attr(any(feature = "ffi_import", feature = "ffi_export"), ffi_type(opaque))]
-                pub struct Opaque;
-            },
-            &parse_quote!(ffi_type(opaque)),
-        );
-        assert_ffi_policy(
-            parse_quote! {
-                #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(local))]
-                pub struct Local;
-            },
-            &parse_quote!(ffi_type(local)),
-        );
-        assert_ffi_policy(
-            parse_quote! {
-                #[cfg_attr(
-                    any(feature = "ffi_export", feature = "ffi_import"),
-                    ffi_type(unsafe { robust })
-                )]
-                #[repr(transparent)]
-                pub struct Robust(u32);
-            },
-            &parse_quote!(ffi_type(unsafe { robust })),
-        );
-    }
-    #[test]
-    fn ffi_type_diagnostics_remain_actionable() {
-        let cases: [(syn::DeriveInput, &str); 3] = [
-            (
-                parse_quote! {
-                    #[ffi_type = "opaque"]
-                    pub struct NameValue;
-                },
-                "`ffi_type` must be bare or use list-form representation arguments",
-            ),
-            (
-                parse_quote! {
-                    #[cfg_attr(feature = "std", ffi_type)]
-                    pub struct WrongGate;
-                },
-                "`ffi_type` on a model item must be gated by",
-            ),
-            (
-                parse_quote! {
-                    #[ffi_type]
-                    #[ffi_type(opaque)]
-                    pub struct Duplicate;
-                },
-                "a model item may declare `ffi_type` only once",
-            ),
-        ];
-        for (input, expected) in cases {
-            let rendered = process_pub_item(input).to_string();
-            assert!(
-                rendered.contains("compile_error"),
-                "expected a compile error for `{expected}`: {rendered}"
-            );
-            assert!(
-                rendered.contains(expected),
-                "missing diagnostic `{expected}`: {rendered}"
-            );
-        }
-    }
-    #[test]
-    fn standalone_ffi_helpers_match_export_derive_predicate() {
-        let data_model_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_data_model");
-        if !data_model_root.join("Cargo.toml").is_file() {
-            // Registry packages contain only this derive crate. The complete
-            // monorepo audit runs whenever the sibling data-model source is
-            // present, without making published tests depend on external files.
-            return;
-        }
-        let base_model_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_model_base");
-        assert!(
-            base_model_root.join("Cargo.toml").is_file(),
-            "the monorepo FFI audit requires the canonical foundational model owner"
-        );
-        let mut direct_derives = Vec::new();
-        for (owner_root, inventory_prefix) in [
-            (&data_model_root, Path::new("")),
-            (&base_model_root, Path::new("iroha_model_base")),
-        ] {
-            let mut sources = Vec::new();
-            collect_rust_sources(&owner_root.join("src"), &mut sources);
-            for entry in fs::read_dir(owner_root).expect("read model crate root") {
-                let entry = entry.expect("read model crate-root entry");
-                let file_type = entry.file_type().expect("inspect model crate-root entry");
-                assert!(
-                    !file_type.is_symlink(),
-                    "model production source entry must not be a symlink: {}",
-                    entry.path().display()
-                );
-                if file_type.is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") {
-                    sources.push(entry.path());
-                }
-            }
-            sources.sort();
-            for path in sources {
-                let source = fs::read_to_string(&path)
-                    .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-                let file = syn::parse_file(&source)
-                    .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-                let relative = path.strip_prefix(owner_root).expect("model owner source");
-                let inventory_path = inventory_prefix.join(relative);
-                audit_standalone_ffi_predicates(
-                    &inventory_path,
-                    &file.items,
-                    false,
-                    "",
-                    &mut direct_derives,
-                );
-            }
-        }
-        direct_derives.sort();
-        let expected: Vec<_> = include_str!("../tests/fixtures/direct_ffi_exports.txt")
-            .lines()
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(str::to_owned)
-            .collect();
-        assert_eq!(
-            direct_derives, expected,
-            "the direct model FFI surface changed; review every new or removed type explicitly"
-        );
-    }
-    #[test]
-    fn standalone_ffi_inventory_tracks_names_and_scopes() {
-        let file: syn::File = parse_quote! {
-            #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), derive(iroha_ffi::FfiType))]
-            struct SharedName;
-            mod nested {
-                #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), derive(iroha_ffi::FfiType))]
-                struct SharedName;
-            }
-        };
-        let mut inventory = Vec::new();
-        audit_standalone_ffi_predicates(
-            Path::new("src/test.rs"),
-            &file.items,
-            false,
-            "",
-            &mut inventory,
-        );
-        assert_eq!(
-            inventory,
-            ["src/test.rs::SharedName", "src/test.rs::nested::SharedName"]
-        );
-        audit_standalone_ffi_predicates(
-            Path::new("iroha_model_base/src/test.rs"),
-            &file.items,
-            false,
-            "",
-            &mut inventory,
-        );
-        assert_eq!(
-            inventory,
-            [
-                "src/test.rs::SharedName",
-                "src/test.rs::nested::SharedName",
-                "iroha_model_base/src/test.rs::SharedName",
-                "iroha_model_base/src/test.rs::nested::SharedName",
-            ],
-            "the owning crate must distinguish identical module and type names"
-        );
-    }
-    fn collect_rust_sources(directory: &Path, sources: &mut Vec<PathBuf>) {
-        let mut entries = fs::read_dir(directory)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", directory.display()))
-            .map(|entry| entry.expect("read data-model source entry"))
-            .collect::<Vec<_>>();
-        entries.sort_by_key(fs::DirEntry::path);
-        for entry in entries {
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .unwrap_or_else(|error| panic!("failed to inspect {}: {error}", path.display()));
-            assert!(
-                !file_type.is_symlink(),
-                "data-model production source entry must not be a symlink: {}",
-                path.display()
-            );
-            if file_type.is_dir() {
-                collect_rust_sources(&path, sources);
-            } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-                sources.push(path);
-            }
-        }
-    }
-    fn audit_standalone_ffi_predicates(
-        path: &Path,
-        items: &[Item],
-        items_are_model_children: bool,
-        module_prefix: &str,
-        direct_derives: &mut Vec<String>,
-    ) {
-        let export_only: Meta =
-            parse_quote!(all(feature = "ffi_export", not(feature = "ffi_import")));
-        let export_only = normalized_tokens(&export_only);
-        for item in items {
-            let (name, attrs) = match item {
-                Item::Struct(item) => (item.ident.to_string(), Some(item.attrs.as_slice())),
-                Item::Enum(item) => (item.ident.to_string(), Some(item.attrs.as_slice())),
-                Item::Union(item) => (item.ident.to_string(), Some(item.attrs.as_slice())),
-                Item::Mod(item) => {
-                    if let Some((_, items)) = &item.content {
-                        let children_are_model_owned = item
-                            .attrs
-                            .iter()
-                            .any(|attr| path_ends_with(attr.path(), "model"));
-                        audit_standalone_ffi_predicates(
-                            path,
-                            items,
-                            children_are_model_owned,
-                            &format!("{module_prefix}{}::", item.ident),
-                            direct_derives,
-                        );
-                    }
-                    (item.ident.to_string(), None)
-                }
-                _ => continue,
-            };
-            let Some(attrs) = attrs else {
-                continue;
-            };
-            let (derive_predicates, helper_predicates) = ffi_attribute_predicates(path, attrs);
-            if derive_predicates.is_empty() {
-                assert!(
-                    items_are_model_children || helper_predicates.is_empty(),
-                    "{}: `{name}` has a standalone `ffi_type` helper without a direct FfiType derive",
-                    path.display()
-                );
-                continue;
-            }
-            direct_derives.push(format!(
-                "{}::{module_prefix}{name}",
-                path.to_string_lossy().replace('\\', "/")
-            ));
-            assert_eq!(
-                derive_predicates.len(),
-                1,
-                "{}: `{name}` must have exactly one direct FfiType derive predicate",
-                path.display()
-            );
-            for predicate in derive_predicates.iter().chain(&helper_predicates) {
-                assert_eq!(
-                    predicate.as_deref(),
-                    Some(export_only.as_str()),
-                    "{}: `{name}` has an FFI derive/helper outside the exact export-only predicate",
-                    path.display()
-                );
-            }
-        }
-    }
-    fn ffi_attribute_predicates(
-        path: &Path,
-        attrs: &[Attribute],
-    ) -> (Vec<Option<String>>, Vec<Option<String>>) {
-        let mut derives = Vec::new();
-        let mut helpers = Vec::new();
-        for attr in attrs {
-            if attr.path().is_ident("cfg_attr") {
-                let Meta::List(list) = &attr.meta else {
-                    panic!("{}: cfg_attr must be a list", path.display());
-                };
-                let metas = Punctuated::<Meta, Token![,]>::parse_terminated
-                    .parse2(list.tokens.clone())
-                    .unwrap_or_else(|error| {
-                        panic!("{}: failed to parse cfg_attr: {error}", path.display())
-                    });
-                let mut metas = metas.into_iter();
-                let predicate = metas
-                    .next()
-                    .unwrap_or_else(|| panic!("{}: empty cfg_attr", path.display()));
-                let predicate = normalized_tokens(&predicate);
-                for meta in metas {
-                    if derive_contains_ffi_type(path, &meta) {
-                        derives.push(Some(predicate.clone()));
-                    }
-                    if path_ends_with(meta.path(), "ffi_type") {
-                        helpers.push(Some(predicate.clone()));
-                    }
-                }
-            } else {
-                if derive_contains_ffi_type(path, &attr.meta) {
-                    derives.push(None);
-                }
-                if path_ends_with(attr.path(), "ffi_type") {
-                    helpers.push(None);
-                }
-            }
-        }
-        (derives, helpers)
-    }
-    fn derive_contains_ffi_type(path: &Path, meta: &Meta) -> bool {
-        let Meta::List(list) = meta else {
-            return false;
-        };
-        if !path_ends_with(&list.path, "derive") {
-            return false;
-        }
-        Punctuated::<syn::Path, Token![,]>::parse_terminated
-            .parse2(list.tokens.clone())
-            .unwrap_or_else(|error| {
-                panic!(
-                    "{}: failed to parse derive attribute paths: {error}",
-                    path.display()
-                )
-            })
-            .iter()
-            .any(|derive| path_ends_with(derive, "FfiType"))
-    }
-    fn path_ends_with(path: &syn::Path, expected: &str) -> bool {
-        path.segments
-            .last()
-            .is_some_and(|segment| segment.ident == expected)
-    }
-    fn normalized_tokens(tokens: &impl ToTokens) -> String {
-        tokens
-            .to_token_stream()
-            .to_string()
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect()
-    }
-    fn export_cfg_payloads(attrs: &[Attribute]) -> Vec<String> {
-        attrs
-            .iter()
-            .filter(|attr| attr.path().is_ident("cfg_attr"))
-            .flat_map(|attr| {
-                let nested = attr
-                    .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                    .expect("generated cfg_attr must parse");
-                let mut nested = nested.into_iter();
-                let predicate = nested.next().expect("generated cfg_attr predicate");
-                assert_eq!(
-                    normalized_tokens(&predicate),
-                    normalized_meta(&parse_quote!(feature = "ffi_export")),
-                    "generated FFI attributes must be export-only"
-                );
-                nested.map(|meta| normalized_tokens(&meta))
-            })
-            .collect()
-    }
-    fn normalized_meta(meta: &Meta) -> String {
-        normalized_tokens(meta)
-    }
-    fn assert_ffi_policy(input: syn::DeriveInput, expected: &Meta) {
-        let output: File = syn::parse2(process_pub_item(input)).expect("FFI model output");
-        let [Item::Struct(item)] = output.items.as_slice() else {
-            panic!("an FFI model must emit exactly one struct")
-        };
-        let rendered = output.to_token_stream().to_string();
-        let expected = normalized_tokens(expected);
-        let payloads = export_cfg_payloads(&item.attrs);
-        assert_eq!(
-            payloads
-                .iter()
-                .filter(|payload| **payload == expected)
-                .count(),
-            1,
-            "FFI policy `{expected}` was not preserved in the export attributes:\n{rendered}"
-        );
-        assert_eq!(
-            payloads
-                .iter()
-                .filter(|payload| **payload == "iroha_ffi::ffi_export")
-                .count(),
-            1,
-            "an explicit FFI policy must retain the type-level export generator:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("ffi_import"),
-            "generated model output must not retain the removed import branch:\n{rendered}"
-        );
     }
 }

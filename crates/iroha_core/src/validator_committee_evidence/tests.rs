@@ -140,11 +140,11 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
     );
     let network = fixture.authorization.network_id;
     let prep = &fixture.transition.preparation;
-    let mut keys = (1..=7_u8)
+    // The incumbent seats are the fixture's seeds 1..=4 in canonical order.
+    let mut keys = (1..=4_u8)
         .map(|index| KeyPair::from_seed(vec![index; 32], Algorithm::BlsNormal))
         .collect::<Vec<_>>();
     keys.sort_by(|a, b| a.public_key().cmp(b.public_key()));
-    keys.truncate(4);
     let roster = fixture
         .incumbent
         .validators

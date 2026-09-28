@@ -192,7 +192,7 @@ to prevent accidental reuse of their assigned values.
 | 0x9E | `DECODE_STR` | Decode string into typed or binary value (supports Base64) |
 | 0x9F | `VALIDATE_FORMAT` | Validate string against format (IBAN with country-length + mod-97 enforcement, BIC, numeric) |
 
-The deterministic ISO 20022 helpers parse, validate, sign, and serialize data
+The deterministic ISO 20022 helpers parse, validate, and serialize data
 only. Network egress belongs in a separately configured service outside the VM
 and consensus execution.
 

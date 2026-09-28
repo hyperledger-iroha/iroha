@@ -744,9 +744,6 @@ fn generic_consumer_gate_accepts_transfer_and_rejects_opaque_carriers() {
     ));
 }
 
-fn transfer_balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
-    iroha_data_model::fastpq::transfer_balance_key(asset, account).expect("canonical balance key")
-}
 fn transfer_transcript(
     asset_definition: &AssetDefinitionId,
     from_account: &AccountId,

@@ -7,10 +7,8 @@ use eyre::{Context, Result, bail, ensure, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
-    json as serde_json,
     json::{self, Value},
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -73,12 +71,12 @@ pub fn default_stage_profile_dir() -> PathBuf {
         .join("fastpq_stage_profiles")
         .join(timestamp)
 }
-#[derive(Serialize, JsonSerialize, JsonDeserialize)]
+#[derive(JsonSerialize, JsonDeserialize)]
 struct BenchHashes {
     blake3_hex: String,
     sha256_hex: String,
 }
-#[derive(Serialize, Default, JsonSerialize, JsonDeserialize)]
+#[derive(JsonSerialize, Default, JsonDeserialize)]
 struct BenchMetadata {
     generated_at: Option<String>,
     host: Option<String>,
@@ -87,7 +85,7 @@ struct BenchMetadata {
     command: Option<String>,
     notes: Option<String>,
 }
-#[derive(Serialize, JsonSerialize, JsonDeserialize)]
+#[derive(JsonSerialize, JsonDeserialize)]
 struct BenchEntry {
     label: String,
     path: String,
@@ -95,10 +93,8 @@ struct BenchEntry {
     padded_rows: Option<u64>,
     iterations: Option<u64>,
     warmups: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[norito(skip_serializing_if = "Option::is_none")]
     operation_filter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[norito(skip_serializing_if = "Option::is_none")]
     matrix_operation_filters: Option<Vec<String>>,
     gpu_backend: Option<String>,
@@ -106,13 +102,13 @@ struct BenchEntry {
     metadata: BenchMetadata,
     hashes: BenchHashes,
 }
-#[derive(Serialize, JsonSerialize, JsonDeserialize)]
+#[derive(JsonSerialize, JsonDeserialize)]
 struct ConstraintSummary {
     require_rows: Option<u64>,
     max_operation_ms: BTreeMap<String, f64>,
     min_operation_speedup: BTreeMap<String, f64>,
 }
-#[derive(Serialize, JsonSerialize, JsonDeserialize)]
+#[derive(JsonSerialize, JsonDeserialize)]
 struct BenchManifestPayload {
     version: u32,
     generated_unix_ms: u64,
@@ -120,13 +116,13 @@ struct BenchManifestPayload {
     benches: Vec<BenchEntry>,
     constraints: ConstraintSummary,
 }
-#[derive(Serialize, JsonSerialize, JsonDeserialize)]
+#[derive(JsonSerialize, JsonDeserialize)]
 struct SignatureEnvelope {
     algorithm: String,
     public_key_hex: String,
     signature_hex: String,
 }
-#[derive(Serialize, JsonSerialize, JsonDeserialize)]
+#[derive(JsonSerialize, JsonDeserialize)]
 struct SignedBenchManifest {
     payload: BenchManifestPayload,
     signature: Option<SignatureEnvelope>,
@@ -172,32 +168,25 @@ impl BenchManifestOptions {
         map
     }
 }
-#[derive(Debug, Deserialize, JsonDeserialize)]
+#[derive(Debug, JsonDeserialize)]
 struct MatrixManifest {
     version: u32,
-    #[serde(default)]
     #[norito(default)]
     require_rows: Option<u64>,
-    #[serde(default)]
     #[norito(default)]
     max_operation_ms: BTreeMap<String, f64>,
-    #[serde(default)]
     #[norito(default)]
     min_operation_speedup: BTreeMap<String, f64>,
-    #[serde(default)]
     #[norito(default)]
     devices: Vec<MatrixDeviceEntry>,
 }
-#[derive(Debug, Deserialize, JsonDeserialize)]
+#[derive(Debug, JsonDeserialize)]
 struct MatrixDeviceEntry {
     label: String,
-    #[serde(default)]
     #[norito(default)]
     operation_filters: Vec<String>,
-    #[serde(default)]
     #[norito(default)]
     max_operation_ms: BTreeMap<String, f64>,
-    #[serde(default)]
     #[norito(default)]
     min_operation_speedup: BTreeMap<String, f64>,
 }
@@ -206,7 +195,7 @@ fn apply_matrix_manifest(options: &mut BenchManifestOptions, manifest_path: &Pat
         .with_context(|| format!("read matrix manifest {}", manifest_path.display()))?;
     digest384_report::retired_fields(&json::from_slice::<Value>(&bytes)?)
         .map_err(|error| eyre!(error))?;
-    let manifest: MatrixManifest = serde_json::from_slice(&bytes)
+    let manifest: MatrixManifest = json::from_slice(&bytes)
         .with_context(|| format!("parse matrix manifest {}", manifest_path.display()))?;
     ensure!(
         manifest.version == 1,
@@ -314,14 +303,14 @@ pub fn write_bench_manifest(mut options: BenchManifestOptions) -> Result<()> {
     };
     validate_manifest_payload(&payload)?;
     digest384_report::retired_fields(&json::to_value(&payload)?).map_err(|error| eyre!(error))?;
-    let payload_bytes = serde_json::to_vec(&payload).context("serialize bench manifest payload")?;
+    let payload_bytes = json::to_vec(&payload).context("serialize bench manifest payload")?;
     let signature = if let Some(key_path) = options.signing_key.as_ref() {
         Some(sign_manifest(&payload_bytes, key_path)?)
     } else {
         None
     };
     let signed = SignedBenchManifest { payload, signature };
-    let json = serde_json::to_json_pretty(&signed).context("serialize signed manifest")?;
+    let json = json::to_json_pretty(&signed).context("serialize signed manifest")?;
     if let Some(parent) = options.output.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -851,7 +840,7 @@ pub fn run_stage_profile(options: &StageProfileOptions) -> Result<PathBuf> {
     };
     let summary_path = options.output_dir.join("stage_profile_summary.json");
     let encoded =
-        norito::json::to_vec_pretty(&summary).context("failed to encode stage profile summary")?;
+        json::to_vec_pretty(&summary).context("failed to encode stage profile summary")?;
     fs::write(&summary_path, encoded)
         .with_context(|| format!("failed to write {}", summary_path.display()))?;
     eprintln!(
@@ -1248,8 +1237,7 @@ fn write_cuda_suite_summary(
         labels: options.labels.clone(),
         commands: commands.to_vec(),
     };
-    let encoded =
-        norito::json::to_vec_pretty(&summary).context("failed to encode CUDA suite summary")?;
+    let encoded = json::to_vec_pretty(&summary).context("failed to encode CUDA suite summary")?;
     fs::write(&summary_path, encoded)
         .with_context(|| format!("failed to write {}", summary_path.display()))?;
     Ok(summary_path)
@@ -1465,7 +1453,7 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .insert("report".into(), report);
-        norito::json::to_vec_pretty(&bundle).unwrap()
+        json::to_vec_pretty(&bundle).unwrap()
     }
     fn write_bundle(temp: &TempDir, name: &str, rows: u64) -> PathBuf {
         let path = temp.path().join(name);
@@ -1816,8 +1804,7 @@ mod tests {
         write_bench_manifest(options).expect("manifest succeeds");
         let manifest_text =
             fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
-        let manifest: serde_json::Value =
-            serde_json::from_str(&manifest_text).expect("manifest json");
+        let manifest: json::Value = json::from_str(&manifest_text).expect("manifest json");
         let benches = manifest
             .get("payload")
             .and_then(|p| p.get("benches"))
@@ -1889,7 +1876,7 @@ mod tests {
         });
         fs::write(
             &manifest_path,
-            norito::json::to_vec_pretty(&manifest_value).unwrap(),
+            json::to_vec_pretty(&manifest_value).unwrap(),
         )
         .unwrap();
         let options = BenchManifestOptions {
@@ -1993,8 +1980,7 @@ mod tests {
         write_bench_manifest(options).expect("manifest succeeds");
         let manifest_text =
             fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
-        let manifest: serde_json::Value =
-            serde_json::from_str(&manifest_text).expect("manifest json");
+        let manifest: json::Value = json::from_str(&manifest_text).expect("manifest json");
         let bench = manifest["payload"]["benches"][0].clone();
         assert_eq!(bench["label"], norito::json!("cuda-lde"));
         assert_eq!(bench["operation_filter"], norito::json!("lde"));
@@ -2194,7 +2180,7 @@ mod tests {
         });
         fs::write(
             &manifest_path,
-            norito::json::to_vec_pretty(&manifest_value).unwrap(),
+            json::to_vec_pretty(&manifest_value).unwrap(),
         )
         .unwrap();
         let options = BenchManifestOptions {
@@ -2215,8 +2201,7 @@ mod tests {
         write_bench_manifest(options).expect("manifest succeeds");
         let manifest_text =
             fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
-        let manifest: serde_json::Value =
-            serde_json::from_str(&manifest_text).expect("manifest json");
+        let manifest: json::Value = json::from_str(&manifest_text).expect("manifest json");
         let bench = manifest["payload"]["benches"][0].clone();
         assert_eq!(
             bench["matrix_operation_filters"],
@@ -2432,7 +2417,7 @@ mod tests {
         };
         fs::write(
             options.row_usage.as_ref().unwrap(),
-            norito::json::to_vec_pretty(&norito::json!({ "batches": [] })).unwrap(),
+            json::to_vec_pretty(&norito::json!({ "batches": [] })).unwrap(),
         )
         .expect("write row usage");
         let plan = build_cuda_bench_command(&options).expect("build bench");
@@ -2536,7 +2521,7 @@ mod tests {
         let result = run_cuda_suite(&options).expect("run dry suite");
         assert!(result.summary.exists());
         let summary_text = fs::read_to_string(&result.summary).expect("read summary");
-        let value: Value = norito::json::from_str(&summary_text).expect("summary json");
+        let value: Value = json::from_str(&summary_text).expect("summary json");
         assert_eq!(value["dry_run"], norito::json!(true));
         assert_eq!(
             value["raw_output"].as_str(),

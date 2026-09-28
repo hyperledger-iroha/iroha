@@ -1,7 +1,6 @@
 //! Signed-genesis trust root and one-owner beacon DKG provisioning.
 
 use super::*;
-use iroha_data_model::parameter::system::SumeragiNposParameters;
 
 const REQUEST_SCHEMA: &str = "iroha.global-beacon.bootstrap.request.v1";
 const BUNDLE_SCHEMA: &str = "iroha.global-beacon.bootstrap.bundle.v1";
@@ -44,7 +43,7 @@ struct GenesisProof {
     manifest: iroha_genesis::RawGenesisTransaction,
     signed_wire: Vec<u8>,
     public_key: PublicKey,
-    first_finality: BridgeFinalityProof,
+    first_finality: SumeragiFinalityProof,
 }
 
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
@@ -53,7 +52,7 @@ struct GenesisPublicBundle {
     schema: String,
     request: GenesisRequest,
     genesis: GenesisProof,
-    phase_proofs: Vec<BridgeFinalityProof>,
+    phase_proofs: Vec<SumeragiFinalityProof>,
     finalized_observed_height: u64,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     finalization_draft: ThresholdKeyLifecycleCertificateV1,
@@ -95,12 +94,9 @@ fn first_required_pulse_height(genesis: &GenesisProof) -> Result<u64> {
         .manifest
         .effective_parameters()
         .map_err(|_| Error::InvalidInput)?;
-    let npos = parameters
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
-        .ok_or(Error::InvalidInput)?;
-    npos.epoch_length_blocks()
+    parameters
+        .sumeragi()
+        .epoch_length_blocks
         .get()
         .checked_sub(1)
         .ok_or(Error::Height)
@@ -111,7 +107,7 @@ fn verify_signed_genesis_attempt(
     chain_discriminant: u16,
     request: &GenesisRequest,
     genesis: &GenesisProof,
-) -> Result<(Vec<PeerId>, BridgeFinalityVerifier, u64)> {
+) -> Result<(Vec<PeerId>, SumeragiFinalityVerifier, u64)> {
     iroha_genesis::init_instruction_registry();
     let session = request.dkg_session;
     let validated = iroha_genesis::validate_prepared_genesis_bundle(
@@ -164,17 +160,20 @@ fn verify_signed_genesis_attempt(
     if session.acceptances_end_height >= cutoff {
         return Err(Error::Height);
     }
-    let context = &genesis.first_finality.finality_artifact.height_context;
-    iroha_core::sumeragi::validate_signed_genesis_v2_authority(
-        &signed_genesis,
-        context,
-        &genesis.first_finality.finality_artifact.validator_set_pops,
+    let validators = validated
+        .validator_pops()
+        .iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key: public_key.clone(),
+            proof_of_possession: proof_of_possession.clone(),
+        })
+        .collect();
+    let mut verifier = SumeragiFinalityVerifier::new(
+        validated.block(),
+        &genesis.manifest.chain_id().to_string(),
+        validators,
     )
     .map_err(|_| Error::Crypto)?;
-    let mut verifier = BridgeFinalityVerifier::with_context(
-        network,
-        genesis.first_finality.finality_artifact.context_id(),
-    );
     verifier
         .verify(&genesis.first_finality)
         .map_err(|_| Error::Crypto)?;
@@ -247,6 +246,7 @@ pub(super) fn provision_genesis_seat_command(
     if signer.public_key() != roster[usize::from(signer_index - 1)].public_key() {
         return Err(Error::InvalidCustody);
     }
+    let trusted_instance_id = Hash::prehashed(verifier.instance().0);
     let session = request.dkg_session;
     let handle = &request.provider_handles[usize::from(signer_index - 1)];
     let output = rotation_seat::claim_attempt_directory(attempt_root, &session, signer_index)?;
@@ -259,12 +259,7 @@ pub(super) fn provision_genesis_seat_command(
         finality_input,
         verifier,
         cutoff,
-        genesis
-            .first_finality
-            .finality_artifact
-            .context_id()
-            .0
-            .into(),
+        trusted_instance_id,
         1,
         handle,
         request.provider_revision,
@@ -278,7 +273,7 @@ fn validate_genesis_phase_chain(
     chain_discriminant: u16,
     request: &GenesisRequest,
     genesis: &GenesisProof,
-    phases: &[BridgeFinalityProof],
+    phases: &[SumeragiFinalityProof],
 ) -> Result<Vec<PeerId>> {
     let (roster, mut verifier, cutoff) =
         verify_signed_genesis_attempt(network, chain_discriminant, request, genesis)?;
@@ -287,7 +282,7 @@ fn validate_genesis_phase_chain(
     }
     let mut last = 1;
     for phase in phases {
-        let height = phase.finality_artifact.height;
+        let height = phase.height();
         check_rotation_phase_height(last, height, phase.block_header.height().get(), cutoff)?;
         verifier.verify(phase).map_err(|_| Error::Crypto)?;
         last = height;
@@ -402,7 +397,7 @@ pub(super) fn assemble_genesis_dkg_command(
             )
             .map_err(|_| Error::Crypto)
         })
-        .collect::<Result<Vec<BridgeFinalityProof>>>()?;
+        .collect::<Result<Vec<SumeragiFinalityProof>>>()?;
     let roster = validate_genesis_phase_chain(
         network,
         chain_discriminant,

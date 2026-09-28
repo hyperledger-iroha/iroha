@@ -26,7 +26,6 @@ mod model {
         crate :: DeriveJsonDeserialize,
     )]
     #[display("{id}: {value}")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::value::model::Asset")]
     pub struct Asset {

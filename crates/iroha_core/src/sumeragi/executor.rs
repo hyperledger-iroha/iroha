@@ -30,8 +30,7 @@ use iroha_data_model::{
     block::{BlockHeader as IrohaHeader, CommitCertificate, SignedBlock},
     events::EventBox,
     parameter::system::ConsensusMode,
-
-    transaction::{TransactionEntrypoint, TransactionAdmissionIntent},
+    transaction::{TransactionAdmissionIntent, TransactionEntrypoint},
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
@@ -91,6 +90,7 @@ enum Request {
     Build(u64, u64, u32, mpsc::SyncSender<(Vec<u8>, bool)>),
     Reject(u64, u64, Hash32),
     AttachQueue(Arc<Queue>),
+    AttachBeacon(Arc<super::beacon::BeaconService>),
 }
 
 /// The driver-facing handle of the executor thread.
@@ -125,6 +125,11 @@ impl StateExecutor {
     /// Attach the transaction queue: the builder reads it and applied blocks clean it.
     pub fn attach_queue(&self, queue: Arc<Queue>) {
         let _ = self.requests.send(Request::AttachQueue(queue));
+    }
+
+    /// Attach the current pulse producer after replay, before the consensus driver starts.
+    pub fn attach_beacon(&self, beacon: Arc<super::beacon::BeaconService>) {
+        let _ = self.requests.send(Request::AttachBeacon(beacon));
     }
 
     /// Re-apply a block Kura already holds (startup replay): execute it on the applied tip
@@ -174,7 +179,9 @@ impl Executor for StateExecutor {
     }
 
     fn reject(&mut self, height: u64, view: u64, block_hash: &Hash32) {
-        let _ = self.requests.send(Request::Reject(height, view, *block_hash));
+        let _ = self
+            .requests
+            .send(Request::Reject(height, view, *block_hash));
     }
 }
 
@@ -202,6 +209,7 @@ struct Worker<'s> {
     /// The transactions of the last payload this node built, for the quarantine.
     last_built: Option<(u64, u64, Vec<iroha_crypto::HashOf<TransactionEntrypoint>>)>,
     queue: Option<Arc<Queue>>,
+    beacon: Option<Arc<super::beacon::BeaconService>>,
 }
 
 fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
@@ -214,6 +222,7 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
         results: BTreeMap::new(),
         last_built: None,
         queue: context.queue.clone(),
+        beacon: None,
     };
     while let Ok(request) = requests.recv() {
         worker.serve(request);
@@ -238,6 +247,7 @@ impl Worker<'_> {
             }
             Request::Reject(height, view, block_hash) => self.reject(height, view, block_hash),
             Request::AttachQueue(queue) => self.queue = Some(queue),
+            Request::AttachBeacon(beacon) => self.beacon = Some(beacon),
         }
     }
 
@@ -296,34 +306,28 @@ impl Worker<'_> {
             self.results.remove(&previous.block_hash);
         }
         let height = block.header.height;
-        let Some(parent) = self.state.view().latest_block() else {
-            return ExecOutcome::Failed("the applied parent block is not available".into());
+        let iroha_block = match payload::decode(&block.payload) {
+            Ok(block) => block,
+            Err(error) => return invalid(height, &error),
         };
+        if self.state.view().latest_block().is_none() {
+            return ExecOutcome::Failed("the applied parent block is not available".into());
+        }
         let Some(scheduled) = self.scheduled(height) else {
             return ExecOutcome::Failed(format!("no scheduled configuration for height {height}"));
         };
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
-        let assembly = Assembly {
-            parent: &parent,
-            view: block.header.origin_view,
-            cadence,
-        };
-        let iroha_block = if block.payload.is_empty() {
-            match payload::empty_block(self.state, assembly) {
-                Ok(block) => block,
-                Err(error) => return ExecOutcome::Failed(error.to_string()),
-            }
-        } else {
-            match payload::decode(&block.payload) {
-                Ok(block) => block,
-                Err(error) => return invalid(height, &error),
-            }
-        };
         if !proposal_matches_header(iroha_block.header(), block) {
-            return invalid(height, &"the payload's height or view differs from the header");
+            return invalid(
+                height,
+                &"the payload's height or view differs from the header",
+            );
         }
         if block.header.attest != attestation_required(&iroha_block) {
-            return invalid(height, &"the attestation flag differs from the payload's rule");
+            return invalid(
+                height,
+                &"the attestation flag differs from the payload's rule",
+            );
         }
         let topology = Topology::new(scheduled.committee.clone());
         let validated = catch_unwind(AssertUnwindSafe(|| {
@@ -354,11 +358,11 @@ impl Worker<'_> {
         let Some(witness) = overlay.take_exec_witness() else {
             return ExecOutcome::Failed("the execution witness was not captured".into());
         };
-        let (commitment, preimage, result) =
-            match execution_result(&witness, valid.as_ref(), &next) {
-                Ok(computed) => computed,
-                Err(error) => return invalid(height, &error),
-            };
+        let (commitment, preimage, result) = match execution_result(&witness, valid.as_ref(), &next)
+        {
+            Ok(computed) => computed,
+            Err(error) => return invalid(height, &error),
+        };
         if top_ups_without_flag(&commitment, block.header.attest) {
             return invalid(height, &"executed top-ups without the attestation flag");
         }
@@ -495,6 +499,27 @@ impl Worker<'_> {
         Ok(next)
     }
 
+    fn pulse_for_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>, String>
+    {
+        if let Some(beacon) = &self.beacon {
+            return beacon
+                .pulse_for_height(height)
+                .map_err(|error| error.to_string());
+        }
+        // Replay and component executors have no signer service. They may build only heights
+        // for which committed state requests no pulse.
+        if super::beacon::current_requirement(self.state, height, self.context.consensus_mode)
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Err("required global beacon producer is not attached".into());
+        }
+        Ok(None)
+    }
+
     /// Build a payload for `(height, view)` over the applied tip (§6.10).
     fn build(&mut self, height: u64, view: u64, max_bytes: u32) -> (Vec<u8>, bool) {
         if height != self.applied.0.saturating_add(1) {
@@ -515,13 +540,24 @@ impl Worker<'_> {
             queue,
             max_bytes.saturating_sub(PAYLOAD_OVERHEAD),
         );
+        // Only real queued work may activate the pulse signer. A pulse cannot create a block.
+        if selected.is_empty() {
+            return (Vec::new(), false);
+        }
+        let pulse = match self.pulse_for_height(height) {
+            Ok(pulse) => pulse,
+            Err(error) => {
+                iroha_logger::debug!(height, %error, "sumeragi: waiting for required global beacon pulse");
+                return (Vec::new(), false);
+            }
+        };
         let assembly = Assembly {
             parent: &parent,
             view,
             cadence: Duration::from_millis(scheduled.params.block_time_ms),
         };
         while !selected.is_empty() {
-            let block = match payload::assemble(self.state, assembly, &selected) {
+            let block = match payload::assemble_with_pulse(self.state, assembly, &selected, pulse) {
                 Ok(block) => block,
                 Err(error) => {
                     iroha_logger::warn!(height, %error, "sumeragi: payload assembly failed");
@@ -569,6 +605,10 @@ impl Worker<'_> {
         let Some(queue) = self.queue.clone() else {
             return;
         };
+        // Local pulse availability must never quarantine otherwise valid transactions.
+        let Ok(pulse) = self.pulse_for_height(height) else {
+            return;
+        };
         let queued = payload::select(self.state, &queue, usize::MAX);
         let mut poison = Vec::new();
         for (tx, plan) in queued
@@ -582,7 +622,9 @@ impl Worker<'_> {
                 view,
                 cadence,
             };
-            let Ok(single) = payload::assemble(self.state, assembly, &[(tx, plan)]) else {
+            let Ok(single) =
+                payload::assemble_with_pulse(self.state, assembly, &[(tx, plan)], pulse)
+            else {
                 continue;
             };
             self.live = None;
@@ -616,7 +658,7 @@ impl Worker<'_> {
     }
 }
 
-/// The iroha header of a decoded or synthesized payload must match the certified core header.
+/// The iroha header of a decoded payload must match the certified core header.
 fn proposal_matches_header(header: IrohaHeader, block: &Block) -> bool {
     header.height().get() == block.header.height
         && header.view_change_index() == block.header.origin_view
@@ -634,12 +676,15 @@ pub fn attestation_required(block: &SignedBlock) -> bool {
             return false;
         };
         tx.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
-            && tx.instructions().explicit_instructions().any(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
-                    .is_some()
-            })
+            && tx
+                .instructions()
+                .explicit_instructions()
+                .any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+                        .is_some()
+                })
     })
 }
 
@@ -682,6 +727,63 @@ fn local_failure(error: &BlockValidationError) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_and_encoded_zero_transaction_payloads_are_invalid_without_state_work() {
+        use iroha_sumeragi::message::BlockHeader;
+        use std::{collections::BTreeSet, num::NonZeroU64};
+
+        let state = Arc::new(State::new_for_testing(
+            crate::state::World::new(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        ));
+        let parent_hash = Hash32([1; 32]);
+        let mut executor = StateExecutor::spawn(ExecutorContext {
+            state: Arc::clone(&state),
+            queue: None,
+            staging: Staging::new(),
+            events: tokio::sync::broadcast::channel(16).0,
+            genesis_account: iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            consensus_mode: ConsensusMode::Permissioned,
+            applied: (1, parent_hash),
+            crypto: None,
+        })
+        .expect("state executor");
+        let zero_transaction_wire = iroha_data_model::block::builder::BlockBuilder::new(
+            IrohaHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0),
+        )
+        .build(BTreeSet::new())
+        .encode_wire()
+        .unwrap();
+        for (index, payload) in [Vec::new(), zero_transaction_wire].into_iter().enumerate() {
+            let block = Block {
+                header: BlockHeader {
+                    instance: Hash32([2; 32]),
+                    height: 2,
+                    origin_view: 0,
+                    parent_hash,
+                    parent_result: Hash32([3; 32]),
+                    payload_hash: Hash32([4; 32]),
+                    payload_len: u32::try_from(payload.len()).unwrap(),
+                    proposer: 0,
+                    skipped_leaders: Vec::new(),
+                    attest: false,
+                },
+                payload,
+            };
+            let hash = Hash32([u8::try_from(index + 5).unwrap(); 32]);
+            assert!(matches!(
+                executor.execute(&block, &hash),
+                Some(ExecOutcome::Invalid)
+            ));
+            assert_eq!(
+                state.view().height(),
+                0,
+                "no synthesized block or overlay committed"
+            );
+        }
+    }
 
     /// Local conditions are retried (`Failed`); a property of the block is `Invalid`.
     #[test]

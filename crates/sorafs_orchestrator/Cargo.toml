@@ -13,8 +13,10 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 
 [features]
-default = ["cli-orchestrator"]
+default = ["cli-orchestrator", "moderation-grpc"]
 dev-tools = []
+# The CLI builds and signs publication transactions, so it needs the data
+# model's constructor surface (`transparent_api`) in standalone builds too.
 cli-orchestrator = [
     "dep:iroha_config",
     "dep:iroha_torii_shared",
@@ -22,17 +24,20 @@ cli-orchestrator = [
     "dep:sorafs_chunker",
     "dep:sorafs_manifest",
     "dep:toml",
+    "iroha_data_model/transparent_api",
 ]
 local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
+# gRPC moderation-runner service hosted by the `sorafs_cli` binary. Library
+# consumers select `cli-orchestrator` alone and never compile tonic/prost.
+moderation-grpc = ["cli-orchestrator", "dep:tonic", "dep:prost", "dep:tonic-prost"]
 
 [dependencies]
 iroha_model_base = { workspace = true }
 iroha_service_model = { workspace = true }
 sorafs_car = { path = "../sorafs_car", features = ["manifest", "cli"] }
 norito = { path = "../norito", features = ["node-codec"], default-features = false }
-prost = "0.14.3"
+prost = { version = "0.14.3", optional = true }
 thiserror = "2.0.17"
-rust_decimal = { workspace = true }
 iroha_telemetry = { path = "../iroha_telemetry" }
 tracing = { workspace = true }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["application-model"] }
@@ -44,8 +49,8 @@ base64 = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "net", "io-util", "fs"] }
-tonic = { version = "0.14.6", features = ["transport"] }
-tonic-prost = "0.14.6"
+tonic = { version = "0.14.6", default-features = false, features = ["server", "router", "codegen"], optional = true }
+tonic-prost = { version = "0.14.6", optional = true }
 reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
 quinn = { version = "0.11.9", default-features = false, features = ["rustls", "runtime-tokio"], optional = true }
 rcgen = { version = "=0.14.5", optional = true }
@@ -54,7 +59,7 @@ tempfile = "3.23.0"
 sha2 = { version = "0.10.9", default-features = false, features = ["std"], optional = true }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 url = { workspace = true }
-iroha_version = { path = "../iroha_version" }
+iroha_version = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", optional = true }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["application"] }
@@ -71,13 +76,14 @@ futures = "0.3.31"
 hex = "0.4.3"
 assert_cmd = "2.1.1"
 httpmock = "0.8.2"
+rust_decimal = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest" }
 soranet_pq = { path = "../soranet_pq" }
 
 [[bin]]
 name = "sorafs_cli"
 path = "src/bin/sorafs_cli.rs"
-required-features = ["cli-orchestrator"]
+required-features = ["cli-orchestrator", "moderation-grpc"]
 
 [[bin]]
 name = "taikai_viewer"
@@ -91,3 +97,4 @@ path = "tests/orchestrator_parity.rs"
 [[test]]
 name = "sorafs_cli"
 path = "tests/sorafs_cli.rs"
+required-features = ["cli-orchestrator", "moderation-grpc"]

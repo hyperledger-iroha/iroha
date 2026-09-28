@@ -20,12 +20,12 @@ tiny-keccak = { workspace = true, optional = true }
 thiserror = { workspace = true, default-features = false, optional = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"], optional = true }
 iroha_schema = { workspace = true, optional = true }
-halo2curves = { workspace = true }
+halo2curves = { workspace = true, optional = true }
 hex = { workspace = true, features = ["alloc"], optional = true }
 rayon = { workspace = true, optional = true }
-once_cell = { workspace = true }
+once_cell = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
-poseidon-primitives = "0.2.0"
+iroha_zkp_poseidon = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -33,11 +33,13 @@ hex-literal = { workspace = true }
 
 [features]
 default = ["full", "parallel"]
-# Lightweight, consensus-visible primitives used by the public data model.
-model-primitives = []
+# Lightweight, consensus-visible primitives (re-exported from `iroha_zkp_poseidon`).
+model-primitives = ["dep:iroha_zkp_poseidon"]
 # Complete proof engine used by node, CLI, and direct crate consumers.
 full = [
     "model-primitives",
+    "dep:halo2curves",
+    "dep:once_cell",
     "dep:fastpq_isi",
     "dep:zeroize",
     "dep:iroha_crypto",

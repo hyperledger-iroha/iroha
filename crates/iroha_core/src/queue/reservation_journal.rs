@@ -4470,22 +4470,6 @@ const fn journal_file_identity_available(identity: JournalFileIdentity) -> bool 
 const fn journal_file_identity_available(_identity: JournalFileIdentity) -> bool {
     false
 }
-fn journal_file_is_single_link(metadata: &SecureMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
-}
 #[cfg(windows)]
 fn journal_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -4621,7 +4605,7 @@ fn reconcile_compaction_temp(
     };
     if journal_file_is_indirect(&metadata)
         || !metadata.is_file()
-        || !journal_file_is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&metadata)
     {
         return Err(invalid_data(
             "lane reservation compaction temp must be a direct single-link regular file",
@@ -4656,7 +4640,7 @@ fn reconcile_compaction_temp(
     drop(temp);
     let before_remove = secure_file_metadata::from_path(&tmp)?;
     if journal_file_identity(&before_remove) != temp_identity
-        || !journal_file_is_single_link(&before_remove)
+        || !secure_file_metadata::is_single_link(&before_remove)
     {
         return Err(invalid_data(
             "lane reservation compaction temp changed before reconciliation cleanup",
@@ -4704,7 +4688,7 @@ fn validate_regular_path(path: &Path) -> io::Result<()> {
             "lane reservation journal path must be a direct regular file with stable identity",
         ));
     }
-    if !journal_file_is_single_link(&metadata) {
+    if !secure_file_metadata::is_single_link(&metadata) {
         return Err(invalid_data(
             "lane reservation journal must have exactly one filesystem link",
         ));
@@ -4727,7 +4711,9 @@ fn verify_open_regular_path(path: &Path, file: &File) -> io::Result<JournalFileI
             "opened lane reservation journal and path must be direct regular files with stable identities",
         ));
     }
-    if !journal_file_is_single_link(&path_metadata) || !journal_file_is_single_link(&opened) {
+    if !secure_file_metadata::is_single_link(&path_metadata)
+        || !secure_file_metadata::is_single_link(&opened)
+    {
         return Err(invalid_data(
             "lane reservation journal must have exactly one filesystem link",
         ));

@@ -101,11 +101,15 @@ validate_provider_spec() {
     value="${pair#*=}"
     case "$key" in
       name) name="$value" ;;
-      provider-id|provider_id) provider_id="$value" ;;
-      gateway-key|gateway_key|gateway-public-key|gateway_public_key) gateway_key="$value" ;;
-      base-url|base_url) base_url="$value" ;;
-      stream-token|stream_token) stream_token="$value" ;;
-      *) ;;
+      provider-id) provider_id="$value" ;;
+      gateway-key) gateway_key="$value" ;;
+      base-url) base_url="$value" ;;
+      stream-token) stream_token="$value" ;;
+      privacy-url) ;;
+      *)
+        echo "error: unknown --provider key '$key'; expected name, provider-id, gateway-key, base-url, stream-token, privacy-url" >&2
+        exit 1
+        ;;
     esac
   done
 

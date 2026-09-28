@@ -657,8 +657,8 @@
       "kind": "provider_admission_envelope",
       "encoding": "json",
       "expectation": "valid",
-      "byte_length": 639,
-      "sha256": "6f324c66716c3e791199e783fb14ae1a17c61b909709c87cc514c59244fa6ed2"
+      "byte_length": 868,
+      "sha256": "7983c8d11b14b6eb03fcdf6bdcdbbb9b885080754c07ee715d011cbf253af350"
     },
     {
       "path": "provider_admission/envelope_v1.to",
@@ -666,8 +666,8 @@
       "kind": "provider_admission_envelope",
       "encoding": "norito",
       "expectation": "valid",
-      "byte_length": 1311,
-      "sha256": "19db550b4822f611ee48fdcf175ab92f4654fb4f8d460c0625f90950d738153e"
+      "byte_length": 1397,
+      "sha256": "5c197cbc2a6accd22044027bda5b22a93775650fdd857fad7c95fa8a74d253c9"
     },
     {
       "path": "reference_sdk/pop_membership_current_v1.to",
@@ -1091,6 +1091,6 @@
     "key_usage": "test_only_reference_sdk_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "1b8ab4f546e93441a91a67d42405cfae917d9d73964e8770e4f8e8eb2d81dd962d00593a03c5e6342975d7de55925e87e43dc27d75bf8868e5c0c41acb85600d"
+    "signature_hex": "51229228fa7ba11d5ba0f6e9456706275f08be963e52f1e4ab30db40e591c22d795160dd1ddc2a205565ed7ecefa978bd72d2e74d7c4afdfcac62e93cf45910d"
   }
 }

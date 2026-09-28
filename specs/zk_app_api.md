@@ -489,7 +489,7 @@ Examples:
 1) Listen to all events for a proof id:
 
 ```
-iroha ledger trigger register \
+iroha trigger register \
   --id proof_watch \
   --filter data \
   --data-proof halo2/ipa:0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd \
@@ -499,7 +499,7 @@ iroha ledger trigger register \
 2) Only successes (Verified) for that proof:
 
 ```
-iroha ledger trigger register \
+iroha trigger register \
   --id proof_successes \
   --filter data \
   --data-proof halo2/ipa:0123abcd... \

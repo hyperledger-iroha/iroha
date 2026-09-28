@@ -205,8 +205,8 @@ pub(crate) fn verify_ipa_proof(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Verify a Pasta IPA proof that has no public instances.
-#[allow(dead_code)]
 pub(crate) fn verify_ipa_proof_no_instances(
     params: &PastaParams,
     vk: &VerifyingKey,

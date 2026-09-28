@@ -149,6 +149,7 @@ impl KisoHandle {
         response.await??;
         Ok(receiver)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Lightweight mock handle used in tests to avoid spinning up the full actor and watchers.
     ///
     /// The mock serves `get_dto` requests from the provided configuration snapshot and acknowledges
@@ -178,6 +179,7 @@ impl KisoHandle {
         }
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 async fn run_mock_actor(
     mut actor_receiver: mpsc::Receiver<Message>,
     logger: LoggerConfig,

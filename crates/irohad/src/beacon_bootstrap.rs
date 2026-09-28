@@ -26,14 +26,11 @@ use iroha_core::state::{
     threshold_key_lifecycle_certificate_preimage_v1, verify_threshold_key_lifecycle_certificate_v1,
 };
 use iroha_core::validator_committee_evidence::{
-    COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1, ValidatorCommitteeSelectionEvidenceV1,
-    VerifiedValidatorCommitteeSelectionV1, verify_validator_committee_selection_evidence_v1,
+    ValidatorCommitteeSelectionEvidenceV1, VerifiedValidatorCommitteeSelectionV1,
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::HeightContextId,
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::{
         GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1,
         v2::is_valid_committee_size,
@@ -46,6 +43,7 @@ use iroha_data_model::{
         },
     },
     nexus::ValidatorCommitteePreparationV1,
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
 };
 use iroha_model_base::peer::PeerId;
 use norito::derive::{JsonDeserialize, JsonSerialize};
@@ -72,6 +70,7 @@ const ROTATION_PENDING_SHARE_NAME: &str = "pending-share.bin";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Error {
     InvalidInput,
+    UnsupportedRotationEvidence,
     InvalidCustody,
     Crypto,
     Height,
@@ -82,6 +81,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::InvalidInput => "beacon bootstrap public input is invalid",
+            Self::UnsupportedRotationEvidence => "rotation requires current authenticated committee state evidence, which is unavailable",
             Self::InvalidCustody => "beacon bootstrap custody path is invalid",
             Self::Crypto => "beacon bootstrap cryptographic validation failed",
             Self::Height => "beacon bootstrap committed-height observation is invalid or closed",
@@ -301,7 +301,7 @@ struct RotationPublicBundle {
     preparation: ValidatorCommitteePreparationV1,
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
     finalized_observed_height: u64,
-    phase_proofs: Vec<BridgeFinalityProof>,
+    phase_proofs: Vec<SumeragiFinalityProof>,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     finalization_draft: ThresholdKeyLifecycleCertificateV1,
     providers: Vec<Provider>,
@@ -765,12 +765,12 @@ fn read_exact_until(fd: BorrowedFd<'_>, deadline: Instant, bytes: &mut [u8]) -> 
 fn read_rotation_phase_height(
     fd: BorrowedFd<'_>,
     deadline: Instant,
-    verifier: &mut BridgeFinalityVerifier,
+    verifier: &mut SumeragiFinalityVerifier,
     last_height: &mut u64,
     cutoff_height: u64,
 ) -> Result<u64> {
     // Each FIFO frame is a big-endian u32 byte length followed by one canonical
-    // BridgeFinalityProof. The proof chain, never the controller's claimed height,
+    // SumeragiFinalityProof. The proof chain, never the controller's claimed height,
     // advances the DKG phase clock.
     let mut length = [0_u8; 4];
     read_exact_until(fd, deadline, &mut length)?;
@@ -780,12 +780,12 @@ fn read_rotation_phase_height(
     }
     let mut encoded = vec![0_u8; length];
     read_exact_until(fd, deadline, &mut encoded)?;
-    let proof: BridgeFinalityProof = norito::decode_canonical_with_limits(
+    let proof: SumeragiFinalityProof = norito::decode_canonical_with_limits(
         &encoded,
         norito::canonical_decode_limits(encoded.len()),
     )
     .map_err(|_| Error::Crypto)?;
-    let height = proof.finality_artifact.height;
+    let height = proof.height();
     check_rotation_phase_height(
         *last_height,
         height,
@@ -813,17 +813,12 @@ fn check_rotation_phase_height(
 }
 
 fn rotation_phase_verifier(
-    proof: &RotationProofArgs,
-    evidence: &ValidatorCommitteeSelectionEvidenceV1,
-) -> Result<BridgeFinalityVerifier> {
-    let mut verifier = BridgeFinalityVerifier::with_context(
-        proof.network_id,
-        HeightContextId(HashOf::from_untyped_unchecked(proof.trusted_context_id)),
-    );
-    for artifact in &evidence.finality_chain {
-        verifier.verify(artifact).map_err(|_| Error::Crypto)?;
-    }
-    Ok(verifier)
+    _proof: &RotationProofArgs,
+    _evidence: &ValidatorCommitteeSelectionEvidenceV1,
+) -> Result<SumeragiFinalityVerifier> {
+    // Current certificates bind a state root, not the retired epoch-context object.
+    // No status observation may substitute for the missing committee-state witness.
+    Err(Error::UnsupportedRotationEvidence)
 }
 
 fn validate_rotation_phase_chain(
@@ -832,7 +827,7 @@ fn validate_rotation_phase_chain(
     start_height: u64,
     final_height: u64,
     cutoff_height: u64,
-    chain: &[BridgeFinalityProof],
+    chain: &[SumeragiFinalityProof],
 ) -> Result<()> {
     let expected_count = usize::try_from(
         final_height
@@ -846,7 +841,7 @@ fn validate_rotation_phase_chain(
     let mut verifier = rotation_phase_verifier(proof, evidence)?;
     let mut last_height = start_height;
     for phase in chain {
-        let height = phase.finality_artifact.height;
+        let height = phase.height();
         check_rotation_phase_height(
             last_height,
             height,
@@ -897,28 +892,13 @@ fn draft_rotation_certificate(
 }
 
 fn read_verified_rotation_selection(
-    proof: &RotationProofArgs,
+    _proof: &RotationProofArgs,
 ) -> Result<(
     ValidatorCommitteeSelectionEvidenceV1,
     VerifiedValidatorCommitteeSelectionV1,
 )> {
-    let bytes = read_public_bytes_bounded(
-        &proof.selection_evidence,
-        COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1,
-    )?;
-    let evidence: ValidatorCommitteeSelectionEvidenceV1 =
-        norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
-            .map_err(|_| Error::InvalidInput)?;
-    let selected = verify_validator_committee_selection_evidence_v1(
-        &evidence,
-        proof.network_id,
-        HeightContextId(HashOf::from_untyped_unchecked(proof.trusted_context_id)),
-        proof.anchor_height,
-        proof.target_epoch,
-        proof.transition_id.into(),
-    )
-    .map_err(|_| Error::Crypto)?;
-    Ok((evidence, selected))
+    // Reject before opening an evidence file, signer descriptor, or private attempt root.
+    Err(Error::UnsupportedRotationEvidence)
 }
 
 fn validate_rotation_bundle(

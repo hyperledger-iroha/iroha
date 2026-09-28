@@ -11,10 +11,12 @@
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::TransferTranscript;
 
+#[cfg(test)]
+use super::ReservationCheckpoint;
 use super::{
-    BTreeMap, EntryOwner, OccurrenceSlot, OccurrenceUsage, ReservationCheckpoint,
-    ReservationContext, ReservationError, ReservationInvariant, ReservationLedger,
-    ReservationPolicy, ReservationTransaction, SourceDimension, SourceUsage,
+    BTreeMap, EntryOwner, OccurrenceSlot, OccurrenceUsage, ReservationContext, ReservationError,
+    ReservationInvariant, ReservationLedger, ReservationPolicy, ReservationTransaction,
+    SourceDimension, SourceUsage,
 };
 use crate::fastpq::source_capture::{
     FastpqSourceStatementBuildLimits, FastpqSourceTranscriptUsage,
@@ -143,6 +145,7 @@ pub(crate) struct EntryBundleReservationTransaction<'a> {
     construction_limits: FastpqSourceStatementBuildLimits,
 }
 
+#[cfg(test)]
 /// Journal checkpoint covering both usage and newly owned entry identities.
 pub(crate) struct EntryBundleReservationCheckpoint {
     inner: ReservationCheckpoint,
@@ -282,11 +285,13 @@ impl EntryBundleReservationTransaction<'_> {
         self.inner.owner_usage(&owner.inner)
     }
 
+    #[cfg(test)]
     /// Exact block usage including this physical fragment's pending replacements.
     pub(crate) fn usage(&self) -> SourceUsage {
         self.inner.usage()
     }
 
+    #[cfg(test)]
     /// Save an ancestor-safe accounting and identity-binding boundary.
     pub(crate) fn checkpoint(&self) -> EntryBundleReservationCheckpoint {
         EntryBundleReservationCheckpoint {
@@ -295,6 +300,7 @@ impl EntryBundleReservationTransaction<'_> {
         }
     }
 
+    #[cfg(test)]
     /// Undo a retained boundary; invalid checkpoints leave both ledgers intact.
     pub(crate) fn rollback(
         &mut self,

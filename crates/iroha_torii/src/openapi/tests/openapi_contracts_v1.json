@@ -272,7 +272,7 @@
     },
     {
       "id": "bridge.bundle.required",
-      "values": ["commitment", "finality_proof"]
+      "values": ["network_id", "finality_proof"]
     },
     {
       "id": "block.header.required",
@@ -287,7 +287,8 @@
         "creation_time_ms",
         "view_change_index",
         "confidential_features",
-        "execution_context_hash"
+        "execution_context_hash",
+        "global_beacon_pulse_hash"
       ]
     },
     {
@@ -300,7 +301,8 @@
         "da_pin_intents_hash",
         "npos_effects_hash",
         "confidential_features",
-        "execution_context_hash"
+        "execution_context_hash",
+        "global_beacon_pulse_hash"
       ]
     },
     {
@@ -341,10 +343,10 @@
       "id": "bridge.components",
       "values": [
         "BridgeFinalityProof",
-        "BridgeFinalityAttestationBodyV1",
-        "BridgeFinalityAttestationV1",
+        "SumeragiFinalityAttestationBody",
+        "SumeragiFinalityAttestation",
         "BridgeCommitment",
-        "BridgeFinalityBundle",
+        "SumeragiFinalityBundle",
         "SumeragiV2FinalityArtifact",
         "SumeragiV2FinalizedNextEpochSnapshot",
         "SumeragiV2HeightContext",
@@ -393,7 +395,8 @@
         "creation_time_ms",
         "view_change_index",
         "confidential_features",
-        "execution_context_hash"
+        "execution_context_hash",
+        "global_beacon_pulse_hash"
       ]
     },
     {

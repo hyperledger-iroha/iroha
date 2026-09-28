@@ -10,7 +10,6 @@ mod model {
     /// Trigger execution event. Produced every time the `ExecuteTrigger` instruction is executed.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::events::execute_trigger::model::ExecuteTriggerEvent")]
     pub struct ExecuteTriggerEvent {
@@ -24,10 +23,19 @@ mod model {
     }
     /// Filter for [`ExecuteTriggerEvent`].
     #[derive(
-        Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Default, Getters, Decode, Encode, IntoSchema,
+        Debug,
+        Clone,
+        PartialOrd,
+        Ord,
+        PartialEq,
+        Eq,
+        Default,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::events::execute_trigger::model::ExecuteTriggerEventFilter"
     )]

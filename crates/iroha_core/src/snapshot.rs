@@ -1028,22 +1028,6 @@ fn stable_file_identity_available(identity: StableSnapshotFileIdentity) -> bool 
 fn stable_file_identity_available(_identity: StableSnapshotFileIdentity) -> bool {
     false
 }
-fn regular_file_has_single_link(metadata: &SecureMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
-}
 #[cfg(unix)]
 fn snapshot_unix_owner_and_mode_are_trusted(uid: u32, mode: u32, effective_uid: u32) -> bool {
     uid == effective_uid && mode & 0o022 == 0
@@ -1148,7 +1132,7 @@ fn bind_snapshot_file_handle_with_digest(
     };
     if path_before.file_type().is_symlink()
         || !path_before.is_file()
-        || !regular_file_has_single_link(&path_before)
+        || !secure_file_metadata::is_single_link(&path_before)
         || !stable_file_identity_available(stable_file_identity(&path_before))
         || !snapshot_metadata_has_trusted_owner_and_mode(&path_before)
     {
@@ -1169,7 +1153,7 @@ fn bind_snapshot_file_handle_with_digest(
     let file = std::fs::File::open(path)?;
     let opened_before = secure_file_metadata::from_file(&file)?;
     if !opened_before.is_file()
-        || !regular_file_has_single_link(&opened_before)
+        || !secure_file_metadata::is_single_link(&opened_before)
         || !stable_file_identity_available(stable_file_identity(&opened_before))
         || stable_file_identity(&opened_before) != stable_file_identity(&path_before)
         || !snapshot_metadata_has_trusted_owner_and_mode(&opened_before)
@@ -1199,7 +1183,7 @@ fn bind_snapshot_file_handle_with_digest(
     let path_after = secure_file_metadata::from_path(path)?;
     if path_after.file_type().is_symlink()
         || !path_after.is_file()
-        || !regular_file_has_single_link(&path_after)
+        || !secure_file_metadata::is_single_link(&path_after)
         || !stable_file_identity_available(stable_file_identity(&path_after))
         || stable_file_identity(&opened_before) != stable_file_identity(&opened_after)
         || stable_file_identity(&opened_before) != stable_file_identity(&path_after)
@@ -1379,8 +1363,8 @@ fn verify_bound_snapshot_file_metadata_at(
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || !opened.is_file()
-        || !regular_file_has_single_link(&metadata)
-        || !regular_file_has_single_link(&opened)
+        || !secure_file_metadata::is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&opened)
         || !stable_file_identity_available(stable_file_identity(&metadata))
         || !stable_file_identity_available(stable_file_identity(&opened))
         || stable_file_identity(&opened) != binding.identity
@@ -3119,6 +3103,7 @@ where
     generation.verify_generation_unchanged()?;
     Ok(SnapshotReadOutcome { state })
 }
+#[cfg(test)]
 /// Deserialize a heap-owned [`State`] and install the actual runtime ZK configuration
 /// before snapshot reconciliation is allowed to mutate Kura. The caller supplies
 /// the immutable configured manifest baseline before any restored State view,
@@ -3567,7 +3552,7 @@ fn bind_snapshot_generation_gc_removal(
             .map_err(|error| TryWriteError::IO(error, artifact_path.clone()))?;
         if metadata.file_type().is_symlink()
             || !metadata.is_file()
-            || !regular_file_has_single_link(&metadata)
+            || !secure_file_metadata::is_single_link(&metadata)
             || !stable_file_identity_available(stable_file_identity(&metadata))
         {
             return Ok(None);
@@ -3646,7 +3631,7 @@ fn verify_snapshot_generation_gc_removal(
             .map_err(|error| TryWriteError::IO(error, file.path.clone()))?;
         if metadata.file_type().is_symlink()
             || !metadata.is_file()
-            || !regular_file_has_single_link(&metadata)
+            || !secure_file_metadata::is_single_link(&metadata)
             || stable_file_identity(&metadata) != file.identity
             || metadata.len() != file.len
         {

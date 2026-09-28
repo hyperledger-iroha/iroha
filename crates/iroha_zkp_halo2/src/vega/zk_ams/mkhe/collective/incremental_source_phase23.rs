@@ -16,8 +16,17 @@
     dead_code,
     reason = "the production context-correspondence seal is intentionally uninhabited"
 )]
+use super::super::super::phase23_rns_link::ZkAmsPhase23RnsLinkSecretChunkV1;
+#[cfg(test)]
 use super::super::super::{
     ZkAmsMkheErrorV1,
+    phase23_rns_link::{
+        ZkAmsPhase23RnsLinkContextV1, ZkAmsPhase23RnsLinkExternalSourceAssemblyV1,
+        ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
+    },
+};
+#[cfg(test)]
+use super::super::super::{
     packing::{
         T256PackedPlaintextDecodeWorkspaceV1, ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
         visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1,
@@ -27,37 +36,47 @@ use super::super::super::{
         ZkAmsPhase23AccumulatorShapeV1, ZkAmsPhase23MaterializedAccumulatorsV1,
         materialize_release_accumulator_chunk_stream_with_decoder_v1, validate_materialized,
     },
-    phase23_rns_link::{
-        ZkAmsPhase23RnsLinkContextV1, ZkAmsPhase23RnsLinkExternalSourceAssemblyV1,
-        ZkAmsPhase23RnsLinkExternalSourcePublicationV1, ZkAmsPhase23RnsLinkFamilyV1,
-        ZkAmsPhase23RnsLinkSecretChunkV1,
-    },
+    phase23_rns_link::ZkAmsPhase23RnsLinkFamilyV1,
 };
+#[cfg(test)]
 use super::{
-    MaskedRelaxedRandomSourceV1, ZkAmsMkheDirectObjectCasPublicationV1,
-    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
-    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    MaskedRelaxedRandomSourceV1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1,
 };
+#[cfg(test)]
+use super::{
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectReadAtProviderV1,
+    ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+};
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
+#[cfg(test)]
 use std::path::Path;
+#[cfg(test)]
 const PHASE23_ORCHESTRATOR_VERSION_V1: u8 = 1;
 const PHASE23_RECORD_COUNT_V1: usize = 43;
 const PHASE23_MAIN_BLOCKS_PER_RECORD_V1: usize = 896;
 const PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1: usize = 512;
 const PHASE23_SIGNED_BLOCKS_PER_WITNESS_V1: usize = 128;
 const PHASE23_CANONICAL_COEFFICIENTS_PER_BLOCK_V1: usize = 256;
+#[cfg(test)]
 const PHASE23_SIGNED_COEFFICIENTS_PER_BLOCK_V1: usize = 1_024;
 const PHASE23_MAIN_BLOCK_BYTES_V1: usize = 8_192;
 const PHASE23_NONCE_BYTES_V1: usize = 32;
 const PHASE23_RING_DEGREE_V1: usize = 131_072;
 const PHASE23_MANIFEST_CAPACITY_V1: usize = PHASE23_RECORD_COUNT_V1;
+#[cfg(test)]
 const PHASE23_BUNDLE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.materialize-encrypt-source-bundle";
+#[cfg(test)]
 const PHASE23_X_VALUES_V1: u32 = 89;
+#[cfg(test)]
 const PHASE23_U_AND_E_VALUES_V1: u32 = 1_048_576;
+#[cfg(test)]
 const PHASE23_RE_VALUES_V1: u32 = 1_024;
+#[cfg(test)]
 const PHASE23_W_VALUES_V1: u32 = 524_288;
+#[cfg(test)]
 const PHASE23_RW_VALUES_V1: u32 = 512;
 // Conservative named-heap equation. Direct-object/confidential-provider
 // internals, kernel or OS page cache, allocator metadata outside the named Vec
@@ -93,10 +112,12 @@ const _: () = {
 };
 /// Production has no variant. Tests can exercise framing helpers without
 /// claiming that the parent-private context axes have been connected.
+#[cfg(test)]
 enum Phase23ContextCorrespondenceSealV1 {
     #[cfg(test)]
     TestOnly,
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Phase23RecordPositionV1 {
     ordinal: u16,
@@ -105,6 +126,7 @@ struct Phase23RecordPositionV1 {
     family_chunk_count: u16,
     logical_value_count: u32,
 }
+#[cfg(test)]
 impl Phase23RecordPositionV1 {
     fn layout_v1(self) -> Result<ZkAmsT256PackingLayoutV1, ZkAmsMkheErrorV1> {
         let layout = zk_ams_t256_packing_layout_v1(self.logical_value_count)?;
@@ -124,6 +146,7 @@ impl Phase23RecordPositionV1 {
         }
     }
 }
+#[cfg(test)]
 fn phase23_record_position_v1(ordinal: u16) -> Result<Phase23RecordPositionV1, ZkAmsMkheErrorV1> {
     let (family, chunk_index, family_chunk_count, logical_value_count) = match ordinal {
         0 => (ZkAmsPhase23RnsLinkFamilyV1::X, 0, 1, PHASE23_X_VALUES_V1),
@@ -157,6 +180,7 @@ fn phase23_record_position_v1(ordinal: u16) -> Result<Phase23RecordPositionV1, Z
         logical_value_count,
     })
 }
+#[cfg(test)]
 fn require_expected_packed_coordinate_v1(
     position: Phase23RecordPositionV1,
     layout: ZkAmsT256PackingLayoutV1,
@@ -176,10 +200,12 @@ fn require_expected_packed_coordinate_v1(
 /// Every owner is allocated while it still contains zeros. Moving the pool or
 /// one chunk moves pointers only; every unused or failed-path chunk keeps the
 /// confidential leaf's zeroizing `Drop` implementation.
+#[cfg(test)]
 struct Phase23SecretRecordChunkPoolV1 {
     main: Vec<ZkAmsPhase23RnsLinkSecretChunkV1>,
     nonce: Option<ZkAmsPhase23RnsLinkSecretChunkV1>,
 }
+#[cfg(test)]
 impl Phase23SecretRecordChunkPoolV1 {
     fn try_new_exact_v1() -> Result<Self, ZkAmsMkheErrorV1> {
         let mut main = Vec::new();
@@ -278,6 +304,7 @@ impl Phase23SecretRecordChunkPoolV1 {
         source.write_next_nonce_v1(position.ordinal, nonce_owner)
     }
 }
+#[cfg(test)]
 fn fill_canonical_source_block_v1(
     output: &mut [u8],
     coefficients: &[[u8; 32]],
@@ -292,6 +319,7 @@ fn fill_canonical_source_block_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 fn fill_signed_source_block_v1(
     output: &mut [u8],
     coefficients: &[i64],
@@ -306,6 +334,7 @@ fn fill_signed_source_block_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct Phase23BundleDigestAxesV1 {
     profile_digest: [u8; 32],
@@ -322,6 +351,7 @@ struct Phase23BundleDigestAxesV1 {
     source_receipt_digest: [u8; 32],
     public_artifact_manifest_bound: bool,
 }
+#[cfg(test)]
 fn phase23_bundle_digest_from_frames_v1(
     axes: Phase23BundleDigestAxesV1,
     ordered_manifest_digests: &[[u8; 32]; PHASE23_RECORD_COUNT_V1],
@@ -386,6 +416,7 @@ fn phase23_bundle_digest_from_frames_v1(
     }
     Ok(digest)
 }
+#[cfg(test)]
 fn require_exact_release_shape_v1(
     shape: ZkAmsPhase23AccumulatorShapeV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -401,6 +432,7 @@ fn require_exact_release_shape_v1(
 }
 /// One move-only correspondence owner. It deliberately exposes no getters, codec, clone, or tuple
 /// decomposition; later stages must add a purpose-specific consuming transition.
+#[cfg(test)]
 #[must_use = "dropping this owner closes the source snapshots and all correspondence capability"]
 struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P> {
     // Taken only by the authenticated replay-to-session transition.
@@ -414,6 +446,7 @@ struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P> {
     public_artifact_manifest_bound: bool,
     bundle_digest: [u8; 32],
 }
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>
 {
@@ -469,6 +502,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
         Ok(())
     }
 }
+#[cfg(test)]
 struct Phase23MaterializeEncryptChunkStreamV1<'a, I, R, K, P> {
     chunks: I,
     authority: &'a mut ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
@@ -479,6 +513,7 @@ struct Phase23MaterializeEncryptChunkStreamV1<'a, I, R, K, P> {
     manifests: &'a mut Vec<ZkAmsMkheStreamingCollectiveCiphertextV1>,
     next_record: u16,
 }
+#[cfg(test)]
 impl<I, R, K, P> Iterator for Phase23MaterializeEncryptChunkStreamV1<'_, I, R, K, P>
 where
     I: Iterator<Item = Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
@@ -565,6 +600,7 @@ where
         Some(Ok(packed))
     }
 }
+#[cfg(test)]
 #[allow(
     dead_code,
     clippy::too_many_arguments,
@@ -691,6 +727,7 @@ where
 }
 #[path = "incremental_source_phase23_radix_range_v2.rs"]
 mod radix_range_v2;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use radix_range_v2::MaterializedPlaneContextV1;
 #[cfg(test)]
 const _: () = {
@@ -699,6 +736,7 @@ const _: () = {
 };
 #[path = "incremental_source_phase23_source_algebra.rs"]
 mod source_algebra;
+#[cfg(test)]
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>
 {

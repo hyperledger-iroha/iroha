@@ -443,8 +443,8 @@ impl From<&LocalInputs> for ResetContextInputs {
         }
     }
 }
-impl From<&InventoryV1> for ResetTopologyIntentV1 {
-    fn from(value: &InventoryV1) -> Self {
+impl<Beacon> From<&InventoryRecordV1<Beacon>> for ResetTopologyIntentV1 {
+    fn from(value: &InventoryRecordV1<Beacon>) -> Self {
         let artifact = |a: &ArtifactV1| ResetArtifactIntentV1 {
             role: a.role.clone(),
             local_path: a.local_path.clone(),

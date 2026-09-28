@@ -6,11 +6,12 @@
 //! proof-supplied fixed opening. Instead it walks the typed word-operation and
 //! word-memory schedules once and emits canonical affine, repeated, and sparse
 //! atoms for all four physical log19 SHA segments.
+#[cfg(test)]
+use super::fixed_algebraic::ZkX509FixedAlgebraicOpeningsV1;
 use super::{
     fixed_algebraic::{
         ZkX509FixedAlgebraicAtomV1, ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1,
-        ZkX509FixedAlgebraicOpeningsV1, ZkX509FixedAlgebraicScheduleBuilderV1,
-        ZkX509FixedAlgebraicScheduleV1,
+        ZkX509FixedAlgebraicScheduleBuilderV1, ZkX509FixedAlgebraicScheduleV1,
     },
     merkle::{
         ZK_X509_CA_SPKI_DER_BYTES_V1, ZK_X509_CRL_COMMITMENT_MAX_DER_BYTES_V1,
@@ -2799,6 +2800,7 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
         }
         Ok(combined)
     }
+    #[cfg(test)]
     /// Evaluate and concatenate all four child openings in physical order.
     pub(crate) fn evaluate_query_indices_v1(
         &self,

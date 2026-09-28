@@ -1,6 +1,8 @@
 //! Authoritative SoraFS orderbook policy and signed-payload ledger handlers.
 use super::*;
 use crate::smartcontracts::ValidSingularQuery;
+use crate::smartcontracts::isi::helpers::instruction_error_as_query_failure as query_failure;
+use crate::smartcontracts::isi::helpers::transaction_account_has_permission as has_permission;
 use crate::state::{StateTransaction, WorldReadOnly};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
@@ -16,7 +18,6 @@ use iroha_data_model::{
             SubmitSorafsOrderbookOrder,
         },
     },
-    permission::Permission,
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
@@ -49,7 +50,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::state_path::StatePath;
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::DecodeLimits;
 use sorafs_manifest::{
@@ -268,26 +269,6 @@ fn emit_orderbook_event(
         .world
         .emit_events(Some(SorafsGatewayEvent::OrderbookLedger(event)));
     Ok(())
-}
-fn has_permission(
-    state_transaction: &StateTransaction<'_, '_>,
-    authority: &AccountId,
-    permission: &str,
-) -> bool {
-    let required = Permission::new(permission.to_owned(), Json::new(()));
-    if state_transaction
-        .world
-        .account_permissions
-        .get(authority)
-        .is_some_and(|permissions| permissions.iter().any(|candidate| candidate == &required))
-    {
-        return true;
-    }
-    state_transaction
-        .world
-        .account_roles_iter(authority)
-        .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-        .any(|role| role.permissions().any(|candidate| candidate == &required))
 }
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -3118,12 +3099,6 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
             now,
         )?;
         Ok(())
-    }
-}
-fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    match error {
-        InstructionExecutionError::Query(error) => error,
-        error => QueryExecutionFail::Conversion(error.to_string()),
     }
 }
 fn ensure_orderbook_query_state(world: &impl WorldReadOnly) -> Result<(), QueryExecutionFail> {

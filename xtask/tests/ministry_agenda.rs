@@ -1,5 +1,5 @@
 use assert_cmd::cargo::cargo_bin_cmd;
-use norito::json::{self as serde_json, Value};
+use norito::json::{self, Value};
 use std::{fs, path::PathBuf};
 use tempfile::TempDir;
 fn workspace_root() -> PathBuf {
@@ -31,7 +31,7 @@ fn ministry_agenda_duplicate_conflict_is_reported() {
     let base_proposal = root.join("fixtures/documentation/ministry/agenda_proposal_example.json");
     let registry = root.join("fixtures/documentation/ministry/agenda_duplicate_registry.json");
     let mut payload: Value =
-        serde_json::from_str(&fs::read_to_string(&base_proposal).expect("read proposal"))
+        json::from_str(&fs::read_to_string(&base_proposal).expect("read proposal"))
             .expect("parse proposal");
     // Rewrite the first target to match the registry entry so the validator detects a conflict.
     if let Some(target) = payload
@@ -51,7 +51,7 @@ fn ministry_agenda_duplicate_conflict_is_reported() {
     }
     let temp = TempDir::new().expect("temp dir");
     let modified = temp.path().join("proposal.json");
-    fs::write(&modified, serde_json::to_string_pretty(&payload).unwrap())
+    fs::write(&modified, json::to_string_pretty(&payload).unwrap())
         .expect("write modified proposal");
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(&root);

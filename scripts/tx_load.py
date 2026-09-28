@@ -185,7 +185,7 @@ PING_SUBMIT_RE = re.compile(r"Submitted\s+(?P<submitted>\d+)\s*/\s*(?P<attempted
 
 
 def parse_ping_submitted(output: str) -> Optional[tuple[int, int]]:
-    """Return (submitted, attempted) for `iroha ledger transaction ping` output."""
+    """Return (submitted, attempted) for `iroha tx ping` output."""
     if not output:
         return None
     last = None
@@ -256,7 +256,7 @@ def main() -> int:
         type=float,
         default=60.0,
         help=(
-            "Maximum seconds to wait for each `iroha ledger transaction ping` subprocess "
+            "Maximum seconds to wait for each `iroha tx ping` subprocess "
             "(0 = wait forever)."
         ),
     )
@@ -607,8 +607,7 @@ def main() -> int:
             args.iroha_bin,
             "--config",
             str(shard.client_config),
-            "ledger",
-            "transaction",
+            "tx",
             "ping",
             "--msg",
             args.msg,

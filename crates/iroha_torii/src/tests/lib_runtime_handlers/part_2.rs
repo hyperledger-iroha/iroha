@@ -1308,6 +1308,69 @@ fn iterable_target_domain_query_builders_capture_target_payload() {
     let accounts_query = build_find_accounts_with_asset_query_for_test(asset_definition_id.clone());
     assert_accounts_with_asset_query_targets_domain(&accounts_query, &asset_definition_id);
 }
+#[tokio::test]
+async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_routes() {
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&ALICE_ID),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    configure_private_ingress_routes_for_test(&mut app);
+    let definition: iroha_data_model::asset::AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        .parse()
+        .expect("canonical XOR id");
+    seed_asset_definition_for_test(&app, &definition, None);
+    let asset = iroha_data_model::asset::AssetId::new(definition.clone(), ALICE_ID.clone());
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    iroha_data_model::isi::Mint::asset_quantity(77_u32, asset.clone())
+        .execute(&ALICE_ID, &mut tx)
+        .expect("fund exact native holding");
+    tx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    assert!(super::torii_all_dataspace_routes(app.as_ref()).len() > 1);
+    for query in [
+        iroha_data_model::query::SingularQueryBox::from(
+            iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
+                definition.clone(),
+            ),
+        ),
+        iroha_data_model::query::SingularQueryBox::from(
+            iroha_data_model::query::asset::prelude::FindAssetById::new(asset),
+        ),
+    ] {
+        let request = request_for_test(
+            &ALICE_ID,
+            iroha_data_model::query::QueryRequest::Singular(query.clone()),
+        );
+        let scope = super::signed_query_scope_for_app(app.as_ref(), &request);
+        let routes = super::torii_authorized_signed_query_routes(app.as_ref(), &request, &scope)
+            .expect("exact public asset lookup does not request unrelated restricted data");
+        assert!(
+            routes
+                .iter()
+                .all(|route| route.dataspace_id == DataSpaceId::UNIVERSAL)
+        );
+        let signed = authorize_query_for_test(
+            iroha_data_model::query::QueryRequest::Singular(query),
+            ALICE_ID.clone(),
+        )
+        .sign(&iroha_test_samples::ALICE_KEYPAIR);
+        let response = super::handler_signed_query(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(QueryOptions::default()),
+            versioned_query_for_test(signed),
+        )
+        .await
+        .expect("ordinary signed wallet query")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}
+
 #[test]
 fn signed_query_scope_classifies_find_asset_by_id_as_target_account() {
     let account_id = checked_torii_test_account_id(0xd9, "derive asset-by-id account fixture key");

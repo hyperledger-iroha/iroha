@@ -10,14 +10,12 @@ use iroha_core::{
 use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, decode_framed_signed_block},
-    bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::GlobalThresholdBeaconChainAnchorV1,
     isi::consensus_keys::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
         ThresholdKeyLifecycleCertificateV1,
     },
-    isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
-    parameter::system::SumeragiNposParameters,
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
     transaction::TransactionEntrypoint,
 };
 use iroha_test_network::{
@@ -461,11 +459,11 @@ async fn ready(port: u16, expected: u16, deadline: Instant) -> Result<()> {
                 let mut line = String::new();
                 tokio::io::BufReader::new(stream).read_line(&mut line).await?;
                 if line.starts_with(&format!("HTTP/1.1 {expected} ")) { return Ok::<_, eyre::Report>(()); }
-                ensure!(!line.starts_with("HTTP/1.1 200 ") || expected == 200, "validator claimed ready without installed production custody");
+                ensure!(!line.starts_with("HTTP/1.1 200 ") || expected == 200, "validator readiness disagrees with the expected admission state");
             }
             sleep(Duration::from_millis(200)).await;
         }
-    }).await.wrap_err("native readiness did not match the authenticated custody stage")?
+    }).await.wrap_err("native admission readiness did not reach the expected state")?
 }
 
 async fn listeners_started(peers: &mut Peers, api: u16, deadline: Instant) -> Result<()> {
@@ -1247,19 +1245,32 @@ fn native_genesis_bundle(prepared: &prepare::Prepared) -> Result<NativeGenesisPr
     })
 }
 
-fn read_exact_finality(config_path: &Path, height: u64) -> Result<BridgeFinalityProof> {
+fn read_exact_finality(config_path: &Path, height: u64) -> Result<SumeragiFinalityProof> {
     let native = config(config_path)?;
-    let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
-    let (header, artifact) = store.read_verified_v2_finality(height)?;
+    let mut store =
+        BlockStore::open_read_only(Kura::canonical_storage_paths(native.kura.store_dir.value()).0)?;
+    let genesis = read_block(&mut store, 1)?;
+    // This fixture retains its signed genesis committee throughout. The independent
+    // contiguous verifier below checks every next-committee commitment against it.
+    let committee = iroha_genesis::signed_genesis_validator_pops(&genesis)?
+        .into_iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key,
+            proof_of_possession,
+        })
+        .collect();
+    let block = read_block(&mut store, height)?;
     ensure!(
-        header.height().get() == height && artifact.height == height,
-        "native finality differs from the requested exact height"
+        block.header().height().get() == height,
+        "native block differs from requested height"
     );
-    Ok(BridgeFinalityProof {
-        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-        block_header: header,
-        finality_artifact: artifact,
-    })
+    let proof = SumeragiFinalityProof {
+        block_header: block.header(),
+        block_wire: block.encode_wire()?,
+        committee,
+    };
+    proof.decode_checked()?;
+    Ok(proof)
 }
 
 fn verify_pulse(
@@ -1278,22 +1289,25 @@ fn verify_pulse(
     let signed_wire: Vec<u8> = json::from_value(field(genesis, "signed_wire")?.clone())?;
     let public_key: iroha_crypto::PublicKey =
         json::from_value(field(genesis, "public_key")?.clone())?;
-    iroha_genesis::validate_prepared_genesis_bundle(
+    let validated = iroha_genesis::validate_prepared_genesis_bundle(
         &signed_wire,
         &manifest,
         &public_key,
         record.session.network_id.into_genesis_hash(),
     )?;
+    let validators: Vec<_> = validated
+        .validator_pops()
+        .iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key: public_key.clone(),
+            proof_of_possession: proof_of_possession.clone(),
+        })
+        .collect();
     let parameters = manifest.effective_parameters()?;
-    let npos = parameters
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
-        .ok_or_else(|| eyre!("validated signed genesis omitted NPoS parameters"))?;
-    let epoch_length = npos.epoch_length_blocks().get();
+    let epoch_length = parameters.sumeragi().epoch_length_blocks.get();
     ensure!(
         epoch_length == epoch_retention::EPOCH_LENGTH,
-        "fixture must exercise the native catalog decision at mandatory height 10"
+        "fixture must exercise the native catalog decision at mandatory height 6"
     );
     let pulse_height = epoch_length
         .checked_sub(1)
@@ -1323,102 +1337,44 @@ fn verify_pulse(
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // Native completion has already authenticated this exact catalog
-        // transaction as Applied on all four peers. The first-release carrier
-        // executes it through a native lane decision, not a merge entry. Bind
-        // the sole native decision to this pulse and exclude unrelated work.
-        let context = block
-            .execution_context()
-            .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
-        let decisions = context.native_lane_decisions.as_deref().ok_or_else(|| {
-            eyre!("catalog transaction has no native decision on the mandatory pulse carrier")
-        })?;
-        decisions
-            .validate_structure()
-            .map_err(|error| eyre!("invalid mandatory pulse native decisions: {error}"))?;
-        ensure!(
-            decisions.base_state_height == anchor_height
-                && decisions.groups.len() == 1
-                && decisions.groups[0].payload.input.entrypoint.hash() == catalog_entrypoint_hash
-                && decisions.groups[0].payload.descriptor.slots.len() == 1
-                && context.merge_entry.is_none()
-                && block.external_entrypoint_count() == 0
-                && context.queue_plan_admissions.is_empty()
-                && context.autonomous_lane_payloads.is_empty()
-                && context.lane_payload_ownerships.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction native catalog decision"
-        );
-        let (header, initial) = store.read_verified_v2_finality(1)?;
-        let initial_authority = initial
-            .height_context
-            .kagemusha_mint_finality_authority
-            .clone();
-        let mut verifier =
-            BridgeFinalityVerifier::with_context(record.session.network_id, initial.context_id());
-        verifier.verify(&BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-            block_header: header,
-            finality_artifact: initial,
-        })?;
-        let mut prior_authorization = None;
-        for height in 2..=epoch_length + 1 {
-            let (header, artifact) = store.read_verified_v2_finality(height)?;
-            let context = &artifact.height_context;
+        // Authenticate actual current certificates and their canonical executed block
+        // identities. No retired epoch-context or sidecar is an authority source.
+        let mut verifier = SumeragiFinalityVerifier::new(
+            validated.block(),
+            &manifest.chain_id().to_string(),
+            validators.clone(),
+        )?;
+        for height in 1..=epoch_length + 1 {
+            let proof = read_exact_finality(config_path, height)?;
             ensure!(
-                context.kagemusha_mint_finality_authority == initial_authority,
-                "unchanged committee must retain the same immutable authority generation"
+                proof.committee == validators,
+                "fixture changed its signed validator committee"
             );
-            if height == epoch_length {
-                prior_authorization = Some(context.kagemusha_mint_finality_authorization.clone());
+            verifier.verify(&proof)?;
+            let certified = read_block(&mut store, height)?;
+            ensure!(
+                certified.encode_wire()? == proof.block_wire,
+                "proof and native journal block differ"
+            );
+            if height > 1 {
+                ensure!(
+                    certified.network_entrypoint_count() > 0,
+                    "fixture committed an empty block"
+                );
             }
-            if height == epoch_length + 1 {
-                let authorization = &context.kagemusha_mint_finality_authorization;
-                ensure!(
-                    context.epoch == 1 && authorization.epoch == 1,
-                    "scheduling epoch must advance after retained boundary"
-                );
-                ensure!(
-                    authorization.decision == KagemushaMintFinalityEpochDecisionV1::Retain,
-                    "unchanged committee must authenticate a retain decision"
-                );
-                ensure!(
-                    authorization.beacon
-                        == BeaconEpochBindingV1::Installed(
-                            iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
-                                session_id: record.session.session_id,
-                                transcript_hash: record.session.transcript_hash
-                            }
-                        ),
-                    "retained epoch must bind the installed beacon authority"
-                );
-                authorization.validate_successor(
-                    prior_authorization
-                        .as_ref()
-                        .ok_or_else(|| eyre!("missing authenticated boundary authorization"))?,
-                )?;
-            }
-            verifier.verify(&BridgeFinalityProof {
-                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-                block_header: header,
-                finality_artifact: artifact,
-            })?;
         }
-        // Canonical QueuePlan admissions and autonomous anchors are genuine
-        // protocol content even when they contain no external transaction row.
+        // Native completion already authenticated this catalog transaction as Applied
+        // on every peer. Bind its sole network entrypoint to the real pulse block.
         ensure!(
-            !block.is_empty()
-                && (block.external_entrypoint_count() > 0
-                    || block
-                        .execution_context()
-                        .is_some_and(|context| !context.is_empty())),
-            "mandatory pulse lacks useful canonical content independent of its effects"
+            block.network_entrypoint_count() == 1
+                && block
+                    .network_entrypoint_at(0)
+                    .is_some_and(|entrypoint| entrypoint.hash() == catalog_entrypoint_hash),
+            "mandatory pulse block is not the exact catalog transaction"
         );
-        let pulse = block
-            .npos_consensus_effects()
-            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref())
-            .ok_or_else(|| {
-                eyre!("mandatory pulse is absent from signed-genesis height {pulse_height}")
-            })?;
+        let pulse = block.global_beacon_pulse().ok_or_else(|| {
+            eyre!("mandatory pulse is absent from signed-genesis height {pulse_height}")
+        })?;
         ensure!(
             pulse.height == pulse_height,
             "mandatory pulse height differs"
@@ -1730,6 +1686,7 @@ fn catalog_fixture(
         delegator: writer.to_builder().account,
         writer,
         genesis,
+        chain_id: manifest.chain_id().to_string(),
         baseline_dataspaces: first.configured_dataspace_catalog.clone(),
         baseline_lanes: lanes.lanes().to_vec(),
         previous_runtime: Some(runtime),
@@ -1969,7 +1926,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     let mut outcome: Result<()> = async {
         listeners_started(&mut peers, api, startup).await?;
         wait_for_exact_height(&clients, 1, startup).await?;
-        for offset in 0..4 { ready(api + offset, 503, startup).await?; }
+        for offset in 0..4 { ready(api + offset, 200, startup).await?; }
         eprintln!("beacon fixture initial startup complete: elapsed={:.3}s", startup_started.elapsed().as_secs_f64());
         let ceremony_deadline = Instant::now() + PHASE_BUDGET;
         let signed_genesis = native_genesis_bundle(&prepared)?;
@@ -2068,30 +2025,15 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         let instruction = &dkg.install_instruction_path;
         // Match the maintained controller: commit the certificate without a
         // local beacon provider, then activate custody on the same four ledgers.
-        // Installation and provider restart share one unchanged phase deadline.
+        // Installation has a finite phase deadline; pending-work recovery is bounded below.
         let restart = Instant::now() + PHASE_BUDGET;
         let install_height = submit_install(&clients[0], instruction, &certificate, restart).await?;
         wait_for_exact_height(&clients, install_height, restart).await?;
-        for offset in 0..4 { ready(api + offset, 503, restart).await?; }
-        peers.stop(restart).await?;
-        for broker in &mut brokers {
-            broker.stop(restart).await?;
-        }
-        brokers.clear();
-        let (active_brokers, peer_configs) = stage_provider_brokers(
-            directory,
-            &broker_binary,
-            &bundle,
-            &dkg,
-            &prepared.roster,
-        )
-        .await?;
-        brokers = active_brokers;
-        peers = spawn_peers(directory, &daemon, &prepared.roster, 2)?;
-        listeners_started(&mut peers, api, restart).await?;
-        wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 200, restart).await?; }
+        // Admission is available without beacon custody. The paid catalog operation below
+        // independently proves that a required pulse cannot be omitted.
         wait_for_exact_meshed_height(&clients, install_height, restart).await?;
+        let peer_configs = (0..4).map(|index| directory.join(format!("peer{index}.toml"))).collect::<Vec<_>>();
         let mut doctor = command(&cli, directory);
         doctor.args(["--machine", "taira", "doctor", "--scope", "basic", "--public-root", &format!("http://127.0.0.1:{api}"), "--json"]);
         let doctor_deadline = (Instant::now() + Duration::from_secs(60)).min(restart);
@@ -2106,13 +2048,28 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         // Deployment uses the generated genesis-authorized client. The fresh
         // public account remains the onboarding/faucet/canary actor and receives
         // no deployment administration permissions.
-        // The first genuine paid catalog transaction admits at 8, anchors at 9,
-        // and executes at the mandatory pulse height 10. Its native completion
-        // verifies the exact signed operation independently on all four peers.
+        // The first genuine paid catalog transaction executes at required pulse height 6.
+        // Its bounded initial observation must remain pending without providers; recovery
+        // resumes the same signed transaction and native dispatch claim.
         let catalog_entrypoint_hash = super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
             binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
             genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
+        }, || async {
+            let recovery = Instant::now() + PHASE_BUDGET;
+            peers.stop(recovery).await?;
+            for broker in &mut brokers { broker.stop(recovery).await?; }
+            brokers.clear();
+            let (active_brokers, active_configs) = stage_provider_brokers(
+                directory, &broker_binary, &bundle, &dkg, &prepared.roster,
+            ).await?;
+            ensure!(active_configs == peer_configs, "provider restart changed validator configuration paths");
+            brokers = active_brokers;
+            peers = spawn_peers(directory, &daemon, &prepared.roster, 2)?;
+            listeners_started(&mut peers, api, recovery).await?;
+            for offset in 0..4 { ready(api + offset, 200, recovery).await?; }
+            // The retained real catalog may now commit immediately; do not demand idle h5.
+            Ok(())
         }).await?;
         {
             let mut runtime = Runtime { directory, daemon: &daemon, roster: &prepared.roster,

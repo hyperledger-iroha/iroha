@@ -88,6 +88,29 @@ genesis test allocations and are not claims of mainnet monetary value.
   activation state. A snapshot without the required retained finality is rejected;
   authenticated snapshot-bootstrap history delivery remains to be qualified.
 
+## Execution inputs on the Sumeragi node
+
+Staking, committee preparation and threshold-key lifecycle instructions execute
+inside blocks, so they read only committed state that every node shares, never a
+node's own certificates (certificates are per node, `specs/sumeragi.md` §12.7):
+
+- The scheduling epochs are the committed NPoS epochs `[e·L + 1, (e + 1)·L]`,
+  with `L` the signed, immutable `SumeragiNposParameters.epoch_length_blocks`.
+  Frozen preparations in World fix their own target intervals after the current
+  epoch and must follow it (selection at the preceding epoch's end, contiguous
+  start). Global-lane tenure uses these intervals; other lanes use the epochs
+  alone.
+- The incumbent KAGEMUSHA authority is the signed generation-zero authority of
+  the genesis handshake metadata bound to the chain's network id. The Sumeragi
+  node certifies no epoch successor, so the genesis authorization governs every
+  height (open-ended interval). F8 replaces it with World's authorization chain
+  and generation handoffs; S8 wires elections so that boundaries freeze and
+  activate preparations.
+- A threshold-key lifecycle certificate at height `h` is signed by the committee
+  World's lag-2 consensus schedule holds for `h` (committed in `R_{h−2}`), in the
+  core's canonical order; Torii admission checks the next height against the
+  same entry.
+
 ## Outstanding protocol and runtime outcomes
 
 | Outcome | Exact dependency and completion criterion | Owners |

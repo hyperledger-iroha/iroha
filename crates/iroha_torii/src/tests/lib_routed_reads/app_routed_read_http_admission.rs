@@ -6,7 +6,7 @@ mod app_routed_read_http_admission_tests {
         body::{Body, Bytes},
         http::{HeaderMap, HeaderValue, Request, StatusCode, header},
         middleware::{Next, from_fn, from_fn_with_state},
-        response::{IntoResponse as _, Response},
+        response::Response,
         routing::any,
     };
     use std::{
@@ -17,7 +17,6 @@ mod app_routed_read_http_admission_tests {
         },
         task::Poll,
     };
-    use tower::ServiceExt as _;
     fn pending_body(polls: &Arc<AtomicUsize>) -> Body {
         let polls = Arc::clone(polls);
         Body::from_stream(futures::stream::poll_fn(move |_| {
@@ -483,6 +482,90 @@ mod app_routed_read_http_admission_tests {
             .await;
         drop(reservation);
     }
+    #[tokio::test]
+    async fn bodyless_read_waits_before_polling_and_releases_capacity_on_cancellation() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(1);
+        let before = app.query_fanout_inflight.available_permits();
+        let waiters = app.app_routed_read_waiters.available_permits();
+        let occupied = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let descriptor = route_catalog::application_api::ACCOUNTS_GET;
+        let router = admission_router(Arc::clone(&app), descriptor, false);
+        let request = Request::builder()
+            .uri(descriptor.path())
+            .body(pending_body(&polls))
+            .unwrap();
+        let mut response = Box::pin(router.oneshot(request));
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
+        assert_eq!(app.app_routed_read_waiters.available_permits(), waiters - 1);
+        drop(response);
+        assert_eq!(app.app_routed_read_waiters.available_permits(), waiters);
+        drop(occupied);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+        let permit = acquire_app_routed_read_http_memory(&app, false)
+            .await
+            .unwrap();
+        assert!(app.query_fanout_inflight.available_permits() < before);
+        drop(permit);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
+    #[tokio::test]
+    async fn solo_bodyless_burst_queues_under_one_unchanged_memory_working_set() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
+        let before = app.query_fanout_inflight.available_permits();
+        let occupied = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let descriptor = route_catalog::application_api::ACCOUNTS_GET;
+        let mut reads = Vec::new();
+        for _ in 0..12 {
+            let router = admission_router(Arc::clone(&app), descriptor, false);
+            let request = Request::builder()
+                .uri(format!("{}?limit=100", descriptor.path()))
+                .body(Body::empty())
+                .unwrap();
+            let mut read = Box::pin(async move {
+                let response = router.oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                drop(response);
+            });
+            assert!(futures::poll!(read.as_mut()).is_pending());
+            reads.push(read);
+        }
+        assert_eq!(app.query_fanout_inflight.available_permits(), 0);
+        drop(occupied);
+        futures::future::join_all(reads).await;
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+        assert_eq!(
+            app.app_routed_read_waiters.available_permits(),
+            defaults::torii::QUERY_MAX_INFLIGHT.get()
+        );
+    }
+
+    #[tokio::test]
+    async fn bodyless_read_queue_keeps_finite_count_and_deadline() {
+        let mut app = mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).unwrap();
+        state.query_queue_timeout = Duration::from_millis(10);
+        state.app_routed_read_waiters = Arc::new(tokio::sync::Semaphore::new(1));
+        let before = app.query_fanout_inflight.available_permits();
+        let occupied = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let mut waiting = Box::pin(acquire_app_routed_read_http_memory(&app, false));
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        let full = acquire_app_routed_read_http_memory(&app, false)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(full.status(), StatusCode::TOO_MANY_REQUESTS);
+        let elapsed = waiting.await.err().unwrap();
+        assert_eq!(elapsed.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(app.app_routed_read_waiters.available_permits(), 1);
+        drop(occupied);
+        assert_eq!(app.query_fanout_inflight.available_permits(), before);
+    }
+
     #[test]
     fn dynamic_raw_target_exact_and_plus_one_precede_permit_acquisition() {
         let app = mk_app_state_for_tests();
@@ -539,7 +622,7 @@ mod app_routed_read_http_admission_tests {
             .find("let target_bytes = app_routed_read_raw_target_bytes")
             .expect("target preflight source");
         let permit = source
-            .find("let reservation = match try_acquire_new_query_fanout_memory")
+            .find("let reservation = match acquire_app_routed_read_http_memory")
             .expect("permit source");
         assert!(target < permit);
     }

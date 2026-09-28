@@ -94,14 +94,6 @@ impl From<iroha_crypto::Error> for TicketSignatureError {
     DeriveJsonDeserialize,
 )]
 #[norito(tag = "scope", content = "value")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
 #[allow(clippy::exhaustive_enums)]
 pub enum TicketScopeV1 {
     /// Ticket permits read-only access.
@@ -124,14 +116,6 @@ pub enum TicketScopeV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 pub struct TicketBodyV1 {
     /// Blinded content identifier protected by the `SoraNet` salt schedule.
@@ -175,14 +159,6 @@ impl TicketBodyV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
 )]
 pub struct TicketEnvelopeV1 {
     /// Canonical ticket body.

@@ -31,12 +31,12 @@ The output directory and its dedicated artifacts parent must already exist,
 be owner-private, resolve below /private/tmp, and remain outside the source
 repository. By default the output is <run>/artifacts/<stage>, the artifacts
 parent is the authenticated artifact root, and cancellation is
-<run>/cancel-request.json. Cargo loads the package-local authority through a
-live Torii router from a fresh, hard-link-free, sealed clone at the caller's
+<run>/cancel-request.json. Cargo projects the package-local authority through
+Torii's compiled route catalog from a fresh, hard-link-free, sealed clone at the caller's
 exact clean HEAD through the authenticated Cargo 1.93.1/--locked/--offline/-j1 process
 policy. Plain --unsigned-manifest instead uses the Node authored-spec metadata
 owner on the same clean checkout, requires an empty output directory, and does
-not run Cargo, clone source, or claim live-router validation.
+not run Cargo, clone source, or claim compiled-projection validation.
 EOF
   exit 2
 }

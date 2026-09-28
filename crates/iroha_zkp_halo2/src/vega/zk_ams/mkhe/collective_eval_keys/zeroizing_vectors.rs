@@ -11,7 +11,9 @@ fn record_cks_stream_zeroizing_drop_v1(all_zero: bool) {
         audit.set((drops + 1, failed + usize::from(!all_zero)));
     });
 }
+#[cfg(test)]
 struct ZeroizingU64VectorV1(Vec<u64>);
+#[cfg(test)]
 impl ZeroizingU64VectorV1 {
     fn with_capacity_exact(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -26,17 +28,20 @@ impl ZeroizingU64VectorV1 {
         Ok(values)
     }
 }
+#[cfg(test)]
 impl core::ops::Deref for ZeroizingU64VectorV1 {
     type Target = Vec<u64>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
+#[cfg(test)]
 impl core::ops::DerefMut for ZeroizingU64VectorV1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingU64VectorV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(self.0.as_mut_slice());
@@ -47,7 +52,9 @@ impl Drop for ZeroizingU64VectorV1 {
         record_cks_stream_zeroizing_drop_v1(self.0.iter().all(|value| *value == 0));
     }
 }
+#[cfg(test)]
 struct ZeroizingByteVectorV1(Vec<u8>);
+#[cfg(test)]
 impl ZeroizingByteVectorV1 {
     fn read_exact<R: std::io::Read>(
         reader: &mut R,
@@ -62,12 +69,14 @@ impl ZeroizingByteVectorV1 {
         Ok(Self(bytes))
     }
 }
+#[cfg(test)]
 impl core::ops::Deref for ZeroizingByteVectorV1 {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for ZeroizingByteVectorV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(self.0.as_mut_slice());

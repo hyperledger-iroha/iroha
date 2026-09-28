@@ -193,12 +193,9 @@ async fn parliament_draft_handlers_frame_exact_native_instructions() {
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             GovernanceAttemptId, ProposalKind,
         },
-        isi::{
-            Instruction as _,
-            governance::{
-                CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
-                SubmitParliamentLifecycleTransitionV1,
-            },
+        isi::governance::{
+            CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
+            SubmitParliamentLifecycleTransitionV1,
         },
     };
 
@@ -549,8 +546,6 @@ struct GovHarness {
     chain_id: Arc<ChainId>,
     authority: AccountId,
     authority_keypair: KeyPair,
-    asset_def_id: AssetDefinitionId,
-    escrow: AccountId,
 }
 fn checked_governance_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], algorithm)
@@ -686,8 +681,6 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
         chain_id: Arc::new(chain_id),
         authority,
         authority_keypair,
-        asset_def_id,
-        escrow,
     }
 }
 fn mk_manifest_provenance(
@@ -849,11 +842,6 @@ fn sample_agenda_proposal(proposal_id: &str) -> AgendaProposalV1 {
 fn decode_governance_proposal_instruction(
     instr: &GovernanceProposalInstructionDraftV1,
 ) -> iroha_data_model::isi::InstructionBox {
-    let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
-    iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
-        .expect("instruction payload decode")
-}
-fn decode_tx_instruction(instr: &TxInstr) -> iroha_data_model::isi::InstructionBox {
     let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
     iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
         .expect("instruction payload decode")

@@ -1035,8 +1035,6 @@ fn queue_depth_bounded_in(
     maximum: usize,
     work_limit: usize,
 ) -> io::Result<usize> {
-    use std::os::unix::ffi::OsStrExt as _;
-
     let mut count = 0_usize;
     let mut work = 0_usize;
     let mut entries = rustix::fs::Dir::read_from(&directory.file).map_err(io::Error::from)?;

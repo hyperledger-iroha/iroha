@@ -93,7 +93,7 @@ def payload_body(name: str, *, shared: bool) -> dict:
     )
     return {
         "admission_intent": {
-            "intent": "ordinary" if shared else "queue_plan_synced",
+            "intent": "ordinary",
             "value": None,
         },
         "authority": f"authority-{name}",
@@ -404,13 +404,13 @@ def test_shared_admission_intent_is_exact_ordinary(
     [
         None,
         {},
-        {"intent": "queue_plan_synced"},
-        {"intent": "queue_plan_synced", "value": None, "legacy": True},
-        {"intent": "ordinary", "value": None},
-        {"intent": "queue_plan_synced", "value": 0},
+        {"intent": "ordinary"},
+        {"intent": "ordinary", "value": None, "legacy": True},
+        {"intent": "queue_plan_synced", "value": None},
+        {"intent": "ordinary", "value": 0},
     ],
 )
-def test_swift_owned_admission_intent_is_exact_queue_plan_synced(
+def test_swift_owned_admission_intent_is_exact_ordinary(
     tmp_path: Path, intent: object
 ) -> None:
     source, target, _, _ = populate_valid_corpus(tmp_path)

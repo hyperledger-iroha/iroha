@@ -152,11 +152,12 @@ pub fn payload_hash(crypto: &dyn Crypto, payload: &[u8]) -> Hash32 {
     crypto.hash(&out)
 }
 
-/// `body_ok(b) := len(b.payload) == b.header.payload_len ∧ H(TAG_PAY ‖ b.payload) ==
+/// `body_ok(b) := 0 < len(b.payload) == b.header.payload_len ∧ H(TAG_PAY ‖ b.payload) ==
 /// b.header.payload_hash` (§3.2).
 pub fn body_ok(crypto: &dyn Crypto, block: &Block) -> bool {
     cfg!(sumeragi_mutation = "MS20")
-        || (u32::try_from(block.payload.len()).is_ok_and(|len| len == block.header.payload_len)
+        || (!block.payload.is_empty()
+            && u32::try_from(block.payload.len()).is_ok_and(|len| len == block.header.payload_len)
             && payload_hash(crypto, &block.payload) == block.header.payload_hash)
 }
 

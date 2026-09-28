@@ -566,18 +566,12 @@ fn stark_fields_are_canonical_v1<A: PolynomialAirFieldV1, const BASE: usize, con
         .chain(fixed)
         .all(|value| value.is_canonical())
 }
+#[cfg(test)]
 /// Evaluate one aggregate reduction opening as an exact polynomial vector.
 ///
 /// Limb constants, first/last boundaries, activity, and padding are numeric
 /// verifier-preprocessed openings. The evaluator therefore has no native
 /// limb/row branch on the LDE and has maximum total degree four.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Scalar wrapper retained for differential validation"
-    )
-)]
 pub(crate) fn evaluate_p256_reduction_stark_residues_v1(
     current: &[F; P256_REDUCTION_BASE_WIDTH_V1],
     next: &[F; P256_REDUCTION_BASE_WIDTH_V1],
@@ -667,17 +661,11 @@ pub(crate) fn evaluate_p256_reduction_stark_residues_over_field_v1<A: Polynomial
     }
     Ok(residues)
 }
+#[cfg(test)]
 /// Evaluate one aggregate wallet low-S opening as an exact polynomial vector.
 ///
 /// The same numeric topology removes native row branching from the LDE. The
 /// strict comparison has maximum total degree three.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Scalar wrapper retained for differential validation"
-    )
-)]
 pub(crate) fn evaluate_p256_low_s_stark_residues_v1(
     current: &[F; P256_LOW_S_BASE_WIDTH_V1],
     next: &[F; P256_LOW_S_BASE_WIDTH_V1],

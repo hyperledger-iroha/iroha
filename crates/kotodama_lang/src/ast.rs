@@ -352,11 +352,6 @@ pub struct TriggerMetadataEntry {
     pub value: Expr,
 }
 
-/// Seiyaku-level localization table.
-#[derive(Debug, PartialEq, Clone)]
-pub struct MessageBlock {
-    pub entries: Vec<MessageEntry>,
-}
 /// Localized message entry keyed by a stable message id.
 #[derive(Debug, PartialEq, Clone)]
 pub struct MessageEntry {

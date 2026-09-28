@@ -73,6 +73,7 @@ pub fn gamma_decompose_v1(residue: u64) -> Result<GammaDecompositionV1, Compress
     }
     Ok(GammaDecompositionV1 { high, low })
 }
+#[cfg(test)]
 /// Reconstruct the proof-ring residue represented by a gamma decomposition.
 ///
 /// # Errors
@@ -142,6 +143,7 @@ pub fn center_proof_residue_v1(residue: u64) -> Result<i64, CompressionErrorV1> 
             - i64::try_from(PROOF_MODULUS_V1).expect("proof modulus fits i64"))
     }
 }
+#[cfg(test)]
 /// Convert a signed lift to its unique proof-ring residue.
 #[must_use]
 pub fn proof_residue_from_centered_v1(value: i64) -> u64 {

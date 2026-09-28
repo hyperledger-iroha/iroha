@@ -28,8 +28,6 @@ macro_rules! define_v1_keywords {
         const V1_KEYWORD_TOKEN_KINDS: &[TokenKind] = &[$(TokenKind::$variant),+];
     };
 }
-/// Normative machine-readable lexical grammar used to generate V1 tables.
-pub const V1_LEXICAL_GRAMMAR: &str = include_str!("../grammar/v1.lex");
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TokenKind {

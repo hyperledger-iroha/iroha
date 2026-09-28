@@ -169,6 +169,10 @@ impl Core {
                 header.payload_len > params.max_block_bytes,
                 Defect::PayloadTooLarge,
             ),
+            (
+                header.payload_len == 0 && !cfg!(sumeragi_mutation = "MA8"),
+                Defect::EmptyPayload,
+            ),
         ];
         if let Some((_, defect)) = checks.into_iter().find(|(failed, _)| *failed) {
             return Some(defect);
@@ -189,17 +193,6 @@ impl Core {
             (
                 header.skipped_leaders != self.topo.skipped_leader_keys(&self.cfg.committee, w),
                 Defect::SkippedLeaders,
-            ),
-            (
-                w >= params.empty_after_views
-                    && header.payload_len != 0
-                    && !cfg!(sumeragi_mutation = "ML13"),
-                Defect::NonEmptyPayload,
-            ),
-            // §3.7 A1: `EMPTY` from `empty_after_views` on is never flagged (MA8 deletes it).
-            (
-                w >= params.empty_after_views && header.attest && !cfg!(sumeragi_mutation = "MA8"),
-                Defect::FlaggedEmpty,
             ),
         ];
         fresh

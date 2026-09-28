@@ -4,8 +4,7 @@
 //! we do not control, so lightweight wrappers are provided here and shared across the
 //! Iroha data model. A companion [`socket_addr!`] macro parses address literals at compile
 //! time for convenience while keeping the canonical Norito codecs.
-#![allow(unexpected_cfgs)]
-use crate::{conststr::ConstString, ffi};
+use crate::conststr::ConstString;
 use derive_more::{AsRef, Debug, Display, From, IntoIterator};
 use iroha_macro::FromVariant;
 /// Parses an IPv4 or IPv6 socket address literal at compile time.
@@ -31,34 +30,30 @@ pub enum ParseError {
     /// Ipv6 address contains more than one '::' abbreviation
     UnexpectedAbbreviation,
 }
-ffi::ffi_item! {
-    /// An Iroha-native version of [`std::net::Ipv4Addr`] that integrates with Norito and schema tooling.
-        #[derive(
-        Debug,
-        Display,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        AsRef,
-        From,
-        IntoIterator,
-        Encode,
-        Decode,
-        IntoSchema,
-    )]
-    #[display("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
-    #[debug("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
-    #[repr(transparent)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_primitives::addr::Ipv4Addr")]
-    pub struct Ipv4Addr([u8; 4]);
-    // SAFETY: `Ipv4Addr` has no trap representation in [u8; 4]
-    ffi_type(unsafe {robust})
-}
+/// An Iroha-native version of [`std::net::Ipv4Addr`] that integrates with Norito and schema tooling.
+#[derive(
+    Debug,
+    Display,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    AsRef,
+    From,
+    IntoIterator,
+    Encode,
+    Decode,
+    IntoSchema,
+)]
+#[display("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
+#[debug("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
+#[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::addr::Ipv4Addr")]
+pub struct Ipv4Addr([u8; 4]);
 impl Ipv4Addr {
     /// Construct new [`Ipv4Addr`] from given octets
     pub const fn new(octets: [u8; 4]) -> Self {
@@ -124,31 +119,27 @@ impl Ipv4Addr {
     /// resolve to something else.
     pub const UNSPECIFIED: Self = Self([0, 0, 0, 0]);
 }
-ffi::ffi_item! {
-    /// An Iroha-native version of [`std::net::Ipv6Addr`] that integrates with Norito and schema tooling.
-        #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        AsRef,
-        From,
-        IntoIterator,
-        Encode,
-        Decode,
-        IntoSchema,
-    )]
-    #[repr(transparent)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_primitives::addr::Ipv6Addr")]
-    pub struct Ipv6Addr([u16; 8]);
-    // SAFETY: `Ipv6Addr` has no trap representation in [u16; 8]
-    ffi_type(unsafe {robust})
-}
+/// An Iroha-native version of [`std::net::Ipv6Addr`] that integrates with Norito and schema tooling.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    AsRef,
+    From,
+    IntoIterator,
+    Encode,
+    Decode,
+    IntoSchema,
+)]
+#[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::addr::Ipv6Addr")]
+pub struct Ipv6Addr([u16; 8]);
 impl Ipv6Addr {
     /// The analogue of [`std::net::Ipv4Addr::LOCALHOST`], an address associated
     /// with the local machine.
@@ -305,31 +296,29 @@ impl JsonDeserialize for Ipv6Addr {
             })
     }
 }
-ffi::ffi_item! {
-    /// An Iroha-native version of [`std::net::IpAddr`] used for deterministic serialization.
-        #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Encode,
-        Decode,
-        IntoSchema,
-        FromVariant,
-        Hash,
-    )]
-    #[allow(variant_size_differences)] // Boxing 16 bytes probably doesn't make sense
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_primitives::addr::IpAddr")]
-    pub enum IpAddr {
-        /// Ipv4 variant
-        V4(Ipv4Addr),
-        /// Ipv6 variant
-        V6(Ipv6Addr),
-    }
+/// An Iroha-native version of [`std::net::IpAddr`] used for deterministic serialization.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    FromVariant,
+    Hash,
+)]
+#[allow(variant_size_differences)] // Boxing 16 bytes probably doesn't make sense
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::addr::IpAddr")]
+pub enum IpAddr {
+    /// Ipv4 variant
+    V4(Ipv4Addr),
+    /// Ipv6 variant
+    V6(Ipv6Addr),
 }
 #[cfg(feature = "json")]
 impl FastJsonWrite for IpAddr {
@@ -371,32 +360,19 @@ impl JsonDeserialize for IpAddr {
         })
     }
 }
-ffi::ffi_item! {
-    /// This struct provides an Iroha-native version of [`std::net::SocketAddrV4`] used for deterministic serialization.
-        #[derive(
-        Debug,
-        Display,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        Encode,
-        Decode,
-        IntoSchema,
-    )]
-    #[display("{}:{}", self.ip, self.port)]
-    #[debug("{}:{}", self.ip, self.port)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_primitives::addr::SocketAddrV4")]
-    pub struct SocketAddrV4 {
-        /// The Ipv4 address.
-        pub ip: Ipv4Addr,
-        /// The port number.
-        pub port: u16,
-    }
+/// This struct provides an Iroha-native version of [`std::net::SocketAddrV4`] used for deterministic serialization.
+#[derive(
+    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
+)]
+#[display("{}:{}", self.ip, self.port)]
+#[debug("{}:{}", self.ip, self.port)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::addr::SocketAddrV4")]
+pub struct SocketAddrV4 {
+    /// The Ipv4 address.
+    pub ip: Ipv4Addr,
+    /// The port number.
+    pub port: u16,
 }
 impl From<([u8; 4], u16)> for SocketAddrV4 {
     fn from(value: ([u8; 4], u16)) -> Self {
@@ -454,32 +430,19 @@ impl JsonDeserialize for SocketAddrV4 {
         }
     }
 }
-ffi::ffi_item! {
-    /// This struct provides an Iroha-native version of [`std::net::SocketAddrV6`] used for deterministic serialization.
-        #[derive(
-        Debug,
-        Display,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        Encode,
-        Decode,
-        IntoSchema,
-    )]
-    #[display("[{}]:{}", self.ip, self.port)]
-    #[debug("[{}]:{}", self.ip, self.port)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_primitives::addr::SocketAddrV6")]
-    pub struct SocketAddrV6 {
-        /// The Ipv6 address.
-        pub ip: Ipv6Addr,
-        /// The port number.
-        pub port: u16,
-    }
+/// This struct provides an Iroha-native version of [`std::net::SocketAddrV6`] used for deterministic serialization.
+#[derive(
+    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
+)]
+#[display("[{}]:{}", self.ip, self.port)]
+#[debug("[{}]:{}", self.ip, self.port)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::addr::SocketAddrV6")]
+pub struct SocketAddrV6 {
+    /// The Ipv6 address.
+    pub ip: Ipv6Addr,
+    /// The port number.
+    pub port: u16,
 }
 impl From<([u16; 8], u16)> for SocketAddrV6 {
     fn from(value: ([u16; 8], u16)) -> Self {
@@ -543,28 +506,26 @@ impl JsonDeserialize for SocketAddrV6 {
         }
     }
 }
-ffi::ffi_item! {
-    /// Socket address defined by hostname and port
-        #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        Encode,
-        Decode,
-        IntoSchema,
-    )]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_primitives::addr::SocketAddrHost")]
-    pub struct SocketAddrHost {
-        /// The hostname
-        pub host: ConstString,
-        /// The port number
-        pub port: u16,
-    }
+/// Socket address defined by hostname and port
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_primitives::addr::SocketAddrHost")]
+pub struct SocketAddrHost {
+    /// The hostname
+    pub host: ConstString,
+    /// The port number
+    pub port: u16,
 }
 impl core::fmt::Display for SocketAddrHost {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -610,31 +571,29 @@ impl JsonDeserialize for SocketAddrHost {
     }
 }
 // Norito derives now implement DecodeFromSlice for these enums and structs.
-ffi::ffi_item! {
-    /// This enum provides an Iroha-native version of [`std::net::SocketAddr`] used for deterministic serialization.
-        #[derive(
-        Debug,
-        Display,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Encode,
-        Decode,
-        IntoSchema,
-        FromVariant,
-    )]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_primitives::addr::SocketAddr")]
-    pub enum SocketAddr {
-        /// An Ipv4 socket address.
-        Ipv4(SocketAddrV4),
-        /// An Ipv6 socket address.
-        Ipv6(SocketAddrV6),
-        /// A socket address identified by hostname
-        Host(SocketAddrHost),
-    }
+/// This enum provides an Iroha-native version of [`std::net::SocketAddr`] used for deterministic serialization.
+#[derive(
+    Debug,
+    Display,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    FromVariant,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_primitives::addr::SocketAddr")]
+pub enum SocketAddr {
+    /// An Ipv4 socket address.
+    Ipv4(SocketAddrV4),
+    /// An Ipv6 socket address.
+    Ipv6(SocketAddrV6),
+    /// A socket address identified by hostname
+    Host(SocketAddrHost),
 }
 #[cfg(feature = "json")]
 fn parse_socket_addr(input: &str) -> Option<SocketAddr> {

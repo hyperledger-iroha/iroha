@@ -12,6 +12,7 @@ pub struct FrontierCheckpoint {
     /// Merkle root associated with the checkpoint.
     pub root: [u8; 32],
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Summary of how a frontier checkpoint update changed the rolling history.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrontierCheckpointUpdate {
@@ -74,6 +75,7 @@ impl Default for ZkAssetState {
     }
 }
 impl ZkAssetState {
+    #[cfg(test)]
     /// Compute the root after one commitment without cloning or mutating the
     /// retained tree state.
     ///
@@ -285,6 +287,7 @@ impl ZkAssetState {
         self.persisted_root = append.current_root;
         Ok(append.appended_roots)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Record a frontier checkpoint for reorg recovery, enforcing interval and depth bounds.
     pub fn record_frontier_checkpoint(
         &mut self,
@@ -346,7 +349,7 @@ impl ZkAssetState {
         Ok(update)
     }
 }
-#[cfg(feature = "telemetry")]
+#[cfg(all(test, feature = "telemetry"))]
 impl ZkAssetState {
     /// Build [`ConfidentialTreeStats`] for the current tree snapshot.
     pub fn telemetry_stats(
@@ -372,7 +375,7 @@ impl ZkAssetState {
         }
     }
 }
-#[cfg(feature = "telemetry")]
+#[cfg(all(test, feature = "telemetry"))]
 fn saturating_len_to_u64(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)
 }

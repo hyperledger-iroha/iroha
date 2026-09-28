@@ -14,11 +14,10 @@ use iroha_primitives::soradns::{
 };
 use norito::{
     decode_from_bytes,
-    json::{self, Value as NoritoJsonValue},
+    derive::{JsonDeserialize, JsonSerialize},
+    json::{self, Value},
     to_bytes,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{self, Value as SerdeJsonValue, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -39,7 +38,7 @@ pub fn default_pretty_gateway_suffix() -> String {
     pretty_gateway_suffix().to_string()
 }
 /// Summary of gateway host derivation for a SoraDNS entry.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, JsonSerialize, PartialEq, Eq)]
 pub struct HostSummary {
     /// Original FQDN provided by the caller.
     pub name: String,
@@ -112,7 +111,7 @@ pub enum ManifestCidDigestError {
         path: PathBuf,
         /// Parse failure.
         #[source]
-        source: serde_json::Error,
+        source: json::Error,
     },
     /// Root CID extraction failed.
     #[error(transparent)]
@@ -126,8 +125,8 @@ pub fn manifest_cid_and_digest_from_path(
         path: path.to_path_buf(),
         source,
     })?;
-    let manifest: SerdeJsonValue =
-        serde_json::from_slice(&data).map_err(|source| ManifestCidDigestError::Parse {
+    let manifest: Value =
+        json::from_slice(&data).map_err(|source| ManifestCidDigestError::Parse {
             path: path.to_path_buf(),
             source,
         })?;
@@ -157,7 +156,7 @@ pub struct AcmePlanOptions {
     pub generated_at: OffsetDateTime,
 }
 /// JSON blob describing the SAN/challenge plan for gateway certificates.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct AcmePlan {
     /// ACME directory URL to target.
     pub directory_url: String,
@@ -167,7 +166,7 @@ pub struct AcmePlan {
     pub hosts: Vec<AcmePlanHost>,
 }
 /// Certificate plan for a single alias.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct AcmePlanHost {
     /// Alias literal.
     pub name: String,
@@ -185,30 +184,44 @@ pub struct AcmePlanHost {
     pub certificates: Vec<AcmeCertificatePlan>,
 }
 /// Individual certificate plan (SAN set + challenge guidance).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct AcmeCertificatePlan {
     /// Certificate kind (wildcard vs pretty host).
     pub kind: AcmeCertificateKind,
     /// Subject Alternative Names included in the CSR/order.
     pub san: Vec<String>,
     /// Recommended ACME challenge types.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
     pub recommended_challenges: Vec<String>,
     /// DNS-01 labels that automation must publish.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
     pub dns_challenge_labels: Vec<String>,
     /// Free-form operator notes.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 /// Enumeration describing the certificate plan type.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum AcmeCertificateKind {
     /// Wildcard certificate used for canonical hosts.
     CanonicalWildcard,
     /// Certificate covering the pretty host.
     PrettyHost,
+}
+impl AcmeCertificateKind {
+    /// Stable snake_case label used in serialized plans.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::CanonicalWildcard => "canonical_wildcard",
+            Self::PrettyHost => "pretty_host",
+        }
+    }
+}
+impl json::FastJsonWrite for AcmeCertificateKind {
+    fn write_json(&self, out: &mut String) {
+        json::write_json_string(self.as_str(), out);
+    }
 }
 /// Options supplied when producing a cache invalidation plan.
 #[derive(Debug, Clone)]
@@ -231,23 +244,23 @@ pub struct CacheInvalidationPlanOptions {
     pub generated_at: OffsetDateTime,
 }
 /// High-level cache invalidation plan for a batch of aliases.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct CacheInvalidationPlan {
     /// RFC3339 timestamp when the plan was generated.
     pub generated_at: String,
     /// HTTP method to use for every purge request.
     pub http_method: String,
     /// Optional name of the authentication header supplied with the request.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub auth_header: Option<String>,
     /// Optional environment variable that carries the purge credential/token.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub auth_env: Option<String>,
     /// Alias-specific cache purge targets.
     pub entries: Vec<CacheInvalidationEntry>,
 }
 /// Cache purge targets for a single alias.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct CacheInvalidationEntry {
     /// Alias literal.
     pub name: String,
@@ -260,13 +273,13 @@ pub struct CacheInvalidationEntry {
     /// Wildcard covering the canonical namespace.
     pub canonical_wildcard: String,
     /// Pretty host (`<alias>.<pretty-suffix>`).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub pretty_host: Option<String>,
     /// Concrete purge targets derived from the alias.
     pub purge_targets: Vec<CachePurgeTarget>,
 }
 /// Concrete purge request guidance.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct CachePurgeTarget {
     /// Hostname that should be purged.
     pub host: String,
@@ -286,7 +299,7 @@ pub struct RoutePlanOptions {
     pub generated_at: OffsetDateTime,
 }
 /// Deterministic promotion + rollback plan for gateway bindings.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct RoutePlan {
     /// RFC3339 timestamp when the plan was generated.
     pub generated_at: String,
@@ -294,7 +307,7 @@ pub struct RoutePlan {
     pub entries: Vec<RoutePlanEntry>,
 }
 /// Alias-specific promotion metadata.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct RoutePlanEntry {
     /// Alias literal.
     pub name: String,
@@ -303,7 +316,7 @@ pub struct RoutePlanEntry {
     /// Canonical host.
     pub canonical_host: String,
     /// Pretty host (when requested).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub pretty_host: Option<String>,
     /// Promotion steps executed in order.
     pub promote_steps: Vec<RoutePlanStep>,
@@ -311,43 +324,34 @@ pub struct RoutePlanEntry {
     pub rollback_steps: Vec<RoutePlanStep>,
 }
 /// Structured action used for promotion or rollback.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, JsonSerialize)]
 pub struct RoutePlanStep {
     /// Action identifier (machine friendly).
     pub action: String,
     /// Human-readable description.
     pub description: String,
     /// Target host (if applicable).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     /// Optional notes/free-form guidance.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
 }
-/// Accepted cutover-plan JSON shape (camelCase + snake_case).
-#[derive(Debug, Deserialize)]
+/// Gateway binding payload fields read back during verification.
+#[derive(Debug, JsonDeserialize)]
 struct GatewayBindingRecord {
-    #[serde(default)]
+    #[norito(default)]
     alias: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     hostname: Option<String>,
-    #[serde(default, rename = "contentCid", alias = "content_cid")]
+    #[norito(default)]
     content_cid: Option<String>,
-    #[serde(default, rename = "proofStatus", alias = "proof_status")]
+    #[norito(default)]
     proof_status: Option<String>,
-    #[serde(default, rename = "generatedAt", alias = "generated_at")]
+    #[norito(default)]
     generated_at: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     headers: Option<HashMap<String, String>>,
-    #[serde(default, rename = "headersTemplate", alias = "headers_template")]
-    #[allow(dead_code)]
-    headers_template: Option<String>,
-    #[allow(dead_code)]
-    #[serde(default, rename = "jsonPath", alias = "json_path")]
-    json_path: Option<String>,
-    #[allow(dead_code)]
-    #[serde(default, rename = "headersPath", alias = "headers_path")]
-    headers_path: Option<String>,
 }
 /// Errors encountered while deriving gateway hosts.
 #[derive(Debug, Error)]
@@ -397,7 +401,7 @@ pub enum GatewayBindingVerifyError {
         path: PathBuf,
         /// Underlying parse error.
         #[source]
-        source: serde_json::Error,
+        source: json::Error,
     },
     /// Binding payload omitted the headers block.
     #[error("gateway binding `{path}` is missing the headers block")]
@@ -441,7 +445,7 @@ pub enum GatewayBindingVerifyError {
         path: PathBuf,
         /// Underlying parse error.
         #[source]
-        source: serde_json::Error,
+        source: json::Error,
     },
     /// Manifest lacked root CID metadata.
     #[error("manifest `{path}` is missing root CID fields")]
@@ -503,7 +507,7 @@ pub enum GatewayBindingVerifyError {
         path: PathBuf,
         /// Underlying JSON error.
         #[source]
-        source: serde_json::Error,
+        source: json::Error,
     },
     /// Required field missing from decoded proof.
     #[error("Sora-Proof payload in `{path}` is missing `{field}`")]
@@ -833,7 +837,7 @@ pub fn verify_gateway_binding(
         source,
     })?;
     let record: GatewayBindingRecord =
-        serde_json::from_slice(&bytes).map_err(|source| GatewayBindingVerifyError::Parse {
+        json::from_slice(&bytes).map_err(|source| GatewayBindingVerifyError::Parse {
             path: binding_path.clone(),
             source,
         })?;
@@ -925,7 +929,7 @@ pub fn verify_gateway_binding(
             path: binding_path.clone(),
             source,
         })?;
-    let proof_value: SerdeJsonValue = serde_json::from_slice(&proof_bytes).map_err(|source| {
+    let proof_value: Value = json::from_slice(&proof_bytes).map_err(|source| {
         GatewayBindingVerifyError::InvalidProofJson {
             path: binding_path.clone(),
             source,
@@ -933,7 +937,7 @@ pub fn verify_gateway_binding(
     })?;
     let proof_alias = proof_value
         .get("alias")
-        .and_then(SerdeJsonValue::as_str)
+        .and_then(Value::as_str)
         .ok_or_else(|| GatewayBindingVerifyError::ProofMissingField {
             path: binding_path.clone(),
             field: "alias",
@@ -949,7 +953,7 @@ pub fn verify_gateway_binding(
     }
     let proof_manifest = proof_value
         .get("manifest")
-        .and_then(SerdeJsonValue::as_str)
+        .and_then(Value::as_str)
         .ok_or_else(|| GatewayBindingVerifyError::ProofMissingField {
             path: binding_path.clone(),
             field: "manifest",
@@ -1092,21 +1096,20 @@ fn manifest_content_cid(path: &Path) -> Result<String, GatewayBindingVerifyError
         path: path.to_path_buf(),
         source,
     })?;
-    let value: SerdeJsonValue = serde_json::from_slice(&data).map_err(|source| {
-        GatewayBindingVerifyError::ManifestParse {
+    let value: Value =
+        json::from_slice(&data).map_err(|source| GatewayBindingVerifyError::ManifestParse {
             path: path.to_path_buf(),
             source,
-        }
-    })?;
+        })?;
     let root_bytes = manifest_root_bytes(&value, path)?;
     let encoded = BASE32_NOPAD.encode(&root_bytes).to_lowercase();
     Ok(format!("b{encoded}"))
 }
 fn manifest_root_bytes(
-    manifest: &SerdeJsonValue,
+    manifest: &Value,
     path: &Path,
 ) -> Result<Vec<u8>, GatewayBindingVerifyError> {
-    if let Some(array) = manifest.get("root_cid").and_then(SerdeJsonValue::as_array) {
+    if let Some(array) = manifest.get("root_cid").and_then(Value::as_array) {
         let mut bytes = Vec::with_capacity(array.len());
         for entry in array {
             let Some(number) = entry.as_i64() else {
@@ -1131,20 +1134,14 @@ fn manifest_root_bytes(
         }
         return Ok(bytes);
     }
-    if let Some(array) = manifest
-        .get("root_cids_hex")
-        .and_then(SerdeJsonValue::as_array)
-    {
+    if let Some(array) = manifest.get("root_cids_hex").and_then(Value::as_array) {
         for entry in array {
             if let Some(hex_value) = entry.as_str() {
                 return decode_manifest_hex(hex_value, path);
             }
         }
     }
-    if let Some(hex_value) = manifest
-        .get("root_cid_hex")
-        .and_then(SerdeJsonValue::as_str)
-    {
+    if let Some(hex_value) = manifest.get("root_cid_hex").and_then(Value::as_str) {
         return decode_manifest_hex(hex_value, path);
     }
     Err(GatewayBindingVerifyError::ManifestMissingRoot {
@@ -1191,7 +1188,7 @@ pub enum HostPatternInputError {
         path: PathBuf,
         /// Underlying parse error.
         #[source]
-        source: serde_json::Error,
+        source: json::Error,
     },
     /// Verification entry missing a `name`.
     #[error("verification entry missing `name` field ({context})")]
@@ -1277,8 +1274,8 @@ pub fn verify_host_patterns(
             path: path.clone(),
             source,
         })?;
-        let value: SerdeJsonValue =
-            serde_json::from_slice(&data).map_err(|source| HostPatternInputError::Json {
+        let value: Value =
+            json::from_slice(&data).map_err(|source| HostPatternInputError::Json {
                 path: path.clone(),
                 source,
             })?;
@@ -1318,7 +1315,7 @@ pub struct BindingTemplateOptions {
 #[derive(Debug, Clone)]
 pub struct BindingTemplateRender {
     /// JSON payload mirroring `portal.gateway.binding.json`.
-    pub payload: SerdeJsonValue,
+    pub payload: Value,
     /// Ready-to-paste HTTP header block.
     pub headers_template: String,
 }
@@ -1341,7 +1338,7 @@ pub enum BindingTemplateError {
         path: PathBuf,
         /// Underlying parse error.
         #[source]
-        source: norito::json::Error,
+        source: json::Error,
     },
     /// Manifest lacked a usable root CID payload.
     #[error("manifest `{path}` is missing root CID data: {details}")]
@@ -1387,13 +1384,12 @@ pub fn build_binding_template(
             path: options.manifest_path.clone(),
             source,
         })?;
-    let manifest: NoritoJsonValue =
-        norito::json::from_slice(&manifest_bytes).map_err(|source| {
-            BindingTemplateError::ManifestParse {
-                path: options.manifest_path.clone(),
-                source,
-            }
-        })?;
+    let manifest: Value = json::from_slice(&manifest_bytes).map_err(|source| {
+        BindingTemplateError::ManifestParse {
+            path: options.manifest_path.clone(),
+            source,
+        }
+    })?;
     let root_bytes = manifest_root_bytes_binding(&manifest, &options.manifest_path)?;
     let content_cid = format!("b{}", encode_base32_lower(&root_bytes));
     let generated_at = options.generated_at.format(&Rfc3339).map_err(|err| {
@@ -1405,12 +1401,12 @@ pub fn build_binding_template(
     let mut headers = BTreeMap::new();
     headers.insert("Sora-Content-CID".into(), content_cid.clone());
     headers.insert("Sora-Name".into(), alias.to_string());
-    let proof_payload = serde_json::json!({
+    let proof_payload = norito::json!({
         "alias": alias,
         "manifest": content_cid,
     });
     let proof_bytes =
-        serde_json::to_vec(&proof_payload).map_err(|err| BindingTemplateError::ManifestRoot {
+        json::to_vec(&proof_payload).map_err(|err| BindingTemplateError::ManifestRoot {
             path: options.manifest_path.clone(),
             details: format!("failed to encode proof payload: {err}"),
         })?;
@@ -1458,53 +1454,38 @@ pub fn build_binding_template(
         DEFAULT_PERMISSIONS_POLICY,
     )?;
     let headers_template = format_headers_template(&headers);
-    let mut payload = serde_json::Map::new();
-    payload.insert("alias".into(), SerdeJsonValue::String(alias.to_string()));
+    let mut payload = json::Map::new();
+    payload.insert("alias".into(), Value::String(alias.to_string()));
+    payload.insert("hostname".into(), Value::String(hostname.to_string()));
+    payload.insert("content_cid".into(), Value::String(content_cid.clone()));
     payload.insert(
-        "hostname".into(),
-        SerdeJsonValue::String(hostname.to_string()),
+        "proof_status".into(),
+        Value::String(proof_status.to_string()),
     );
+    payload.insert("generated_at".into(), Value::String(generated_at.clone()));
     payload.insert(
-        "contentCid".into(),
-        SerdeJsonValue::String(content_cid.clone()),
+        "headers_template".into(),
+        Value::String(headers_template.clone()),
     );
-    payload.insert(
-        "proofStatus".into(),
-        SerdeJsonValue::String(proof_status.to_string()),
-    );
-    payload.insert(
-        "generatedAt".into(),
-        SerdeJsonValue::String(generated_at.clone()),
-    );
-    payload.insert(
-        "headersTemplate".into(),
-        SerdeJsonValue::String(headers_template.clone()),
-    );
-    payload.insert(
-        "headers".into(),
-        SerdeJsonValue::Object(headers_to_value(&headers)),
-    );
+    payload.insert("headers".into(), Value::Object(headers_to_value(&headers)));
     if let Some(label) = options
         .route_label
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        payload.insert(
-            "routeLabel".into(),
-            SerdeJsonValue::String(label.to_string()),
-        );
+        payload.insert("route_label".into(), Value::String(label.to_string()));
     }
     Ok(BindingTemplateRender {
-        payload: SerdeJsonValue::Object(payload),
+        payload: Value::Object(payload),
         headers_template,
     })
 }
 fn manifest_root_bytes_binding(
-    manifest: &NoritoJsonValue,
+    manifest: &Value,
     manifest_path: &Path,
 ) -> Result<Vec<u8>, BindingTemplateError> {
-    if let Some(array) = manifest.get("root_cid").and_then(NoritoJsonValue::as_array) {
+    if let Some(array) = manifest.get("root_cid").and_then(Value::as_array) {
         let mut bytes = Vec::with_capacity(array.len());
         for entry in array {
             let Some(number) = entry.as_i64() else {
@@ -1529,10 +1510,7 @@ fn manifest_root_bytes_binding(
         }
         return Ok(bytes);
     }
-    if let Some(array) = manifest
-        .get("root_cids_hex")
-        .and_then(NoritoJsonValue::as_array)
-    {
+    if let Some(array) = manifest.get("root_cids_hex").and_then(Value::as_array) {
         for entry in array {
             if let Some(hex_value) = entry.as_str() {
                 let trimmed = hex_value.trim();
@@ -1551,10 +1529,7 @@ fn manifest_root_bytes_binding(
             }
         }
     }
-    if let Some(hex_value) = manifest
-        .get("root_cid_hex")
-        .and_then(NoritoJsonValue::as_str)
-    {
+    if let Some(hex_value) = manifest.get("root_cid_hex").and_then(Value::as_str) {
         let trimmed = hex_value.trim();
         if trimmed.is_empty() {
             return Err(BindingTemplateError::ManifestRoot {
@@ -1636,9 +1611,7 @@ pub enum GarTemplateError {
     InvalidManifestDigest,
 }
 /// Build a GAR payload template carrying canonical host patterns and header defaults.
-pub fn build_gar_template(
-    options: &GarTemplateOptions,
-) -> Result<SerdeJsonValue, GarTemplateError> {
+pub fn build_gar_template(options: &GarTemplateOptions) -> Result<Value, GarTemplateError> {
     let bindings = derive_gateway_hosts_with_profile(
         &options.name,
         GatewayHostProfile::new(&options.pretty_suffix),
@@ -1655,7 +1628,7 @@ pub fn build_gar_template(
     let host_patterns = bindings
         .host_patterns()
         .iter()
-        .map(|pattern| SerdeJsonValue::from(*pattern))
+        .map(|pattern| Value::from(*pattern))
         .collect::<Vec<_>>();
     let telemetry_labels = options
         .telemetry_labels
@@ -1665,7 +1638,7 @@ pub fn build_gar_template(
         .map(|label| label.to_string())
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(SerdeJsonValue::from)
+        .map(Value::from)
         .collect::<Vec<_>>();
     let csp_template = options
         .csp_template
@@ -1682,22 +1655,22 @@ pub fn build_gar_template(
         .as_deref()
         .unwrap_or(DEFAULT_PERMISSIONS_POLICY)
         .to_string();
-    Ok(json!({
+    Ok(norito::json!({
         "version": 2,
-        "name": bindings.normalized_name(),
+        "name": (bindings.normalized_name()),
         "manifest_cid": manifest_cid,
         "manifest_digest": manifest_digest,
         "host_patterns": host_patterns,
         "csp_template": csp_template,
         "hsts_template": hsts_template,
         "permissions_template": permissions_template,
-        "valid_from_epoch": options.valid_from_epoch,
-        "valid_until_epoch": options.valid_until_epoch,
+        "valid_from_epoch": (options.valid_from_epoch),
+        "valid_until_epoch": (options.valid_until_epoch),
         "license_sets": [],
         "moderation_directives": [],
-        "metrics_policy": SerdeJsonValue::Null,
+        "metrics_policy": (Value::Null),
         "telemetry_labels": telemetry_labels,
-        "rpt_digest": SerdeJsonValue::Null,
+        "rpt_digest": (Value::Null),
     }))
 }
 pub fn normalize_manifest_digest(value: &str) -> Result<String, GarTemplateError> {
@@ -1761,28 +1734,28 @@ pub struct GarVerifySummary {
 }
 impl GarVerifySummary {
     /// Render the GAR verification summary as JSON for automation.
-    pub fn to_json_value(&self) -> SerdeJsonValue {
+    pub fn to_json_value(&self) -> Value {
         let host_patterns = self
             .host_patterns
             .iter()
-            .map(|pattern| SerdeJsonValue::String(pattern.clone()))
+            .map(|pattern| Value::String(pattern.clone()))
             .collect::<Vec<_>>();
         let telemetry_labels = self
             .telemetry_labels
             .iter()
-            .map(|label| SerdeJsonValue::String(label.clone()))
+            .map(|label| Value::String(label.clone()))
             .collect::<Vec<_>>();
-        json!({
-            "version": self.version,
-            "name": self.normalized_name,
-            "canonical_label": self.canonical_label,
-            "canonical_host": self.canonical_host,
-            "manifest_cid": self.manifest_cid,
-            "manifest_digest": self.manifest_digest,
+        norito::json!({
+            "version": (self.version),
+            "name": (self.normalized_name),
+            "canonical_label": (self.canonical_label),
+            "canonical_host": (self.canonical_host),
+            "manifest_cid": (self.manifest_cid),
+            "manifest_digest": (self.manifest_digest),
             "host_patterns": host_patterns,
             "telemetry_labels": telemetry_labels,
-            "valid_from_epoch": self.valid_from_epoch,
-            "valid_until_epoch": self.valid_until_epoch,
+            "valid_from_epoch": (self.valid_from_epoch),
+            "valid_until_epoch": (self.valid_until_epoch),
         })
     }
 }
@@ -1805,7 +1778,7 @@ pub enum GarVerifyError {
         path: PathBuf,
         /// Underlying parse error.
         #[source]
-        source: serde_json::Error,
+        source: json::Error,
     },
     /// Required field missing in the payload.
     #[error("GAR `{path}` is missing `{field}`")]
@@ -1891,11 +1864,10 @@ pub fn verify_gar_payload(
         path: path.clone(),
         source,
     })?;
-    let value: SerdeJsonValue =
-        serde_json::from_slice(&raw).map_err(|source| GarVerifyError::Parse {
-            path: path.clone(),
-            source,
-        })?;
+    let value: Value = json::from_slice(&raw).map_err(|source| GarVerifyError::Parse {
+        path: path.clone(),
+        source,
+    })?;
     let object = value
         .as_object()
         .ok_or_else(|| GarVerifyError::InvalidField {
@@ -1905,18 +1877,19 @@ pub fn verify_gar_payload(
         })?;
     let version = object
         .get("version")
-        .and_then(SerdeJsonValue::as_u64)
+        .and_then(Value::as_u64)
         .ok_or_else(|| GarVerifyError::MissingField {
             path: path.clone(),
             field: "version",
         })?;
-    let name_value = object
-        .get("name")
-        .and_then(SerdeJsonValue::as_str)
-        .ok_or_else(|| GarVerifyError::MissingField {
-            path: path.clone(),
-            field: "name",
-        })?;
+    let name_value =
+        object
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| GarVerifyError::MissingField {
+                path: path.clone(),
+                field: "name",
+            })?;
     let gar_name = name_value.trim();
     if gar_name.is_empty() {
         return Err(GarVerifyError::InvalidField {
@@ -1927,7 +1900,7 @@ pub fn verify_gar_payload(
     }
     let manifest_cid_value = object
         .get("manifest_cid")
-        .and_then(SerdeJsonValue::as_str)
+        .and_then(Value::as_str)
         .ok_or_else(|| GarVerifyError::MissingField {
             path: path.clone(),
             field: "manifest_cid",
@@ -1941,8 +1914,8 @@ pub fn verify_gar_payload(
         });
     }
     let manifest_digest = match object.get("manifest_digest") {
-        None | Some(SerdeJsonValue::Null) => Ok(None),
-        Some(SerdeJsonValue::String(value)) => {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 Ok(None)
@@ -2005,13 +1978,13 @@ pub fn verify_gar_payload(
     }
     let valid_from_epoch = object
         .get("valid_from_epoch")
-        .and_then(SerdeJsonValue::as_u64)
+        .and_then(Value::as_u64)
         .ok_or_else(|| GarVerifyError::MissingField {
             path: path.clone(),
             field: "valid_from_epoch",
         })?;
     let valid_until_epoch = match object.get("valid_until_epoch") {
-        None | Some(SerdeJsonValue::Null) => None,
+        None | Some(Value::Null) => None,
         Some(value) => Some(value.as_u64().ok_or_else(|| GarVerifyError::InvalidField {
             path: path.clone(),
             field: "valid_until_epoch",
@@ -2019,7 +1992,7 @@ pub fn verify_gar_payload(
         })?),
     };
     let telemetry_labels = match object.get("telemetry_labels") {
-        None | Some(SerdeJsonValue::Null) => Vec::new(),
+        None | Some(Value::Null) => Vec::new(),
         Some(value) => {
             let array = value
                 .as_array()
@@ -2148,17 +2121,17 @@ pub fn verify_gar_payload(
 }
 fn merge_host_pattern_entries(
     target: &mut HashMap<String, Vec<String>>,
-    value: &SerdeJsonValue,
+    value: &Value,
     context: &str,
 ) -> Result<(), HostPatternInputError> {
     match value {
-        SerdeJsonValue::Array(items) => {
+        Value::Array(items) => {
             for item in items {
                 merge_host_pattern_entries(target, item, context)?;
             }
             Ok(())
         }
-        SerdeJsonValue::Object(map) => {
+        Value::Object(map) => {
             if map.contains_key("host_patterns") {
                 let name_value =
                     map.get("name")
@@ -2183,7 +2156,10 @@ fn merge_host_pattern_entries(
             }
         }
         other => Err(HostPatternInputError::InvalidShape {
-            details: format!("unexpected JSON token: {other}"),
+            details: format!(
+                "unexpected JSON token: {}",
+                json::to_string(&other).unwrap_or_default()
+            ),
         }),
     }
 }
@@ -2197,7 +2173,7 @@ fn normalise_name_key(name: &str) -> Result<String, HostPatternInputError> {
     Ok(trimmed.to_ascii_lowercase())
 }
 fn parse_host_patterns(
-    value: Option<&SerdeJsonValue>,
+    value: Option<&Value>,
     display_name: &str,
 ) -> Result<Vec<String>, HostPatternInputError> {
     let Some(raw) = value else {
@@ -2267,10 +2243,10 @@ fn format_headers_template(headers: &BTreeMap<String, String>) -> String {
     rendered.push('\n');
     rendered
 }
-fn headers_to_value(headers: &BTreeMap<String, String>) -> serde_json::Map<String, SerdeJsonValue> {
-    let mut map = serde_json::Map::new();
+fn headers_to_value(headers: &BTreeMap<String, String>) -> json::Map {
+    let mut map = json::Map::new();
     for (key, value) in headers {
-        map.insert(key.clone(), SerdeJsonValue::String(value.clone()));
+        map.insert(key.clone(), Value::String(value.clone()));
     }
     map
 }
@@ -2387,7 +2363,7 @@ pub fn release_directory(options: DirectoryReleaseOptions) -> Result<(), Box<dyn
             .collect(),
     };
     let directory_value =
-        serde_json::to_value(&directory_json).map_err(|err| -> Box<dyn Error> { Box::new(err) })?;
+        json::to_value(&directory_json).map_err(|err| -> Box<dyn Error> { Box::new(err) })?;
     let directory_json_bytes = canonical_json_bytes(&directory_value)
         .map_err(|err| -> Box<dyn Error> { Box::new(err) })?;
     let directory_json_sha256 = sha256_bytes(&directory_json_bytes);
@@ -2423,7 +2399,7 @@ pub fn release_directory(options: DirectoryReleaseOptions) -> Result<(), Box<dyn
         proof_manifest_cid.as_ref(),
         &builder_public_key,
     )?;
-    let signing_bytes = serde_json::to_vec(&signing_payload)?;
+    let signing_bytes = json::to_vec(&signing_payload)?;
     let builder_signature = Signature::try_new(builder_keypair.private_key(), &signing_bytes)
         .map_err(|err| format!("failed to sign SoraDNS release directory payload: {err}"))?;
     let record = ResolverDirectoryRecordV1 {
@@ -2440,7 +2416,7 @@ pub fn release_directory(options: DirectoryReleaseOptions) -> Result<(), Box<dyn
         builder_signature,
     };
     let record_json_path = release_dir.join("record.json");
-    let mut record_json = norito::json::to_vec(&record)?;
+    let mut record_json = json::to_vec(&record)?;
     record_json.push(b'\n');
     fs::write(&record_json_path, &record_json)?;
     let record_norito_path = release_dir.join("record.to");
@@ -2469,7 +2445,7 @@ pub fn release_directory(options: DirectoryReleaseOptions) -> Result<(), Box<dyn
         note: options.note.clone(),
     };
     let metadata_path = release_dir.join("metadata.json");
-    fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?)?;
+    fs::write(&metadata_path, json::to_vec_pretty(&metadata)?)?;
     println!("SoraDNS directory release bundle created");
     println!("  Output directory : {}", release_dir.display());
     println!("  Directory ID     : {root_hex}");
@@ -2584,35 +2560,12 @@ fn hash_branch(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     hasher.update(right);
     hasher.finalize().into()
 }
-fn canonical_json_bytes(value: &SerdeJsonValue) -> Result<Vec<u8>, DirectoryReleaseError> {
-    let serde_value = canonicalize_value(value);
+fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, DirectoryReleaseError> {
+    // `json::Map` is ordered, so object keys are already emitted in canonical order.
     let mut bytes = Vec::new();
-    serde_json::to_writer(&mut bytes, &serde_value)?;
+    json::to_writer(&mut bytes, value)?;
     bytes.push(b'\n');
     Ok(bytes)
-}
-fn canonicalize_value(value: &SerdeJsonValue) -> SerdeJsonValue {
-    match value {
-        SerdeJsonValue::Null => SerdeJsonValue::Null,
-        SerdeJsonValue::Bool(b) => SerdeJsonValue::Bool(*b),
-        SerdeJsonValue::Number(num) => SerdeJsonValue::Number(num.clone()),
-        SerdeJsonValue::String(s) => SerdeJsonValue::String(s.clone()),
-        SerdeJsonValue::Array(items) => SerdeJsonValue::Array(
-            items
-                .iter()
-                .map(canonicalize_value)
-                .collect::<Vec<SerdeJsonValue>>(),
-        ),
-        SerdeJsonValue::Object(map) => {
-            let mut entries = map.iter().collect::<Vec<_>>();
-            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-            let mut obj = serde_json::Map::new();
-            for (key, value) in entries {
-                obj.insert(key.clone(), canonicalize_value(value));
-            }
-            SerdeJsonValue::Object(obj)
-        }
-    }
 }
 fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -2678,24 +2631,24 @@ fn relative_path(path: &Path, root: &Path) -> String {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| path.display().to_string())
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct DirectoryJson {
     version: u32,
     created_at_ms: u64,
     rad_count: usize,
     merkle_root: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     previous_root: Option<String>,
     rad: Vec<DirectoryRadJsonEntry>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct DirectoryRadJsonEntry {
     resolver_id: String,
     rad_sha256: String,
     leaf_hash: String,
     file: String,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct ReleaseMetadata {
     directory_id_hex: String,
     rad_count: usize,
@@ -2705,30 +2658,30 @@ struct ReleaseMetadata {
     output_dir: String,
     files: DirectoryFilesMetadata,
     rad_entries: Vec<RadEntryMetadata>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct DirectoryFilesMetadata {
     directory_json: String,
     record_json: String,
     record_norito: String,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct RadEntryMetadata {
     resolver_id: String,
     rad_sha256_hex: String,
     leaf_hash_hex: String,
     file: String,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSerialize)]
 struct SigningPayload {
     record_version: u16,
     created_at_ms: u64,
     rad_count: u32,
     root_hash_hex: String,
     directory_json_sha256_hex: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
     previous_root_hex: Option<String>,
     proof_manifest_cid: String,
     builder_public_key_hex: String,
@@ -2785,19 +2738,12 @@ enum DirectoryReleaseError {
     DuplicateResolver { resolver_id: String },
     #[error("at least one RAD document is required to build a directory")]
     EmptyRadSet,
-    #[error("failed to encode JSON: {source}")]
-    JsonEncode { source: serde_json::Error },
     #[error("failed to serialize Norito JSON: {source}")]
-    NoritoJson { source: norito::json::Error },
+    Json { source: json::Error },
 }
-impl From<serde_json::Error> for DirectoryReleaseError {
-    fn from(source: serde_json::Error) -> Self {
-        Self::JsonEncode { source }
-    }
-}
-impl From<norito::json::Error> for DirectoryReleaseError {
-    fn from(source: norito::json::Error) -> Self {
-        Self::NoritoJson { source }
+impl From<json::Error> for DirectoryReleaseError {
+    fn from(source: json::Error) -> Self {
+        Self::Json { source }
     }
 }
 #[cfg(test)]
@@ -2863,14 +2809,14 @@ mod tests {
         let summary = &summaries[0];
         let temp = tempdir().expect("tempdir");
         let file = temp.path().join("gar.json");
-        let payload = serde_json::json!({
+        let payload = norito::json!({
             "docs.sora": [
-                summary.canonical_host,
-                summary.canonical_wildcard,
-                summary.pretty_host
+                (summary.canonical_host),
+                (summary.canonical_wildcard),
+                (summary.pretty_host)
             ]
         });
-        fs::write(&file, serde_json::to_vec(&payload).unwrap()).expect("write file");
+        fs::write(&file, json::to_vec(&payload).unwrap()).expect("write file");
         verify_host_patterns(&summaries, &[file]).expect("verification succeeds");
     }
     #[test]
@@ -2880,16 +2826,16 @@ mod tests {
         let summary = &summaries[0];
         let temp = tempdir().expect("tempdir");
         let file = temp.path().join("gar.json");
-        let payload = serde_json::json!([
+        let payload = norito::json!([
             {
                 "name": "docs.sora",
                 "host_patterns": [
-                    summary.canonical_host,
-                    summary.canonical_wildcard
+                    (summary.canonical_host),
+                    (summary.canonical_wildcard)
                 ]
             }
         ]);
-        fs::write(&file, serde_json::to_vec(&payload).unwrap()).expect("write file");
+        fs::write(&file, json::to_vec(&payload).unwrap()).expect("write file");
         let error =
             verify_host_patterns(&summaries, &[file]).expect_err("verification should fail");
         assert!(matches!(
@@ -2921,10 +2867,10 @@ mod tests {
     fn binding_template_emits_payload_and_headers() {
         let temp = tempdir().expect("tempdir");
         let manifest_path = temp.path().join("manifest.json");
-        let manifest = serde_json::json!({
+        let manifest = norito::json!({
             "root_cid": [1, 2, 3, 4],
         });
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect("write manifest");
+        fs::write(&manifest_path, json::to_vec(&manifest).unwrap()).expect("write manifest");
         let options = BindingTemplateOptions {
             manifest_path: manifest_path.clone(),
             alias: "docs.sora".to_string(),
@@ -2945,11 +2891,11 @@ mod tests {
             .as_object()
             .expect("payload should be JSON object");
         assert_eq!(
-            payload.get("alias").and_then(SerdeJsonValue::as_str),
+            payload.get("alias").and_then(Value::as_str),
             Some("docs.sora")
         );
         assert_eq!(
-            payload.get("hostname").and_then(SerdeJsonValue::as_str),
+            payload.get("hostname").and_then(Value::as_str),
             Some("docs.sora.link")
         );
         assert!(render.headers_template.contains("Sora-Name: docs.sora"));
@@ -2965,7 +2911,8 @@ mod tests {
         let manifest_path = temp.path().join("manifest.json");
         fs::write(
             &manifest_path,
-            serde_json::json!({ "root_cid": [0_u8, 1, 2, 3] }).to_string(),
+            json::to_string(&norito::json!({ "root_cid": [0_u8, 1, 2, 3] }))
+                .expect("encode manifest JSON"),
         )
         .expect("write manifest");
         let generated_at = OffsetDateTime::UNIX_EPOCH;
@@ -2990,16 +2937,33 @@ mod tests {
         let cid_suffix = encode_base32_lower(&[0, 1, 2, 3]);
         let expected_cid = format!("b{cid_suffix}");
         let timestamp = generated_at.format(&Rfc3339).expect("timestamp formatting");
-        assert_eq!(headers["Sora-Name"], "portal.sora");
-        assert_eq!(headers["Sora-Content-CID"], expected_cid);
-        assert_eq!(headers["Sora-Proof-Status"], "ok");
+        assert_eq!(headers["Sora-Name"].as_str(), Some("portal.sora"));
         assert_eq!(
-            headers["Sora-Route-Binding"],
-            format!("host={hostname};cid={expected_cid};generated_at={timestamp};label=preview")
+            headers["Sora-Content-CID"].as_str(),
+            Some(expected_cid.as_str())
         );
-        assert_eq!(headers["Content-Security-Policy"], DEFAULT_CSP_TEMPLATE);
-        assert_eq!(headers["Strict-Transport-Security"], DEFAULT_HSTS_TEMPLATE);
-        assert_eq!(headers["Permissions-Policy"], DEFAULT_PERMISSIONS_POLICY);
+        assert_eq!(headers["Sora-Proof-Status"].as_str(), Some("ok"));
+        assert_eq!(
+            headers["Sora-Route-Binding"].as_str(),
+            Some(
+                format!(
+                    "host={hostname};cid={expected_cid};generated_at={timestamp};label=preview"
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            headers["Content-Security-Policy"].as_str(),
+            Some(DEFAULT_CSP_TEMPLATE)
+        );
+        assert_eq!(
+            headers["Strict-Transport-Security"].as_str(),
+            Some(DEFAULT_HSTS_TEMPLATE)
+        );
+        assert_eq!(
+            headers["Permissions-Policy"].as_str(),
+            Some(DEFAULT_PERMISSIONS_POLICY)
+        );
         assert!(
             render
                 .headers_template
@@ -3034,7 +2998,7 @@ mod tests {
         let payload = build_gar_template(&options).expect("gar payload");
         let labels = payload
             .get("telemetry_labels")
-            .and_then(SerdeJsonValue::as_array)
+            .and_then(Value::as_array)
             .expect("labels array");
         let label_values: Vec<&str> = labels
             .iter()
@@ -3043,9 +3007,7 @@ mod tests {
         let digest_lower = manifest_digest.to_ascii_lowercase();
         assert_eq!(label_values, vec!["DG-3", "ops"], "labels trimmed/deduped");
         assert_eq!(
-            payload
-                .get("manifest_digest")
-                .and_then(SerdeJsonValue::as_str),
+            payload.get("manifest_digest").and_then(Value::as_str),
             Some(digest_lower.as_str()),
             "manifest digest should be normalised to lowercase"
         );
@@ -3073,7 +3035,7 @@ mod tests {
             key_pair.public_key(),
         )
         .expect("signing payload builds");
-        let signing_bytes = serde_json::to_vec(&payload).expect("serialize signing payload");
+        let signing_bytes = json::to_vec(&payload).expect("serialize signing payload");
         let signature = Signature::try_new(key_pair.private_key(), &signing_bytes)
             .expect("sign checked SoraDNS release fixture payload");
         assert_eq!(payload.builder_public_key_hex, hex_encode(expected_payload));
@@ -3085,10 +3047,10 @@ mod tests {
     fn binding_template_rejects_empty_alias() {
         let temp = tempdir().expect("tempdir");
         let manifest_path = temp.path().join("manifest.json");
-        let manifest = serde_json::json!({
+        let manifest = norito::json!({
             "root_cid": [1, 2, 3],
         });
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect("write manifest");
+        fs::write(&manifest_path, json::to_vec(&manifest).unwrap()).expect("write manifest");
         let options = BindingTemplateOptions {
             manifest_path,
             alias: " ".to_string(),
@@ -3113,10 +3075,10 @@ mod tests {
     fn binding_template_custom_headers_replace_defaults() {
         let temp = tempdir().expect("tempdir");
         let manifest_path = temp.path().join("manifest.json");
-        let manifest = serde_json::json!({
+        let manifest = norito::json!({
             "root_cid": [5, 6, 7, 8],
         });
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect("write manifest");
+        fs::write(&manifest_path, json::to_vec(&manifest).unwrap()).expect("write manifest");
         let options = BindingTemplateOptions {
             manifest_path,
             alias: "docs.sora".to_string(),
@@ -3136,19 +3098,17 @@ mod tests {
         assert_eq!(
             headers
                 .get("Content-Security-Policy")
-                .and_then(SerdeJsonValue::as_str),
+                .and_then(Value::as_str),
             Some("default-src 'self' sorafs://;")
         );
         assert_eq!(
-            headers
-                .get("Permissions-Policy")
-                .and_then(SerdeJsonValue::as_str),
+            headers.get("Permissions-Policy").and_then(Value::as_str),
             Some("geolocation=(self)")
         );
         assert_eq!(
             headers
                 .get("Strict-Transport-Security")
-                .and_then(SerdeJsonValue::as_str),
+                .and_then(Value::as_str),
             Some("max-age=123; preload")
         );
     }
@@ -3156,10 +3116,10 @@ mod tests {
     fn verify_gateway_binding_reports_canonical_label() {
         let temp = tempdir().expect("tempdir");
         let manifest_path = temp.path().join("manifest.json");
-        let manifest = serde_json::json!({
+        let manifest = norito::json!({
             "root_cid": [9, 10, 11, 12],
         });
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect("write manifest");
+        fs::write(&manifest_path, json::to_vec(&manifest).unwrap()).expect("write manifest");
         let options = BindingTemplateOptions {
             manifest_path,
             alias: "docs.sora".to_string(),
@@ -3176,8 +3136,7 @@ mod tests {
         };
         let render = build_binding_template(&options).expect("template");
         let binding_path = temp.path().join("binding.json");
-        fs::write(&binding_path, serde_json::to_vec(&render.payload).unwrap())
-            .expect("write binding");
+        fs::write(&binding_path, json::to_vec(&render.payload).unwrap()).expect("write binding");
         let summary = verify_gateway_binding(&binding_path, &GatewayBindingExpectations::default())
             .expect("binding verification succeeds");
         let bindings = derive_gateway_hosts("docs.sora").expect("bindings derived");
@@ -3188,10 +3147,10 @@ mod tests {
     fn binding_template_rejects_disabled_header_override() {
         let temp = tempdir().expect("tempdir");
         let manifest_path = temp.path().join("manifest.json");
-        let manifest = serde_json::json!({
+        let manifest = norito::json!({
             "root_cid": [9, 10, 11],
         });
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect("write manifest");
+        fs::write(&manifest_path, json::to_vec(&manifest).unwrap()).expect("write manifest");
         let options = BindingTemplateOptions {
             manifest_path,
             alias: "docs.sora".to_string(),
@@ -3234,44 +3193,48 @@ mod tests {
         let obj = template
             .as_object()
             .expect("gar template payload should be an object");
+        assert_eq!(obj.get("name").and_then(Value::as_str), Some("docs.sora"));
         assert_eq!(
-            obj.get("name").and_then(SerdeJsonValue::as_str),
-            Some("docs.sora")
-        );
-        assert_eq!(
-            obj.get("manifest_cid").and_then(SerdeJsonValue::as_str),
+            obj.get("manifest_cid").and_then(Value::as_str),
             Some("bafybeigdyrzt")
         );
         assert_eq!(
-            obj.get("manifest_digest").and_then(SerdeJsonValue::as_str),
+            obj.get("manifest_digest").and_then(Value::as_str),
             Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
         );
         let hosts = obj
             .get("host_patterns")
-            .and_then(SerdeJsonValue::as_array)
+            .and_then(Value::as_array)
             .expect("host patterns");
         assert_eq!(hosts.len(), 3);
-        assert!(hosts.iter().any(|value| value == "docs.sora.gw.sora.name"));
-        assert!(hosts.iter().any(|value| value == "*.gw.sora.id"));
+        assert!(
+            hosts
+                .iter()
+                .any(|value| value.as_str() == Some("docs.sora.gw.sora.name"))
+        );
+        assert!(
+            hosts
+                .iter()
+                .any(|value| value.as_str() == Some("*.gw.sora.id"))
+        );
         assert_eq!(
-            obj.get("csp_template").and_then(SerdeJsonValue::as_str),
+            obj.get("csp_template").and_then(Value::as_str),
             Some(DEFAULT_CSP_TEMPLATE)
         );
         assert_eq!(
-            obj.get("hsts_template").and_then(SerdeJsonValue::as_str),
+            obj.get("hsts_template").and_then(Value::as_str),
             Some(DEFAULT_HSTS_TEMPLATE)
         );
         assert_eq!(
-            obj.get("permissions_template")
-                .and_then(SerdeJsonValue::as_str),
+            obj.get("permissions_template").and_then(Value::as_str),
             Some(DEFAULT_PERMISSIONS_POLICY)
         );
         let labels = obj
             .get("telemetry_labels")
-            .and_then(SerdeJsonValue::as_array)
+            .and_then(Value::as_array)
             .expect("labels");
         assert_eq!(labels.len(), 2);
-        assert!(labels.iter().any(|label| label == "dg-3"));
+        assert!(labels.iter().any(|label| label.as_str() == Some("dg-3")));
     }
     #[test]
     fn gar_template_respects_overrides_and_patterns() {
@@ -3305,21 +3268,20 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(actual_patterns, expected_patterns, "host patterns mismatch");
         assert_eq!(
-            obj.get("csp_template").and_then(SerdeJsonValue::as_str),
+            obj.get("csp_template").and_then(Value::as_str),
             Some("default-src 'self' sorafs://")
         );
         assert_eq!(
-            obj.get("hsts_template").and_then(SerdeJsonValue::as_str),
+            obj.get("hsts_template").and_then(Value::as_str),
             Some("max-age=42; preload")
         );
         assert_eq!(
-            obj.get("permissions_template")
-                .and_then(SerdeJsonValue::as_str),
+            obj.get("permissions_template").and_then(Value::as_str),
             Some("microphone=()")
         );
         let labels = obj
             .get("telemetry_labels")
-            .and_then(SerdeJsonValue::as_array)
+            .and_then(Value::as_array)
             .expect("labels");
         let label_values: Vec<&str> = labels
             .iter()
@@ -3328,7 +3290,7 @@ mod tests {
         assert_eq!(label_values, vec!["alpha", "beta"]);
         let digest_lower = "ff".repeat(32);
         assert_eq!(
-            obj.get("manifest_digest").and_then(SerdeJsonValue::as_str),
+            obj.get("manifest_digest").and_then(Value::as_str),
             Some(digest_lower.as_str())
         );
     }
@@ -3357,11 +3319,11 @@ mod tests {
         let host_patterns = bindings
             .host_patterns()
             .iter()
-            .map(|pattern| serde_json::Value::String((*pattern).to_string()))
+            .map(|pattern| json::Value::String((*pattern).to_string()))
             .collect::<Vec<_>>();
-        let payload = serde_json::json!({
+        let payload = norito::json!({
             "version": 2,
-            "name": bindings.normalized_name(),
+            "name": (bindings.normalized_name()),
             "manifest_cid": manifest_cid,
             "manifest_digest": manifest_digest,
             "host_patterns": host_patterns,
@@ -3371,13 +3333,13 @@ mod tests {
             "valid_until_epoch": 1_767_307_200u64,
             "license_sets": [],
             "moderation_directives": [],
-            "metrics_policy": serde_json::Value::Null,
+            "metrics_policy": (json::Value::Null),
             "telemetry_labels": ["dg-3", "docs-portal"],
-            "rpt_digest": serde_json::Value::Null,
+            "rpt_digest": (json::Value::Null),
         });
         let temp = tempdir().expect("tempdir");
         let gar_path = temp.path().join("gar.json");
-        fs::write(&gar_path, serde_json::to_vec_pretty(&payload).unwrap()).expect("write gar");
+        fs::write(&gar_path, json::to_vec_pretty(&payload).unwrap()).expect("write gar");
         let summary = verify_gar_payload(
             &gar_path,
             &GarVerifyOptions {
@@ -3410,13 +3372,13 @@ mod tests {
     #[test]
     fn verify_gar_payload_rejects_missing_host_pattern() {
         let bindings = derive_gateway_hosts("docs.sora").expect("bindings derived for docs.sora");
-        let host_patterns = serde_json::json!([
-            bindings.canonical_host(),
-            GatewayHostBindings::canonical_wildcard()
+        let host_patterns = norito::json!([
+            (bindings.canonical_host()),
+            (GatewayHostBindings::canonical_wildcard())
         ]);
-        let payload = serde_json::json!({
+        let payload = norito::json!({
             "version": 2,
-            "name": bindings.normalized_name(),
+            "name": (bindings.normalized_name()),
             "manifest_cid": "bafybeigdyrzt2vx7demoexamplecid",
             "host_patterns": host_patterns,
             "csp_template": DEFAULT_CSP_TEMPLATE,
@@ -3426,7 +3388,7 @@ mod tests {
         });
         let temp = tempdir().expect("tempdir");
         let gar_path = temp.path().join("gar.json");
-        fs::write(&gar_path, serde_json::to_vec_pretty(&payload).unwrap()).expect("write gar");
+        fs::write(&gar_path, json::to_vec_pretty(&payload).unwrap()).expect("write gar");
         let error = verify_gar_payload(
             &gar_path,
             &GarVerifyOptions {
@@ -3441,11 +3403,11 @@ mod tests {
     #[test]
     fn verify_gar_payload_detects_manifest_mismatch() {
         let bindings = derive_gateway_hosts("docs.sora").expect("bindings derived for docs.sora");
-        let payload = serde_json::json!({
+        let payload = norito::json!({
             "version": 2,
-            "name": bindings.normalized_name(),
+            "name": (bindings.normalized_name()),
             "manifest_cid": "bafybeigdyrzt2vx7demoexamplecid",
-            "host_patterns": bindings.host_patterns(),
+            "host_patterns": (bindings.host_patterns().to_vec()),
             "csp_template": DEFAULT_CSP_TEMPLATE,
             "hsts_template": DEFAULT_HSTS_TEMPLATE,
             "valid_from_epoch": 1_735_771_200u64,
@@ -3453,7 +3415,7 @@ mod tests {
         });
         let temp = tempdir().expect("tempdir");
         let gar_path = temp.path().join("gar.json");
-        fs::write(&gar_path, serde_json::to_vec_pretty(&payload).unwrap()).expect("write gar");
+        fs::write(&gar_path, json::to_vec_pretty(&payload).unwrap()).expect("write gar");
         let error = verify_gar_payload(
             &gar_path,
             &GarVerifyOptions {
@@ -3475,33 +3437,33 @@ mod tests {
         let expected_cid = format!("b{}", BASE32_NOPAD.encode(&manifest_root).to_lowercase());
         fs::write(
             &manifest_path,
-            serde_json::json!({ "root_cid": manifest_root }).to_string(),
+            json::to_string(&norito::json!({ "root_cid": manifest_root }))
+                .expect("encode manifest JSON"),
         )
         .expect("write manifest");
-        let proof_payload = serde_json::json!({
+        let proof_payload = norito::json!({
             "alias": "docs.sora",
             "manifest": expected_cid
         });
-        let proof_header = BASE64_STANDARD.encode(serde_json::to_vec(&proof_payload).unwrap());
-        let payload = serde_json::json!({
+        let proof_header = BASE64_STANDARD.encode(json::to_vec(&proof_payload).unwrap());
+        let payload = norito::json!({
             "alias": "docs.sora",
             "hostname": "docs.sora.link",
-            "contentCid": expected_cid,
-            "proofStatus": "ok",
-            "generatedAt": "2026-01-02T03:04:05Z",
+            "content_cid": expected_cid,
+            "proof_status": "ok",
+            "generated_at": "2026-01-02T03:04:05Z",
             "headers": {
                 "Sora-Name": "docs.sora",
             "Sora-Content-CID": expected_cid,
             "Sora-Proof": proof_header,
             "Sora-Proof-Status": "ok",
-            "Sora-Route-Binding": format!("host=docs.sora.link;cid={expected_cid};generated_at=2026-01-02T03:04:05Z"),
+            "Sora-Route-Binding": (format!("host=docs.sora.link;cid={expected_cid};generated_at=2026-01-02T03:04:05Z")),
             "Content-Security-Policy": DEFAULT_CSP_TEMPLATE,
             "Permissions-Policy": DEFAULT_PERMISSIONS_POLICY,
             "Strict-Transport-Security": DEFAULT_HSTS_TEMPLATE,
         }
         });
-        fs::write(&binding_path, serde_json::to_vec_pretty(&payload).unwrap())
-            .expect("write binding");
+        fs::write(&binding_path, json::to_vec_pretty(&payload).unwrap()).expect("write binding");
         let summary = verify_gateway_binding(
             &binding_path,
             &GatewayBindingExpectations {
@@ -3522,17 +3484,17 @@ mod tests {
     fn gateway_binding_verification_rejects_mismatched_proof() {
         let temp = tempdir().expect("tempdir");
         let binding_path = temp.path().join("binding.json");
-        let proof_payload = serde_json::json!({
+        let proof_payload = norito::json!({
             "alias": "docs.sora",
             "manifest": "bafwrong"
         });
-        let proof_header = BASE64_STANDARD.encode(serde_json::to_vec(&proof_payload).unwrap());
-        let payload = serde_json::json!({
+        let proof_header = BASE64_STANDARD.encode(json::to_vec(&proof_payload).unwrap());
+        let payload = norito::json!({
             "alias": "docs.sora",
             "hostname": "docs.sora.link",
-            "contentCid": "bafgatewaycid",
-            "proofStatus": "ok",
-            "generatedAt": "2026-01-02T03:04:05Z",
+            "content_cid": "bafgatewaycid",
+            "proof_status": "ok",
+            "generated_at": "2026-01-02T03:04:05Z",
             "headers": {
                 "Sora-Name": "docs.sora",
             "Sora-Content-CID": "bafgatewaycid",
@@ -3544,8 +3506,7 @@ mod tests {
             "Strict-Transport-Security": DEFAULT_HSTS_TEMPLATE,
         }
         });
-        fs::write(&binding_path, serde_json::to_vec_pretty(&payload).unwrap())
-            .expect("write binding");
+        fs::write(&binding_path, json::to_vec_pretty(&payload).unwrap()).expect("write binding");
         let err = verify_gateway_binding(&binding_path, &GatewayBindingExpectations::default())
             .expect_err("verification should fail");
         matches!(err, GatewayBindingVerifyError::ProofManifestMismatch { .. });
@@ -3558,35 +3519,35 @@ mod tests {
         let manifest_root = vec![0x10, 0x20, 0x30];
         fs::write(
             &manifest_path,
-            serde_json::json!({ "root_cid": manifest_root }).to_string(),
+            json::to_string(&norito::json!({ "root_cid": manifest_root }))
+                .expect("encode manifest JSON"),
         )
         .expect("write manifest");
         let binding_root = vec![0xAA, 0xBB, 0xCC];
         let binding_cid = format!("b{}", BASE32_NOPAD.encode(&binding_root).to_lowercase());
-        let proof_payload = serde_json::json!({
+        let proof_payload = norito::json!({
             "alias": "docs.sora",
             "manifest": binding_cid
         });
-        let proof_header = BASE64_STANDARD.encode(serde_json::to_vec(&proof_payload).unwrap());
-        let payload = serde_json::json!({
+        let proof_header = BASE64_STANDARD.encode(json::to_vec(&proof_payload).unwrap());
+        let payload = norito::json!({
             "alias": "docs.sora",
             "hostname": "docs.sora.link",
-            "contentCid": binding_cid,
-            "proofStatus": "ok",
-            "generatedAt": "2026-01-02T03:04:05Z",
+            "content_cid": binding_cid,
+            "proof_status": "ok",
+            "generated_at": "2026-01-02T03:04:05Z",
             "headers": {
                 "Sora-Name": "docs.sora",
             "Sora-Content-CID": binding_cid,
             "Sora-Proof": proof_header,
             "Sora-Proof-Status": "ok",
-            "Sora-Route-Binding": format!("host=docs.sora.link;cid={binding_cid};generated_at=2026-01-02T03:04:05Z"),
+            "Sora-Route-Binding": (format!("host=docs.sora.link;cid={binding_cid};generated_at=2026-01-02T03:04:05Z")),
             "Content-Security-Policy": DEFAULT_CSP_TEMPLATE,
             "Permissions-Policy": DEFAULT_PERMISSIONS_POLICY,
             "Strict-Transport-Security": DEFAULT_HSTS_TEMPLATE,
         }
         });
-        fs::write(&binding_path, serde_json::to_vec_pretty(&payload).unwrap())
-            .expect("write binding");
+        fs::write(&binding_path, json::to_vec_pretty(&payload).unwrap()).expect("write binding");
         let err = verify_gateway_binding(
             &binding_path,
             &GatewayBindingExpectations {
@@ -3604,16 +3565,16 @@ mod tests {
     fn gateway_binding_verification_requires_permissions_policy() {
         let temp = tempdir().expect("tempdir");
         let binding_path = temp.path().join("binding.json");
-        let payload = serde_json::json!({
+        let payload = norito::json!({
             "alias": "docs.sora",
             "hostname": "docs.sora.link",
-            "contentCid": "bafgatewaycid",
-            "proofStatus": "ok",
-            "generatedAt": "2026-01-02T03:04:05Z",
+            "content_cid": "bafgatewaycid",
+            "proof_status": "ok",
+            "generated_at": "2026-01-02T03:04:05Z",
             "headers": {
                 "Sora-Name": "docs.sora",
                 "Sora-Content-CID": "bafgatewaycid",
-                "Sora-Proof": BASE64_STANDARD.encode(br#"{"alias":"docs.sora","manifest":"bafgatewaycid"}"#),
+                "Sora-Proof": (BASE64_STANDARD.encode(br#"{"alias":"docs.sora","manifest":"bafgatewaycid"}"#)),
                 "Sora-Proof-Status": "ok",
                 "Sora-Route-Binding": "host=docs.sora.link;cid=bafgatewaycid;generated_at=2026-01-02T03:04:05Z",
                 "Content-Security-Policy": DEFAULT_CSP_TEMPLATE,
@@ -3622,7 +3583,7 @@ mod tests {
         });
         fs::write(
             &binding_path,
-            serde_json::to_vec_pretty(&payload).expect("serialize binding"),
+            json::to_vec_pretty(&payload).expect("serialize binding"),
         )
         .expect("write binding");
         let err = verify_gateway_binding(&binding_path, &GatewayBindingExpectations::default())

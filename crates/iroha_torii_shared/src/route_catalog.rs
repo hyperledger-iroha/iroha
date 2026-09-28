@@ -1974,12 +1974,6 @@ pub mod diagnostic {
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "OpenAPI document discovery convention",
     });
-    /// Schema route registered by `add_schema_routes`.
-    pub const SCHEMA_ROUTES: &[RouteDescriptor] = &[SCHEMA];
-    /// `OpenAPI` routes registered by `add_openapi_routes`.
-    pub const OPENAPI_ROUTES: &[RouteDescriptor] = &[OPENAPI_JSON];
-    /// Profiling route registered by `add_profiling_routes`.
-    pub const PROFILE_ROUTES: &[RouteDescriptor] = &[PROFILE];
 
     /// Diagnostic and self-description routes registered by the builder.
     pub const ROUTES: &[RouteDescriptor] = &[

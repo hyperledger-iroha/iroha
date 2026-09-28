@@ -108,6 +108,7 @@ impl DaPinStore {
     ) -> Option<&DaPinIntentWithLocation> {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
     }
+    #[cfg(test)]
     /// Return whether a pin intent collides with any committed pin intent identity.
     ///
     /// Aliases are intentionally excluded: they are mutable shortcuts and may
@@ -119,6 +120,7 @@ impl DaPinStore {
             || self.get_by_manifest(&intent.manifest_hash).is_some()
             || self.get_by_ticket(&intent.storage_ticket).is_some()
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return all intents ordered by `(block_height, index_in_bundle)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &DaPinIntentWithLocation> {
         self.by_location.values()

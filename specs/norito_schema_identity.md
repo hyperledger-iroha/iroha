@@ -17,11 +17,11 @@ including the captured revocation preimage. These captures are not a full
 workspace or release qualification. See the
 [current cutover evidence](#active-identity-cutover-2026-09-09).
 
-The concrete model fixtures now preserve seven owned records and two
-encoding-only projections: Action, DataEvent, the three execution contexts,
-block subscriptions/messages, the block-send adapter and reputation event-ID
-material. Their 52 root/container frames and three adapter projections are
-documented in
+The concrete model fixtures now preserve six owned records and two
+encoding-only projections: Action, DataEvent, the smart-contract and executor
+contexts, block subscriptions/messages, the block-send adapter and reputation
+event-ID material. Their 48 root/container frames and three adapter projections
+are documented in
 [`model_concrete_identity_frames.md`](../crates/iroha_data_model/tests/fixtures/model_concrete_identity_frames.md).
 The borrowed adapters retain their owning decoders and exact projected bytes.
 
@@ -869,8 +869,7 @@ review evidence bound to the digest, not a numerical completion target.
 
 The source queue is not a coverage proof. The syntax inventory follows
 source declarations, local items, aliases and cfg attributes; compiler checks
-must cover generated version enums (`iroha_version_derive/src/lib.rs:313`),
-macro families and every supported target/feature selection.
+must cover macro families and every supported target/feature selection.
 
 The subsequent syntax scan contains 4,827 physical files, 5,551 candidate
 codec/identity declarations and 452 manual implementation sites. Of the
@@ -1000,8 +999,7 @@ helper is not a compiler capture or coverage proof.
 
 | Generator | Required declaration input |
 | --- | --- |
-| `model` / `model_single` | Preserve explicit attributes through ordinary and FFI expansions; capture actual private `model` names. The 12 Nexus `model_single!` records have their own captured declarations and complete populated frame/carrier fixtures. Remaining callers and features still require closure. |
-| `declare_versioned` | Explicit identity for the generated enum; version aliases share their underlying identity and acquire no duplicate implementation. |
+| `model` / `model_single` | Preserve explicit attributes through the expansion; capture actual private `model` names. The 12 Nexus `model_single!` records have their own captured declarations and complete populated frame/carrier fixtures. Remaining callers and features still require closure. |
 | `EventSet` | All 25 production `*Set` types and the test caller supply a required literal child identity. The generator derives that identity once, independently of the parent, and shares strict metadata parsing with `RegistrableBuilder`. |
 | `RegistrableBuilder` | Each of the two production callers supplies a required literal identity for its generated `New*` child. The generator has no fallback and rejects missing, duplicate, unknown, non-literal and invalid metadata. Eight generator tests, three compile-fail cases and 23 asset/NFT owner tests pass. |
 | `data_event!` | All 12 generated parent enums and their set children have explicit captured identities; the template emits one parent identity derive. |
@@ -1046,9 +1044,9 @@ pre-declaration root/`Vec`/`Option` frames and 75 JSON values; the 12 generated
 parent enums preserve captured nominal names and both directional hashes. The
 [fixture record](../crates/iroha_data_model_derive/tests/fixtures/README.md)
 records the capture digest and scope. Full-suite validation also removed the
-utility parser's duplicate-attribute tolerance and replaced the stale numerical
-direct-FFI check with the exact reviewed declaration inventory. These checks do
-not qualify FFI expansion, native execution or other feature selections.
+utility parser's duplicate-attribute tolerance. The direct-FFI declaration
+inventory was later removed with the retired `iroha_ffi` layer. These checks do
+not qualify native execution or other feature selections.
 
 The 17 Musubi generated types preserve 196 pre-declaration frames across 49
 values, including text bounds, full-byte digests and populated pages. Root,
@@ -1318,21 +1316,19 @@ qualification remain separate requirements.
 ## Version diagnostic ownership
 
 The lower `iroha_version` dependency declares its two actual public frame owners:
-RawVersioned and UnsupportedVersion. Their 26 captured root/Option/Vec frames
+RawVersioned and UnsupportedVersion. Their 20 captured root/Option/Vec frames
 and complete rejection controls are documented in the
 [version fixture contract](../crates/iroha_version/tests/fixtures/README.md).
 RawVersioned's slice adapter now reconstructs the canonical complete enum;
 its former one-byte parser rejected the derived encoder's u32-tagged payload.
-Explicit 0/1 tags retain the captured layout. Typed field/depth/allocation errors,
+RawVersioned carries only Norito bytes under the explicit tag 1; the retired
+JSON variant is gone. Typed field/depth/allocation errors,
 exact consumption and caller layout context survive reconstruction.
 
-The crate explicitly selects Norito's existing base-codec surface, and its JSON
-error conversion follows the existing JSON feature. Both default and minimal
-selections compile independently. Default version/derive tests pass 16 cases;
-minimal version tests pass 11, including the same 26 immutable frames. Strict
-all-target Clippy passes for both selections, with all final runs bound to the
-same 19,343 inputs. No ABI version, accepted legacy layout or alternate frame
-identity is introduced.
+The crate explicitly selects Norito's existing base-codec surface and has no
+optional features; the unused derive macros and JSON versioning helpers were
+removed. No ABI version, accepted legacy layout or alternate frame identity is
+introduced.
 
 The reviewed dependency fingerprint now includes this explicit base-codec
 selection and the earlier public model-test target registration. All five

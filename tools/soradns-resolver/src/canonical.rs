@@ -8,12 +8,6 @@ pub fn canonicalize_norito_bytes(value: &NoritoJsonValue) -> Result<Vec<u8>, Jso
     bytes.push(b'\n');
     Ok(bytes)
 }
-/// Canonicalise arbitrary JSON bytes and return both the canonical encoding and parsed value.
-pub fn canonicalize_json_bytes(bytes: &[u8]) -> Result<(Vec<u8>, NoritoJsonValue), JsonError> {
-    let value: NoritoJsonValue = json::from_slice(bytes)?;
-    let canonical_bytes = canonicalize_norito_bytes(&value)?;
-    Ok((canonical_bytes, value))
-}
 /// Canonicalise untrusted JSON inside explicit lexical, decode, and output-byte ceilings.
 pub fn canonicalize_json_bytes_bounded(
     bytes: &[u8],

@@ -9,9 +9,11 @@ use crate::{
     IrohaNetwork, NetworkMessage,
     secure_file_metadata::{self, SecureMetadata},
 };
+#[cfg(test)]
+use data_events::StreamingPrivacyRelay;
 use data_events::{
-    DomainEvent, StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
-    StreamingTicketReady, StreamingTicketRevoked,
+    DomainEvent, StreamingPrivacyRoute, StreamingRouteBinding, StreamingTicketReady,
+    StreamingTicketRevoked,
 };
 use iroha_config::parameters::{actual, defaults as config_defaults};
 use iroha_crypto::{
@@ -40,6 +42,8 @@ use iroha_model_base::peer::PeerId;
 #[cfg(feature = "quic")]
 use iroha_p2p::streaming::{CapabilityNegotiation, StreamingConnection};
 use iroha_p2p::{Post, Priority};
+#[cfg(test)]
+use norito::streaming::PrivacyCapabilities;
 #[cfg(feature = "quic")]
 use norito::streaming::{CapabilityAck, CapabilityReport, TransportCapabilities};
 use norito::{
@@ -49,8 +53,8 @@ use norito::{
         BUNDLED_RANS_BUILD_AVAILABLE, BUNDLED_RANS_GPU_BUILD_AVAILABLE, BundleAnsTables,
         BundleTableError, CapabilityFlags, CapabilityRole, ContentKeyUpdate, ControlFrame,
         EncryptionSuite, EntropyMode, FeedbackHintFrame, Hash, KeyUpdate, ManifestAnnounceFrame,
-        ManifestV1, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, PrivacyRouteUpdate,
-        ReceiverReport, SyncDiagnostics, TransportCapabilityResolution, crypto::TransportKeys,
+        ManifestV1, PrivacyRelay, PrivacyRoute, PrivacyRouteUpdate, ReceiverReport,
+        SyncDiagnostics, TransportCapabilityResolution, crypto::TransportKeys,
         default_bundle_tables, load_bundle_tables_from_toml,
     },
 };
@@ -98,14 +102,6 @@ pub fn set_global_handle(handle: StreamingHandle) {
         .write()
         .expect("global streaming handle lock poisoned");
     *guard = Some(handle);
-}
-/// Clear the process-wide streaming handle. Mainly used by tests to avoid
-/// leaking state between scenarios.
-pub fn clear_global_handle() {
-    let mut guard = global_handle_storage()
-        .write()
-        .expect("global streaming handle lock poisoned");
-    *guard = None;
 }
 /// Retrieve the registered streaming handle (if any).
 #[must_use]
@@ -172,11 +168,13 @@ impl Drop for PreparedPrivacyRouteUpdate {
         std::hint::black_box(self.update.exit_token.as_mut_slice());
     }
 }
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct PendingPrivacyRouteUpdate {
     prepared: PreparedPrivacyRouteUpdate,
     expiry: u64,
 }
+#[cfg(test)]
 fn mark_privacy_route_provisioned_in_state(
     state: &StreamingState,
     stream_id: &Hash,
@@ -201,6 +199,7 @@ fn mark_privacy_route_provisioned_in_state(
     route_state.acked = false;
     Ok(())
 }
+#[cfg(test)]
 fn handle_provisioned_state_update(
     result: Result<(), StreamingProcessError>,
     stream_id: Hash,
@@ -936,10 +935,6 @@ impl StreamingHandle {
         self.capabilities = self.normalize_viewer_feature_bits(capabilities);
         self
     }
-    /// Update the advertised capability flags in place.
-    pub fn set_capabilities(&mut self, capabilities: CapabilityFlags) {
-        self.capabilities = self.normalize_viewer_feature_bits(capabilities);
-    }
     /// Hash of the currently configured bundle tables.
     #[must_use]
     pub fn bundle_tables_checksum(&self) -> Hash {
@@ -1073,12 +1068,14 @@ impl StreamingHandle {
     pub fn capabilities(&self) -> CapabilityFlags {
         self.capabilities
     }
+    #[cfg(test)]
     /// Attach a snapshot path so session state is persisted to disk automatically.
     #[must_use]
     pub fn with_snapshot_path(mut self, path: PathBuf) -> Self {
         self.snapshot_path = Some(path);
         self
     }
+    #[cfg(test)]
     /// Configure the encryption key used when persisting or loading snapshots.
     ///
     /// # Errors
@@ -1177,6 +1174,7 @@ impl StreamingHandle {
         self.try_persist_snapshots();
         Ok(frame)
     }
+    #[cfg(test)]
     /// Build a signed `KeyUpdate` frame using the configured key material.
     ///
     /// # Errors
@@ -1259,6 +1257,7 @@ impl StreamingHandle {
         self.try_persist_snapshots();
         Ok(())
     }
+    #[cfg(test)]
     fn convert_privacy_relay(relay: &StreamingPrivacyRelay) -> PrivacyRelay {
         PrivacyRelay {
             relay_id: relay.relay_id,
@@ -1406,6 +1405,7 @@ impl StreamingHandle {
         nullifiers.remove(&nullifier);
         Ok(())
     }
+    #[cfg(test)]
     /// Prepare `PrivacyRouteUpdate` frames to provision exit relays for the given stream.
     ///
     /// # Errors
@@ -1441,6 +1441,7 @@ impl StreamingHandle {
         }
         Ok(updates)
     }
+    #[cfg(test)]
     fn pending_privacy_route_updates(
         &self,
         stream_id: &Hash,
@@ -1514,6 +1515,7 @@ impl StreamingHandle {
         }
         Ok(pending_updates)
     }
+    #[cfg(test)]
     fn mark_privacy_route_provisioned(
         &self,
         stream_id: &Hash,

@@ -87,8 +87,8 @@ sm-ffi-openssl = [
 beep = ["ivm/beep"]
 ## Enable deep DAG recovery diagnostics at startup.
 ## Recomputes per-block DAG fingerprints and compares with persisted sidecars.
-## Adds optional deps and is included in the portable shipping daemon.
-dag-recovery-verify = ["dep:nonzero_ext"]
+## Included in the portable shipping daemon.
+dag-recovery-verify = []
 # Support lightweight telemetry, including diagnostics
 telemetry = [
     "iroha_telemetry",
@@ -155,12 +155,10 @@ iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true, optional = true }
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
-iroha_sccp_rpc = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false }
 iroha_torii = { workspace = true, default-features = false }
 iroha_torii_shared = { workspace = true }
 iroha_genesis = { workspace = true }
-iroha_version = { workspace = true }
 ivm = { workspace = true }
 iroha_p2p = { workspace = true }
 mv = { workspace = true }
@@ -170,12 +168,11 @@ sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_node = { path = "../sorafs_node" }
 
-# Optional deps for recovery diagnostics (features: dag-recovery-verify, zk-stark)
+# Deps used by recovery diagnostics (dag-recovery-verify) and proof helpers
 base64 = { workspace = true, features = ["alloc"] }
 sha2 = { version = "0.10.9", default-features = false }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 hex = { workspace = true }
-nonzero_ext = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env", "string"] }
 eyre = { workspace = true }
@@ -188,7 +185,6 @@ norito = { workspace = true, default-features = false }
 iroha_i18n = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 rand = { workspace = true }
-x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets", "zeroize"] }
 blake3 = { workspace = true }
 
 [dev-dependencies]
@@ -197,7 +193,6 @@ iroha_core = { workspace = true, default-features = false, features = ["runtime"
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 serial_test = "3.5.0"
 tempfile = { workspace = true }
-path-absolutize = { workspace = true }
 assertables = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }

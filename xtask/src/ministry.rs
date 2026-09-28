@@ -8,8 +8,6 @@ use norito::{
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rand_distr::{Distribution, Normal};
-use serde::{Deserialize, Serialize};
-use serde_json::Value as SerdeJsonValue;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     error::Error,
@@ -90,29 +88,29 @@ struct QuarterIngestSnapshot {
     review_panel_summary: Option<ReviewPanelSummaryV1>,
     source_checksums: BTreeMap<String, String>,
 }
-#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
+#[derive(Debug, Default, JsonSerialize, JsonDeserialize, Clone)]
 struct RedTeamScenario {
     drill_id: String,
-    #[serde(default)]
+    #[norito(default)]
     date_window: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     scenario_class: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     operators: Vec<String>,
-    #[serde(default)]
+    #[norito(default)]
     dashboards_sha: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     evidence_path: Option<String>,
-    #[serde(default)]
+    #[norito(default)]
     sorafs_cid: Option<String>,
 }
-#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
+#[derive(Debug, Default, JsonSerialize, JsonDeserialize, Clone)]
 struct AiMetricSummary {
     total_samples: u64,
     false_positives: u64,
     false_negatives: u64,
 }
-#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
+#[derive(Debug, Default, JsonSerialize, JsonDeserialize, Clone)]
 struct AppealsSummary {
     total: u64,
     resolved: u64,
@@ -120,18 +118,18 @@ struct AppealsSummary {
     sla_breaches: u64,
     avg_resolution_hours: f64,
 }
-#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
+#[derive(Debug, Default, JsonSerialize, JsonDeserialize, Clone)]
 struct DenylistSummary {
     additions: u64,
     removals: u64,
     emergency_actions: u64,
 }
-#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
+#[derive(Debug, Default, JsonSerialize, JsonDeserialize, Clone)]
 struct TreasurySummary {
     total_deposits_xor: i64,
     total_payouts_xor: i64,
 }
-#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
+#[derive(Debug, Default, JsonSerialize, JsonDeserialize, Clone)]
 struct VolunteerSummary {
     total_briefs: u64,
     languages: BTreeMap<String, u64>,
@@ -140,7 +138,7 @@ struct VolunteerSummary {
     disclosures_missing: u64,
     off_topic_rejections: u64,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct QuarterDashboard {
     quarter: String,
     generated_at: String,
@@ -149,31 +147,31 @@ struct QuarterDashboard {
     denylist: DenylistDashboard,
     treasury: TreasuryDashboard,
     volunteer: Option<VolunteerSummary>,
-    #[serde(default)]
+    #[norito(default)]
     red_team: Vec<RedTeamScenario>,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct AiAccuracyRow {
     total_samples: u64,
     false_positive_rate: f64,
     false_negative_rate: f64,
     accuracy: f64,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct AppealDashboard {
     total: u64,
     resolved: u64,
     avg_resolution_hours: f64,
     sla_breach_rate: f64,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct DenylistDashboard {
     additions: u64,
     removals: u64,
     emergency_actions: u64,
     net_delta: i64,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct TreasuryDashboard {
     total_deposits_xor: String,
     total_payouts_xor: String,
@@ -188,7 +186,7 @@ struct TransparencyManifest {
     metrics_checksum: String,
     note: Option<String>,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SanitizedMetrics {
     quarter: String,
     generated_at: String,
@@ -198,10 +196,10 @@ struct SanitizedMetrics {
     treasury: TreasurySummary,
     volunteer: Option<SanitizedVolunteer>,
     ai_policies: BTreeMap<String, SanitizedPolicy>,
-    #[serde(default)]
+    #[norito(default)]
     red_team: Vec<RedTeamScenario>,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SanitizerMetadata {
     epsilon_counts: f64,
     epsilon_accuracy: f64,
@@ -210,7 +208,7 @@ struct SanitizerMetadata {
     min_accuracy_samples: u64,
     seed_commitment: String,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SanitizedAppeals {
     total: u64,
     resolved: u64,
@@ -218,14 +216,14 @@ struct SanitizedAppeals {
     sla_breaches: u64,
     avg_resolution_hours: f64,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SanitizedDenylist {
     additions: u64,
     removals: u64,
     emergency_actions: u64,
     net_delta: i64,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SanitizedVolunteer {
     total_briefs: u64,
     languages: BTreeMap<String, u64>,
@@ -234,7 +232,7 @@ struct SanitizedVolunteer {
     disclosures_missing: u64,
     off_topic_rejections: u64,
 }
-#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SanitizedPolicy {
     total_samples: u64,
     false_positive_rate: f64,
@@ -599,8 +597,8 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
 }
 fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
     let raw = fs::read(&options.action_path)?;
-    let json_value: SerdeJsonValue = serde_json::from_slice(&raw)?;
-    let payload: TransparencyReleaseActionPayload = serde_json::from_value(json_value.clone())?;
+    let json_value: Value = json::from_slice(&raw)?;
+    let payload: TransparencyReleaseActionPayload = json::from_value(json_value.clone())?;
     if payload.action != "TransparencyReleaseV1" {
         return Err(format!(
             "unsupported action `{}` in {} (expected TransparencyReleaseV1)",
@@ -656,7 +654,7 @@ fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
     let base_name = format!("{}_{}", quarter_slug, generated_at_ms);
     let norito_path = quarter_dir.join(format!("{base_name}.to"));
     fs::write(&norito_path, &encoded)?;
-    let mut json_text = serde_json::to_string_pretty(&json_value)?;
+    let mut json_text = json::to_string_pretty(&json_value)?;
     json_text.push('\n');
     let json_path = quarter_dir.join(format!("{base_name}.json"));
     fs::write(&json_path, json_text)?;
@@ -1187,7 +1185,7 @@ fn is_allowed(value: &str, allowed: &[&str]) -> bool {
 fn is_hex_digest(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, JsonDeserialize)]
 struct TransparencyReleaseActionPayload {
     action: String,
     version: u64,
@@ -1710,7 +1708,7 @@ mod tests {
     fn volunteer_validator_accepts_template() {
         let raw =
             include_str!("../../fixtures/documentation/ministry/volunteer_brief_template.json");
-        let value: Value = norito::json::from_str(raw).expect("parse volunteer template");
+        let value: Value = json::from_str(raw).expect("parse volunteer template");
         let report = super::validate_volunteer_entry(&value, "brief");
         assert!(
             report.errors.is_empty(),
@@ -2269,7 +2267,7 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let governance_dir = tmp.path().join("governance");
         let action_path = tmp.path().join("release.json");
-        let action = serde_json::json!({
+        let action = norito::json!({
             "action": "TransparencyReleaseV1",
             "version": 1,
             "quarter": "2026-Q3",
@@ -2283,7 +2281,7 @@ mod tests {
         });
         fs::write(
             &action_path,
-            format!("{}\n", serde_json::to_string_pretty(&action).expect("json")),
+            format!("{}\n", json::to_string_pretty(&action).expect("json")),
         )
         .expect("write action");
         run_anchor(AnchorOptions {
@@ -2315,10 +2313,10 @@ mod tests {
             decoded.sorafs_root_cid,
             vec![1, 35, 69, 103, 137, 171, 205, 239]
         );
-        let summary: SerdeJsonValue =
-            serde_json::from_slice(&fs::read(json_path).expect("read json")).expect("json");
+        let summary: Value =
+            json::from_slice(&fs::read(json_path).expect("read json")).expect("json");
         assert_eq!(
-            summary.get("action").and_then(SerdeJsonValue::as_str),
+            summary.get("action").and_then(Value::as_str),
             Some("TransparencyReleaseV1")
         );
     }

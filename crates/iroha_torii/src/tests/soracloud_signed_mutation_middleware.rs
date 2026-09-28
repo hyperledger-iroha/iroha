@@ -10,7 +10,6 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use tower::ServiceExt as _;
 #[tokio::test]
 async fn soracloud_mutation_still_enforces_typed_accept() {
     let handler_calls = Arc::new(AtomicUsize::new(0));

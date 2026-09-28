@@ -4,21 +4,26 @@
 //! privately replays the candidate RKG-round-one and Galois proof equations
 //! plus typed object authentication. It deliberately supplies no admission or
 //! release receipt, no public verification result, and no release transition.
+use super::super::direct_object_transport::ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1;
+#[cfg(test)]
 use super::super::{
     ZkAmsMkheErrorV1,
     direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyRoundV1,
-    direct_object_transport::ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1,
     exact_eight_chunk_membership::{
         ExactEightChunkMembershipEvidenceV1, ExactEightChunkMembershipRoleV1,
         PreflightedExactEightChunkMembershipWireV1,
     },
 };
-use super::{
-    CHALLENGE_REPETITIONS_V1, ExactBindingTranscriptContextV1, PersistentDirectRelationV1,
-};
+#[cfg(test)]
+use super::CHALLENGE_REPETITIONS_V1;
+#[cfg(test)]
+use super::{ExactBindingTranscriptContextV1, PersistentDirectRelationV1};
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
+#[cfg(test)]
 #[path = "direct_relation_wire_v1/predecode_v1.rs"]
 mod predecode_v1;
+#[cfg(test)]
 #[allow(
     unused_imports,
     reason = "candidate-only semantic verifier seam is retained for the pending direct-relation owner and cannot mint admission or release authority"
@@ -27,21 +32,29 @@ pub(super) use predecode_v1::{
     CompletedDirectGaloisSemanticVerificationV1, CompletedDirectRkgOneSemanticVerificationV1,
     verify_direct_galois_semantic_candidate_v1, verify_direct_rkg_one_semantic_candidate_v1,
 };
+#[cfg(test)]
 #[path = "direct_relation_wire_v1/response_commitment_v1.rs"]
 pub(super) mod response_commitment_v1;
+#[cfg(test)]
 #[path = "direct_relation_wire_v1/rkg_one_creator_membership_v1.rs"]
 mod rkg_one_creator_membership_v1;
+#[cfg(test)]
 #[path = "direct_relation_wire_v1/rkg_one_creator_prover_v1.rs"]
 mod rkg_one_creator_prover_v1;
+#[cfg(test)]
 #[path = "direct_relation_wire_v1/rkg_one_creator_response_v1.rs"]
 mod rkg_one_creator_response_v1;
 #[path = "direct_relation_wire_v1/statement_v1.rs"]
 pub(super) mod statement_v1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use rkg_one_creator_prover_v1::{
     PublishedDirectRkgOneProofOwnerV2, SealedDirectRkgOneProofOwnerV1,
     seal_direct_rkg_one_proof_owner_v1,
 };
+#[cfg(test)]
 pub(super) use statement_v1::ExpectedDirectRelationStatementV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use statement_v1::PreparedDirectRkgOneStatementCoreV1;
 #[cfg(test)]
 #[allow(
     unused_imports,
@@ -51,31 +64,41 @@ pub(super) use statement_v1::{
     AggregateH0ObjectRoleV1, AggregateH1ObjectRoleV1, GaloisBObjectRoleV1, RkgKObjectRoleV1,
     RkgNormalizationObjectRoleV1,
 };
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use statement_v1::{
-    DirectPolynomialObjectV1, DirectRelationPublicObjectsV1, PreparedDirectRkgOneStatementCoreV1,
-    RkgH0ObjectRoleV1, RkgH1ObjectRoleV1,
+    DirectPolynomialObjectV1, DirectRelationPublicObjectsV1,
 };
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use statement_v1::{RkgH0ObjectRoleV1, RkgH1ObjectRoleV1};
 #[cfg(test)]
 #[path = "direct_relation_wire_v1/kats.rs"]
 mod kats;
 #[cfg(test)]
 #[path = "direct_relation_wire_v1/tests.rs"]
 mod tests;
+#[cfg(test)]
 const DIRECT_RELATION_WIRE_MAGIC_V1: [u8; 4] = *b"ZAXR";
+#[cfg(test)]
 const DIRECT_RELATION_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZADS";
+#[cfg(test)]
 pub(super) const DIRECT_RELATION_CODEC_VERSION_V1: u8 = 1;
 const HEADER_BYTES_V1: usize = 80;
 const STATEMENT_PREFIX_BYTES_V1: usize = 544;
 const OBJECT_ENTRY_BYTES_V1: usize = 32 + ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1;
 const STATEMENT_TRAILER_BYTES_V1: usize = 64;
+#[cfg(test)]
 const MAX_STATEMENT_BYTES_V1: usize = 938;
 const RKG_ONE_STATEMENT_BYTES_V1: usize = 828;
 const RKG_TWO_STATEMENT_BYTES_V1: usize = 938;
 const NORMALIZE_STATEMENT_BYTES_V1: usize = 828;
 const GALOIS_STATEMENT_BYTES_V1: usize = 718;
+#[cfg(test)]
 const WITNESS_COUNT_V1: usize = 6;
+#[cfg(test)]
 const BOUND_ONE_WITNESS_COUNT_V1: usize = 2;
+#[cfg(test)]
 const BOUND_TWO_WITNESS_COUNT_V1: usize = 4;
+#[cfg(test)]
 const CHUNKS_PER_WITNESS_V1: usize = 8;
 const DIRECT_BOUND_ONE_MEMBERSHIP_BYTES_V1: usize = 12_291;
 const DIRECT_BOUND_TWO_MEMBERSHIP_BYTES_V1: usize = 12_819;
@@ -87,25 +110,38 @@ const CHALLENGE_SEED_BYTES_V1: usize = 32;
 const BODY_BYTES_V1: usize =
     MEMBERSHIP_BYTES_V1 + RESPONSE_BYTES_V1 + BLIND_RESPONSE_BYTES_V1 + CHALLENGE_SEED_BYTES_V1;
 const EXACT_POLYNOMIAL_OBJECT_BYTES_V1: u64 = 39_845_888;
+#[cfg(test)]
 const RELEASE_RNS_LIMBS_V1: usize = 38;
+#[cfg(test)]
 const RELEASE_RING_COEFFICIENTS_V1: usize = 131_072;
+#[cfg(test)]
 const RECONSTRUCTED_COMMITMENT_POINTS_V1: usize = WITNESS_COUNT_V1 * CHUNKS_PER_WITNESS_V1;
+#[cfg(test)]
 const RECONSTRUCTED_COMMITMENT_BYTES_V1: usize = RECONSTRUCTED_COMMITMENT_POINTS_V1 * 33;
+#[cfg(test)]
 const RELATION_CORE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-relation-wire.statement-core";
+#[cfg(test)]
 const FINAL_STATEMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.final-statement";
+#[cfg(test)]
 const MEMBERSHIP_SLOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.membership-slot";
+#[cfg(test)]
 const ORDERED_COMMITMENT_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.ordered-commitment-root";
+#[cfg(test)]
 const ORDERED_MEMBERSHIP_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.ordered-membership-root";
+#[cfg(test)]
 pub(super) const RELATION_LINEAGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.lineage";
+#[cfg(test)]
 const RNS_FIRST_MESSAGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.rns-first-message";
+#[cfg(test)]
 const COMMITMENT_FIRST_MESSAGE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-relation-wire.commitment-first-message";
+#[cfg(test)]
 const MEMBERSHIP_FRAME_OFFSETS_V1: [usize; WITNESS_COUNT_V1] =
     [0, 12_291, 24_582, 37_401, 50_220, 63_039];
 const _: () = {
@@ -129,6 +165,7 @@ const _: () = {
     assert!(HEADER_BYTES_V1 + GALOIS_STATEMENT_BYTES_V1 + BODY_BYTES_V1 == 25_248_656);
     assert!(2 * EXACT_POLYNOMIAL_OBJECT_BYTES_V1 > 64 * 1024 * 1024);
 };
+#[cfg(test)]
 impl PersistentDirectRelationV1 {
     const fn statement_bytes(self) -> usize {
         match self {
@@ -179,6 +216,7 @@ impl PersistentDirectRelationV1 {
         }
     }
 }
+#[cfg(test)]
 fn membership_share_statement_digest(
     relation: PersistentDirectRelationV1,
     core_digest: [u8; 32],
@@ -197,6 +235,7 @@ fn membership_share_statement_digest(
     ]);
     hash.finalize()
 }
+#[cfg(test)]
 fn canonical_header(expected: &ExpectedDirectRelationStatementV1) -> [u8; HEADER_BYTES_V1] {
     canonical_header_fields_v1(
         expected.relation(),
@@ -204,6 +243,7 @@ fn canonical_header(expected: &ExpectedDirectRelationStatementV1) -> [u8; HEADER
         expected.statement_digest(),
     )
 }
+#[cfg(test)]
 fn canonical_header_fields_v1(
     relation: PersistentDirectRelationV1,
     statement_bytes: usize,
@@ -235,11 +275,13 @@ fn canonical_header_fields_v1(
     bytes[48..80].copy_from_slice(&statement_digest);
     bytes
 }
+#[cfg(test)]
 trait DirectRelationMembershipSummaryV1 {
     fn commitment_set_digest(&self) -> [u8; 32];
     fn proof_set_digest(&self) -> [u8; 32];
     fn verifier_transcript_digest(&self) -> [u8; 32];
 }
+#[cfg(test)]
 impl<R: ExactEightChunkMembershipRoleV1> DirectRelationMembershipSummaryV1
     for ExactEightChunkMembershipEvidenceV1<R>
 {
@@ -253,6 +295,7 @@ impl<R: ExactEightChunkMembershipRoleV1> DirectRelationMembershipSummaryV1
         self.verifier_transcript_digest()
     }
 }
+#[cfg(test)]
 impl<R: ExactEightChunkMembershipRoleV1> DirectRelationMembershipSummaryV1
     for PreflightedExactEightChunkMembershipWireV1<'_, R>
 {
@@ -266,6 +309,7 @@ impl<R: ExactEightChunkMembershipRoleV1> DirectRelationMembershipSummaryV1
         self.verifier_transcript_digest()
     }
 }
+#[cfg(test)]
 fn ordered_membership_roots<BoundOne, BoundTwo>(
     relation: PersistentDirectRelationV1,
     core_digest: [u8; 32],
@@ -301,11 +345,13 @@ where
     }
     (commitment.finalize(), membership.finalize())
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DirectRelationFirstMessageDigestsV1 {
     rns: [[u8; 32]; CHALLENGE_REPETITIONS_V1],
     commitments: [[u8; 32]; CHALLENGE_REPETITIONS_V1],
 }
+#[cfg(test)]
 impl DirectRelationFirstMessageDigestsV1 {
     fn new(
         rns: [[u8; 32]; CHALLENGE_REPETITIONS_V1],
@@ -321,12 +367,14 @@ impl DirectRelationFirstMessageDigestsV1 {
         Ok(Self { rns, commitments })
     }
 }
+#[cfg(test)]
 struct DirectRelationRnsFirstMessageHasherV1 {
     hash: Keccak256,
     relation: PersistentDirectRelationV1,
     next_row: usize,
     next_limb: usize,
 }
+#[cfg(test)]
 impl DirectRelationRnsFirstMessageHasherV1 {
     fn new(relation: PersistentDirectRelationV1) -> Self {
         let (rows, count) = relation.rns_row_tags();
@@ -378,6 +426,7 @@ impl DirectRelationRnsFirstMessageHasherV1 {
         Ok(self.hash.finalize())
     }
 }
+#[cfg(test)]
 fn commitment_first_message_digest(
     relation: PersistentDirectRelationV1,
     bytes: &[u8],
@@ -396,6 +445,7 @@ fn commitment_first_message_digest(
     hash.update(bytes);
     Ok(hash.finalize())
 }
+#[cfg(test)]
 fn challenge_vector_from_first_messages(
     context: ExactBindingTranscriptContextV1,
     first_messages: DirectRelationFirstMessageDigestsV1,

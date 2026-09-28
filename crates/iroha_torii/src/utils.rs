@@ -12,8 +12,10 @@ use iroha_data_model::{
 };
 use iroha_torii_shared::ErrorEnvelope;
 use iroha_version::Version;
+#[cfg(test)]
+use norito::json;
 use norito::{
-    json::{self, JsonDeserializeOwned, JsonSerialize, Value},
+    json::{JsonSerialize, Value},
     prelude::*,
 };
 use std::{
@@ -29,6 +31,76 @@ pub(crate) const MAX_ERROR_MESSAGE_CHARACTERS: usize = 1024;
 pub(crate) const MAX_ERROR_DETAIL_CHARACTERS: usize = 1024;
 pub(crate) const MAX_REJECT_CODE_BYTES: usize = 128;
 
+/// Current wall-clock time in Unix milliseconds, saturating at `u64::MAX`.
+///
+/// A clock before the Unix epoch reports `0`.
+#[must_use]
+pub(crate) fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+/// Count the leading zero bits of a big-endian byte string.
+#[must_use]
+pub(crate) fn leading_zero_bits(bytes: &[u8]) -> u32 {
+    let mut total = 0u32;
+    for byte in bytes {
+        if *byte == 0 {
+            total += 8;
+            continue;
+        }
+        total += byte.leading_zeros();
+        break;
+    }
+    total
+}
+/// Whether `ip` is a globally routable unicast address (no private, loopback, link-local,
+/// multicast, documentation, benchmarking, shared, reserved, or transition ranges).
+#[must_use]
+pub(crate) fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => is_public_ipv4(ip),
+        std::net::IpAddr::V6(ip) => is_public_ipv6(ip),
+    }
+}
+fn is_public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_unspecified()
+        || a == 0
+        || a >= 240
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 88 && c == 99)
+        || (a == 198 && (18..=19).contains(&b)))
+}
+fn is_public_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
+    let documentation_v2 = segments[0] == 0x3fff && (segments[1] & 0xf000) == 0;
+    let orchid = segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010;
+    let transition = (segments[0] == 0x2001 && segments[1] == 0)
+        || segments[0] == 0x2002
+        || ip.to_ipv4_mapped().is_some();
+    !((segments[0] & 0xe000) != 0x2000
+        || ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || (segments[0] & 0xfe00) == 0xfc00
+        || (segments[0] & 0xffc0) == 0xfe80
+        || documentation
+        || documentation_v2
+        || orchid
+        || transition)
+}
 /// Return whether any syntactically valid `If-None-Match` validator weakly matches `etag`.
 ///
 /// Entity-tag opaque values are case-sensitive. A wildcard is accepted only as the sole
@@ -1391,6 +1463,7 @@ pub fn respond_json_value_with_status(status: StatusCode, value: Value) -> Respo
 /// Dynamic values do not carry a stable Norito object schema. For Norito responses, the
 /// JSON document is encoded as a Norito string so clients still receive a checksummed
 /// Norito envelope without relying on a dynamic schema.
+#[cfg(test)]
 pub fn respond_json_document_with_status_and_format(
     status: StatusCode,
     value: Value,
@@ -1615,6 +1688,7 @@ pub mod extractors {
     ///
     /// Missing or unsupported `Content-Type` yields `415 Unsupported Media Type`;
     /// decode failures surface as `400 Bad Request` to distinguish payload issues from negotiation.
+    #[cfg(test)]
     #[derive(Clone, Copy, Debug)]
     pub struct NoritoVersioned<T>(pub T);
     /// Extractor of raw Norito bytes from the request body.
@@ -1638,6 +1712,7 @@ pub mod extractors {
                 .map_err(typed_body_rejection)
         }
     }
+    #[cfg(test)]
     impl<S, T> FromRequest<S> for NoritoVersioned<T>
     where
         Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
@@ -2540,7 +2615,7 @@ pub mod extractors {
             .is_some_and(|magnitude| magnitude != "0" && canonical_unsigned_decimal(magnitude))
     }
     #[cfg(test)]
-    mod tests {
+    pub(crate) mod tests {
         use super::*;
         use axum::{
             body::Body,
@@ -2549,7 +2624,7 @@ pub mod extractors {
         };
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
-        use norito::core::{NoritoDeserialize, NoritoSerialize, SerializePayload};
+        use norito::core::{NoritoDeserialize, NoritoSerialize};
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = "iroha_torii::utils::extractors::tests::Dummy")]
         #[derive(
@@ -2694,8 +2769,6 @@ pub mod extractors {
         fn kagemusha_ingress_device_public_key(
             key: &p256::ecdsa::SigningKey,
         ) -> iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 {
-            use p256::elliptic_curve::sec1::ToEncodedPoint as _;
-
             iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1::from_sec1_bytes(
                 key.verifying_key().to_encoded_point(false).as_bytes(),
             )
@@ -2766,7 +2839,7 @@ pub mod extractors {
             }
         }
         #[cfg(feature = "app_api")]
-        fn kagemusha_ingress_top_up_fixture()
+        pub(crate) fn kagemusha_ingress_top_up_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
             use iroha_data_model::kagemusha::{
                 KAGEMUSHA_WIRE_VERSION_V1, KagemushaHardwareCredentialV1,
@@ -2863,7 +2936,7 @@ pub mod extractors {
                 .expect("attach mint authorization")
         }
         #[cfg(feature = "app_api")]
-        fn kagemusha_ingress_redemption_fixture()
+        pub(crate) fn kagemusha_ingress_redemption_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
             use iroha_data_model::kagemusha::{
                 KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,

@@ -7224,7 +7224,7 @@ fn record_submission_result_metrics<T>(
         );
     }
 }
-#[allow(dead_code)] // Retained for workload helpers that need success-only submission semantics.
+#[cfg(test)]
 async fn run_submission<F>(
     plan_label: &'static str,
     expect_success: bool,

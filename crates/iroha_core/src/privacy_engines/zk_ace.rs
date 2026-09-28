@@ -14,8 +14,7 @@
 #[cfg(test)]
 use super::prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1;
 use super::zk_ace_stark::{
-    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1,
-    MAX_CLASSICAL_ROM_QUERY_LOG2_V1, MAX_PROOF_BYTES, PROVABLE_SOUNDNESS_BITS_V1,
+    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES,
     ZkAceAirRelationInputsV1, ZkAceStarkError, prove_zk_ace_stark_v1_with_rng,
     verify_zk_ace_stark_v1,
 };
@@ -163,12 +162,6 @@ pub const ZK_ACE_DIGEST384_PARAMETER_SHA3_256_V1: &str =
 pub const ZK_ACE_POSEIDON_PROFILE_V1: &[u8] = b"poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6";
 /// Native and consensus proof byte ceiling.
 pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
-/// Theorem-backed classical-ROM, work-normalized soundness of the profile.
-///
-/// This is not a qROM security claim.
-pub const ZK_ACE_PROVABLE_SOUNDNESS_BITS_V1: u16 = PROVABLE_SOUNDNESS_BITS_V1;
-/// Maximum base-two classical random-oracle query-work exponent covered by that bound.
-pub const ZK_ACE_MAX_CLASSICAL_ROM_QUERY_LOG2_V1: u8 = MAX_CLASSICAL_ROM_QUERY_LOG2_V1;
 /// Frozen SHA-256 self-authentication digest of every verifier-profile field below.
 ///
 /// SHA-256 is retained here only as a non-STARK artifact checksum. It is never

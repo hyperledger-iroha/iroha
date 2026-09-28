@@ -40,6 +40,7 @@ pub(super) struct PreparedConsumedCreditInsertV1 {
 }
 
 impl PreparedConsumedCreditInsertV1 {
+    #[cfg(test)]
     pub(super) fn witness(&self) -> &ConsumedCreditInsertWitnessV1 {
         &self.witness
     }
@@ -126,6 +127,7 @@ impl ExactConsumedCreditIndex {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn preview_insert_witness(
         &self,
         credit_id: CreditIdV1,
@@ -164,6 +166,7 @@ impl ExactConsumedCreditIndex {
         self.install_prepared_insert(prepared)
     }
 
+    #[cfg(test)]
     pub(super) fn insert_with_witness(
         &mut self,
         credit_id: CreditIdV1,
@@ -365,12 +368,6 @@ fn apply_successor_path_to_overlay(
 }
 
 impl ConsumedCreditInsertWitnessV1 {
-    /// Return the protocol-fixed canonical empty-leaf digest.
-    #[must_use]
-    pub fn canonical_empty_leaf_digest() -> KagemushaPastaStateCommitmentV1 {
-        hash_empty_leaf()
-    }
-
     /// Return the canonical present-leaf digest bound to this credit and envelope.
     #[must_use]
     pub fn canonical_present_leaf_digest(&self) -> KagemushaPastaStateCommitmentV1 {
@@ -406,29 +403,6 @@ impl ConsumedCreditInsertWitnessV1 {
             return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
         }
         Ok(())
-    }
-
-    /// Verify this witness against the exact transition inputs and roots.
-    ///
-    /// # Errors
-    ///
-    /// Rejects any substitution of the credit ID, envelope digest, predecessor root, successor
-    /// root, path, or the protocol-fixed leaf hash relations.
-    pub fn verify_binding(
-        &self,
-        predecessor_root: KagemushaPastaStateCommitmentV1,
-        credit_id: CreditIdV1,
-        envelope_digest: DigestV1,
-        successor_root: KagemushaPastaStateCommitmentV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        if self.predecessor_root != predecessor_root
-            || self.credit_id != credit_id
-            || self.envelope_digest != envelope_digest
-            || self.successor_root != successor_root
-        {
-            return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
-        }
-        self.verify()
     }
 }
 

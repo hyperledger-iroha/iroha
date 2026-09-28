@@ -68,6 +68,7 @@ const LANE_COMPLIANCE_LOAD_LIMITS: LaneComplianceLoadLimits = LaneComplianceLoad
     max_decode_depth: LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH,
 };
 impl LaneComplianceEngine {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Construct an engine from explicit policy definitions.
     ///
     /// # Errors

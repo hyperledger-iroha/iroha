@@ -9,7 +9,6 @@ form the first-release Iroha 3 data model, as implemented in the
 - Purpose: Provide canonical types for domain objects (domains, accounts, assets, NFTs, roles, permissions, peers), state-changing instructions (ISI), queries, triggers, transactions, blocks, and parameters.
 - Serialization: Wire records use Norito codecs and schema contracts, with manual implementations for validated or bounded representations. Canonical protocol JSON is mandatory, including without default features.
 - IVM note: Certain deserialization-time validations are disabled when targeting the Iroha Virtual Machine (IVM), since the host performs validation before invoking contracts (see crate docs in `src/lib.rs`).
-- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export` to avoid overhead when FFI is not needed.
 
 ## Core Traits and Helpers
 
@@ -115,7 +114,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 ## Parameters and Configuration
 
 - System parameter families (all `Default`ed, carry getters, and convert to individual enums):
-- `SumeragiParameters { block_cadence_ms, max_clock_drift_ms, key_activation_lead_blocks, key_overlap_grace_blocks, key_expiry_grace_blocks, key_allowed_algorithms, idle_block_interval_ms, exec_budget_ms, apply_budget_ms, max_block_bytes, empty_after_views, epoch_length_blocks, demotion_window }`. The cadence (default 1000 ms, the core's `block_time`) and key policy are signed chain context. The Sumeragi chain parameters `idle_block_interval_ms` (5000), `exec_budget_ms` (4000), `apply_budget_ms` (1000), `max_block_bytes` (4 MiB), `empty_after_views` (2) and `epoch_length_blocks` (3600) map 1:1 onto the core's `ChainParams` and have `SumeragiParameter` variants; `demotion_window` (128) is a genesis constant whose variant is accepted only in the genesis block. Until the Sumeragi driver lands, the node records none of these variants (TODO(WP5)).
+- `SumeragiParameters { block_cadence_ms, max_clock_drift_ms, key_activation_lead_blocks, key_overlap_grace_blocks, key_expiry_grace_blocks, key_allowed_algorithms, payload_retry_interval_ms, exec_budget_ms, apply_budget_ms, max_block_bytes, epoch_length_blocks, demotion_window }`. The cadence (default 1000 ms, the core's `block_time`) and key policy are signed chain context. The Sumeragi chain parameters `payload_retry_interval_ms` (5000), `exec_budget_ms` (4000), `apply_budget_ms` (1000), `max_block_bytes` (4 MiB) and `epoch_length_blocks` (3600) map 1:1 onto the core's `ChainParams` and have `SumeragiParameter` variants; `demotion_window` (128) is a genesis constant whose variant is accepted only in the genesis block. An empty build waits for queued work and retries after `payload_retry_interval_ms`; it never creates an empty block.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`. `max_time_to_live_ms` defaults to one day and bounds every signature-bound transaction lifetime.
   - `SmartContractParameters { fuel, memory, execution_depth, max_output_items, max_output_bytes }`. The output limits bound the aggregate queued instructions, durable writes, FastPQ entries, completed AXT states, and access artifacts retained by one IVM execution.
@@ -276,7 +275,7 @@ the first release does not decode superseded data-model layouts.
 
 ## Features and Determinism
 
-- The workspace requires `std`; protocol JSON is unconditional. The [crate manifest](../crates/iroha_data_model/Cargo.toml) owns the shipping application, cryptographic, HTTP, FFI and internal mutable-API feature selections. `ffi_import` is not a shipping feature.
+- The workspace requires `std`; protocol JSON is unconditional. The [crate manifest](../crates/iroha_data_model/Cargo.toml) owns the shipping application, cryptographic, HTTP and internal mutable-API feature selections. The crate exports no C ABI; native SDK bridges consume Norito payloads.
 - Determinism: All serialization uses Norito encoding to be portable across hardware. IVM bytecode is an opaque byte blob; execution must not introduce non-deterministic reductions. The host validates transactions and supplies inputs to IVM deterministically.
 
 ### Transparent API (`transparent_api`)

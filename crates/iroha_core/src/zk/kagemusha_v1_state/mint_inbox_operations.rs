@@ -1,12 +1,14 @@
 //! Hardware-certified mint reservation, durable staging, and mixed-credit fold scheduling.
 
-use super::mint_inbox::{applied_top_up_result_v1, require_exact_top_up_reservation_v1};
 use super::*;
 use crate::zk::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
+#[cfg(test)]
 use iroha_data_model::kagemusha::KagemushaMintAuthorizationV1;
 
+#[cfg(test)]
 const MINT_CAPACITY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-inbox-capacity";
 
+#[cfg(test)]
 /// One operation in a deterministic, history-unbounded pending-credit drain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingCreditFoldV1 {
@@ -16,6 +18,7 @@ pub enum PendingCreditFoldV1 {
     Receive(CreditIdV1),
 }
 
+#[cfg(test)]
 impl PendingCreditFoldV1 {
     /// Return the globally unique credit selected by this singular fold.
     #[must_use]
@@ -26,6 +29,7 @@ impl PendingCreditFoldV1 {
     }
 }
 
+#[cfg(test)]
 /// Stable native inbox boundary for an explicit drain pass.
 ///
 /// Epoch identity prevents a counter reset from reinterpreting an old watermark. This is local
@@ -36,6 +40,7 @@ pub struct KagemushaPendingCreditWatermarkV1 {
     inbox_revision: u128,
 }
 
+#[cfg(test)]
 impl KagemushaPendingCreditWatermarkV1 {
     /// Return the hardware epoch which owns this inclusive drain boundary.
     #[must_use]
@@ -50,6 +55,7 @@ impl KagemushaPendingCreditWatermarkV1 {
     }
 }
 
+#[cfg(test)]
 fn validate_pending_credit_watermark(
     current_epoch: HardwareEpochV1,
     current_inbox_revision: u128,
@@ -64,6 +70,7 @@ fn validate_pending_credit_watermark(
     Ok(())
 }
 
+#[cfg(test)]
 fn next_pending_fold_through_entries(
     current_epoch: HardwareEpochV1,
     current_inbox_revision: u128,
@@ -94,6 +101,7 @@ fn next_pending_fold_through_entries(
     }
 }
 
+#[cfg(test)]
 fn next_required_pending_fold_through_entries(
     current_balance: u128,
     required_amount: u128,
@@ -118,6 +126,7 @@ fn next_required_pending_fold_through_entries(
     .ok_or(KagemushaStateErrorV1::InsufficientBalance)
 }
 
+#[cfg(test)]
 fn required_pending_fold_prefix(
     current_balance: u128,
     amount: u128,
@@ -166,6 +175,7 @@ fn required_pending_fold_prefix(
         .collect()
 }
 
+#[cfg(test)]
 /// Durable result of mint delivery; every retry retains the original certificate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MintCreditStageOutcomeV1 {
@@ -177,6 +187,7 @@ pub enum MintCreditStageOutcomeV1 {
     DuplicateConsumed(MintStageCertificateV1),
 }
 
+#[cfg(test)]
 /// Require an exact retry to carry the certificate retained by the native inbox.
 ///
 /// A detached certificate cannot replace the original Guard evidence or advance its revision.
@@ -205,58 +216,6 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
-    /// Authenticate one applied chain top-up and stage it under the original hardware Guard.
-    ///
-    /// The caller pins `trust_anchor` independently of `status` and selects the already reserved
-    /// `operation_id`. A new delivery must match that installed private reservation, pass both
-    /// release-authenticated mint proofs, and present the qualified staging certificate. An exact
-    /// retry returns the retained certificate without changing the inbox revision. The stock
-    /// bridge has no qualified hardware backend, so this operation cannot make it available.
-    pub fn stage_applied_top_up_mint_credit(
-        &mut self,
-        operation_id: DigestV1,
-        status: &KagemushaOperationStatusV1,
-        trust_anchor: &KagemushaFinalityTrustAnchorV1,
-        certificate: &MintStageCertificateV1,
-    ) -> Result<MintCreditStageOutcomeV1, KagemushaStateErrorV1> {
-        let result = applied_top_up_result_v1(status, operation_id)?;
-        if result.request.operation_id != operation_id {
-            return Err(KagemushaStateErrorV1::MintFinalityMismatch);
-        }
-        let authorization = result
-            .request
-            .mint_authorization
-            .as_ref()
-            .ok_or(KagemushaStateErrorV1::MintFinalityMismatch)?;
-        let credit = &result.mint_credit;
-        let credit_id = CreditIdV1(credit.statement.lifecycle.credit_id);
-        if let Some(reservation) = self.mint_inbox.reservation(credit_id) {
-            require_exact_top_up_reservation_v1(reservation, operation_id, Some(authorization))?;
-            let verified = verify_applied_top_up_mint_stage_v1(
-                &self.recursive_verifier,
-                self.proof_release.artifacts,
-                reservation,
-                status,
-                trust_anchor,
-            )?;
-            return self.stage_mint_credit(
-                authorization,
-                credit,
-                Some(&verified),
-                Some(certificate),
-            );
-        }
-
-        // Duplicate delivery still needs independently pinned chain finality and the exact
-        // previously retained hardware evidence. No new proof or journal transaction is made.
-        status
-            .validate_against(trust_anchor)
-            .map_err(|_| KagemushaStateErrorV1::MintFinalityMismatch)?;
-        if !require_original_mint_stage_certificate_v1(&self.mint_inbox, credit_id, certificate)? {
-            return Err(KagemushaStateErrorV1::CreditNotStaged(credit_id));
-        }
-        self.stage_mint_credit(authorization, credit, None, None)
-    }
 }
 
 impl<R, G, H> KagemushaStateMachineV1<R, G, H>
@@ -270,6 +229,7 @@ where
         &self.mint_inbox
     }
 
+    #[cfg(test)]
     /// Capture the current inbox boundary without changing any monetary or journal state.
     pub fn pending_credit_watermark(&self) -> KagemushaPendingCreditWatermarkV1 {
         KagemushaPendingCreditWatermarkV1 {
@@ -278,6 +238,7 @@ where
         }
     }
 
+    #[cfg(test)]
     /// Select the next mint/peer operation within a previously captured drain pass.
     ///
     /// Later deliveries remain pending for the next pass. Old-epoch staged money stays included;
@@ -310,6 +271,7 @@ where
         )
     }
 
+    #[cfg(test)]
     /// Select the next mint/peer fold needed for a specific send or redemption amount.
     ///
     /// Unlike [`Self::next_pending_fold_through`], this target-aware selector stops as soon as
@@ -345,6 +307,7 @@ where
         )
     }
 
+    #[cfg(test)]
     /// Select only the monetary folds required to cover the requested outgoing amount.
     ///
     /// Mint and peer credits each produce one fold. The plan has no cumulative operation limit;
@@ -366,6 +329,7 @@ where
         )
     }
 
+    #[cfg(test)]
     /// Preview the pre-debit allocation and sealed local recipient binding.
     ///
     /// The resulting statement is not authorization to expose the mint authorization. The
@@ -400,6 +364,7 @@ where
         })
     }
 
+    #[cfg(test)]
     /// Install one hardware-certified allocation before its authorization can debit online funds.
     ///
     /// Exact retries are idempotent. No monetary sequence or balance is modified. A failed
@@ -455,6 +420,7 @@ where
         Ok(())
     }
 
+    #[cfg(test)]
     /// Preview staging an authenticated finalized mint into its existing durable allocation.
     ///
     /// The proof capability alone does not establish local ownership: it must match the exact
@@ -517,6 +483,7 @@ where
         })
     }
 
+    #[cfg(test)]
     /// Stage exact finalized bytes, or recover their original durable receipt without refolding.
     ///
     /// A first delivery requires both the concrete native proof-verification capability and a
@@ -590,6 +557,7 @@ where
         Ok(MintCreditStageOutcomeV1::Staged(certificate.clone()))
     }
 
+    #[cfg(test)]
     fn validate_new_mint_reservation(
         &self,
         reservation: &MintInboxReservationV1,
@@ -641,6 +609,7 @@ where
         Ok(())
     }
 
+    #[cfg(test)]
     /// Select the exact authenticated pending record used by `MintFold`.
     ///
     /// A detached decoded credit never supplies private witness authority. Recovery may permit

@@ -103,11 +103,13 @@ impl MatchedRouteMetadata {
         self.listener
     }
     /// Server-side effect classification, when the route is cataloged.
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn effect(&self) -> Option<RouteEffect> {
         self.effect
     }
     /// Principal admission requirement, when the route is cataloged.
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn admission(&self) -> Option<AdmissionPolicy> {
         self.admission
@@ -252,11 +254,13 @@ impl MountedRouteIndex {
 }
 impl MountedRouteManifest {
     /// Explicit application operations, in canonical catalog order.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn explicit_routes(&self) -> &[RouteDescriptor] {
         &self.explicit_routes
     }
     /// Framework-level CORS OPTIONS behavior.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn implicit_routes(&self) -> &[ImplicitRouteDescriptor] {
         &self.implicit_routes

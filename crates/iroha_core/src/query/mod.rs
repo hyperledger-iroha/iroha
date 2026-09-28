@@ -9,6 +9,7 @@ pub mod cursor;
 pub mod final_promotion_account_custody;
 /// Coherent native deployment custody and durable final-promotion operation history.
 pub mod final_promotion_authority;
+mod finalized_archive_fs;
 pub mod index_status;
 mod journal_io;
 pub mod pagination;
@@ -16,7 +17,10 @@ pub mod projection_checkpoint;
 pub mod projection_checkpoint_journal;
 pub mod projection_rowset;
 pub mod projection_shard;
+/// Finalized governed provider-admission authority.
+pub mod provider_admission;
 pub mod provider_ingest_finalized;
+pub mod provider_ingest_source;
 /// Raw role-13 custody history and same-State block finality; signing still requires executed Check.
 pub mod release_manifest_authority;
 pub mod reputation_finalized;
@@ -26,9 +30,6 @@ pub mod signer_check_test_fixture;
 pub(crate) mod signer_custody_history;
 /// Same-State certified-chain block finality verification for signer consumers.
 pub mod signer_finality;
-/// Finalized governed provider-admission authority.
-pub mod provider_admission;
-pub mod provider_ingest_source;
 pub mod snapshot;
 /// Explicit funded public-ballot setup; never production admission or finalized evidence.
 #[cfg(any(test, feature = "iroha-core-tests"))]

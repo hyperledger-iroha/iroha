@@ -8,13 +8,27 @@
 //! the RLWE/source linkage is retained as a nonempty digest-bound residual and
 //! the composite verifier continues to fail closed.
 
+#[cfg(test)]
+use super::rns_native_proof_hash::RnsNativeProofHashWorkV1;
+#[cfg(test)]
 use super::rns_native_proof_hash::{
     RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
     RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
-    RnsNativeProofHashWorkV1, decode_proof_digest_v1,
+    decode_proof_digest_v1,
 };
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
+    rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
+    },
+    rns_native_qpcs_prefix::{
+        DIGEST_BYTES_V1, LEAF_BYTES_V1, MAX_OPENED_LEAVES_V1, QUERY_COUNT_V1,
+    },
+    rns_native_transcript::ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+};
+#[cfg(test)]
+use super::{
     rns_native_cross_field_inventory::{
         RnsNativePreQpcsQMaskInventoryPreflightV1,
         authenticate_rns_native_cross_field_inventory_from_sealed_pre_qpcs_preflight_v1,
@@ -27,17 +41,14 @@ use super::{
         bind_rns_native_cross_field_rlwe_pre_direct_inventory_v1,
     },
     rns_native_profile::{
-        ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
     },
     rns_native_public_polynomial_reader::RnsNativePublicPolynomialEvaluationV1,
     rns_native_qpcs_prefix::{
-        DIGEST_BYTES_V1, DOMAIN_SIZE_V1, Fq2ParametersV1, Fq2V1, IndexSetV1, LEAF_BYTES_V1,
-        MAX_OPENED_LEAVES_V1, QUERY_COUNT_V1, ROWS_PER_LIMB_V1, RnsNativeQpcsFoldZeroStageV1,
-        RnsNativeQpcsRelationScheduleV1, TreeDescriptorV1, TreeRoleV1, TreeViewV1,
-        authenticate_rns_native_qpcs_prefix_v1,
+        DOMAIN_SIZE_V1, Fq2ParametersV1, Fq2V1, IndexSetV1, ROWS_PER_LIMB_V1,
+        RnsNativeQpcsFoldZeroStageV1, RnsNativeQpcsRelationScheduleV1, TreeDescriptorV1,
+        TreeRoleV1, TreeViewV1, authenticate_rns_native_qpcs_prefix_v1,
         authenticate_rns_native_qpcs_prefix_with_schedule_v1, authenticate_tree_v1,
         derive_fields_v1, descriptor_for_indices_v1, fold_value_with_inverse_x_v1,
         query_pair_indices_v1, read_value_v1, validate_leaf_values_v1,
@@ -56,18 +67,22 @@ use super::{
         ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1,
         ZkAmsMkheRnsNativeCrossFieldRootClaimV1,
         ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
-        ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1, ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
-        ZkAmsMkheRnsNativeTerminalRootsV1,
+        ZkAmsMkheRnsNativeQpcsBoundTranscriptV1, ZkAmsMkheRnsNativeTerminalRootsV1,
     },
 };
 
+#[cfg(test)]
 const CLOSURE_MAGIC_V1: [u8; 4] = *b"ZQFC";
+#[cfg(test)]
 const CLOSURE_VERSION_V1: u8 = 1;
 const FIRST_ENCODED_LAYER_V1: usize = 2;
 const LAST_LAYER_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize - 1;
 const ENCODED_LAYER_COUNT_V1: usize = LAST_LAYER_V1 - FIRST_ENCODED_LAYER_V1 + 1;
+#[cfg(test)]
 const FIRST_CHECKED_FOLD_V1: u8 = 1;
+#[cfg(test)]
 const LAST_CHECKED_FOLD_V1: u8 = ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 - 1;
+#[cfg(test)]
 const TERMINAL_DERIVED_V1: u8 = 1;
 const TREE_DESCRIPTOR_BYTES_V1: usize = 2 + 2 + 4 + 4;
 pub(super) const CLOSURE_HEADER_BYTES_V1: usize = 4
@@ -85,7 +100,9 @@ const MAX_FRI_AUTHENTICATION_HASHES_V1: usize = 20_030;
 pub(super) const MAX_CORRELATED_FRI_AUTHENTICATION_BYTES_V1: usize =
     MAX_FRI_OPENED_LEAVES_V1 * LEAF_BYTES_V1 + MAX_FRI_AUTHENTICATION_HASHES_V1 * DIGEST_BYTES_V1;
 
+#[cfg(test)]
 const SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.fri-complete.schedule";
+#[cfg(test)]
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.fri-complete.rlwe-source-residual";
 
@@ -120,6 +137,7 @@ const _: () = {
     assert!(!PRE_AUTH_CLAIMED_QPCS_RELEASE_READY_V1);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeQpcsFriCompleteErrorV1 {
     InvalidPrefix,
@@ -139,14 +157,17 @@ pub(super) enum RnsNativeQpcsFriCompleteErrorV1 {
     ArithmeticOverflow,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeQpcsFriCompleteErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeQpcsFriCompleteErrorV1 {}
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct FriClosureContextV1 {
     parameter_digest: [u8; 32],
@@ -159,6 +180,7 @@ struct FriClosureContextV1 {
     schedule_digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl FriClosureContextV1 {
     fn from_transcript_v1(
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -209,6 +231,7 @@ impl FriClosureContextV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct ClosureShapeV1 {
     indices: [IndexSetV1; ENCODED_LAYER_COUNT_V1],
@@ -219,16 +242,19 @@ struct ClosureShapeV1 {
     aggregate_authentication_bytes: usize,
 }
 
+#[cfg(test)]
 struct ClosureViewV1<'a> {
     layers: [TreeViewV1<'a>; ENCODED_LAYER_COUNT_V1],
     downstream_residual: &'a [u8],
 }
 
+#[cfg(test)]
 struct DecoderV1<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl<'a> DecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
@@ -283,6 +309,7 @@ impl<'a> DecoderV1<'a> {
 ///
 /// The retained bytes still require the separate RLWE/source-linkage verifier;
 /// this token is therefore deliberately non-authorizing.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -309,6 +336,7 @@ pub(super) struct RnsNativeQpcsFriCompleteStageV1<'a> {
 /// Its provisional terminal chronology is non-authorizing and retains three
 /// undisclosed root-equality obligations.  The schedule cannot be borrowed or
 /// extracted; it can only move into the authentication transition below.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -326,6 +354,7 @@ pub(super) struct RnsNativeQpcsPreAuthClaimedV1 {
 ///
 /// The authenticated qPCS stage still owns the sole relation schedule and the
 /// terminal chronology still owns every undisclosed equality obligation.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -346,6 +375,7 @@ pub(super) struct RnsNativeQpcsAuthenticatedClaimedV1<'a> {
 /// retained schedule from a successfully completed FRI stage.  In particular,
 /// the legacy schedule reconstructed from final public challenge seeds cannot
 /// construct this owner.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -363,6 +393,7 @@ pub(super) struct RnsNativeQpcsCompletedLineageV1 {
 /// The type name is visible to the direct module, but its tuple field and sole
 /// construction site remain private here. It has no constructor, clone, copy,
 /// getter, or raw-parts surface.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     dead_code,
@@ -376,6 +407,7 @@ const CLAIMED_SOURCE_RELATIONS_V1: usize =
 const CLAIMED_SOURCE_QPCS_PAIR_BYTES_V1: usize = 2 * core::mem::size_of::<u64>();
 const CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1: usize =
     CLAIMED_SOURCE_RELATIONS_V1 * CLAIMED_SOURCE_QPCS_PAIR_BYTES_V1;
+#[cfg(test)]
 const CLAIMED_SOURCE_RING_POWER_SQUARINGS_V1: usize = 17;
 const CLAIMED_SOURCE_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.claimed-source-numeric-binding";
@@ -387,6 +419,7 @@ pub(super) const RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1: usize =
         + RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1;
 
 /// Exact work of the sole claimed-source numeric frame, checked at hashing.
+#[cfg(test)]
 pub(super) const RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1: RnsNativeProofHashWorkV1 =
     match RnsNativeProofHashWorkV1::from_word_count(874) {
         Ok(work) => work,
@@ -420,17 +453,20 @@ pub(super) struct RnsNativeQpcsAuthenticatedNumericTailV1 {
 }
 
 impl RnsNativeQpcsAuthenticatedNumericTailV1 {
+    #[cfg(test)]
     const UNFILLED: Self = Self {
         a: u64::MAX,
         product: u64::MAX,
         opening_quotient: u64::MAX,
     };
 
+    #[cfg(test)]
     pub(super) const fn values_v1(self) -> (u64, u64, u64) {
         (self.a, self.product, self.opening_quotient)
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeQpcsClaimedSourceErrorV1 {
     SourcePreflight,
@@ -444,17 +480,20 @@ pub(super) enum RnsNativeQpcsClaimedSourceErrorV1 {
     InvalidBinding,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativeQpcsClaimedSourceErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativeQpcsClaimedSourceErrorV1 {}
 
 /// Opaque owner after the exact authenticated-claimed qPCS has passed source
 /// preflight. The sole schedule is still present inside `source.qpcs()` and
 /// the complete two-obligation terminal chronology remains paired with it.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -474,6 +513,7 @@ pub(super) struct RnsNativeQpcsPreflightedClaimedSourceV1<
 /// relation schedule and the whole provisional chronology. In particular it
 /// cannot be converted to the legacy completed-lineage or claimed-relation
 /// owners, either of which would lose this chronology.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -497,6 +537,7 @@ pub(super) struct RnsNativeQpcsSchedulelessClaimedSourceV1<
 /// The sole relation schedule and all three terminal-root obligations remain
 /// recursively owned. No schedule, chronology, inventory bytes, or raw parts
 /// can be projected from this type.
+#[cfg(test)]
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -515,12 +556,14 @@ pub(super) struct RnsNativeQpcsClaimedInventoryChronologyV2<
     source_binding_digest: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQpcsSchedulelessClaimedSourceV1<'_, S> {
     pub(super) const fn claimed_source_binding_digest_v1(&self) -> ProofDigestV1 {
         self.source_binding_digest
     }
 }
 
+#[cfg(test)]
 impl<'qpcs, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeQpcsSchedulelessClaimedSourceV1<'qpcs, S>
 {
@@ -569,6 +612,7 @@ impl<'qpcs, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     }
 }
 
+#[cfg(test)]
 impl<'qpcs, 'cross, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeQpcsClaimedInventoryChronologyV2<'qpcs, 'cross, S>
 {
@@ -610,6 +654,7 @@ impl<'qpcs, 'cross, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     }
 }
 
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the undeclared direct adapter consumes this completed qPCS owner"
@@ -717,6 +762,7 @@ impl RnsNativeQpcsCompletedLineageV1 {
     }
 }
 
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the private RLWE/source verifier will consume these retained bindings; the current composite boundary must remain fail-closed"
@@ -804,6 +850,7 @@ impl<'a> RnsNativeQpcsFriCompleteStageV1<'a> {
 ///
 /// Rejects a schedule from another relation lineage, a legacy unlineaged
 /// schedule, roots tagged for another qPCS state, or invalid terminal binding.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "tranche A defines the source typestate before production orchestration is integrated"
@@ -837,6 +884,7 @@ pub(super) fn prepare_rns_native_qpcs_pre_auth_claimed_v1(
 
 /// Authenticate qPCS using the final seeds and the exact schedule already
 /// owned by the pre-auth claimed typestate.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "tranche A defines the source transition before production orchestration is integrated"
@@ -868,6 +916,7 @@ pub(super) fn authenticate_rns_native_qpcs_pre_auth_claimed_v1<'a>(
     )
 }
 
+#[cfg(test)]
 fn finish_rns_native_qpcs_pre_auth_claimed_v1<'a>(
     qpcs: RnsNativeQpcsFriCompleteStageV1<'a>,
     expected_qpcs_bound_transcript_state: ProofDigestV1,
@@ -890,6 +939,7 @@ fn finish_rns_native_qpcs_pre_auth_claimed_v1<'a>(
 /// The final seeds are borrowed only from its own provisional chronology and
 /// the qPCS stage still owns the sole schedule throughout the preflight call.
 /// No transcript, schedule, root, or chronology parts are returned.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preflight_rns_native_qpcs_authenticated_claimed_source_v1<'proof, S>(
     authenticated: RnsNativeQpcsAuthenticatedClaimedV1<'proof>,
@@ -935,12 +985,14 @@ where
     })
 }
 
+#[cfg(test)]
 fn map_claimed_source_preflight_error_v1(
     _: RnsNativeRlweSourceStatementErrorV1,
 ) -> RnsNativeQpcsClaimedSourceErrorV1 {
     RnsNativeQpcsClaimedSourceErrorV1::SourcePreflight
 }
 
+#[cfg(test)]
 impl<'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeQpcsPreflightedClaimedSourceV1<'proof, S>
 {
@@ -1019,6 +1071,7 @@ impl<'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 ///
 /// Both ownership boundaries reconstruct these fields independently and call
 /// this one frame owner. Computing a digest grants no source/proof authority.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct RnsNativeClaimedNumericBindingAxesV1 {
     pub(super) statement_anchor: ProofDigestV1,
@@ -1036,6 +1089,7 @@ pub(super) struct RnsNativeClaimedNumericBindingAxesV1 {
     pub(super) final_transcript: ProofDigestV1,
 }
 
+#[cfg(test)]
 impl RnsNativeClaimedNumericBindingAxesV1 {
     pub(super) fn digest_v1(
         self,
@@ -1100,6 +1154,7 @@ impl RnsNativeClaimedNumericBindingAxesV1 {
     }
 }
 
+#[cfg(test)]
 fn claimed_source_numeric_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     source: &RnsNativeRlweSourceStatementStageV1<'_, S>,
     schedule: &RnsNativeQpcsRelationScheduleV1,
@@ -1126,6 +1181,7 @@ fn claimed_source_numeric_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV
     .digest_v1(numeric_tails.iter().copied().map(|tail| tail.values_v1()))
 }
 
+#[cfg(test)]
 fn claimed_source_qpcs_pair_v1(
     bytes: &[u8],
     relation: usize,
@@ -1153,6 +1209,7 @@ fn claimed_source_qpcs_pair_v1(
     Ok((product, opening_quotient))
 }
 
+#[cfg(test)]
 fn validate_claimed_source_numeric_tail_v1(
     limb: usize,
     repetition: usize,
@@ -1196,14 +1253,17 @@ fn validate_claimed_source_numeric_tail_v1(
     })
 }
 
+#[cfg(test)]
 fn claimed_source_mod_add_v1(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) + u128::from(right)) % u128::from(modulus)) as u64
 }
 
+#[cfg(test)]
 fn claimed_source_mod_mul_v1(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
 
+#[cfg(test)]
 fn claimed_source_ring_power_v1(mut value: u64, modulus: u64) -> u64 {
     for _ in 0..CLAIMED_SOURCE_RING_POWER_SQUARINGS_V1 {
         value = claimed_source_mod_mul_v1(value, value, modulus);
@@ -1212,6 +1272,7 @@ fn claimed_source_ring_power_v1(mut value: u64, modulus: u64) -> u64 {
 }
 
 /// Consume the authenticated fold-zero stage and complete correlated FRI.
+#[cfg(test)]
 pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     equation_commitment_digests: &[ProofDigestV1],
@@ -1231,6 +1292,7 @@ pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1<'a>(
 }
 
 /// Complete qPCS while preserving the exact pre-terminal relation schedule.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "the typed qPCS/cross-field orchestration adapter is not declared yet"
@@ -1255,6 +1317,7 @@ pub(super) fn authenticate_rns_native_qpcs_fri_complete_with_schedule_v1<'a>(
     authenticate_fri_after_fold_zero_v1(transcript, prefix)
 }
 
+#[cfg(test)]
 fn authenticate_fri_after_fold_zero_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     mut prefix: RnsNativeQpcsFoldZeroStageV1<'a>,
@@ -1274,6 +1337,7 @@ fn authenticate_fri_after_fold_zero_v1<'a>(
     verify_closure_parts_with_retained_evaluations_v1(context, relation_schedule, closure_parts)
 }
 
+#[cfg(test)]
 struct FriClosurePartsV1<'input, 'proof> {
     queries: &'input [u32; QUERY_COUNT_V1],
     fri_one_indices: IndexSetV1,
@@ -1283,6 +1347,7 @@ struct FriClosurePartsV1<'input, 'proof> {
     closure: &'proof [u8],
 }
 
+#[cfg(test)]
 fn verify_closure_parts_with_retained_evaluations_v1<'proof>(
     context: FriClosureContextV1,
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
@@ -1393,6 +1458,7 @@ fn verify_closure_parts_v1<'a>(
     )
 }
 
+#[cfg(test)]
 fn closure_shape_v1(
     queries: &[u32; QUERY_COUNT_V1],
 ) -> Result<ClosureShapeV1, RnsNativeQpcsFriCompleteErrorV1> {
@@ -1455,6 +1521,7 @@ fn closure_shape_v1(
     })
 }
 
+#[cfg(test)]
 fn decode_closure_exact_v1<'a>(
     closure: &'a [u8],
     context: FriClosureContextV1,
@@ -1577,6 +1644,7 @@ fn decode_closure_exact_v1<'a>(
     })
 }
 
+#[cfg(test)]
 #[allow(
     clippy::too_many_arguments,
     reason = "the fixed FRI layer relation has explicit authenticated inputs"
@@ -1634,6 +1702,7 @@ fn verify_fold_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn verify_terminal_degree_v1(
     context: FriClosureContextV1,
     fields: &[Fq2ParametersV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
@@ -1673,6 +1742,7 @@ fn verify_terminal_degree_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn derive_fold_challenge_v1(
     context: FriClosureContextV1,
     layer: usize,
@@ -1695,6 +1765,7 @@ fn derive_fold_challenge_v1(
     .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge)
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum ClosureBindingRoleV1 {
     Schedule,
@@ -1702,6 +1773,7 @@ enum ClosureBindingRoleV1 {
     ClaimedSource,
 }
 
+#[cfg(test)]
 fn binding_hash_v1(
     role: ClosureBindingRoleV1,
     parameter_digest: [u8; 32],
@@ -1743,6 +1815,7 @@ fn binding_hash_v1(
     Ok(digest)
 }
 
+#[cfg(test)]
 fn schedule_digest_v1(
     context: FriClosureContextV1,
 ) -> Result<ProofDigestV1, RnsNativeQpcsFriCompleteErrorV1> {
@@ -1770,6 +1843,7 @@ fn schedule_digest_v1(
     )
 }
 
+#[cfg(test)]
 fn residual_digest_v1(
     context: FriClosureContextV1,
     residual: &[u8],

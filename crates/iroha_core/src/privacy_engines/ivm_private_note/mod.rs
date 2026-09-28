@@ -36,9 +36,10 @@ pub(crate) use air::{
 pub(crate) use codec::PRIVATE_PROGRAM_BYTES_V1;
 #[cfg(test)]
 pub(crate) use codec::encode_private_program_v1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub use facade::verify_ivm_private_note_v1;
 pub use facade::{
     IvmPrivateNoteProofErrorV1, prove_ivm_private_note_v1, prove_ivm_private_note_v1_with_rng,
-    verify_ivm_private_note_v1,
 };
 #[cfg(feature = "privacy-release-evidence")]
 pub(crate) use fixture::{
@@ -70,13 +71,15 @@ pub(crate) use stark::{
     PrivateNoteStarkRelationV1, validate_ivm_private_note_stark_profile_v1,
     verify_private_note_stark_v1,
 };
+#[cfg(test)]
+pub use wallet::decrypt_ivm_private_wallet_note_v1;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) use wallet::encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1;
 pub(crate) use wallet::validate_ivm_private_wallet_encryption_opening_v1;
 pub use wallet::{
-    IvmPrivateNoteWalletErrorV1, decrypt_ivm_private_wallet_note_v1,
-    derive_ivm_private_recipient_id_v1, encrypt_ivm_private_wallet_note_v1,
-    encrypt_ivm_private_wallet_note_with_os_rng_v1, ivm_private_recipient_public_key_v1,
-    validate_ivm_private_encrypted_output_v1,
+    IvmPrivateNoteWalletErrorV1, derive_ivm_private_recipient_id_v1,
+    encrypt_ivm_private_wallet_note_v1, encrypt_ivm_private_wallet_note_with_os_rng_v1,
+    ivm_private_recipient_public_key_v1, validate_ivm_private_encrypted_output_v1,
 };
 #[cfg(test)]
 pub(crate) fn private_note_statement_fixture_v1() -> (

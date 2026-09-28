@@ -1,14 +1,6 @@
 //! Future-beacon sortition helper for governance bodies (seeding + ranked alternates).
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{NetworkId, account::AccountId};
-/// Beacon-derived draw result: ranked winners plus alternates (descending output; ties by account id).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Draw {
-    #[doc = "Selected members in descending beacon-derived score order."]
-    pub members: Vec<AccountId>,
-    #[doc = "Backup candidates to replace members that decline or are ineligible."]
-    pub alternates: Vec<AccountId>,
-}
 /// Compute deterministic sortition seed.
 pub fn compute_seed(
     network_id: &NetworkId,

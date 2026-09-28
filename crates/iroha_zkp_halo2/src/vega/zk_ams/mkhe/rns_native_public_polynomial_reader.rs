@@ -27,28 +27,39 @@
     reason = "the private reader remains fail-closed until the remaining production integration delta below is implemented"
 )]
 
+#[cfg(test)]
 use std::sync::OnceLock;
 
+use super::rns_native_proof_hash::RnsNativeProofDigestV1 as ProofDigestV1;
+#[cfg(test)]
 use super::rns_native_proof_hash::{
-    RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
-    RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+    RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1,
+    RnsNativeProofHashRoleV1,
 };
 use super::{
     direct_object_transport::{
         ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
-        ZkAmsMkheDirectObjectKindV1, ZkAmsMkheDirectObjectPointerV1,
-        ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
-        ZkAmsMkheDirectObjectReadTransactionV1,
     },
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_IO_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1,
     },
+};
+#[cfg(test)]
+use super::{
+    direct_object_transport::{
+        ZkAmsMkheDirectObjectKindV1, ZkAmsMkheDirectObjectPointerV1,
+        ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
+        ZkAmsMkheDirectObjectReadTransactionV1,
+    },
+    rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
     rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
 };
+#[cfg(test)]
 use crate::vega::sponge::Keccak256;
 
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
 const DIGEST_BYTES_V1: usize = 32;
 const RECORDS_V1: usize = 43;
@@ -101,19 +112,28 @@ const PUBLIC_POLYNOMIAL_COARSE_WORK_UNITS_V1: u64 = PUBLIC_POLYNOMIAL_CANONICAL_
     + PUBLIC_POLYNOMIAL_MODULAR_MULTIPLICATIONS_V1
     + PUBLIC_POLYNOMIAL_MODULAR_ADDITIONS_V1;
 
+#[cfg(test)]
 const ENCODING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.encoding";
+#[cfg(test)]
 const ARTIFACT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.artifact";
+#[cfg(test)]
 const MANIFEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.manifest";
+#[cfg(test)]
 const READ_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.read-set";
 const QPCS_SCHEDULE_POINT_BYTES_V1: usize = 40 * (2 + 8 + 5 * (2 + 8));
+#[cfg(test)]
 const QPCS_SCHEDULE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.qpcs-schedule";
+#[cfg(test)]
 const ENCODING_LANGUAGE_V1: &[u8] = b"coefficient-domain;ascending-c0-through-c131071;u32-count-big-endian-then-count-u64-big-endian;count=131072;strict-residue-less-than-position-modulus;no-reduction;no-ntt-order;one-complete-blake3-transaction-before-evaluation-escape";
+#[cfg(test)]
 const MANIFEST_LANGUAGE_V1: &[u8] = b"A[40]-then-B[40]-then-C0[record-major-43][limb-major-40]-then-C1[record-major-43][limb-major-40];descriptor-role-record-limb-modulus-kind-length-and-pointer-frame-bound;all-3520-pointer-digests-distinct;legacy-38-and-missing-new-limbs-rejected";
+#[cfg(test)]
 const READ_LANGUAGE_V1: &[u8] = b"capture-one-provider-and-snapshot;limb-major-runtime-read-A-B-then-record-major-C0-C1;five-qpcs-points-per-limb-from-one-retained-schedule;bind-all-200-points-in-read-receipt;authenticate-all-88-objects-before-serving-five-repetitions;strict-limb-then-repetition-order;poison-on-any-failure;8192-byte-maximum-read;3520-byte-evaluation-cache";
 
 /// Exact remaining changes required before this private tranche can enter a
 /// production path. No item in this file performs those changes.
+#[cfg(test)]
 pub(super) const RNS_NATIVE_PUBLIC_POLYNOMIAL_READER_REMAINING_INTEGRATION_DELTA_V1: &[u8] = b"construct-manifest-from-a-40-limb-phase23-publication-owner-and-move-its-immutable-provider;replace-the-detached-RnsNativePublicArtifactViewV1-preflight-input-with-this-owned-reader;derive-every-source-statement-limb-identity-from-descriptor-artifact_digest_v1;thread-provider-P-through-RnsNativeRlweSourceStatementStageV1-and-RnsNativeSourceTerminalCrossFieldPrerequisiteV1;bind-qpcs_schedule_digest-and-read_set_digest-into-the-source-terminal-token;consume-the-retained-qpcs-schedule-and-authenticated-evaluation-bytes-through-a-purpose-specific-sealed-direct-source-transition;remove-production-caller-supplied-a-A-B-C0-C1-qpcs-numeric-values;charge-aggregate-io-work-and-measured-rss;keep-composite-readiness-and-release-false-until-upstream-40-limb-KATs-and-resource-evidence-pass";
 
 pub(super) const RNS_NATIVE_PUBLIC_POLYNOMIAL_READER_SOURCE_SETTLED_V1: bool = true;
@@ -161,6 +181,7 @@ const _: () = {
     assert!(!RNS_NATIVE_PUBLIC_POLYNOMIAL_PRODUCTION_READY_V1);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativePublicPolynomialReaderErrorV1 {
     InvalidCount,
@@ -178,14 +199,17 @@ pub(super) enum RnsNativePublicPolynomialReaderErrorV1 {
     Incomplete,
 }
 
+#[cfg(test)]
 impl core::fmt::Display for RnsNativePublicPolynomialReaderErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RnsNativePublicPolynomialReaderErrorV1 {}
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub(super) enum RnsNativePublicPolynomialRoleV1 {
@@ -195,6 +219,7 @@ pub(super) enum RnsNativePublicPolynomialRoleV1 {
     CiphertextC1 = 3,
 }
 
+#[cfg(test)]
 impl RnsNativePublicPolynomialRoleV1 {
     const fn object_kind_v1(self) -> ZkAmsMkheDirectObjectKindV1 {
         match self {
@@ -210,6 +235,7 @@ impl RnsNativePublicPolynomialRoleV1 {
     }
 }
 
+#[cfg(test)]
 fn public_polynomial_encoding_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     static DIGEST: OnceLock<[u8; DIGEST_BYTES_V1]> = OnceLock::new();
     *DIGEST.get_or_init(|| {
@@ -230,6 +256,7 @@ fn public_polynomial_encoding_digest_v1() -> [u8; DIGEST_BYTES_V1] {
 ///
 /// This descriptor is copyable for bounded internal traversal; the manifest and
 /// reader owners deliberately are not.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativePublicPolynomialDescriptorV1 {
     role: RnsNativePublicPolynomialRoleV1,
@@ -239,6 +266,7 @@ pub(super) struct RnsNativePublicPolynomialDescriptorV1 {
     artifact_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl RnsNativePublicPolynomialDescriptorV1 {
     pub(super) fn new(
         role: RnsNativePublicPolynomialRoleV1,
@@ -309,6 +337,7 @@ impl RnsNativePublicPolynomialDescriptorV1 {
     }
 }
 
+#[cfg(test)]
 fn validate_pointer_v1(
     role: RnsNativePublicPolynomialRoleV1,
     pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -328,6 +357,7 @@ fn validate_pointer_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn artifact_digest_v1(descriptor: RnsNativePublicPolynomialDescriptorV1) -> [u8; DIGEST_BYTES_V1] {
     let limb = usize::from(descriptor.limb);
     let mut hash = Keccak256::new();
@@ -341,6 +371,7 @@ fn artifact_digest_v1(descriptor: RnsNativePublicPolynomialDescriptorV1) -> [u8;
 }
 
 /// Exact move-only compact manifest for all 3,520 public limb objects.
+#[cfg(test)]
 #[must_use = "dropping the manifest discards the only typed public-artifact inventory"]
 pub(super) struct RnsNativePublicPolynomialManifestV1 {
     public_a: Box<[RnsNativePublicPolynomialDescriptorV1]>,
@@ -350,6 +381,7 @@ pub(super) struct RnsNativePublicPolynomialManifestV1 {
     manifest_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl RnsNativePublicPolynomialManifestV1 {
     pub(super) fn new(
         public_a: Box<[RnsNativePublicPolynomialDescriptorV1]>,
@@ -498,6 +530,7 @@ impl RnsNativePublicPolynomialManifestV1 {
     }
 }
 
+#[cfg(test)]
 fn manifest_digest_v1(
     manifest: &RnsNativePublicPolynomialManifestV1,
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativePublicPolynomialReaderErrorV1> {
@@ -535,6 +568,7 @@ struct QpcsScheduleIdentityV1 {
 }
 
 impl QpcsScheduleIdentityV1 {
+    #[cfg(test)]
     fn from_schedule_v1(
         schedule: &RnsNativeQpcsRelationScheduleV1,
     ) -> Result<Self, RnsNativePublicPolynomialReaderErrorV1> {
@@ -595,6 +629,7 @@ impl QpcsScheduleIdentityV1 {
         Ok(value)
     }
 
+    #[cfg(test)]
     fn validate_base_v1(self) -> Result<(), RnsNativePublicPolynomialReaderErrorV1> {
         let context = RnsNativeProofHashContextV1::canonical()
             .map_err(|_| RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule)?;
@@ -615,6 +650,7 @@ impl QpcsScheduleIdentityV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_v1(self) -> Result<(), RnsNativePublicPolynomialReaderErrorV1> {
         self.validate_base_v1()?;
         if self.binding_digest == ProofDigestV1::ZERO {
@@ -624,6 +660,7 @@ impl QpcsScheduleIdentityV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct FivePointBlockPlanV1 {
     modulus: u64,
@@ -635,6 +672,7 @@ struct FivePointBlockPlanV1 {
     step_multiplications: u64,
 }
 
+#[cfg(test)]
 impl FivePointBlockPlanV1 {
     fn new_v1(
         modulus: u64,
@@ -680,6 +718,7 @@ impl FivePointBlockPlanV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct EvaluationWorkV1 {
     coefficients: u64,
@@ -687,6 +726,7 @@ struct EvaluationWorkV1 {
     additions: u64,
 }
 
+#[cfg(test)]
 impl EvaluationWorkV1 {
     fn charge_v1(
         &mut self,
@@ -710,6 +750,7 @@ impl EvaluationWorkV1 {
     }
 }
 
+#[cfg(test)]
 struct FivePointBlockEvaluationV1 {
     plan: FivePointBlockPlanV1,
     values: [u64; REPETITIONS_V1],
@@ -718,6 +759,7 @@ struct FivePointBlockEvaluationV1 {
     work: EvaluationWorkV1,
 }
 
+#[cfg(test)]
 impl FivePointBlockEvaluationV1 {
     const fn new_v1(plan: FivePointBlockPlanV1) -> Self {
         Self {
@@ -806,14 +848,17 @@ impl FivePointBlockEvaluationV1 {
     }
 }
 
+#[cfg(test)]
 fn mod_add_v1(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) + u128::from(right)) % u128::from(modulus)) as u64
 }
 
+#[cfg(test)]
 fn mod_mul_v1(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
 
+#[cfg(test)]
 fn mod_pow_with_work_v1(mut base: u64, mut exponent: u64, modulus: u64) -> (u64, u64) {
     let mut result = 1_u64;
     let mut work = 0_u64;
@@ -840,6 +885,7 @@ pub(super) struct RnsNativePublicPolynomialEvaluationV1 {
 }
 
 impl RnsNativePublicPolynomialEvaluationV1 {
+    #[cfg(test)]
     const UNFILLED: Self = Self {
         public_a: u64::MAX,
         public_b: u64::MAX,
@@ -857,6 +903,7 @@ const _: () = {
 };
 
 /// Non-consensus operational receipt for one complete public-manifest pass.
+#[cfg(test)]
 #[allow(
     missing_copy_implementations,
     reason = "the completed read-set receipt is a single-use source-terminal authority"
@@ -875,6 +922,7 @@ pub(super) struct RnsNativePublicPolynomialReadReceiptV1 {
     read_set_digest: [u8; DIGEST_BYTES_V1],
 }
 
+#[cfg(test)]
 impl RnsNativePublicPolynomialReadReceiptV1 {
     pub(super) const fn manifest_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
         self.manifest_digest
@@ -918,6 +966,7 @@ impl RnsNativePublicPolynomialReadReceiptV1 {
 }
 
 /// Move-only, poison-on-failure owner of one complete authenticated public pass.
+#[cfg(test)]
 #[must_use = "dropping the reader before finish cannot mint a read-set receipt"]
 pub(super) struct RnsNativePublicPolynomialReaderV1<P>
 where
@@ -941,6 +990,7 @@ where
     poisoned: bool,
 }
 
+#[cfg(test)]
 impl<P> RnsNativePublicPolynomialReaderV1<P>
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1,

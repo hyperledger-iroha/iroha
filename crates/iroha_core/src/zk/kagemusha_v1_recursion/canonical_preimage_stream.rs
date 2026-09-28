@@ -8,13 +8,16 @@
 //! TODO: integrate with the canonical variable-field context/statement/envelope assemblers;
 //! the byte-stream relation alone grants no MintFold or recipient authority.
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
     gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
 };
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use crate::zk::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::PastaSha256ByteV1};
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// An exact active byte prefix with a circuit-constrained length and zero tail.
 ///
 /// Byte provenance and capacity must be identical during key generation and proving. In
@@ -27,7 +30,9 @@ pub(crate) struct KagemushaBoundedByteStreamV1<F: KagemushaPoseidonFieldV1> {
     actual_len: AssignedValue<F>,
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 impl<F: KagemushaPoseidonFieldV1> KagemushaBoundedByteStreamV1<F> {
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     /// Constrain `actual_len` to the buffer capacity and every byte outside its prefix to zero.
     pub(crate) fn constrain(
         ctx: &mut Context<F>,
@@ -56,16 +61,19 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaBoundedByteStreamV1<F> {
         Ok(Self { bytes, actual_len })
     }
 
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     /// Borrow the fixed-capacity buffer, including its proven zero tail.
     pub(crate) fn bytes(&self) -> &[PastaSha256ByteV1<F>] {
         &self.bytes
     }
 
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     /// Return the exact constrained active length for framing, CRC or bounded hashing.
     pub(crate) fn actual_len(&self) -> AssignedValue<F> {
         self.actual_len
     }
 
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     /// Concatenate two active prefixes without using their witness lengths as host indices.
     ///
     /// A zero-fill barrel shifter moves `other` right by the proven length of `self`. Each
@@ -133,6 +141,7 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaBoundedByteStreamV1<F> {
     }
 }
 
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Prove an ordinary integer length in `0..=capacity` without a field-wraparound escape.
 fn constrain_stream_length_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,

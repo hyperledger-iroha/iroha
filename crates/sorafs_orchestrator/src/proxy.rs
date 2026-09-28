@@ -159,11 +159,11 @@ impl ProxyMode {
             Self::MetadataOnly => "metadata-only",
         }
     }
-    /// Parses a textual proxy mode label.
+    /// Parses an exact canonical proxy mode label (`bridge` or `metadata-only`).
     pub fn parse(label: &str) -> Option<Self> {
-        match label.trim().to_ascii_lowercase().as_str() {
+        match label {
             "bridge" => Some(Self::Bridge),
-            "metadata-only" | "metadata_only" | "metadata" => Some(Self::MetadataOnly),
+            "metadata-only" => Some(Self::MetadataOnly),
             _ => None,
         }
     }
@@ -202,13 +202,11 @@ impl norito::json::JsonObjectKey for ProxyMode {
 }
 impl norito::json::JsonObjectKeyOwned for ProxyMode {
     fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
-        match key {
-            "bridge" => Ok(Self::Bridge),
-            "metadata-only" => Ok(Self::MetadataOnly),
-            _ => Err(norito::json::Error::Message(
+        Self::parse(key).ok_or_else(|| {
+            norito::json::Error::Message(
                 "proxy_mode object key must be `bridge` or `metadata-only`".to_owned(),
-            )),
-        }
+            )
+        })
     }
 }
 /// Hex-encoded per-start capability used to authenticate to a local proxy.
@@ -2875,7 +2873,8 @@ fn generate_cache_salt_with_rng<R: TryCryptoRng + ?Sized>(
 }
 /// Proxy handshake payload dispatched by clients.
 #[cfg(feature = "local-quic-proxy")]
-#[derive(NoritoSerialize, NoritoDeserialize)]
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::proxy::ProxyHandshakeV1")]
 struct ProxyHandshakeV1 {
     version: u8,
     #[norito(default)]
@@ -2911,7 +2910,8 @@ impl Drop for ProxyHandshakeV1 {
 }
 /// Acknowledgement returned to clients after the handshake completes.
 #[cfg(feature = "local-quic-proxy")]
-#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::proxy::ProxyHandshakeAckV1")]
 struct ProxyHandshakeAckV1 {
     version: u8,
     accepted: bool,
@@ -2922,7 +2922,8 @@ struct ProxyHandshakeAckV1 {
 }
 /// Stream open frame dispatched per application channel.
 #[cfg(feature = "local-quic-proxy")]
-#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::proxy::ProxyStreamOpenV1")]
 struct ProxyStreamOpenV1 {
     version: u8,
     #[norito(default)]
@@ -2940,7 +2941,8 @@ struct ProxyStreamOpenV1 {
 }
 /// Stream acknowledgement returned once the proxy routes a request.
 #[cfg(feature = "local-quic-proxy")]
-#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::proxy::ProxyStreamAckV1")]
 struct ProxyStreamAckV1 {
     version: u8,
     code: u8,

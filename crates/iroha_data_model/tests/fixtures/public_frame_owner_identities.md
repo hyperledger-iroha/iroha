@@ -1,14 +1,15 @@
 # Public manual model frame fixtures
 
-The identifier and block-signature JSON files retain successful captures before declaring the
-public owners' Norito identities. They were recorded after removing redundant
-adapter framing and repairing fallible IdBox delegation; they do not claim to
-capture the former malformed-input behavior.
+The identifier JSON retains successful captures made after repairing fallible IdBox
+delegation and before declaring its public owner's Norito identity. The block-signature
+JSON was regenerated for the current first-release header, including its dedicated
+threshold-beacon pulse commitment, by the canonical checked capture test. These captures
+describe valid current frames; they do not preserve former malformed-input behavior.
 
 | Fixture | Coverage | SHA-256 |
 | --- | --- | --- |
 | `id_box_identity_frames.json` | All 13 IdBox variants, None, Some(permission), empty Vec and all-variant Vec: 17 frames | `440a4413817a41e1e67d2c4a6623738d73e884ac4c993c9c2a334a2cc1533146` |
-| `block_signature_identity_frames.json` | Two genuinely signed headers and root/Option/Vec containers: seven frames | `163757b493774c08771031417b2cae4d70dd606d961f4675a98be5e3b057822c` |
+| `block_signature_identity_frames.json` | Two genuinely signed headers and root/Option/Vec containers: seven frames | `2a7313c77ce8975f1f8613c1f8f4a2a0b0068f706ef3c40f8f7b7f412fe7d325` |
 
 The compiler-observed nominal owners are
 `iroha_data_model::id::model::IdBox` and
@@ -123,8 +124,14 @@ and fixture remains; temporary capture writers are removed.
 
 | Fixture | Coverage | SHA-256 |
 | --- | --- | --- |
-| `query_manual_identity_frames.json` | Seven owners, 59 root/Option/Vec frames: erased queries, typed signatures, authorized requests, signed envelopes, batch tuples, responses and time intervals | `21909a3ffabf52f33987c6498c86b5958f7c7f9203c8322015a28115b98fb29c` |
-| `query_derived_identity_frames.json` | Eight connected owners, 122 frames: requests, parameters, all 31 item-kind tags, output, batches, singular query/output and cursors | `f7f52e991d70f7ba7c7a883428d7ff9d6732d1a2b1c237dc8ca0b940c706f14e` |
+| `query_manual_identity_frames.json` | Seven owners, 59 root/Option/Vec frames: erased queries, typed signatures, authorized requests, signed envelopes, batch tuples, responses and time intervals | `c09e2059d0bd0f4a9eae6be22d87d764ed3f2e11cc7f8ab68857319452d6989c` |
+| `query_derived_identity_frames.json` | Eight connected owners, 122 frames: requests, parameters, all 31 item-kind tags, output, batches, singular query/output and cursors | `a8f951911789c2c36bebb96e9aaf05c1a6ecd171bb503c8849acb50390f5b1b9` |
+
+The query parameter frames were regenerated on 2026-09-27 from the current first-release
+model using the ignored `capture_current_query_and_time_identity_frames` and
+`capture_current_derived_query_identity_frames` tests. They include the nonempty-work payload
+retry parameter and current execution-source budgets; no retired parameter wire layout is
+accepted as a compatibility input.
 
 QuerySignature retains its own nominal identity and projects its root to
 `SignatureOf<QueryRequestWithAuthority>`; wrapper containers remain distinct.

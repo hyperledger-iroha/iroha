@@ -1,7 +1,7 @@
 //! Hardening and privacy baseline checks for the SoraGlobal Gateway CDN (SNNet-15H).
 //! Produces JSON/Markdown evidence that SBOMs, vuln scans, retention defaults,
 //! and sandbox/signing-policy artefacts are present before promotion.
-use blake3::Hasher as Blake3;
+use crate::soranet_common::file_blake3_hex;
 use eyre::{Result, WrapErr};
 use norito::json::{self, Map, Number, Value};
 use std::{
@@ -152,12 +152,6 @@ fn retention_block(data_days: u32, log_days: u32, overall: &mut ComponentState) 
     obj.insert("state".into(), Value::String(state.as_str().to_string()));
     *overall = overall.elevate(state);
     Value::Object(obj)
-}
-fn file_blake3_hex(path: &Path) -> Result<String> {
-    let mut hasher = Blake3::new();
-    let mut file = fs::File::open(path).wrap_err_with(|| format!("open {}", path.display()))?;
-    std::io::copy(&mut file, &mut hasher).wrap_err_with(|| format!("hash {}", path.display()))?;
-    Ok(hasher.finalize().to_hex().to_string())
 }
 fn render_markdown(root: &Map) -> String {
     let overall = root

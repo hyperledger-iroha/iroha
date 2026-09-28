@@ -79,7 +79,7 @@ authorized account through the ordinary signed transaction path:
 iroha app sorafs toolkit instruction capacity-declaration \
   --summary artifacts/sorafs/providers/acme/declaration.json \
   > artifacts/sorafs/providers/acme/instruction.json
-iroha transaction stdin \
+iroha tx stdin \
   < artifacts/sorafs/providers/acme/instruction.json
 ```
 

@@ -22,6 +22,7 @@
     )
 )]
 
+#[cfg(test)]
 use core::convert::Infallible;
 
 use iroha_crypto::confidential_spool::{
@@ -29,13 +30,16 @@ use iroha_crypto::confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1,
 };
 
+#[cfg(test)]
 use crate::vega::{bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, sponge::Keccak256};
 
+#[cfg(test)]
 use super::{
     GlobalLookupCommitmentPurposeV1, comparator_signed_coordinate_v1,
     global_lookup_topology_digest_v1,
 };
 
+#[cfg(test)]
 const PLANE_OPENING_VERSION_V1: u8 = 1;
 const COORDINATES_PER_PLANE_V1: usize = 1 << 14;
 const COMPARATOR_GROUPS_V1: usize = 344;
@@ -84,27 +88,39 @@ const RETAINED_VALUE_BYTES_V1: u64 = PLANE_COUNT_V1 as u64 * VALUE_BYTES_PER_PLA
 const RETAINED_BLINDING_BYTES_V1: u64 = PLANE_COUNT_V1 as u64 * SCALAR_BYTES_V1;
 const RETAINED_COMMITMENT_WIRE_BYTES_V1: u64 = PLANE_COUNT_V1 as u64 * POINT_BYTES_V1;
 
+#[cfg(test)]
 const PLANE_MAPPING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.vector-arithmetic-plane.mapping\0";
+#[cfg(test)]
 const PLANE_CONTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.vector-arithmetic-plane.context\0";
+#[cfg(test)]
 const PLANE_RECORD_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.vector-arithmetic-plane.record\0";
+#[cfg(test)]
 const GROUP_AXIS_LANGUAGE_V1: &[u8] =
     b"group=record*8+group-in-record;record=0..42;group-in-record=0..7";
+#[cfg(test)]
 const UNIT_AXIS_LANGUAGE_V1: &[u8] =
     b"unit=((record*3+signed-role)*8+plane);record=0..42;signed-role=(r,e0,e1);plane=0..7";
+#[cfg(test)]
 const COLUMN_AXIS_LANGUAGE_V1: &[u8] = b"beta-column=0..17;beta-order=group-major-then-column";
+#[cfg(test)]
 const COORDINATE_AXIS_LANGUAGE_V1: &[u8] =
     b"coordinate-v=0..16383;Boolean-coordinate-bits-little-endian;canonical-T256-scalar-big-endian-32";
+#[cfg(test)]
 const PLANE_ORDER_LANGUAGE_V1: &[u8] =
     b"plane-order=bD[group],bS[group],beta[group][column],m[group],x[unit],n[unit];commitment-order=blinding-order=plane-order";
+#[cfg(test)]
 const SNAPSHOT_LAYOUT_LANGUAGE_V1: &[u8] =
     b"one-authenticated-confidential-snapshot;ordered-two-spool-storage-v1;whole-plane-ranges=[0,7075),[7075,9288);segment-context=full-plane-context+mapping+ordered-exact-range;aggregate=descriptor+both-actual-leaf-digests-in-order;plane-major;per-plane-slots=value-chunk[0..31],tail;value-chunk=512-canonical-scalars;tail=blinding32||nonidentity-commitment33||zero-padding16319;slot=plane*33+local;no-independent-snapshot-authorities";
+#[cfg(test)]
 const COMMITMENT_LANGUAGE_V1: &[u8] =
     b"commitment-mask[plane]=blinding[plane];mask-order=plane-order;C_plane=sum_v(value[plane,v]*G[v])+blinding[plane]*H;one-nonzero-canonical-blinding-and-one-canonical-nonidentity-33B-point-per-plane;basis=ZkAmsT256BulletproofSuiteV1:G[0..16384)+H";
+#[cfg(test)]
 const SOURCE_CONTEXT_LANGUAGE_V1: &[u8] =
     b"context-order=native40-inventory,basis,mapping,source-replay-record,source-opening-record,radix-range-record";
+#[cfg(test)]
 const PRODUCTION_BLOCKER_LANGUAGE_V1: &[u8] =
     b"current-upstream-does-not-own-one-authenticated-snapshot-containing-all-9288-exact-values,blindings,and-matching-commitments;ordered-two-spool-storage-does-not-supply-authenticated-source-to-pair-handoff-or-commitment-equations;replay-cursor-does-not-yet-authenticate-plane-slots;production-seal-remains-Infallible";
 
@@ -162,6 +178,7 @@ const _: () = {
     assert!(!RELEASE_READY_V1);
 };
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlaneOpeningErrorV1 {
     Shape,
@@ -172,6 +189,7 @@ enum PlaneOpeningErrorV1 {
     Source,
 }
 
+#[cfg(test)]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GlobalLookupPlaneRoleV1 {
@@ -183,6 +201,7 @@ enum GlobalLookupPlaneRoleV1 {
     SmallNegativeMagnitude = 6,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GlobalLookupPlaneCoordinateV1 {
     ordinal: u16,
@@ -192,6 +211,7 @@ struct GlobalLookupPlaneCoordinateV1 {
     column: Option<u8>,
 }
 
+#[cfg(test)]
 fn plane_coordinate_v1(
     ordinal: usize,
 ) -> Result<GlobalLookupPlaneCoordinateV1, PlaneOpeningErrorV1> {
@@ -247,6 +267,7 @@ fn plane_coordinate_v1(
     })
 }
 
+#[cfg(test)]
 fn role_plane_count_v1(role: GlobalLookupPlaneRoleV1) -> usize {
     let purpose = match role {
         GlobalLookupPlaneRoleV1::BooleanD => {
@@ -265,6 +286,7 @@ fn role_plane_count_v1(role: GlobalLookupPlaneRoleV1) -> usize {
     purpose.count_v1()
 }
 
+#[cfg(test)]
 fn absorb_len_prefixed_v1(hash: &mut Keccak256, bytes: &[u8]) -> Result<(), PlaneOpeningErrorV1> {
     let len = u16::try_from(bytes.len()).map_err(|_| PlaneOpeningErrorV1::Resource)?;
     hash.update(&len.to_be_bytes());
@@ -272,6 +294,7 @@ fn absorb_len_prefixed_v1(hash: &mut Keccak256, bytes: &[u8]) -> Result<(), Plan
     Ok(())
 }
 
+#[cfg(test)]
 fn plane_mapping_digest_v1() -> Result<[u8; 32], PlaneOpeningErrorV1> {
     let topology_digest = require_nonzero_v1(global_lookup_topology_digest_v1())?;
     let mut hash = Keccak256::new();
@@ -309,6 +332,7 @@ fn plane_mapping_digest_v1() -> Result<[u8; 32], PlaneOpeningErrorV1> {
     require_nonzero_v1(hash.finalize())
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct PlaneOpeningSourceContextV1 {
     source_replay_record_digest: [u8; 32],
@@ -316,6 +340,7 @@ struct PlaneOpeningSourceContextV1 {
     radix_range_record_digest: [u8; 32],
 }
 
+#[cfg(test)]
 fn plane_context_digest_v1(
     axes: PlaneOpeningSourceContextV1,
 ) -> Result<[u8; 32], PlaneOpeningErrorV1> {
@@ -340,6 +365,7 @@ fn plane_context_digest_v1(
 }
 
 /// Hash the existing context language only from a view minted by the original source.
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) fn materialized_plane_context_digest_v1(
     source: &crate::vega::zk_ams::mkhe::collective::MaterializedPlaneContextV1<'_>,
 ) -> Result<[u8; 32], super::ZkAmsMkheErrorV1> {
@@ -356,6 +382,7 @@ pub(in crate::vega::zk_ams::mkhe) fn materialized_plane_context_digest_v1(
     .map_err(|_| super::ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 
+#[cfg(test)]
 fn approved_snapshot_plan_v1(
     context_digest: [u8; 32],
 ) -> Result<ordered_snapshot_v1::OrderedPlaneSpoolPlanV1, PlaneOpeningErrorV1> {
@@ -369,6 +396,7 @@ fn approved_snapshot_plan_v1(
     Ok(plan)
 }
 
+#[cfg(test)]
 struct PlaneOpeningRecordV1 {
     topology_digest: [u8; 32],
     basis_digest: [u8; 32],
@@ -381,6 +409,7 @@ struct PlaneOpeningRecordV1 {
     record_digest: [u8; 32],
 }
 
+#[cfg(test)]
 fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], PlaneOpeningErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(PLANE_RECORD_DOMAIN_V1);
@@ -432,6 +461,7 @@ fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], Pla
     require_nonzero_v1(hash.finalize())
 }
 
+#[cfg(test)]
 fn validate_plane_record_v1(record: &PlaneOpeningRecordV1) -> Result<(), PlaneOpeningErrorV1> {
     if record.topology_digest != global_lookup_topology_digest_v1()
         || record.basis_digest != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1
@@ -450,6 +480,7 @@ fn validate_plane_record_v1(record: &PlaneOpeningRecordV1) -> Result<(), PlaneOp
 
 /// TODO: Consume the actual ordered pair only after a source owner verifies all
 /// exact values, blindings and matching points. A storage digest is insufficient.
+#[cfg(test)]
 enum GlobalLookupPlaneOpeningMaterializerSealV1 {
     Production {
         authenticated_confidential_snapshot: Infallible,
@@ -462,6 +493,7 @@ enum GlobalLookupPlaneOpeningMaterializerSealV1 {
     TestOnly(TestAuthenticatedSnapshotHarnessV1),
 }
 
+#[cfg(test)]
 enum BoundAuthenticatedSnapshotV1 {
     Production {
         authenticated_confidential_snapshot: Infallible,
@@ -493,16 +525,25 @@ impl Drop for TestAuthenticatedSnapshotHarnessV1 {
 
 #[path = "vector_arithmetic_plane_openings_v1/ordered_snapshot_v1.rs"]
 mod ordered_snapshot_v1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use ordered_snapshot_v1::SealedQMaskSFileV1;
+#[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use ordered_snapshot_v1::{
     OrderedPlaneSpoolSnapshotV1, OrderedPlaneSpoolWriterV1, OrderedSnapshotErrorV1,
-    OrderedStorageSessionBudgetV1, QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1,
-    SealedQMaskSFileV1, WrittenQMaskSBlockFileV1,
 };
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe) use ordered_snapshot_v1::{
+    OrderedStorageSessionBudgetV1, QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1,
+    WrittenQMaskSBlockFileV1,
+};
+#[cfg(test)]
 #[path = "vector_arithmetic_plane_openings_v1/replay_caps_v1.rs"]
 mod replay_caps_v1;
 
+#[cfg(test)]
 use replay_caps_v1::PlaneOpeningReplayPermitsV1;
 
+#[cfg(test)]
 struct PlaneOpeningOwnerLiveV1 {
     snapshot: BoundAuthenticatedSnapshotV1,
     record: PlaneOpeningRecordV1,
@@ -511,20 +552,24 @@ struct PlaneOpeningOwnerLiveV1 {
     completed_replays: u8,
 }
 
+#[cfg(test)]
 #[must_use = "dropping this owner destroys the sole retained opening snapshot"]
 struct GlobalLookupPlaneOpeningOwnerV1 {
     live: Option<PlaneOpeningOwnerLiveV1>,
 }
 
+#[cfg(test)]
 struct GlobalLookupPlaneOpeningReplayV1 {
     live: Option<PlaneOpeningOwnerLiveV1>,
     cursor: Option<replay_caps_v1::PlaneOpeningReplayCursorV1>,
 }
 
+#[cfg(test)]
 struct ConsumedGlobalLookupPlaneOpeningOwnerV1 {
     binding_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl GlobalLookupPlaneOpeningMaterializerSealV1 {
     fn bind_v1(
         self,
@@ -589,6 +634,7 @@ impl GlobalLookupPlaneOpeningMaterializerSealV1 {
     }
 }
 
+#[cfg(test)]
 impl GlobalLookupPlaneOpeningOwnerV1 {
     fn start_replay_v1(
         mut self,
@@ -629,6 +675,7 @@ impl GlobalLookupPlaneOpeningOwnerV1 {
     }
 }
 
+#[cfg(test)]
 impl GlobalLookupPlaneOpeningReplayV1 {
     fn absorb_next_authenticated_plane_v1(
         &mut self,
@@ -660,6 +707,7 @@ impl GlobalLookupPlaneOpeningReplayV1 {
     }
 }
 
+#[cfg(test)]
 fn require_nonzero_v1(digest: [u8; 32]) -> Result<[u8; 32], PlaneOpeningErrorV1> {
     (digest != [0; 32])
         .then_some(digest)

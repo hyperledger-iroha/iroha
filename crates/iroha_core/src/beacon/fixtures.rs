@@ -80,7 +80,7 @@ pub(super) fn adaptive_beacon_fixture() -> AdaptiveBeaconFixture {
     adaptive_beacon_fixture_for_session(adaptive_dkg_session_fixture())
 }
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(super) fn adaptive_beacon_fixture_for_session(
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
 ) -> AdaptiveBeaconFixture {
@@ -348,7 +348,22 @@ pub(crate) fn prepared_session_and_signers_fixture_v1(
     ValidatedGlobalThresholdBeaconSessionV1,
     Vec<InMemoryGlobalThresholdBeaconPartialSignerV1>,
 ) {
-    let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+    prepared_session_and_signers_fixture_for_keys_v1(
+        dkg_session,
+        &adaptive_fixture_signing_keys(dkg_session.committee_size),
+    )
+}
+
+/// Produce providers bound to an exact authenticated test-chain committee.
+#[cfg(test)]
+pub(crate) fn prepared_session_and_signers_fixture_for_keys_v1(
+    dkg_session: GlobalThresholdBeaconDkgSessionV1,
+    keys: &[iroha_crypto::KeyPair],
+) -> (
+    ValidatedGlobalThresholdBeaconSessionV1,
+    Vec<InMemoryGlobalThresholdBeaconPartialSignerV1>,
+) {
+    let fixture = adaptive_beacon_fixture_for_session_and_keys(dkg_session, keys);
     let signers = (1..=dkg_session.committee_size)
         .map(|recipient_index| {
             let contributions = fixture

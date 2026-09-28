@@ -127,6 +127,7 @@ pub struct ParliamentTimedOvnCastingContextArchiveV1 {
 }
 
 impl ParliamentTimedOvnCastingContextArchiveV1 {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Construct and fully replay-validate a canonical public archive.
     ///
     /// The phase determines whether survivor and release fields must be absent

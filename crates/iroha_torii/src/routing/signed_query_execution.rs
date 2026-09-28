@@ -910,6 +910,7 @@ pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
     Ok(response)
 }
 /// Execute a previously verified query request with the provided options.
+#[cfg(any(test, feature = "test-fixtures", feature = "bench"))]
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub(crate) async fn execute_verified_query_with_opts(
     live_query_store: LiveQueryStoreHandle,
@@ -920,27 +921,6 @@ pub(crate) async fn execute_verified_query_with_opts(
 ) -> Result<iroha_data_model::query::QueryResponse> {
     execute_verified_query_with_opts_inner(live_query_store, state, query, tel, opts, None, None)
         .await
-}
-/// Execute a previously verified query while retaining its physical-work admission permit.
-#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub(crate) async fn execute_admitted_verified_query_with_opts(
-    live_query_store: LiveQueryStoreHandle,
-    state: Arc<CoreState>,
-    query: iroha_data_model::query::QueryRequestWithAuthority,
-    tel: MaybeTelemetry,
-    opts: QueryOptions,
-    admission: crate::QueryAdmissionPermit,
-) -> Result<iroha_data_model::query::QueryResponse> {
-    execute_verified_query_with_opts_inner(
-        live_query_store,
-        state,
-        query,
-        tel,
-        opts,
-        Some(admission),
-        None,
-    )
-    .await
 }
 /// Output-specific Core limits carried by one server-owned fanout execution.
 #[derive(Clone, Copy, Debug)]

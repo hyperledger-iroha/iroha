@@ -74,8 +74,11 @@ identify source inputs; they are not evidence that any theorem has been proved.
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/direct_collective_eval_ceremony.rs` | `04c0fa63fa22587509abbef9d2145f86b4a0ebd77cc36ff13e09010054095581` |
 | `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding.rs` | `1c5cf1c9db73a76bb7cb4356cb5b5ffabe187ae21b1a8ccdfac49f5cc42f4db8` |
 
-This table is exhaustive for the production Rust inputs used by the five
-source-refinement facts below. Test-only children and production siblings
+This table is exhaustive for the Rust inputs used by the five
+source-refinement facts below. The fixed T256 membership prover and verifier,
+their transcript and workspace-lease modules, and the exact-small-coefficient
+statements are compiled only for tests until an MKHE caller is wired; the
+hashes above predate that `cfg(test)` gating. Test-only children and production siblings
 unrelated to those facts—including Galois, streaming, incremental,
 prepared-public-A, and release-admission paths—are outside this snapshot
 unless listed explicitly.

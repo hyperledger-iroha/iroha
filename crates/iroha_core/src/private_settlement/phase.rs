@@ -9,19 +9,16 @@ use super::{
     committee::prepare_private_settlement_leg_v1,
     global_state::validate_private_settlement_prepare_lock_registration_v1,
     protocol::{
-        aggregate_private_settlement_phase_votes_v1, private_settlement_prepare_barrier_v1,
         sign_private_settlement_phase_vote_v1, validate_private_settlement_committee_authority_v1,
         validate_private_settlement_prepare_barrier_v1,
-        verify_private_settlement_phase_certificate_v1,
     },
     sidecar_store::PrivateSettlementFileSidecarStoreV1,
 };
 use crate::state::StateView;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::nexus::{
-    AtomicPrivateSettlementV1, PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1,
-    PrivateSettlementPhaseBodyV1, PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1,
-    PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
+    AtomicPrivateSettlementV1, PrivateSettlementPhaseBodyV1, PrivateSettlementPhaseCertificateV1,
+    PrivateSettlementPhaseV1, PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
 };
 use iroha_model_base::peer::PeerId;
 use std::fmt;
@@ -213,51 +210,6 @@ impl PrivateSettlementPhaseSignerV1 {
         }
         .map_err(|_| PrivateSettlementPhaseErrorV1)
     }
-}
-
-/// Aggregate exactly three canonical, distinct phase votes.
-///
-/// # Errors
-///
-/// Rejects two votes, four votes, duplicates, malformed signatures, or any
-/// body/authority substitution with one redacted error.
-pub fn aggregate_private_settlement_phase_votes(
-    body: PrivateSettlementPhaseBodyV1,
-    authority_catalog_index: u8,
-    authority: &PrivateSettlementCommitteeAuthorityV1,
-    votes: &[PrivateSettlementPhaseVoteV1],
-) -> Result<PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseErrorV1> {
-    aggregate_private_settlement_phase_votes_v1(body, authority_catalog_index, authority, votes)
-        .map_err(|_| PrivateSettlementPhaseErrorV1)
-}
-
-/// Construct and fully verify the canonical all-Prepare barrier.
-///
-/// # Errors
-///
-/// Rejects incomplete, reordered, substituted, or cryptographically invalid evidence.
-pub fn build_private_settlement_prepare_barrier(
-    manifest: AtomicPrivateSettlementV1,
-    authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
-    deltas: Vec<PrivateSettlementDeltaV1>,
-    prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
-) -> Result<PrivateSettlementPrepareBarrierV1, PrivateSettlementPhaseErrorV1> {
-    private_settlement_prepare_barrier_v1(manifest, authority_catalog, deltas, prepare_certificates)
-        .map_err(|_| PrivateSettlementPhaseErrorV1)
-}
-
-/// Verify one aggregate participant certificate against its exact authority.
-///
-/// # Errors
-///
-/// Rejects malformed, substituted, or unauthenticated certificates.
-pub fn verify_private_settlement_phase_certificate(
-    certificate: &PrivateSettlementPhaseCertificateV1,
-    authority_catalog_index: u8,
-    authority: &PrivateSettlementCommitteeAuthorityV1,
-) -> Result<(), PrivateSettlementPhaseErrorV1> {
-    verify_private_settlement_phase_certificate_v1(certificate, authority_catalog_index, authority)
-        .map_err(|_| PrivateSettlementPhaseErrorV1)
 }
 
 #[cfg(test)]

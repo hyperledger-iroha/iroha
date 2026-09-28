@@ -7,6 +7,62 @@ use norito::json::Value;
 use toml::Table;
 
 #[test]
+fn public_taira_templates_inherit_canonical_rate_budgets() {
+    use iroha_config::{
+        base::{env::MockEnv, read::ConfigReader, toml::TomlSource},
+        parameters::user::Torii,
+    };
+
+    let taira: Table =
+        toml::from_str(include_str!("../../../configs/soranexus/taira/config.toml")).unwrap();
+    let profile: Table = toml::from_str(include_str!("../profiles/sora-nexus-v1.toml")).unwrap();
+    for section in [&taira["torii"], &profile["policy"]["torii"]] {
+        // Full templates deliberately omit deployment-owned faucet/onboarding
+        // signing inputs. Parse their rate policy with a valid public bind address.
+        let policy = section.as_table().unwrap();
+        let mut section = Table::new();
+        section.insert("address".into(), taira["torii"]["address"].clone());
+        for field in [
+            "preauth_rate_per_ip_per_sec",
+            "preauth_burst_per_ip",
+            "query_rate_per_authority_per_sec",
+            "query_burst_per_authority",
+            "tx_rate_per_authority_per_sec",
+            "tx_burst_per_authority",
+            "deploy_rate_per_origin_per_sec",
+            "deploy_burst_per_origin",
+        ] {
+            if let Some(value) = policy.get(field) {
+                section.insert(field.into(), value.clone());
+            }
+        }
+        let parsed = ConfigReader::new()
+            .with_env(MockEnv::default())
+            .with_toml_source(TomlSource::inline(section))
+            .read_and_complete::<Torii>()
+            .expect("public Torii rate policy inherits current defaults");
+        // Torii::parse supplies the canonical defaults to omitted optional
+        // budgets. The minimal-config regression covers that effective parser;
+        // these public templates must not shadow its policy with stale values.
+        for configured in [
+            parsed.preauth_rate_per_ip_per_sec,
+            parsed.preauth_burst_per_ip,
+            parsed.query_rate_per_authority_per_sec,
+            parsed.query_burst_per_authority,
+            parsed.tx_rate_per_authority_per_sec,
+            parsed.tx_burst_per_authority,
+            parsed.deploy_rate_per_origin_per_sec,
+            parsed.deploy_burst_per_origin,
+        ] {
+            assert_eq!(
+                configured, None,
+                "public template must inherit rate defaults"
+            );
+        }
+    }
+}
+
+#[test]
 fn lane_descriptor_collection_defaults_match_config_defaults() {
     use iroha_config::{
         base::{env::MockEnv, read::ConfigReader, toml::TomlSource},

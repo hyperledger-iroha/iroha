@@ -39,10 +39,6 @@ static MERKLE_AARCH64_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(32_7
 // On x86/x86_64 with Intel SHA-NI, prefer CPU hashing for medium-size trees too.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 static MERKLE_X86_CPU_PREFER_MAX_LEAVES: AtomicUsize = AtomicUsize::new(32_768);
-#[allow(dead_code)]
-static MERKLE_GPU_ROOTS: AtomicU64 = AtomicU64::new(0);
-#[allow(dead_code)]
-static MERKLE_CPU_ROOTS: AtomicU64 = AtomicU64::new(0);
 static MERKLE_REBUILDS: AtomicU64 = AtomicU64::new(0);
 static MERKLE_INCREMENTAL_LEAF_UPDATES: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn set_merkle_gpu_min_leaves(n: usize) {
@@ -125,13 +121,6 @@ pub(crate) fn set_prefer_cpu_sha2_max_leaves_aarch64(v: usize) {
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) fn set_prefer_cpu_sha2_max_leaves_x86(v: usize) {
     MERKLE_X86_CPU_PREFER_MAX_LEAVES.store(v, Ordering::SeqCst);
-}
-#[allow(dead_code)]
-pub fn merkle_root_counters() -> (u64, u64) {
-    (
-        MERKLE_GPU_ROOTS.load(Ordering::Relaxed),
-        MERKLE_CPU_ROOTS.load(Ordering::Relaxed),
-    )
 }
 /// Return cumulative Merkle maintenance counters `(full_rebuilds, incremental_leaf_updates)`.
 #[allow(dead_code)]
@@ -718,15 +707,6 @@ impl ByteMerkleTree {
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.merkle_root_cpu_total.inc();
         Ok(*canonical.root().expect("non-empty").as_ref())
-    }
-    /// Compute a SHA-256 digest for inputs up to 32 bytes by constructing a single padded block and
-    /// using the accelerated `sha256_compress`. This leverages Metal/CUDA/ARMv8/x86 SHA-NI where
-    /// available and falls back to a scalar implementation otherwise.
-    #[inline]
-    #[allow(dead_code)]
-    fn sha256_from_bytes_le32(input: &[u8]) -> [u8; 32] {
-        debug_assert!(input.len() <= 32);
-        sha256_oneblock32(input)
     }
 }
 #[inline]

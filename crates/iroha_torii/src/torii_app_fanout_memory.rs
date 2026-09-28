@@ -135,23 +135,7 @@ struct ToriiFanoutJsonLimits {
     nesting_depth: usize,
     decoded_graph_bytes: usize,
 }
-impl ToriiFanoutJsonLimits {
-    /// Derive finite lexical ceilings from the allocation phase that remains.
-    fn from_decode_allocation_bytes(bytes: usize) -> Self {
-        let value_bytes = core::mem::size_of::<norito::json::Value>().max(1);
-        Self {
-            raw_bytes: bytes,
-            encoded_string_bytes: bytes,
-            decoded_string_bytes: bytes,
-            values: bytes / value_bytes,
-            array_entries: bytes / value_bytes,
-            object_entries: bytes / TORII_FANOUT_JSON_OBJECT_ENTRY_BYTES,
-            nesting_depth: norito::json::MAX_JSON_VALUE_NESTING_DEPTH
-                .min(bytes / TORII_FANOUT_JSON_PARSER_FRAME_BYTES),
-            decoded_graph_bytes: bytes,
-        }
-    }
-}
+impl ToriiFanoutJsonLimits {}
 /// Allocation-relevant facts obtained without allocating an owned JSON value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ToriiFanoutJsonProfile {
@@ -273,7 +257,8 @@ mod torii_app_fanout_norito_dto_sealed {
 /// transactions reach dynamically boxed instructions. Admitting any of those types here before both
 /// source and decoder roots are bounded would turn this marker into a false memory-safety claim.
 // TODO: Add one concrete implementation at a time after its authoritative
-// source path and every reachable decoder allocation are pre-admission bounded.
+// source path and every reachable decoder allocation are pre-admission bounded,
+// and lift the test-only `include!` gate in lib.rs in the same change.
 trait ToriiAppFanoutNoritoDto:
     torii_app_fanout_norito_dto_sealed::Sealed
     + norito::NoritoSerialize
@@ -350,26 +335,6 @@ impl ToriiAppFanoutMemoryBudget {
                 )
             })
     }
-    /// Limit used by `axum::body::to_bytes` before a format-specific preflight.
-    fn route_body_limit(self) -> Result<usize, ToriiAppFanoutMemoryError> {
-        let remaining = self.remaining_bytes()?;
-        if remaining == 0 {
-            let attempted = self.capacity_bytes.checked_add(1).ok_or_else(|| {
-                ToriiAppFanoutMemoryError::overflow("working-set exhaustion diagnostic overflow")
-            })?;
-            return Err(ToriiAppFanoutMemoryError::resource(
-                ToriiAppFanoutResource::WorkingSetBytes,
-                attempted,
-                self.capacity_bytes,
-            ));
-        }
-        Ok(remaining)
-    }
-    fn json_limits(self) -> Result<ToriiFanoutJsonLimits, ToriiAppFanoutMemoryError> {
-        Ok(ToriiFanoutJsonLimits::from_decode_allocation_bytes(
-            self.remaining_bytes()?,
-        ))
-    }
     /// Admit raw bytes, the complete owned graph, parser frames, string
     /// capacity, and error-cleanup scratch before calling `from_slice<Value>`.
     fn admit_json_decode(
@@ -377,13 +342,6 @@ impl ToriiAppFanoutMemoryBudget {
         profile: ToriiFanoutJsonProfile,
     ) -> Result<(), ToriiAppFanoutMemoryError> {
         self.admit_temporary(profile.decode_peak_bytes()?)
-    }
-    /// Keep the decoded graph after the raw body and parser scratch are gone.
-    fn retain_json_graph(
-        &mut self,
-        profile: ToriiFanoutJsonProfile,
-    ) -> Result<(), ToriiAppFanoutMemoryError> {
-        self.retain(profile.decoded_graph_bytes)
     }
     /// Split remaining Norito capacity across the routes that may still
     /// succeed. Only the closed, source-audited DTO set can obtain this plan.

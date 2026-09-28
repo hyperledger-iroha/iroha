@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **850** · Unique variables: **210**
+Total references: **847** · Unique variables: **207**
 
 ## CARGO (prod: 2, test: 3)
 
@@ -104,14 +104,6 @@ Total references: **850** · Unique variables: **210**
 ## CARGO_FEATURE_FASTPQ_GPU (build: 1)
 
 - build: crates/fastpq_prover/build.rs:19 — `let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();`
-
-## CARGO_FEATURE_FFI_EXPORT (prod: 1)
-
-- prod: crates/build-support/src/lib.rs:301 — `let ffi_export = std::env::var_os("CARGO_FEATURE_FFI_EXPORT").is_some();`
-
-## CARGO_FEATURE_FFI_IMPORT (prod: 1)
-
-- prod: crates/build-support/src/lib.rs:300 — `let ffi_import = std::env::var_os("CARGO_FEATURE_FFI_IMPORT").is_some();`
 
 ## CARGO_INCREMENTAL (test: 1)
 
@@ -885,10 +877,6 @@ Total references: **850** · Unique variables: **210**
 - test: integration_tests/tests/permissions.rs:508 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: integration_tests/tests/pipeline_block_rejected.rs:17 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: integration_tests/tests/sorting.rs:43 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
-
-## IROHA_RUN_ZK_WRAPPERS (test: 1)
-
-- test: crates/ivm/tests/kotodama_wrappers.rs:3 — `std::env::var("IROHA_RUN_ZK_WRAPPERS").ok().as_deref() == Some("1")`
 
 ## IROHA_SCCP_BUILD_FEATURES (prod: 1)
 

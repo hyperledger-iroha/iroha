@@ -5,6 +5,7 @@
 /// complete evaluated-key manifest exactly once. It retains only fixed key
 /// identity digests plus the small manifest table; neither the native `2P`
 /// collective key nor any ~1.5 GiB evaluated-key payload remains resident.
+#[cfg(test)]
 #[derive(Debug)]
 pub struct ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     profile: BgvProfile,
@@ -23,6 +24,7 @@ pub struct ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
 /// cannot be constructed without incrementally hashing and parsing the complete canonical entry and
 /// proving that each ZARK digit matches the expected compact output committed by the consumed CKS
 /// evidence receipts.
+#[cfg(test)]
 #[derive(PartialEq, Eq)]
 pub struct ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     runtime_context_digest: [u8; 32],
@@ -39,6 +41,7 @@ pub struct ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     digits: Vec<SeekableEvaluatedKeyDigitV1>,
     limbs: Vec<SeekableEvaluatedKeyLimbV1>,
 }
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -55,6 +58,7 @@ impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
             .finish()
     }
 }
+#[cfg(test)]
 impl ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     /// Exact canonical manifest entry for this payload.
     #[must_use]
@@ -72,12 +76,14 @@ impl ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
         self.snapshot_identity
     }
 }
+#[cfg(test)]
 fn consume_evidence_set_before_provider_v1(
     evidence_set: ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
     expected: evidence_set::EvidenceSetRuntimeBindingV1,
 ) -> Result<evidence_set::VerifiedEvidenceSetRuntimeAdmissionV1, ZkAmsMkheErrorV1> {
     evidence_set.consume_for_runtime_v1(expected)
 }
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     /// Construct the reusable runtime from the compact evaluated-key binding.
     /// The native `2P` key was already dropped during CPK finalization.
@@ -430,6 +436,7 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         Ok(digest)
     }
 }
+#[cfg(test)]
 fn read_seekable_evaluated_key_limb<P>(
     profile: &BgvProfile,
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -557,6 +564,7 @@ fn hoisted_residue_reads_v1() -> usize {
 fn observe_hoisted_residue_read_v1() {
     HOISTED_RESIDUE_READS_V1.with(|count| count.set(count.get().saturating_add(1)));
 }
+#[cfg(test)]
 #[cfg(not(test))]
 fn observe_hoisted_residue_read_v1() {}
 impl<'a> HoistedHybridDigitBatchV1<'a> {
@@ -581,6 +589,7 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             profile.gadget_digits,
         )
     }
+    #[cfg(test)]
     fn new_batch(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
@@ -589,6 +598,7 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         Self::new_batch_with_automorphism(profile, polynomial, None, first_digit, digit_count)
     }
+    #[cfg(test)]
     fn new_automorphed_batch(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
@@ -604,6 +614,7 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             digit_count,
         )
     }
+    #[cfg(test)]
     fn new_batch_with_automorphism(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
@@ -743,6 +754,7 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             signed_digits,
         })
     }
+    #[cfg(test)]
     fn signed_digit(&self, digit_index: usize) -> Result<&[i64], ZkAmsMkheErrorV1> {
         let end_digit = self
             .first_digit
@@ -761,6 +773,7 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             .get(start..end)
             .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)
     }
+    #[cfg(test)]
     fn fill_digit_limb(
         &self,
         digit_index: usize,
@@ -781,6 +794,7 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
         rns_from_signed_exact(self.profile, self.signed_digit(digit_index)?)
     }
 }
+#[cfg(test)]
 fn coefficient_residue_with_automorphism_v1(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -819,6 +833,7 @@ fn coefficient_residue_with_automorphism_v1(
         value
     })
 }
+#[cfg(test)]
 fn inverse_odd_mod_power_of_two(value: usize, modulus: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if value == 0 || value.is_multiple_of(2) || modulus < 2 || !modulus.is_power_of_two() {
         return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
@@ -864,6 +879,7 @@ fn rns_from_signed_exact(
     }
     RnsPolynomial::from_flat(profile, coefficients)
 }
+#[cfg(test)]
 fn clone_rns_exact(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -879,6 +895,7 @@ fn clone_rns_exact(
     coefficients.extend_from_slice(&polynomial.coefficients);
     RnsPolynomial::from_flat(profile, coefficients)
 }
+#[cfg(test)]
 struct KeySwitchLimbWorkspaceV1 {
     evaluated_key: Vec<u64>,
     signed_digit: Vec<u64>,
@@ -897,6 +914,7 @@ fn reset_key_switch_limb_workspace_zeroized_drops_v1() {
 fn key_switch_limb_workspace_zeroized_drops_v1() -> usize {
     KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1.with(std::cell::Cell::get)
 }
+#[cfg(test)]
 impl KeySwitchLimbWorkspaceV1 {
     fn new(profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut evaluated_key = Vec::new();
@@ -920,6 +938,7 @@ impl KeySwitchLimbWorkspaceV1 {
         })
     }
 }
+#[cfg(test)]
 impl Drop for KeySwitchLimbWorkspaceV1 {
     fn drop(&mut self) {
         let evaluated_key = core::hint::black_box(&mut self.evaluated_key);
@@ -938,6 +957,7 @@ impl Drop for KeySwitchLimbWorkspaceV1 {
         let _ = core::hint::black_box(&mut *signed_digit);
     }
 }
+#[cfg(test)]
 fn multiply_accumulate_limb_in_place(
     profile: &BgvProfile,
     accumulator: &mut RnsPolynomial,
@@ -1005,6 +1025,7 @@ fn observe_seekable_liveness(bytes: u64) {
         }
     });
 }
+#[cfg(test)]
 #[cfg(not(test))]
 fn observe_seekable_liveness(_bytes: u64) {}
 #[cfg(test)]
@@ -1030,6 +1051,7 @@ where
         seeded_a_limb,
     )
 }
+#[cfg(test)]
 fn apply_compact_switch_streamed_core_with_automorphism<StoredBLimb, SeededALimb>(
     profile: &BgvProfile,
     mut constant: RnsPolynomial,

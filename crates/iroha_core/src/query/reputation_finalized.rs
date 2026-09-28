@@ -22,6 +22,14 @@
 use super::archive_index::{
     ArchiveIndexLock, ArchiveIndexLockError, ArchiveIndexReadGuard, ArchiveIndexWriteGuard,
 };
+use super::finalized_archive_fs::{
+    STAGED_FILE_PREFIX, bounded_bytes_len, canonical_bytes_domain_digest,
+    is_canonical_digest_file_name,
+};
+#[cfg(unix)]
+use super::finalized_archive_fs::{
+    create_unix_staged_file, unix_staged_file_has_canonical_target, unix_stat_matches_metadata,
+};
 use crate::{
     kura::{
         Kura, KuraArchiveCaptureAuthenticationError, KuraPublicationLease, KuraV2CommitReceipt,
@@ -87,7 +95,6 @@ const WRITER_LOCK_FILE: &str = ".writer.lock";
 const ANCHOR_FILE_SUFFIX: &str = ".anchor.to";
 const CHECKPOINT_FILE_SUFFIX: &str = ".checkpoint.to";
 const POLICY_FILE_SUFFIX: &str = ".policy.to";
-const STAGED_FILE_PREFIX: &str = ".staged-";
 const CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON: &str =
     "checkpoint publication state could not be reconciled; archive reopen is required";
 const KEY_DIGEST_DOMAIN_V1: &[u8] = b"iroha.sorafs.reputation.finalized-archive-key.v1\0";
@@ -1213,6 +1220,7 @@ impl ReputationFeedPrefixSummaryV1 {
             }),
         }
     }
+    #[cfg(test)]
     const fn public(self) -> ReputationFinalizedFeedPrefixV1 {
         ReputationFinalizedFeedPrefixV1 {
             pruned_through: self.pruned_through,
@@ -2176,6 +2184,7 @@ pub struct ReputationFinalizedFeedPrefixV1 {
     /// Cumulative number of rows compacted into the prefix.
     pub pruned_event_count: u64,
 }
+#[cfg(test)]
 /// Typed result of paginating one retained finalized feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
@@ -5022,47 +5031,7 @@ impl ReputationFinalizedArchive {
         }
         Ok(Some((projection, history)))
     }
-    /// Page retained proof outcomes at one exact archived anchor.
-    ///
-    /// Requests beginning before a compacted prefix return
-    /// [`ReputationFinalizedArchivePageV1::HistoryPruned`].
-    pub fn page_proof_outcomes(
-        &self,
-        key: &ReputationFinalizedArchiveKeyV1,
-        after: Option<iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1>,
-        limit: usize,
-    ) -> Result<
-        ReputationFinalizedArchivePageV1<
-            ProofOutcomeFinalizedEventV1,
-            iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1,
-        >,
-        ReputationFinalizedArchiveError,
-    > {
-        let index = self.read_index()?;
-        self.verify_storage_boundaries()?;
-        let state = self.reconstruct_state_for_key(&index, key)?;
-        paginate_retained_feed(
-            &state.proof_outcomes,
-            after,
-            limit,
-            PROOF_OUTCOME_QUERY_MAX_ITEMS_V1,
-            ProofOutcomeFinalizedEventV1::cursor,
-            |cursor| {
-                EventIdentity::from((
-                    cursor.sequence,
-                    cursor.block_height,
-                    cursor.block_hash,
-                    cursor.event_index,
-                ))
-            },
-            |position| iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1 {
-                sequence: position.sequence,
-                block_height: position.block_height,
-                block_hash: position.block_hash,
-                event_index: position.event_index,
-            },
-        )
-    }
+    #[cfg(test)]
     /// Page retained reputation-journal events at one exact archived anchor.
     pub fn page_journal_events(
         &self,
@@ -5102,121 +5071,6 @@ impl ReputationFinalizedArchive {
                     block_hash: position.block_hash,
                     event_index: position.event_index,
                 }
-            },
-        )
-    }
-    /// Page retained repair events at one exact archived anchor.
-    pub fn page_repair_events(
-        &self,
-        key: &ReputationFinalizedArchiveKeyV1,
-        after: Option<iroha_data_model::sorafs::moderation_ledger::RepairFinalizedEventCursorV1>,
-        limit: usize,
-    ) -> Result<
-        ReputationFinalizedArchivePageV1<
-            RepairFinalizedEventV1,
-            iroha_data_model::sorafs::moderation_ledger::RepairFinalizedEventCursorV1,
-        >,
-        ReputationFinalizedArchiveError,
-    > {
-        let index = self.read_index()?;
-        self.verify_storage_boundaries()?;
-        let state = self.reconstruct_state_for_key(&index, key)?;
-        paginate_retained_feed(
-            &state.repair_events,
-            after,
-            limit,
-            usize::try_from(REPAIR_QUERY_MAX_ITEMS_V1).expect("repair query maximum fits usize"),
-            RepairFinalizedEventV1::cursor,
-            |cursor| {
-                EventIdentity::from((
-                    cursor.sequence,
-                    cursor.block_height,
-                    cursor.block_hash,
-                    cursor.event_index,
-                ))
-            },
-            |position| iroha_data_model::sorafs::moderation_ledger::RepairFinalizedEventCursorV1 {
-                sequence: position.sequence,
-                block_height: position.block_height,
-                block_hash: position.block_hash,
-                event_index: position.event_index,
-            },
-        )
-    }
-    /// Page retained orderbook events at one exact archived anchor.
-    pub fn page_orderbook_events(
-        &self,
-        key: &ReputationFinalizedArchiveKeyV1,
-        after: Option<iroha_data_model::sorafs::orderbook::OrderbookFinalizedEventCursorV1>,
-        limit: usize,
-    ) -> Result<
-        ReputationFinalizedArchivePageV1<
-            OrderbookFinalizedEventV1,
-            iroha_data_model::sorafs::orderbook::OrderbookFinalizedEventCursorV1,
-        >,
-        ReputationFinalizedArchiveError,
-    > {
-        let index = self.read_index()?;
-        self.verify_storage_boundaries()?;
-        let state = self.reconstruct_state_for_key(&index, key)?;
-        paginate_retained_feed(
-            &state.orderbook_events,
-            after,
-            limit,
-            usize::try_from(ORDERBOOK_QUERY_MAX_ITEMS_V1)
-                .expect("orderbook query maximum fits usize"),
-            OrderbookFinalizedEventV1::cursor,
-            |cursor| {
-                EventIdentity::from((
-                    cursor.sequence,
-                    cursor.block_height,
-                    cursor.block_hash,
-                    cursor.event_index,
-                ))
-            },
-            |position| iroha_data_model::sorafs::orderbook::OrderbookFinalizedEventCursorV1 {
-                sequence: position.sequence,
-                block_height: position.block_height,
-                block_hash: position.block_hash,
-                event_index: position.event_index,
-            },
-        )
-    }
-    /// Page retained reserve events at one exact archived anchor.
-    pub fn page_reserve_events(
-        &self,
-        key: &ReputationFinalizedArchiveKeyV1,
-        after: Option<iroha_data_model::sorafs::reserve::ReserveFinalizedEventCursorV1>,
-        limit: usize,
-    ) -> Result<
-        ReputationFinalizedArchivePageV1<
-            ReserveFinalizedEventV1,
-            iroha_data_model::sorafs::reserve::ReserveFinalizedEventCursorV1,
-        >,
-        ReputationFinalizedArchiveError,
-    > {
-        let index = self.read_index()?;
-        self.verify_storage_boundaries()?;
-        let state = self.reconstruct_state_for_key(&index, key)?;
-        paginate_retained_feed(
-            &state.reserve_events,
-            after,
-            limit,
-            usize::try_from(RESERVE_QUERY_MAX_ITEMS_V1).expect("reserve query maximum fits usize"),
-            ReserveFinalizedEventV1::cursor,
-            |cursor| {
-                EventIdentity::from((
-                    cursor.sequence,
-                    cursor.block_height,
-                    cursor.block_hash,
-                    cursor.event_index,
-                ))
-            },
-            |position| iroha_data_model::sorafs::reserve::ReserveFinalizedEventCursorV1 {
-                sequence: position.sequence,
-                block_height: position.block_height,
-                block_hash: position.block_hash,
-                event_index: position.event_index,
             },
         )
     }
@@ -5772,7 +5626,7 @@ impl ReputationFinalizedArchive {
             })?;
         if lock_metadata.file_type().is_symlink()
             || !lock_metadata.is_file()
-            || !archive_file_is_single_link(&lock_metadata)
+            || !secure_file_metadata::is_single_link(&lock_metadata)
             || archive_file_identity(&lock_metadata) != self.writer_lock_identity
             || !archive_file_metadata_unchanged(&lock_metadata, &opened_metadata)
         {
@@ -6268,12 +6122,6 @@ fn compaction_proposal(
         source_summary.journal_prefix_source_head_root,
     )
 }
-fn canonical_bytes_domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(domain);
-    hasher.update(bytes);
-    *hasher.finalize().as_bytes()
-}
 fn validate_approval_checkpoint(
     approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     checkpoint: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
@@ -6636,6 +6484,7 @@ fn history_pruned_error(
             .or(checkpoint.reserve_prefix.pruned_through),
     }
 }
+#[cfg(test)]
 fn paginate_retained_feed<T, C>(
     feed: &ReputationRetainedFeedStateV1<T>,
     after: Option<C>,
@@ -7192,9 +7041,6 @@ fn prepare_checkpoint_publication(
     }
     Ok(checkpoint_bytes)
 }
-fn bounded_bytes_len(bytes: &[u8]) -> u64 {
-    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-}
 fn charge_archive_bytes(
     total: &mut u64,
     bytes: u64,
@@ -7280,15 +7126,6 @@ fn policy_file_name(digest: [u8; 32]) -> String {
 }
 fn checkpoint_file_name(digest: [u8; 32]) -> String {
     format!("{}{CHECKPOINT_FILE_SUFFIX}", hex::encode(digest))
-}
-fn is_canonical_digest_file_name(name: &str, suffix: &str) -> bool {
-    let Some(stem) = name.strip_suffix(suffix) else {
-        return false;
-    };
-    stem.len() == 64
-        && stem
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 fn validate_policy_transition(
     previous: Option<&ReputationJournalAuthorityPolicyRecordV1>,
@@ -8536,42 +8373,6 @@ fn recover_staged_directory(
         Ok(())
     }
 }
-#[cfg(unix)]
-fn unix_staged_file_has_canonical_target(
-    directory: &fs::File,
-    staged_name: &OsStr,
-    staged: &rustix::fs::Stat,
-    canonical_suffix: &str,
-) -> Result<bool, rustix::io::Errno> {
-    use std::os::unix::ffi::OsStrExt as _;
-    let entries = rustix::fs::Dir::read_from(directory)?;
-    let mut matches = 0_u8;
-    for entry in entries {
-        let entry = entry?;
-        let name = OsStr::from_bytes(entry.file_name().to_bytes());
-        if name == OsStr::new(".") || name == OsStr::new("..") || name == staged_name {
-            continue;
-        }
-        let Some(name_utf8) = name.to_str() else {
-            continue;
-        };
-        if !is_canonical_digest_file_name(name_utf8, canonical_suffix) {
-            continue;
-        }
-        let candidate = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
-        if candidate.st_dev == staged.st_dev && candidate.st_ino == staged.st_ino {
-            if rustix::fs::FileType::from_raw_mode(candidate.st_mode)
-                != rustix::fs::FileType::RegularFile
-                || candidate.st_nlink as u64 != 2
-                || candidate.st_size != staged.st_size
-            {
-                return Ok(false);
-            }
-            matches = matches.saturating_add(1);
-        }
-    }
-    Ok(matches == 1)
-}
 fn publish_immutable_bytes(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -8858,49 +8659,6 @@ impl Drop for UnixStagedArtifact<'_> {
     }
 }
 #[cfg(unix)]
-fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsString)> {
-    use std::os::unix::fs::MetadataExt as _;
-    for _ in 0..128 {
-        let name = OsString::from(format!(
-            "{STAGED_FILE_PREFIX}{:08x}-{:016x}",
-            std::process::id(),
-            rand::random::<u64>()
-        ));
-        let file = match rustix::fs::openat(
-            directory,
-            &name,
-            rustix::fs::OFlags::WRONLY
-                | rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::EXCL
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        ) {
-            Ok(file) => fs::File::from(file),
-            Err(rustix::io::Errno::EXIST) => continue,
-            Err(error) => return Err(io::Error::from(error)),
-        };
-        let metadata = file.metadata()?;
-        let entry = rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(io::Error::from)?;
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || !unix_stat_matches_metadata(&entry, &metadata, 1)
-        {
-            let _ = rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::empty());
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "exclusive staged artifact identity changed during creation",
-            ));
-        }
-        return Ok((file, name));
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate a unique staged archive artifact",
-    ))
-}
-#[cfg(unix)]
 fn verify_unix_directory_handle(
     directory: &fs::File,
     expected: ArchiveFileIdentity,
@@ -8941,20 +8699,6 @@ fn verify_unix_named_file(
         ));
     }
     Ok(())
-}
-#[cfg(unix)]
-fn unix_stat_matches_metadata(
-    entry: &rustix::fs::Stat,
-    metadata: &fs::Metadata,
-    expected_links: u64,
-) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    rustix::fs::FileType::from_raw_mode(entry.st_mode) == rustix::fs::FileType::RegularFile
-        && entry.st_dev as u64 == metadata.dev()
-        && entry.st_ino as u64 == metadata.ino()
-        && entry.st_nlink as u64 == expected_links
-        && metadata.nlink() == expected_links
-        && u64::try_from(entry.st_size).ok() == Some(metadata.len())
 }
 #[cfg(unix)]
 fn read_bounded_archive_file_at_unix(
@@ -9097,7 +8841,7 @@ fn open_writer_lock_file(path: &Path) -> Result<fs::File, ReputationFinalizedArc
     })?;
     if path_metadata.file_type().is_symlink()
         || !path_metadata.is_file()
-        || !archive_file_is_single_link(&path_metadata)
+        || !secure_file_metadata::is_single_link(&path_metadata)
         || !archive_file_metadata_unchanged(&path_metadata, &opened_metadata)
     {
         return Err(ReputationFinalizedArchiveError::InvalidStorage {
@@ -9153,22 +8897,6 @@ const fn archive_file_identity_available(identity: ArchiveFileIdentity) -> bool 
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     false
 }
-fn archive_file_is_single_link(metadata: &SecureMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
-}
 fn direct_archive_directory_identity(path: &Path) -> io::Result<ArchiveFileIdentity> {
     let metadata = secure_file_metadata::from_path(path)?;
     let identity = archive_file_identity(&metadata);
@@ -9222,7 +8950,7 @@ fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<Secur
     let metadata = secure_file_metadata::from_path(path)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
-        || !archive_file_is_single_link(&metadata)
+        || !secure_file_metadata::is_single_link(&metadata)
         || metadata.len() > max_bytes
     {
         return Err(io::Error::new(
@@ -9267,7 +8995,7 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes
         || path_after.file_type().is_symlink()
         || !path_after.is_file()
-        || !archive_file_is_single_link(&path_after)
+        || !secure_file_metadata::is_single_link(&path_after)
         || !archive_file_metadata_unchanged(&opened_before, &opened_after)
         || !archive_file_metadata_unchanged(&opened_before, &path_after)
         || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)

@@ -597,56 +597,6 @@ impl PorCoordinator {
         );
         Ok(())
     }
-    /// Roll back a just-recorded challenge after the node-side commit failed.
-    #[cfg(test)]
-    pub(crate) fn rollback_challenge(
-        &self,
-        challenge: &PorChallengeV1,
-    ) -> Result<(), PorCoordinatorError> {
-        let _mutation = self.mutation_lock.lock();
-        self.ensure_persistence_healthy()?;
-        let Some((_, record)) = self.records.remove(&challenge.challenge_id) else {
-            return Ok(());
-        };
-        if record.challenge != *challenge
-            || record.proof_digest.is_some()
-            || record.verdict.is_some()
-        {
-            self.records.insert(challenge.challenge_id, record);
-            return Err(PorCoordinatorError::RollbackConflict {
-                challenge_id: challenge.challenge_id,
-                challenge_id_hex: hex::encode(challenge.challenge_id),
-            });
-        }
-        let next_status_generation = match self.next_status_generation() {
-            Ok(generation) => generation,
-            Err(error) => {
-                self.records.insert(challenge.challenge_id, record);
-                return Err(error);
-            }
-        };
-        if challenge.forced {
-            self.untrack_forced(&challenge.provider_id, challenge.epoch_id);
-        }
-        if let Err(error) = self.persist_with_status_generation(next_status_generation) {
-            if Self::commit_uncertain_reason(&error).is_some() {
-                self.status_indexes
-                    .write()
-                    .commit_remove(&record.to_status(), next_status_generation);
-                self.latch_commit_uncertain(&error);
-            } else {
-                if challenge.forced {
-                    self.track_forced(&challenge.provider_id, challenge.epoch_id);
-                }
-                self.records.insert(challenge.challenge_id, record);
-            }
-            return Err(error);
-        }
-        self.status_indexes
-            .write()
-            .commit_remove(&record.to_status(), next_status_generation);
-        Ok(())
-    }
     /// Roll back a just-recorded proof after the node-side commit failed.
     #[cfg(test)]
     pub(crate) fn rollback_proof(
@@ -762,52 +712,6 @@ impl PorCoordinator {
             next_status_generation,
         );
         Ok(())
-    }
-    /// Validate a governance verdict against the current coordinator record.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError`] if the verdict is invalid, references an
-    /// unknown challenge, or conflicts with a terminal record.
-    #[cfg(test)]
-    pub(crate) fn validate_verdict_candidate(
-        &self,
-        verdict: &AuditVerdictV1,
-        trusted_auditor_keys: &[Vec<u8>],
-        auditor_threshold: usize,
-    ) -> Result<PorCoordinatorVerdictOutcome, PorCoordinatorError> {
-        verdict
-            .validate()
-            .map_err(PorCoordinatorError::InvalidVerdict)?;
-        verdict
-            .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
-            .map_err(PorCoordinatorError::InvalidVerdictSignature)?;
-        let _mutation = self.mutation_lock.lock();
-        self.ensure_persistence_healthy()?;
-        let recorded_verdict = RecordedVerdict::from_verdict(verdict)?;
-        let repair_task_id = (verdict.outcome == AuditOutcomeV1::Failed)
-            .then(|| sorafs_repair_task_id_v1(por_repair_source_identity_v1(verdict.challenge_id)));
-        let entry = self.records.get(&verdict.challenge_id).ok_or_else(|| {
-            PorCoordinatorError::UnknownChallenge {
-                challenge_id: verdict.challenge_id,
-                challenge_id_hex: hex::encode(verdict.challenge_id),
-            }
-        })?;
-        entry.ensure_consistency(verdict.manifest_digest, verdict.provider_id)?;
-        if let Some(existing) = &entry.verdict {
-            return if existing.canonical_digest == recorded_verdict.canonical_digest
-                && entry.repair_task_id == repair_task_id
-            {
-                Ok(PorCoordinatorVerdictOutcome::Existing)
-            } else {
-                Err(PorCoordinatorError::VerdictConflict {
-                    challenge_id: verdict.challenge_id,
-                    challenge_id_hex: hex::encode(verdict.challenge_id),
-                })
-            };
-        }
-        entry.validate_verdict_transition(verdict)?;
-        Ok(PorCoordinatorVerdictOutcome::Inserted)
     }
     /// Commit a previously validated audit verdict.
     ///

@@ -71,8 +71,8 @@ def test_untracked_and_tracked_forbidden_support_fail(repository, relative, cont
     ("program.to", b"\0asm\x01\0\0\0"),
     ("docs/history/2026-09-13/runtime.wasm", b"\0asm\x01\0\0\0"),
     ("docs/history/2026-09-13/runtime.to", b"\0asm\x01\0\0\0"),
-    ("vendor/streebog/fixture.wasm", b"anything"),
-    ("vendor/streebog/fixture.bin", b"\0asm\x01\0\0\0"),
+    ("vendor/find_cuda_helper/fixture.wasm", b"anything"),
+    ("vendor/find_cuda_helper/fixture.bin", b"\0asm\x01\0\0\0"),
 ])
 def test_artifacts_cannot_hide_behind_extension_or_build_state(repository, filename, payload):
     path = repository / filename
@@ -87,7 +87,7 @@ def test_native_ivm_and_upstream_target_metadata_are_allowed(repository):
     files = {
         "crates/ivm/src/lib.rs": "//! IVM executes Kotodama bytecode.\nfn execute() {}\n",
         "Cargo.lock": '[[package]]\nname = "wasm-bindgen"\nversion = "0.2"\n',
-        "vendor/streebog/src/lib.rs": '#[cfg(target_arch = "wasm32")]\nfn upstream() {}\n',
+        "vendor/find_cuda_helper/src/lib.rs": '#[cfg(target_arch = "wasm32")]\nfn upstream() {}\n',
         "docs/policy.md": "Wasm is prohibited; use native IVM.\n",
         "crates/gateway.rs": 'const ACTIVE_MIME: &str = "application/wasm";\n',
         "crates/model/tests.rs": 'assert!(from_json(r#"{\"allow_wasi\":true}"#).is_err());\n',

@@ -33,7 +33,7 @@ pub struct Profile {
     pub exec_fail_ppm: u32,
     /// Divergent (nondeterministic) executor (F21).
     pub divergent: bool,
-    /// A deterministic executor defect: every non-empty payload is `Invalid` (ML13).
+    /// A deterministic executor defect: every transaction payload is `Invalid` (F19).
     pub reject_nonempty: bool,
     /// Probability (ppm), per finished execution, of evicting a random cached post-state.
     pub evict_ppm: u32,

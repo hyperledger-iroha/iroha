@@ -437,7 +437,7 @@ pub mod isi {
         /// This validates the complete post-credit balance before mutation and assigns that
         /// precomputed value. It does not emit an `Added` event; callers remain responsible for
         /// balance-change event emission.
-        #[cfg_attr(not(test), allow(dead_code))]
+        #[cfg(test)]
         fn deposit_numeric_asset_exact(
             &mut self,
             id: &AssetId,
@@ -8408,6 +8408,9 @@ pub mod query {
     #[cfg(test)]
     use super::isi::execute_user_numeric_asset_transfer;
     use super::*;
+    use crate::smartcontracts::isi::query::json_predicate::{
+        parse_domain_predicate_value, predicate_matches_with_aliases,
+    };
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::StateReadOnly,
@@ -8643,29 +8646,6 @@ pub mod query {
         Domains(Vec<DomainId>),
         Full,
     }
-    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-        if path.is_empty() {
-            return None;
-        }
-        let mut current = value;
-        for segment in path.split('.') {
-            if segment.is_empty() {
-                return None;
-            }
-            match current {
-                Value::Object(map) => {
-                    current = map.get(segment)?;
-                }
-                _ => return None,
-            }
-        }
-        Some(current)
-    }
-    fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
-        DomainId::parse_fully_qualified(raw)
-            .ok()
-            .or_else(|| DomainId::try_new(raw, "universal").ok())
-    }
     fn asset_definition_domain(
         world: &impl WorldReadOnly,
         definition_id: &AssetDefinitionId,
@@ -8698,14 +8678,6 @@ pub mod query {
             }
             _ => Vec::new(),
         }
-    }
-    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-        matches!(value, Value::String(raw) if raw == expected)
-    }
-    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-        values
-            .iter()
-            .any(|value| matches!(value, Value::String(raw) if raw == expected))
     }
     enum AssetSimplePath {
         Definitions(Vec<AssetDefinitionId>),
@@ -8778,12 +8750,6 @@ pub mod query {
         }
         None
     }
-    fn asset_json_value<'a>(cache: &'a mut Option<Value>, asset: &Asset) -> Option<&'a Value> {
-        if cache.is_none() {
-            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(asset);
-        }
-        cache.as_ref()
-    }
     fn selected_asset_count_for_definitions(
         world: &impl WorldReadOnly,
         definitions: &BTreeSet<AssetDefinitionId>,
@@ -8831,64 +8797,9 @@ pub mod query {
         predicate: &PredicateJson,
         asset: &Asset,
     ) -> bool {
-        let mut asset_json = None;
-        for cond in &predicate.equals {
-            let aliases = asset_alias_values(world, asset, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = asset_json_value(&mut asset_json, asset) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if actual != &cond.value {
-                return false;
-            }
-        }
-        for cond in &predicate.r#in {
-            let aliases = asset_alias_values(world, asset, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = asset_json_value(&mut asset_json, asset) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if !cond.values.iter().any(|candidate| candidate == actual) {
-                return false;
-            }
-        }
-        for field in &predicate.exists {
-            if !asset_alias_values(world, asset, field).is_empty() {
-                continue;
-            }
-            let Some(value) = asset_json_value(&mut asset_json, asset) else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, field) else {
-                return false;
-            };
-            if actual.is_null() {
-                return false;
-            }
-        }
-        true
+        predicate_matches_with_aliases(predicate, asset, |asset, field| {
+            asset_alias_values(world, asset, field)
+        })
     }
     fn asset_definition_alias_values(
         world: &impl WorldReadOnly,
@@ -8916,82 +8827,14 @@ pub mod query {
             _ => Vec::new(),
         }
     }
-    fn asset_definition_json_value<'a>(
-        cache: &'a mut Option<Value>,
-        asset_definition: &AssetDefinition,
-    ) -> Option<&'a Value> {
-        if cache.is_none() {
-            *cache =
-                crate::smartcontracts::isi::query::ordinary_predicate_json_value(asset_definition);
-        }
-        cache.as_ref()
-    }
     fn predicate_matches_asset_definition(
         world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         asset_definition: &AssetDefinition,
     ) -> bool {
-        let mut definition_json = None;
-        for cond in &predicate.equals {
-            let aliases = asset_definition_alias_values(world, asset_definition, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
-            else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if actual != &cond.value {
-                return false;
-            }
-        }
-        for cond in &predicate.r#in {
-            let aliases = asset_definition_alias_values(world, asset_definition, &cond.field);
-            if !aliases.is_empty() {
-                if !aliases
-                    .iter()
-                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
-                {
-                    return false;
-                }
-                continue;
-            }
-            let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
-            else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                return false;
-            };
-            if !cond.values.iter().any(|candidate| candidate == actual) {
-                return false;
-            }
-        }
-        for field in &predicate.exists {
-            if !asset_definition_alias_values(world, asset_definition, field).is_empty() {
-                continue;
-            }
-            let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
-            else {
-                continue;
-            };
-            let Some(actual) = predicate_value_at_path(value, field) else {
-                return false;
-            };
-            if actual.is_null() {
-                return false;
-            }
-        }
-        true
+        predicate_matches_with_aliases(predicate, asset_definition, |asset_definition, field| {
+            asset_definition_alias_values(world, asset_definition, field)
+        })
     }
     #[derive(Debug)]
     enum AssetQueryPlan {

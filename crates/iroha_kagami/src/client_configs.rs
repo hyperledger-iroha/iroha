@@ -163,21 +163,6 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         basic_auth,
     })
 }
-#[cfg(unix)]
-fn same_base_config_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == right.nlink()
-        && left.size() == right.size()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
 fn read_base_config(path: &Path) -> Result<Zeroizing<String>> {
     #[cfg(not(unix))]
     return Err(eyre!(
@@ -208,7 +193,7 @@ fn read_base_config(path: &Path) -> Result<Zeroizing<String>> {
         let before = file
             .metadata()
             .wrap_err_with(|| format!("failed to inspect opened {}", path.display()))?;
-        if !before.is_file() || !same_base_config_snapshot(&lexical, &before) {
+        if !before.is_file() || !crate::secure_fs::same_file_snapshot(&lexical, &before) {
             return Err(eyre!("base config changed while it was opened"));
         }
         {
@@ -236,7 +221,7 @@ fn read_base_config(path: &Path) -> Result<Zeroizing<String>> {
             .wrap_err_with(|| format!("failed to reinspect {}", path.display()))?;
         if raw.len() as u64 > MAX_BASE_CONFIG_BYTES
             || raw.len() as u64 != before.len()
-            || !same_base_config_snapshot(&before, &after)
+            || !crate::secure_fs::same_file_snapshot(&before, &after)
         {
             return Err(eyre!(
                 "base config changed while it was read or exceeded its input limit"

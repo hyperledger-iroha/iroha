@@ -23,4 +23,3 @@ trybuild-tests = []
 iroha_derive = { path = "../iroha_derive" }
 
 [dev-dependencies]
-norito = { workspace = true, default-features = false, features = ["base-codec"] }

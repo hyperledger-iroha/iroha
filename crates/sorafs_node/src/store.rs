@@ -18,12 +18,13 @@ use sorafs_car::{
     compute_chunk_plan_digest_sha3,
 };
 use sorafs_chunker::ChunkProfile;
+#[cfg(test)]
+use sorafs_manifest::pdp::{PdpMerkleReadError, PdpProofLeafV1, PdpSampleV1};
 use sorafs_manifest::{
     MANIFEST_VERSION_V1, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestV1,
     pdp::{
         PDP_MAX_SEGMENT_SAMPLES_V1, PdpCommitmentV1, PdpCommitmentValidationError,
-        PdpMerkleReadError, PdpMerkleTreeError, PdpMerkleTreeV1, PdpProofLeafV1, PdpSampleV1,
-        estimated_heap_bytes as estimated_pdp_heap_bytes,
+        PdpMerkleTreeError, PdpMerkleTreeV1, estimated_heap_bytes as estimated_pdp_heap_bytes,
     },
     retention::{RetentionMetadataError, RetentionSourceV1},
 };
@@ -1153,7 +1154,7 @@ impl StoredManifest {
     #[must_use]
     pub fn pdp_tree(&self) -> Option<&PdpMerkleTreeV1> {
         self.payload_available()
-            .then(|| self.pdp_tree.as_deref())
+            .then_some(self.pdp_tree.as_deref())
             .flatten()
     }
     /// Exact retained-node-slab bytes charged to the aggregate PDP tree budget.
@@ -2972,6 +2973,7 @@ impl StorageBackend {
         }
     }
     /// Persist stripe layout and chunk roles for an existing manifest.
+    #[cfg(test)]
     pub fn attach_stripe_layout(
         &self,
         manifest_id: &str,
@@ -3986,6 +3988,7 @@ impl StorageBackend {
     /// The manifest lifecycle read lease remains held for sample validation, every exact
     /// no-follow chunk read, digest verification, and proof construction. Consequently an
     /// eviction cannot remove or replace the payload while witnesses are being assembled.
+    #[cfg(test)]
     pub fn prove_pdp_samples(
         &self,
         manifest_id: &str,
@@ -4079,6 +4082,7 @@ impl StorageBackend {
         Ok(())
     }
 }
+#[cfg(test)]
 fn pdp_witness_error(error: PdpMerkleReadError<ChunkStoreError>) -> StorageError {
     StorageError::PdpWitness {
         reason: error.to_string(),

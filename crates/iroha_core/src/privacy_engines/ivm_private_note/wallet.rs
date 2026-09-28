@@ -342,6 +342,7 @@ pub fn encrypt_ivm_private_wallet_note_v1(
     )
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 /// Encrypt a pre-committed profiled note using a capsule-retained ephemeral opening.
 ///
 /// The caller must already have derived `commitment` under its governed note
@@ -452,6 +453,7 @@ pub(crate) fn validate_ivm_private_wallet_encryption_opening_v1(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Decrypt, authenticate, and commitment-check one fixed-width private note.
 pub fn decrypt_ivm_private_wallet_note_v1(
     pool_id: PrivacyPoolIdV1,

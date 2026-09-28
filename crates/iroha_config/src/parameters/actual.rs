@@ -860,6 +860,7 @@ impl Root {
             .change_context(FromTomlSourceError)
     }
     /// Check whether the configuration already enables Sora/Nexus-only features.
+    #[cfg(test)]
     #[must_use]
     pub fn uses_sora_features(&self) -> bool {
         let sorafs = self.torii.sorafs_storage.enabled
@@ -3649,6 +3650,7 @@ fn nexus_consensus_unit_ratio_bits(
 /// budgets, relay-worker scheduling, manifest filesystem paths, and compliance filesystem
 /// locations are intentionally excluded because path placement is not a protocol input; loaded
 /// compliance and lane-manifest policy-set digests are bound separately.
+#[cfg(test)]
 pub fn nexus_consensus_policy_digest(
     nexus: &Nexus,
 ) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
@@ -3658,6 +3660,7 @@ pub fn nexus_consensus_policy_digest(
 ///
 /// `compliance_policy_digest` is required whenever [`LaneCompliance::enabled`] is true so two
 /// validators cannot execute the same transaction against different filesystem policy bundles.
+#[cfg(test)]
 pub fn nexus_consensus_policy_digest_with_compliance(
     nexus: &Nexus,
     compliance_policy_digest: Option<[u8; 32]>,
@@ -4840,12 +4843,6 @@ impl LaneConfig {
         self.entry(id)
             .map_or_else(|| id.as_u32(), |entry| entry.shard_id)
     }
-    /// Return true when the lane is marked for confidential compute handling.
-    #[must_use]
-    pub fn is_confidential_compute(&self, id: LaneId) -> bool {
-        self.entry(id)
-            .is_some_and(|entry| entry.confidential_compute.is_some())
-    }
     /// Resolve the confidential compute policy for a lane if configured.
     #[must_use]
     pub fn confidential_compute_policy(&self, id: LaneId) -> Option<&ConfidentialComputePolicy> {
@@ -4858,17 +4855,6 @@ impl LaneConfig {
         self.entry(id)
             .and_then(|entry| entry.confidential_compute.as_ref())
             .map(|policy| &policy.allowed_audiences)
-    }
-    /// Resolve typed scheduler overrides for a lane if configured.
-    #[must_use]
-    pub fn scheduler_policy(&self, id: LaneId) -> Option<&LaneSchedulerPolicy> {
-        self.entry(id).and_then(|entry| entry.scheduler.as_ref())
-    }
-    /// Resolve the typed settlement reserve policy for a lane if configured.
-    #[must_use]
-    pub fn settlement_buffer_policy(&self, id: LaneId) -> Option<&LaneSettlementBufferPolicy> {
-        self.entry(id)
-            .and_then(|entry| entry.settlement_buffer.as_ref())
     }
 }
 /// Derived configuration for a single lane.
@@ -8134,6 +8120,7 @@ impl TrustedPeers {
             .collect()
     }
     /// Tells whether a trusted peers list has some other peers except for the peer itself
+    #[cfg(test)]
     pub fn contains_other_trusted_peers(&self) -> bool {
         !self.others.is_empty()
     }

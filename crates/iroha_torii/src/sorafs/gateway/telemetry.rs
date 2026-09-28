@@ -2,7 +2,7 @@
 use super::acme::CertificateBundle;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::Telemetry;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 /// Canonical header emitted by the gateway.
 pub const SORA_TLS_STATE_HEADER: &str = "x-sora-tls-state";
@@ -58,10 +58,6 @@ impl TlsStateSnapshot {
     pub fn record_failure(&mut self, message: impl Into<String>) {
         self.last_error = Some(message.into());
         self.last_result = TlsRenewalResult::Failure;
-    }
-    /// Update the cached ECH state.
-    pub fn set_ech_enabled(&mut self, enabled: bool) {
-        self.ech_enabled = enabled;
     }
     /// Produce the canonical header value advertised to clients.
     #[must_use]

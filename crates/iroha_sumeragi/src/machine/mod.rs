@@ -11,7 +11,7 @@
 //! - `timeout`: timing out, joining, timeout certificates and view changes (§6.6, §6.7, §6.12);
 //! - `round`: commit, height entry, `BlockApplied`, the safety monitor (§6.8, §6.13, §7.6);
 //! - `sync`: catch-up, body wants and serving (§6.9);
-//! - `propose`: proposing and the heartbeat (§6.10);
+//! - `propose`: work-driven proposing (§6.10);
 //! - `timers`: `Tick`, retransmission, rebroadcast, `Status` cadence and the probe (§6.11);
 //! - `restart`: `Core::new` and `restore`, the restart rules R1–R6 (§7.4).
 //!
@@ -245,15 +245,13 @@ enum Build {
     Idle,
     /// The view-0 build is due at `t_propose`.
     Scheduled(Millis),
-    /// `BuildPayload{req}` is outstanding. `second`: no idle wait follows (heartbeat retry or
-    /// view > 0); `ready`: a `PayloadReady{req}` arrived before the answer.
+    /// `BuildPayload{req}` is outstanding; `ready` arrived before its answer.
     Requested {
         req: u64,
         deadline: Millis,
-        second: bool,
         ready: bool,
     },
-    /// Request `req` was answered `EMPTY`: wait for `until` or `PayloadReady{req}` (heartbeat).
+    /// Request `req` had no usable payload: wait for a bounded retry or new work.
     IdleWait {
         req: u64,
         until: Millis,

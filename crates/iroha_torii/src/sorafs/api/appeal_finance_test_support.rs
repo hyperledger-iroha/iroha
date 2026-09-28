@@ -921,25 +921,6 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world(
     }
     (app, temp_dir)
 }
-fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_moderation_operator(
-    auth: &OrderbookAuthFixture,
-    asset_definition_id: &AssetDefinitionId,
-) -> (SharedAppState, TempDir) {
-    let mut world = appeal_finance_asset_lock_world(auth, asset_definition_id);
-    world.grant_role_for_tests(
-        auth.provider.account.clone(),
-        sorafs_moderation_operator_role_id().clone(),
-    );
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let (node, temp_dir) = sorafs_node_with_temp_storage();
-    let app_inner = Arc::get_mut(&mut app).expect("unique app state");
-    app_inner.sorafs_node = node;
-    #[cfg(feature = "telemetry")]
-    {
-        app_inner.telemetry = isolated_test_telemetry();
-    }
-    (app, temp_dir)
-}
 fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
@@ -1079,32 +1060,4 @@ fn cancel_appeal_finance_asset_lock(
     block
         .commit_empty_block_for_testing()
         .expect("commit appeal finance asset lock cancellation");
-}
-fn sorafs_app_state_with_confirmed_appeal_deposit(
-    case_id: &str,
-    round_id: &str,
-) -> (
-    SharedAppState,
-    TempDir,
-    OrderbookAuthFixture,
-    AppealFinanceDepositConfirmRequestDto,
-) {
-    let auth = orderbook_auth_fixture();
-    let mut deposit_request = appeal_finance_deposit_request(
-        &auth.provider.account,
-        &auth.buyer.account,
-        Some(&auth.provider.account),
-    );
-    deposit_request.case_id = case_id.to_owned();
-    deposit_request.round_id = Some(round_id.to_owned());
-    let expected = appeal_finance_deposit_expectation(deposit_request.clone())
-        .expect("valid moderation deposit expectation");
-    let (app, temp_dir) =
-        sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
-    let confirmation = appeal_finance_deposit_confirm_request(
-        &deposit_request,
-        expected.escrow_id.as_hash().to_string(),
-    );
-    (app, temp_dir, auth, confirmation)
 }

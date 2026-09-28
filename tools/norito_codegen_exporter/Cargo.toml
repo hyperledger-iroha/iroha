@@ -9,7 +9,9 @@ publish = false
 workspace = true
 
 [features]
-dev-tools = []
+# The exporter and inventory binaries; the library used by xtask needs none
+# of their CLI or source-parsing dependencies.
+dev-tools = ["dep:anyhow", "dep:clap", "dep:iroha_schema", "dep:syn", "dep:proc-macro2"]
 
 [[bin]]
 name = "norito_codegen_exporter"
@@ -23,20 +25,20 @@ required-features = ["dev-tools"]
 
 [dependencies]
 iroha_model_base = { workspace = true }
-anyhow = "1.0.100"
+anyhow = { version = "1.0.100", optional = true }
 base64 = { workspace = true, features = ["alloc"] }
 blake2 = { workspace = true }
 blake3 = { workspace = true }
-clap = { version = "4.5.51", features = ["derive"] }
+clap = { version = "4.5.51", features = ["derive"], optional = true }
 eyre = { workspace = true }
 hex = { workspace = true, features = ["alloc", "std"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["application-model"] }
 iroha_primitives = { workspace = true, features = ["json"] }
-iroha_schema = { path = "../../crates/iroha_schema" }
+iroha_schema = { path = "../../crates/iroha_schema", optional = true }
 norito = { path = "../../crates/norito", features = ["node-codec"], default-features = false }
 tempfile = { workspace = true }
 time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
-syn = { workspace = true, features = ["default", "full", "visit"] }
-proc-macro2 = { workspace = true, features = ["span-locations"] }
+syn = { workspace = true, features = ["default", "full", "visit"], optional = true }
+proc-macro2 = { workspace = true, features = ["span-locations"], optional = true }

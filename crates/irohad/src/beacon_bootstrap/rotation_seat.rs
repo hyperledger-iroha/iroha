@@ -9,7 +9,7 @@ struct SeatAttemptJournalV1 {
     schema: String,
     session: GlobalThresholdBeaconDkgSessionV1,
     signer_index: u16,
-    trusted_context_id: Hash,
+    trusted_instance_id: Hash,
     anchor_height: u64,
 }
 
@@ -38,7 +38,7 @@ fn write_public_frame<T: NoritoSerialize>(output: &Directory, name: &str, value:
 fn advance_verified_phase(
     fd: BorrowedFd<'_>,
     deadline: Instant,
-    verifier: &mut BridgeFinalityVerifier,
+    verifier: &mut SumeragiFinalityVerifier,
     last_height: &mut u64,
     target_height: u64,
     cutoff_height: u64,
@@ -267,9 +267,9 @@ pub(super) fn run_seat_dkg(
     signer: KeyPair,
     public_input: BorrowedFd<'_>,
     finality_input: BorrowedFd<'_>,
-    mut verifier: BridgeFinalityVerifier,
+    mut verifier: SumeragiFinalityVerifier,
     cutoff: u64,
-    trusted_context_id: Hash,
+    trusted_instance_id: Hash,
     anchor_height: u64,
     provider_handle: &str,
     provider_revision: u64,
@@ -282,7 +282,7 @@ pub(super) fn run_seat_dkg(
             schema: "iroha.global-beacon.dkg-seat-attempt.v1".into(),
             session,
             signer_index,
-            trusted_context_id,
+            trusted_instance_id,
             anchor_height,
         })?,
         true,
@@ -471,7 +471,7 @@ pub(super) fn assemble_rotation_dkg_command(
             )
             .map_err(|_| Error::Crypto)
         })
-        .collect::<Result<Vec<BridgeFinalityProof>>>()?;
+        .collect::<Result<Vec<SumeragiFinalityProof>>>()?;
     validate_rotation_phase_chain(
         proof,
         &evidence,

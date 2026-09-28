@@ -449,18 +449,9 @@ pub struct SHAKE<const SZ: usize> {
     ptr: usize,
     flipped: bool,
 }
-/// Type specialization for SHAKE128.
-pub type SHAKE128 = SHAKE<128>;
 /// Type specialization for SHAKE256.
 pub type SHAKE256 = SHAKE<256>;
 impl<const SZ: usize> SHAKE<SZ> {
-    // A custom compile-time check; it should prevent compilation from
-    // succeeded if SZ is not 128 or 256.
-    #[allow(dead_code)]
-    const COMPILE_TIME_CHECKS: () = Self::compile_time_checks();
-    const fn compile_time_checks() {
-        let _ = &[()][1 - ((SZ == 128 || SZ == 256) as usize)];
-    }
     const RATE: usize = 200 - (SZ >> 2);
     /// Create a new instance.
     pub fn new() -> Self {
@@ -525,10 +516,6 @@ impl<const SZ: usize> SHAKE<SZ> {
             }
         }
         self.ptr = ptr;
-    }
-    /// Reset this engine to the initial state (empty, input mode).
-    pub fn reset(&mut self) {
-        *self = Self::new();
     }
 }
 /// PRNG based on SHAKE256.

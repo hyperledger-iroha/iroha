@@ -4,17 +4,23 @@
 //! authenticated absence. All integration methods reconcile against the actual Core-owned
 //! outgoing index. Hardware preparation, proofs, private inputs and terminal state stay in Core.
 
-use super::private_journal::{PrivateJournal, PrivateJournalError, PrivateJournalFormat};
+#[cfg(test)]
+use super::private_journal::PrivateJournalFormat;
+use super::private_journal::{PrivateJournal, PrivateJournalError};
 use super::*;
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use norito::{Decode, Encode};
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::path::Path;
 
 /// Maximum exact public binding admitted by one coordinator reservation.
 pub const KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1: usize = 64 * 1024;
 /// Maximum canonical sender intent retained before device preparation.
 pub const KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1: usize = 128 * 1024;
+#[cfg(test)]
 const RETIREMENT_MAX_BYTES: usize = 4 * 1024;
+#[cfg(test)]
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "operations.norito.wal",
     magic: b"IKGOW1\0\0",
@@ -64,6 +70,7 @@ struct Reservation {
     public_binding: Vec<u8>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::coordinator_operation_store::Record")]
 enum Record {
@@ -101,6 +108,7 @@ pub struct KagemushaCoordinatorOperationStoreV1 {
     maximum_reserved_bytes: u64,
 }
 
+#[cfg(test)]
 /// Sender recovery assembled from a journal intent and the actual Core-owned index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KagemushaCoordinatorSenderIntentRecoveryV1 {
@@ -113,18 +121,21 @@ pub enum KagemushaCoordinatorSenderIntentRecoveryV1 {
 }
 
 impl KagemushaCoordinatorOperationStoreV1 {
+    #[cfg(test)]
     /// Return this descriptor-owned, fully replayed and fsynced WAL prefix.
     /// It is durable byte evidence only; the hardware checkpoint must still select it.
     pub fn recovery_prefix(&self) -> Result<KagemushaRecoveryJournalPrefixV1> {
         self.wal.recovery_prefix().map_err(storage_error)
     }
 
+    #[cfg(test)]
     /// Return the bounded live admission charge. Retained terminal history is never evicted.
     #[must_use]
     pub const fn live_reserved_bytes(&self) -> u64 {
         self.reserved_bytes
     }
 
+    #[cfg(test)]
     pub(super) fn create_new(
         path: &Path,
         lane: KagemushaLaneIdV1,
@@ -151,6 +162,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(store)
     }
 
+    #[cfg(test)]
     pub(super) fn open_existing(
         path: &Path,
         lane: KagemushaLaneIdV1,
@@ -217,10 +229,12 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(store)
     }
 
+    #[cfg(test)]
     fn persist(&mut self, record: &Record) -> Result<()> {
         self.wal.append(&encode(record)?).map_err(storage_error)
     }
 
+    #[cfg(test)]
     fn apply_reservation(&mut self, reservation: Reservation) -> Result<()> {
         let growth = reservation_growth(&reservation)?;
         self.reserved_bytes = self
@@ -238,6 +252,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_sender_retirement(
         &self,
         record: &KagemushaOutgoingOperationRecordV1,
@@ -266,6 +281,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn apply_sender_retirement(
         &mut self,
         record: KagemushaOutgoingOperationRecordV1,
@@ -283,6 +299,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn retire_sender(&mut self, record: &KagemushaOutgoingOperationRecordV1) -> Result<bool> {
         if self
             .operations
@@ -299,6 +316,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(true)
     }
 
+    #[cfg(test)]
     fn reserve(
         &mut self,
         operation_id: DigestV1,
@@ -344,6 +362,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(operation_id)
     }
 
+    #[cfg(test)]
     fn validate_reservation_scope(&self, reservation: &Reservation) -> Result<()> {
         if reservation.operation == 5 {
             let maximum = KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1;
@@ -368,6 +387,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn require_new_intent(&self, intent: &KagemushaOutgoingPublicInputPreimageV1) -> Result<()> {
         validate_intent(intent, &self.lane)?;
         if intent.context.release.asset_incarnation != self.asset_incarnation {
@@ -388,6 +408,7 @@ impl KagemushaCoordinatorOperationStoreV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn begin(&mut self, intent: &KagemushaOutgoingPublicInputPreimageV1) -> Result<()> {
         self.wal.check_owned().map_err(storage_error)?;
         if let Some(existing) = self
@@ -413,10 +434,12 @@ impl KagemushaCoordinatorOperationStoreV1 {
 
 use KagemushaCoordinatorOperationStoreErrorV1 as Error;
 
+#[cfg(test)]
 fn encode(record: &Record) -> Result<Vec<u8>> {
     norito::encode_canonical(record).map_err(|_| Error::InvalidBinding)
 }
 
+#[cfg(test)]
 fn validate_reservation(reservation: &Reservation) -> Result<()> {
     if reservation.operation_id == [0; 32]
         || !(1..=22).contains(&reservation.operation)
@@ -453,6 +476,7 @@ fn validate_reservation(reservation: &Reservation) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn reservation_growth(reservation: &Reservation) -> Result<u64> {
     validate_reservation(reservation)?;
     let bytes = encode(&Record::Reserve(reservation.clone()))?.len() as u64
@@ -469,6 +493,7 @@ fn reservation_growth(reservation: &Reservation) -> Result<u64> {
     bytes.checked_add(intent).ok_or(Error::Capacity)
 }
 
+#[cfg(test)]
 fn validate_intent(
     intent: &KagemushaOutgoingPublicInputPreimageV1,
     lane: &KagemushaLaneIdV1,
@@ -494,6 +519,7 @@ fn validate_intent(
     Ok(())
 }
 
+#[cfg(test)]
 /// Canonical tagged sender inputs shared by Core and the device bridge. The enum tag is required
 /// because SendSplit and RedeemSplit use the same device operation code.
 fn sender_public_binding(inputs: &KagemushaOutgoingPublicInputsV1) -> Result<Vec<u8>> {
@@ -515,6 +541,7 @@ where
     G: KagemushaGuardBundleVerifierV1,
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
+    #[cfg(test)]
     /// Create new coordinator retry storage for this actual Core wallet. Existing files never reset.
     /// Creation is permitted only while the selected prefix is the exact initializer. Once
     /// checkpointed journal history advances, recovery must reopen its retained prefix.
@@ -538,6 +565,7 @@ where
         Ok(store)
     }
 
+    #[cfg(test)]
     /// Open the existing journal and reconcile every retained Core operation before serving it.
     pub fn open_coordinator_operation_store(
         &self,
@@ -554,6 +582,7 @@ where
         Ok(store)
     }
 
+    #[cfg(test)]
     /// Admit a caller-persisted ID only after its exact operation/binding is durably retained.
     /// The returned ID equals the caller's ID and confers no qualification or monetary capability.
     /// Native dispatch must first decode non-sender bindings using their exact typed command codec;
@@ -569,6 +598,7 @@ where
         store.reserve(operation_id, operation, public_binding)
     }
 
+    #[cfg(test)]
     /// Durably bind one sender intent before hardware preparation. Exact retries do not append.
     /// Credential identity and the Core authorization key reference must already be authenticated
     /// by the native owner, as for existing Core preparation APIs. A raw identifier or this return
@@ -593,6 +623,7 @@ where
         store.begin(intent)
     }
 
+    #[cfg(test)]
     /// Recover a reserved sender's exact intent together with its actual Core index projection.
     /// Missing reservation is a conflict, not the bridge's authenticated-absence response.
     pub fn recover_coordinator_sender_intent(
@@ -621,6 +652,7 @@ where
         }
     }
 
+    #[cfg(test)]
     /// Retire live sender journal allowances after the actual Core index accepts a terminal
     /// receipt. All closed IDs, original inputs and exact release evidence remain retained.
     /// Missing or changed Core records are errors; raw receipts or host flags cannot call this
@@ -641,6 +673,7 @@ where
         Ok(retired)
     }
 
+    #[cfg(test)]
     pub(super) fn reconcile_coordinator_operations(
         &self,
         store: &KagemushaCoordinatorOperationStoreV1,

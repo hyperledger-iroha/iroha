@@ -81,14 +81,12 @@ the owner decides otherwise.
 1. **Committee lag.** Is a lag of 2 heights acceptable for NPoS epochs? Default: a committee
    or parameter change decided in block `h` binds at `h + 2`, which keeps apply and storage
    off the critical path.
-2. **Idle cadence.** Should dataspace and lane instances default to an idle interval of 30 s or
-   more? Default: `idle_block_interval` is 5 s for every instance (about 17 280 empty blocks
-   per idle day); the spec only recommends 30 s or more for dataspaces and lanes.
-3. **Crashed leader under load.** Should view 0 after a non-empty parent wait
-   `block_time + build_timeout` instead of the idle interval? That cuts the cost of a crashed
-   view-0 leader under load from about 7.2 s to about 3.2 s and adds one empty block after each
-   busy period. Default: not adopted; view 0 always waits up to
-   `idle_block_interval + build_timeout` for a proposal.
+2. **No empty blocks.** Decided: idle instances never create blocks. Empty or missed builds
+   wait for queued transactions, with a bounded `payload_retry_interval` (default 5 s).
+   Decoded application payloads must contain at least one network entrypoint.
+3. **Crashed leader under load.** View 0 currently allows
+   `payload_retry_interval + build_timeout` for a proposal. A shorter wait after a busy
+   parent is a future latency optimization; neither timeout nor retry creates a block.
 4. **Predictable schedule.** Are leaders and proxy tails that are known ahead of time
    acceptable? Default: round-robin over a per-committee permutation. It prevents seed
    grinding and gives slot fairness, but lets an attacker aim a DoS at upcoming leaders;

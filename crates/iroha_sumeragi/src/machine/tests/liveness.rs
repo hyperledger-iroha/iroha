@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::{
-    message::{BlockResponse, Defect},
+    message::BlockResponse,
     preimage::{KIND_COMMIT, KIND_PREPARE},
 };
 
@@ -29,8 +29,8 @@ fn statuses(actions: &[Action]) -> usize {
 fn det_l1_levels_grow() {
     let mut h = H::new(4, pick::set_b(0));
     let t_base = h.local.t_base;
-    // View 0: anchor = t_enter + idle_block_interval + build_timeout.
-    let expected0 = h.params.idle_block_interval + h.local.build_timeout + t_base;
+    // View 0: anchor = t_enter + payload_retry_interval + build_timeout.
+    let expected0 = h.params.payload_retry_interval + h.local.build_timeout + t_base;
     assert_eq!(h.core.view_deadline(), Some(expected0));
     let mut timeouts_at = Vec::new();
     for view in 0..4u64 {
@@ -44,13 +44,9 @@ fn det_l1_levels_grow() {
         let t_enter = h.now;
         h.enter_view(view + 1);
         let next = h.core.view_deadline().unwrap();
-        // T(L) = t_base · 1.5^L; anchor = t_enter + build_timeout for views > 0, or the
-        // time of the own proposal when this node leads the view.
-        let anchor = if h.leader(view + 1) == h.my_idx() {
-            t_enter
-        } else {
-            t_enter + h.local.build_timeout
-        };
+        // T(L) = t_base · 1.5^L; every fresh later view allows one build timeout.
+        // Leading a view without work does not manufacture an immediate proposal.
+        let anchor = t_enter + h.local.build_timeout;
         let level = u32::try_from(view + 1).unwrap();
         let expected = anchor + t_base * 3u64.pow(level) / 2u64.pow(level);
         assert_eq!(next, expected, "view {}", view + 1);
@@ -171,7 +167,7 @@ fn det_l4_stage2_timing() {
 
     // (b) backstop anchor + φ·T for a node that never became ready.
     let mut h = H::new(4, pick::set_a(0));
-    let backstop = h.params.idle_block_interval + h.local.build_timeout + h.local.t_base / 2;
+    let backstop = h.params.payload_retry_interval + h.local.build_timeout + h.local.t_base / 2;
     h.run_until(backstop - 1);
     assert!(h.core.stage < 2);
     h.run_until(backstop);
@@ -375,44 +371,36 @@ fn det_l11_pending_apply_after_peers_moved_on() {
 }
 
 #[test]
-fn det_l13_empty_after_views() {
-    // Leader of view 2 (= empty_after_views) proposes EMPTY at once, without building.
+fn det_l13_late_views_build_nonempty_work() {
     let mut h = H::new(4, pick::proxy_tail(0));
     assert_eq!(h.leader(2), h.my_idx());
     h.enter_view(1);
     let tc = h.tc_q(1);
     let out = h.deliver(h.others(1, &[])[0], WireMessage::Tc(Box::new(tc)));
-    assert!(!out.iter().any(|a| matches!(a, Action::BuildPayload { .. })));
-    let ps = proposals(&out);
-    assert_eq!(ps.len(), 1);
-    assert_eq!(ps[0].header.payload_len, 0);
-    assert_eq!(ps[0].payload.as_deref(), Some(&[][..]));
-    // Leader of view 1 (< empty_after_views) builds a payload (no pacing, no idle wait).
-    let mut h = H::new(4, pick::set_a(0));
-    assert_eq!(h.leader(1), h.my_idx());
-    let tc = h.tc_q(0);
-    let out = h.deliver(h.others(1, &[])[0], WireMessage::Tc(Box::new(tc)));
-    assert!(out.iter().any(|a| matches!(
-        a,
-        Action::BuildPayload {
-            height: 1,
-            view: 1,
-            ..
-        }
-    )));
-    // Voters reject a non-empty fresh block from view 2 on.
+    assert!(
+        out.iter()
+            .any(|a| matches!(a, Action::BuildPayload { view: 2, .. }))
+    );
+    assert!(proposals(&out).is_empty());
+    let out = h.built(b"");
+    assert!(proposals(&out).is_empty());
+    assert!(
+        h.payload_ready()
+            .iter()
+            .any(|a| matches!(a, Action::BuildPayload { .. }))
+    );
+    let out = h.built(b"pending transaction");
+    assert_eq!(
+        proposals(&out)[0].payload.as_deref(),
+        Some(&b"pending transaction"[..])
+    );
     let mut h = H::new(4, pick::set_b(0));
     h.enter_view(1);
     let tc = h.tc_q(1);
-    let c = h.block(2, b"not empty");
-    let out = prop(&mut h, 2, &c, Some(tc));
-    assert!(matches!(
-        &evidence(&out)[..],
-        [Evidence::InvalidProposal {
-            defect: Defect::NonEmptyPayload,
-            ..
-        }]
-    ));
+    let block = h.block(2, b"pending transaction");
+    let out = prop(&mut h, 2, &block, Some(tc));
+    assert!(evidence(&out).is_empty());
+    assert_eq!(h.pending_exec.len(), 1, "late-view nonempty work executes");
 }
 
 #[test]
@@ -795,7 +783,7 @@ fn det_l25_equivocating_leader_early_timeout() {
 /// equivocating (early timeout), or by sending its valid proposal to too few members so that
 /// the view ends on its deadline or by a join while this node holds that proposal; nor does a
 /// committing view this node had already left. A slow honest view does raise it, at view 0
-/// and above; the view-0 wait for the proposal (pace or heartbeat) does not count.
+/// and above; the view-0 wait for the proposal (pace or payload retry) does not count.
 #[test]
 fn det_l26_raise_only_on_slow_commit_or_exec() {
     let half = LocalParams::default().t_base / 2; // T(0)/2
@@ -884,16 +872,16 @@ fn det_l26_raise_only_on_slow_commit_or_exec() {
     qc_msg(&mut h, cqc);
     assert_eq!(start(&h), 1, "slow view 1");
 
-    // (g) The heartbeat: the view-0 proposal arrives `idle_block_interval` after the entry
+    // (g) Work arriving after an idle wait: the view-0 proposal arrives after the entry
     // and commits at once → unchanged (the anchor is the proposal, not the entry).
     let mut h = H::new(4, pick::set_b(0));
-    h.now += h.params.idle_block_interval;
-    let blk = h.block(0, b"");
+    h.now += h.params.payload_retry_interval;
+    let blk = h.block(0, b"work after idle");
     prop(&mut h, 0, &blk, None);
     h.now += 100;
     let cqc = h.qc_q(VoteKind::Commit, 0, &blk);
     qc_msg(&mut h, cqc);
-    assert_eq!(start(&h), 0, "heartbeat");
+    assert_eq!((h.core.tip.height, start(&h)), (1, 0), "work after idle");
 
     // (h) A slow execution raises even when the committing view is fast (the slow block's
     // view failed; view 1's block is executed at once and commits at once): the height's
@@ -917,8 +905,8 @@ fn det_l26_raise_only_on_slow_commit_or_exec() {
 /// §9.2, §6.2 `discard_exec`, §6.8 step 4 (ML27, ML28): an execution that outlasts its view
 /// counts with its elapsed time. (a) Every executor takes longer than `T(1)` for a non-empty
 /// block: views 0 and 1 time out while their executions are pending (the driver cancels the
-/// work), view 2 commits `EMPTY` at once after a 0 ms execution → the start level rises
-/// (otherwise every height repeats this and commits only `EMPTY` blocks). (b) The committed
+/// work), view 2 commits valid retry work at once → the start level rises so later heights
+/// budget for the slow execution already observed. (b) The committed
 /// block's own execution, kept across a view change (it is the lock's block) and still
 /// pending when its `CommitQC` of the view this node left arrives → the start level rises.
 /// (c) A view that fails after its execution finished records only the real duration.
@@ -947,13 +935,13 @@ fn det_l27_pending_execution_counts() {
     h.run_until(deadline);
     assert_eq!(h.core.timeout_view, Some(1));
     h.enter_view(2);
-    let e = h.block(2, b"");
+    let e = h.block(2, b"retry work");
     let bh_e = h.bh(&e);
     let tc = h.tc_q(1);
     // The driver answers the discarded requests `Cancelled` (ignored, stale).
     h.pending_exec.retain(|(bh, _, _)| *bh == bh_e);
     prop(&mut h, 2, &e, Some(tc));
-    assert_eq!(h.pending_exec.len(), 1, "Execute{{EMPTY}}");
+    assert_eq!(h.pending_exec.len(), 1, "Execute{{retry work}}");
     h.exec_all();
     h.now += 50;
     let cqc = h.qc_q(VoteKind::Commit, 2, &e);
@@ -961,7 +949,7 @@ fn det_l27_pending_execution_counts() {
     assert_eq!(
         (h.core.tip.height, start(&h)),
         (1, 1),
-        "EMPTY after two slow views"
+        "nonempty work after two slow views"
     );
 
     // (b) The committed block's execution, pending since view 0, at a CommitQC of view 0
@@ -1032,7 +1020,7 @@ fn det_l29_late_leader_does_not_raise() {
 
     // (a) View 0: the proposal arrives after the anchor `t_enter + P(0)`.
     let mut h = H::new(4, pick::set_b(0));
-    let p0 = h.params.idle_block_interval + h.local.build_timeout;
+    let p0 = h.params.payload_retry_interval + h.local.build_timeout;
     let late = h.core.t_enter + p0 + half + 100;
     h.run_until(late);
     assert_eq!(h.core.timeout_view, None, "the view is still open");

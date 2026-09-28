@@ -6,7 +6,6 @@ pub use sorafs_manifest::alias_cache::{
     AliasCachePolicy, AliasProofError, AliasProofEvaluation, AliasProofState, decode_alias_proof,
     decode_alias_proof_untrusted_signers, unix_now_secs,
 };
-use sorafs_manifest::pin_registry::AliasProofBundleV1;
 use std::time::Duration;
 /// Grace window overrides layered atop the base alias cache policy.
 #[derive(Debug, Clone, Copy)]

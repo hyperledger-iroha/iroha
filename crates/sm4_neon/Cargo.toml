@@ -14,4 +14,3 @@ force-neon = []
 [dependencies]
 
 [dev-dependencies]
-sm4 = "0.5.1"

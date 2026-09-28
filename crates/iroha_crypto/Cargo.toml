@@ -37,9 +37,6 @@ crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
 # Enable support for BLS signatures. The shipping `node-crypto` aggregate includes it.
 bls = ["dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle", "dep:w3f-bls"]
 
-# Expose FFI API for dynamic linking (Internal use only)
-ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export"]
-
 # Allow creating key using random number generator which is tricky in some environments like Smart Contracts
 rand = []
 # Enable parallel helpers for Merkle tree construction
@@ -53,8 +50,6 @@ pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq", "dep:subtl
 [dependencies]
 fastpq_isi = { path = "../fastpq_isi" }
 iroha_primitives = { workspace = true }
-iroha_macro = { workspace = true }
-iroha_ffi = { workspace = true, optional = true }
 iroha_schema = { workspace = true }
 
 derive_more = { workspace = true, features = ["deref", "deref_mut", "display", "debug"] }
@@ -95,7 +90,7 @@ once_cell = { version = "1.21.3", default-features = false, features = ["std"], 
 tempfile = { workspace = true }
 num-bigint = { version = "0.4.6", default-features = false, features = ["std"], optional = true }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"], optional = true }
-streebog = { version = "0.11.0-rc.3", default-features = false, optional = true }
+streebog = { version = "0.11.0", default-features = false, optional = true }
 crypto-bigint = { version = "0.6.1", default-features = false, features = ["alloc", "rand"], optional = true }
 sm2 = { version = "0.13.3", optional = true, default-features = false, features = ["std", "dsa", "pkcs8", "pem"] }
 sm3 = { version = "0.5.0-rc.3", optional = true }

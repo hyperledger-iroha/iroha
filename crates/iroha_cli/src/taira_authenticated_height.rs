@@ -20,34 +20,160 @@ pub(crate) struct VerifiedCommittedHeightV1 {
     block_hash: HashOf<BlockHeader>,
     before_challenge: [u8; 32],
     after_challenge: [u8; 32],
-    proofs: Vec<BridgeFinalityProof>,
+    proofs: Vec<SumeragiFinalityProof>,
+    peers: Vec<PeerHeightEvidenceV1>,
+}
+
+/// Untrusted retained bytes are deliberately separate from the verified capability.
+#[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct RetainedCommittedHeightV1 {
+    schema: String,
+    network_id: NetworkId,
+    genesis_block_hash: HashOf<BlockHeader>,
+    committed_height: NonZeroU64,
+    block_hash: HashOf<BlockHeader>,
+    before_challenge: [u8; 32],
+    after_challenge: [u8; 32],
+    proofs: Vec<SumeragiFinalityProof>,
     peers: Vec<PeerHeightEvidenceV1>,
 }
 
 impl VerifiedCommittedHeightV1 {
+    #[cfg(test)]
+    pub(crate) fn convergence_evidence_fixture(
+        height: u64,
+    ) -> (
+        iroha_genesis::ValidatedGenesisBundle,
+        Vec<PeerV1>,
+        json::Value,
+    ) {
+        tests::convergence_evidence_fixture(height)
+    }
+
+    /// Reauthenticate retained evidence under independently selected genesis and peers.
+    /// This proves the historical capture; callers must bind its journal/wave custody.
+    pub(crate) fn validate_retained(
+        genesis: &iroha_genesis::ValidatedGenesisBundle,
+        peers: Vec<PeerV1>,
+        value: json::Value,
+    ) -> Result<Self> {
+        let raw: RetainedCommittedHeightV1 = json::from_value(value)?;
+        let mut observer = AuthenticatedHeightObserverV1::new(genesis, peers)?;
+        require(
+            raw.schema == "iroha.taira.authenticated-committed-height.v1"
+                && raw.network_id == observer.authority.network
+                && raw.genesis_block_hash == observer.authority.genesis
+                && raw.before_challenge != [0; 32]
+                && raw.after_challenge != [0; 32]
+                && raw.before_challenge != raw.after_challenge
+                && raw.proofs.len() == usize::try_from(raw.committed_height.get())?
+                && raw.peers.len() == VERIFICATION_PEERS,
+            "retained height summary, challenges or complete proof prefix differs",
+        )?;
+        let mut verifier = observer.authority.verifier()?;
+        for proof in &raw.proofs {
+            observer.authority.roster(proof)?;
+            verifier.verify(proof)?;
+        }
+        require(
+            raw.proofs
+                .last()
+                .is_some_and(|proof| proof.block_header.hash() == raw.block_hash),
+            "retained block hash differs from the authenticated tip",
+        )?;
+        observer.verifier = Some(verifier);
+        observer.proofs = raw.proofs;
+        for (index, evidence) in raw.peers.iter().enumerate() {
+            require(
+                evidence.peer == observer.peers[index],
+                "retained selected peer identity differs",
+            )?;
+            for (attestation, challenge) in [
+                (&evidence.before, raw.before_challenge),
+                (&evidence.after, raw.after_challenge),
+            ] {
+                validate_attestation(&observer.authority, &evidence.peer, challenge, attestation)?;
+                require(
+                    attestation.body.finality_proof.block_header.height() == raw.committed_height,
+                    "retained peer capture did not converge on the selected height",
+                )?;
+                observer.require_chain_tip(attestation)?;
+            }
+        }
+        Ok(Self {
+            schema: raw.schema,
+            network_id: raw.network_id,
+            genesis_block_hash: raw.genesis_block_hash,
+            committed_height: raw.committed_height,
+            block_hash: raw.block_hash,
+            before_challenge: raw.before_challenge,
+            after_challenge: raw.after_challenge,
+            proofs: observer.proofs,
+            peers: raw.peers,
+        })
+    }
+
+    pub(crate) fn block_hash(&self) -> HashOf<BlockHeader> {
+        self.block_hash
+    }
+
     pub(crate) fn committed_height(&self) -> NonZeroU64 {
         self.committed_height
     }
 
+    /// Reauthenticate a carrier from the retained complete chain under selected genesis.
+    pub(crate) fn verified_proof_at(
+        &self,
+        genesis: &iroha_genesis::ValidatedGenesisBundle,
+        height: NonZeroU64,
+    ) -> Result<iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock> {
+        require(
+            self.genesis_block_hash == genesis.expected_hash(),
+            "carrier genesis differs",
+        )?;
+        let validators = genesis
+            .validator_pops()
+            .iter()
+            .map(|(public_key, proof_of_possession)| FinalityValidator {
+                public_key: public_key.clone(),
+                proof_of_possession: proof_of_possession.clone(),
+            })
+            .collect();
+        let mut verifier = SumeragiFinalityVerifier::new(
+            genesis.block(),
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            validators,
+        )?;
+        for proof in &self.proofs {
+            let verified = verifier.verify(proof)?;
+            if proof.block_header.height() == height {
+                return Ok(verified);
+            }
+        }
+        Err(eyre!("carrier is absent from the authenticated prefix"))
+    }
+
     /// Retrieve only a proof admitted into this observation's contiguous prefix.
-    pub(crate) fn proof_at(&self, height: NonZeroU64) -> Option<&BridgeFinalityProof> {
+    pub(crate) fn proof_at(&self, height: NonZeroU64) -> Option<&SumeragiFinalityProof> {
         self.proofs.get(usize::try_from(height.get() - 1).ok()?)
     }
 }
 
-#[derive(JsonSerialize)]
+#[derive(JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct PeerHeightEvidenceV1 {
     peer: PeerV1,
-    before: BridgeFinalityAttestationV1,
-    after: BridgeFinalityAttestationV1,
+    before: SumeragiFinalityAttestation,
+    after: SumeragiFinalityAttestation,
 }
 
 /// A verified chain is retained only in memory; every emitted height requires new peer reads.
 pub(crate) struct AuthenticatedHeightObserverV1 {
     authority: Authority,
     peers: Vec<PeerV1>,
-    verifier: Option<BridgeFinalityVerifier>,
-    proofs: Vec<BridgeFinalityProof>,
+    verifier: Option<SumeragiFinalityVerifier>,
+    proofs: Vec<SumeragiFinalityProof>,
     emitted_height: u64,
 }
 
@@ -62,13 +188,13 @@ trait HeightReads: Sync {
         height: NonZeroU64,
         challenge: [u8; 32],
         identity: &PeerId,
-    ) -> Result<BridgeFinalityAttestationV1>;
+    ) -> Result<SumeragiFinalityAttestation>;
     fn next_proof(
         &self,
         peer: usize,
         height: NonZeroU64,
-        verifier: &mut BridgeFinalityVerifier,
-    ) -> Result<BridgeFinalityProof>;
+        verifier: &mut SumeragiFinalityVerifier,
+    ) -> Result<SumeragiFinalityProof>;
 }
 
 struct NativeReads {
@@ -77,9 +203,7 @@ struct NativeReads {
 
 impl HeightReads for NativeReads {
     fn tip(&self, peer: usize) -> Result<u64> {
-        Ok(self.clients[peer]
-            .get_sumeragi_status()?
-            .committed_height)
+        Ok(self.clients[peer].get_sumeragi_status()?.committed_height)
     }
 
     fn attest(
@@ -88,17 +212,17 @@ impl HeightReads for NativeReads {
         height: NonZeroU64,
         challenge: [u8; 32],
         identity: &PeerId,
-    ) -> Result<BridgeFinalityAttestationV1> {
-        self.clients[peer].get_bridge_finality_attestation(height, challenge, identity)
+    ) -> Result<SumeragiFinalityAttestation> {
+        self.clients[peer].get_sumeragi_finality_attestation(height, challenge, identity)
     }
 
     fn next_proof(
         &self,
         peer: usize,
         height: NonZeroU64,
-        verifier: &mut BridgeFinalityVerifier,
-    ) -> Result<BridgeFinalityProof> {
-        self.clients[peer].get_next_bridge_finality_proof(height, verifier)
+        verifier: &mut SumeragiFinalityVerifier,
+    ) -> Result<SumeragiFinalityProof> {
+        self.clients[peer].get_next_sumeragi_finality_proof(height, verifier)
     }
 }
 
@@ -119,24 +243,18 @@ impl AuthenticatedHeightObserverV1 {
             .map(|(key, pop)| (PeerId::new(key.clone()), pop.clone()))
             .collect::<BTreeMap<_, _>>();
         validate_peer_selection(&peers, &validators)?;
-        let (roster, pops) = validators
-            .into_iter()
-            .map(|(validator, pop)| {
-                (
-                    ValidatorPower {
-                        validator,
-                        power: 1,
-                    },
-                    pop,
-                )
-            })
-            .unzip();
         Ok(Self {
             authority: Authority {
                 network: NetworkId::from_genesis_hash(genesis.expected_hash()),
                 genesis: genesis.expected_hash(),
-                roster,
-                pops,
+                trusted_genesis: genesis.block().clone(),
+                validators: validators
+                    .into_iter()
+                    .map(|(peer, proof_of_possession)| FinalityValidator {
+                        public_key: peer.public_key().clone(),
+                        proof_of_possession,
+                    })
+                    .collect(),
             },
             peers,
             verifier: None,
@@ -171,7 +289,7 @@ impl AuthenticatedHeightObserverV1 {
         discriminant: u16,
         deadline: Instant,
         challenge: [u8; 32],
-    ) -> Result<Vec<PeerRead<BridgeFinalityAttestationV1>>> {
+    ) -> Result<Vec<PeerRead<SumeragiFinalityAttestation>>> {
         read_four_peers(&self.peers, discriminant, |index, peer| {
             require_operation_budget(deadline, "reading authenticated validator height")?;
             let tip = match reads.tip(index) {
@@ -201,8 +319,8 @@ impl AuthenticatedHeightObserverV1 {
                 attestation.body.finality_proof.block_header.height() == height,
                 "attested proof differs from requested height",
             )?;
-            // Even a peer that is behind another peer must supply a valid certificate.
-            attestation.body.finality_proof.finality_artifact.verify()?;
+            // Certificate verification follows against the authenticated contiguous prefix.
+            // The challenged identity alone never authorizes a height.
             require_operation_budget(deadline, "verified validator height attestation")?;
             Ok(PeerRead::Verified(attestation))
         })
@@ -372,7 +490,7 @@ impl AuthenticatedHeightObserverV1 {
         &mut self,
         reads: &impl HeightReads,
         source_index: usize,
-        source: &BridgeFinalityAttestationV1,
+        source: &SumeragiFinalityAttestation,
         deadline: Instant,
         new_proofs: &mut usize,
     ) -> Result<bool> {
@@ -417,14 +535,18 @@ impl AuthenticatedHeightObserverV1 {
         Ok(true)
     }
 
-    fn require_chain_tip(&self, attestation: &BridgeFinalityAttestationV1) -> Result<()> {
+    fn require_chain_tip(&self, attestation: &SumeragiFinalityAttestation) -> Result<()> {
         let tip = &attestation.body.finality_proof;
         let genesis = self
             .proofs
             .first()
             .ok_or_else(|| eyre!("missing authenticated genesis proof"))?;
-        self.authority
-            .verify_same_decision(genesis, None, &attestation.body.genesis_finality_proof)
+        let verifier = self
+            .verifier
+            .as_ref()
+            .ok_or_else(|| eyre!("missing authenticated verifier"))?;
+        verifier
+            .verify_same_decision(genesis, &attestation.body.genesis_finality_proof)
             .wrap_err(
                 "validator genesis proof conflicts with the authenticated contiguous chain",
             )?;
@@ -433,11 +555,9 @@ impl AuthenticatedHeightObserverV1 {
             .proofs
             .get(index)
             .ok_or_else(|| eyre!("missing authenticated chain tip"))?;
-        let predecessor = index
-            .checked_sub(1)
-            .and_then(|index| self.proofs.get(index));
-        self.authority
-            .verify_same_decision(retained, predecessor, tip)
+        verifier
+            .verify_same_decision(retained, tip)
+            .map(|_| ())
             .wrap_err("validator proof conflicts with the authenticated contiguous chain")
     }
 }

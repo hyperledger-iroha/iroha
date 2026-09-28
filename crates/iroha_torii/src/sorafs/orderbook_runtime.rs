@@ -12,6 +12,7 @@ use super::orderbook_worker::{
     OrderbookMaintenanceDueV1, OrderbookWorkerActionV1, plan_orderbook_generation,
     plan_orderbook_worker_action, reconcile_orderbook_semantics,
 };
+use super::{pending_evidence_blocks_absence_retry, retained_transaction_digest};
 use crate::{SharedAppState, SoraFsOrderbookTransactionSigner};
 use axum::http::StatusCode;
 use blake3::hash as blake3_hash;
@@ -221,29 +222,6 @@ fn classify_orderbook_transaction_submission(
         _ => OrderbookTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
-fn orderbook_delivery_evidence_blocks_absence_retry(
-    queue_pending: bool,
-    cache_kind: Option<crate::PipelineStatusKind>,
-) -> bool {
-    queue_pending
-        || matches!(
-            cache_kind,
-            Some(
-                crate::PipelineStatusKind::Queued
-                    | crate::PipelineStatusKind::Approved
-                    | crate::PipelineStatusKind::Committed
-                    | crate::PipelineStatusKind::Applied
-            )
-        )
-}
-fn retained_orderbook_transaction_digest(
-    retained_digest: Option<[u8; 32]>,
-    signed_transaction_bytes: Option<&[u8]>,
-) -> Option<[u8; 32]> {
-    let retained_digest = retained_digest.filter(|digest| *digest != [0; 32])?;
-    let bytes = signed_transaction_bytes?;
-    (*blake3_hash(bytes).as_bytes() == retained_digest).then_some(retained_digest)
-}
 fn classify_orderbook_envelope(
     retained_digest: Option<[u8; 32]>,
     signed_transaction_bytes: Option<&[u8]>,
@@ -255,7 +233,7 @@ fn classify_orderbook_envelope(
         return OrderbookEnvelopeReconciliationV1::Unavailable;
     }
     let Some(transaction_digest) =
-        retained_orderbook_transaction_digest(retained_digest, signed_transaction_bytes)
+        retained_transaction_digest(retained_digest, signed_transaction_bytes)
     else {
         return OrderbookEnvelopeReconciliationV1::Unavailable;
     };
@@ -1399,9 +1377,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
         }
         let exact_transaction = match delivery.signed_transaction_bytes.as_deref() {
             Some(bytes) => {
-                if retained_orderbook_transaction_digest(delivery.transaction_digest, Some(bytes))
-                    .is_none()
-                {
+                if retained_transaction_digest(delivery.transaction_digest, Some(bytes)).is_none() {
                     scan.deferred = scan.deferred.saturating_add(1);
                     warn!("durable native SoraFS orderbook transaction digest is invalid");
                     continue;
@@ -1426,7 +1402,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
                 .pipeline_status_cache
                 .lookup(hash)
                 .map(|entry| entry.kind);
-            orderbook_delivery_evidence_blocks_absence_retry(queue_pending, cache_kind)
+            pending_evidence_blocks_absence_retry(queue_pending, cache_kind)
         });
         let Some(observation) = observe_orderbook_transaction_in_one_finalized_view(
             state,
@@ -1453,7 +1429,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
                 .pipeline_status_cache
                 .lookup(hash)
                 .map(|entry| entry.kind);
-            orderbook_delivery_evidence_blocks_absence_retry(queue_pending, cache_kind)
+            pending_evidence_blocks_absence_retry(queue_pending, cache_kind)
         });
         let envelope = match observation.transaction_outcome {
             Some(outcome) => classify_orderbook_envelope(
@@ -1950,21 +1926,16 @@ mod tests {
     }
     #[test]
     fn delivery_pending_or_committed_evidence_blocks_absence_retry() {
-        assert!(orderbook_delivery_evidence_blocks_absence_retry(true, None));
+        assert!(pending_evidence_blocks_absence_retry(true, None));
         for kind in [
             crate::PipelineStatusKind::Queued,
             crate::PipelineStatusKind::Approved,
             crate::PipelineStatusKind::Committed,
             crate::PipelineStatusKind::Applied,
         ] {
-            assert!(orderbook_delivery_evidence_blocks_absence_retry(
-                false,
-                Some(kind),
-            ));
+            assert!(pending_evidence_blocks_absence_retry(false, Some(kind),));
         }
-        assert!(!orderbook_delivery_evidence_blocks_absence_retry(
-            false, None,
-        ));
+        assert!(!pending_evidence_blocks_absence_retry(false, None,));
     }
     #[test]
     fn finalized_entrypoint_lookup_requires_exactly_one_result() {

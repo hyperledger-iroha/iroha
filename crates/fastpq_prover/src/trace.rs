@@ -19,7 +19,7 @@ use crate::{
 use core::convert::TryFrom;
 #[cfg(all(test, feature = "fastpq-gpu"))]
 use fastpq_isi::poseidon::PoseidonSponge as CpuPoseidonSponge;
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 use fastpq_isi::poseidon::RATE;
 use fastpq_isi::{
     FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384V1, GoldilocksDigestDomainV1,
@@ -1218,7 +1218,7 @@ impl PoseidonColumnSlice {
         Self::new(self.offset().checked_sub(base)?, self.len())
     }
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
     let payload = limb_len.checked_add(1)?;
     let remainder = payload % RATE;
@@ -1230,6 +1230,7 @@ pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
 }
 #[cfg(feature = "fastpq-gpu")]
 impl PoseidonColumnBatch {
+    #[cfg(test)]
     fn empty() -> Self {
         Self {
             payloads: Vec::new(),
@@ -1376,6 +1377,7 @@ impl PoseidonColumnBatch {
         })
     }
     /// Construct a flattened batch from already domain-separated limb messages.
+    #[cfg(test)]
     pub fn from_limb_slices(messages: &[Vec<u64>]) -> Option<Self> {
         if messages.is_empty() {
             return Some(Self::empty());
@@ -1441,6 +1443,7 @@ impl PoseidonColumnBatch {
     pub(crate) fn payloads(&self) -> &[u64] {
         &self.payloads
     }
+    #[cfg(test)]
     pub(crate) fn offsets(&self) -> &[PoseidonColumnSlice] {
         &self.offsets
     }

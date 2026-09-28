@@ -28,9 +28,10 @@ pub use source_context::{
 mod digest_backend_tests;
 #[cfg(test)]
 mod source_statement_tests;
+pub use crate::receiver_snapshot::FastpqSourceOpeningBuildLimits;
+#[cfg(test)]
 pub use crate::receiver_snapshot::{
-    FastpqSourceOpeningBuildLimits, fastpq_ordinary_source_statement_archive_v1,
-    fastpq_ordinary_source_statement_opening_v1,
+    fastpq_ordinary_source_statement_archive_v1, fastpq_ordinary_source_statement_opening_v1,
 };
 use fastpq_prover::{
     Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PublicInputs,
@@ -42,13 +43,14 @@ use iroha_config::parameters::actual::FastpqExecutionMode;
 #[cfg(any(test, feature = "fastpq-gpu"))]
 use iroha_config::parameters::actual::{Fastpq, FastpqPoseidonMode};
 use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_data_model::fastpq::{FastpqPublicTransferStatementV1, FastpqPublicTransferTranscriptV1};
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
     block::{BlockHeader, consensus::ExecWitness},
     fastpq::{
-        FastpqOperationKind, FastpqPublicInputs, FastpqPublicTransferStatementV1,
-        FastpqPublicTransferTranscriptV1, FastpqRolePermissionDelta, FastpqStateTransition,
+        FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
         TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
         transfer_asset_scales, transfer_balance_key as balance_key,
@@ -846,6 +848,7 @@ fn hash_encoded<T: NoritoEncode>(value: &T) -> [u8; 32] {
     let hash = Hash::new(value.encode());
     hash.into()
 }
+#[cfg(test)]
 fn public_inputs_from_template(
     template: FastpqPublicInputsTemplate,
     tx_set_hash: [u8; 32],
@@ -870,6 +873,7 @@ where
     build_transfer_batch_with_projection(parameter_set, public_inputs, transcripts, |_| ())
         .map(|(batch, ())| batch)
 }
+#[cfg(test)]
 /// Produce a private prover batch and its separate, path-free public statement.
 ///
 /// The public statement is projected directly from the same finalized in-memory
@@ -927,6 +931,7 @@ where
     };
     Ok((batch, statement))
 }
+#[cfg(test)]
 /// Failure to produce an exact public projection of finalized transfer facts.
 #[derive(Debug, Error)]
 pub enum FinalizedPublicStatementError {
@@ -941,6 +946,7 @@ pub enum FinalizedPublicStatementError {
     },
 }
 
+#[cfg(test)]
 /// Produce a private batch and an exact public projection of finalized transcripts.
 ///
 /// Unlike the repair-capable producer, this entry point rejects any change to original
@@ -975,6 +981,7 @@ where
     Ok((batch, statement))
 }
 
+#[cfg(test)]
 fn validate_finalized_public_transcript_projection(
     originals: &[&TransferTranscript],
     projected: &[FastpqPublicTransferTranscriptV1],
@@ -1189,6 +1196,7 @@ fn validate_prebuilt_batch_bindings(
     }
     Ok(())
 }
+#[cfg(test)]
 /// Convert transcript bundles into FASTPQ batches, preserving execution order.
 ///
 /// # Errors
@@ -1224,6 +1232,7 @@ fn annotate_metadata(batch: &mut TransitionBatch, entry_hash: &Hash, transcript_
         (transcript_count as u64).to_le_bytes().to_vec(),
     );
 }
+#[cfg(test)]
 /// Convert a map of transcripts grouped by entry hash into DTO batches.
 ///
 /// # Errors
@@ -1244,11 +1253,13 @@ pub fn dto_batches_from_transcripts(
     let batches = batches_from_bundles(parameter_set, public_inputs, tx_set_hash, bundles.iter())?;
     Ok(batches.iter().map(transition_batch_to_dto).collect())
 }
+#[cfg(test)]
 /// Convert a prover batch into its DTO representation suitable for `ExecWitness`.
 #[must_use]
 pub fn transition_batch_to_dto(batch: &TransitionBatch) -> FastpqTransitionBatch {
     transition_batch_to_dto_ref(batch)
 }
+#[cfg(test)]
 /// Convert a prover batch reference into a DTO (borrowing-friendly helper).
 #[must_use]
 pub fn transition_batch_to_dto_ref(batch: &TransitionBatch) -> FastpqTransitionBatch {

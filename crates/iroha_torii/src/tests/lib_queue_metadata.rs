@@ -59,6 +59,28 @@ mod tests_queue_metadata {
         }
     }
     #[test]
+    fn unsupported_current_queue_admission_has_permanent_canonical_error() {
+        let error = queue::Error::UnsupportedTransactionAdmission {
+            reason: "current consensus does not support multi-route transaction admission"
+                .to_owned(),
+        };
+        assert_eq!(
+            Error::status_code_for_queue_error(&error),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            Error::queue_error_summary(&error).0,
+            "unsupported_transaction_admission"
+        );
+        assert_eq!(
+            queue_rejection_metadata(&error).0,
+            "PRTRY:UNSUPPORTED_TRANSACTION_ADMISSION"
+        );
+        let envelope = Error::queue_error_envelope(&error, None);
+        assert_eq!(envelope.code, "unsupported_transaction_admission");
+        assert!(envelope.details.unwrap().retry_after_seconds.is_none());
+    }
+    #[test]
     fn kagemusha_v1_queue_conflict_has_stable_code_and_status() {
         let existing_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
             Hash::new(b"existing-kagemusha-v1-entrypoint"),

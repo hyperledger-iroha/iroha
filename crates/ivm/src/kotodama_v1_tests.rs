@@ -1,5 +1,8 @@
 //! Executable acceptance tests for the final Kotodama V1 language surface.
-use crate::{CoreHost, IVM, ProgramMetadata, VMError, kotodama::compiler::Compiler};
+use crate::{
+    CoreHost, IVM, ProgramMetadata, VMError, host::IVMHost, kotodama::compiler::Compiler,
+    parallel::StateAccessSet,
+};
 
 fn compiled_main(source: &str) -> IVM {
     let (code, _, report) = Compiler::new()
@@ -50,7 +53,7 @@ fn transaction_main(source: &str) -> Vec<u8> {
         .iter()
         .find(|entry| entry.name == "main")
         .unwrap();
-    // The block harness loads each image at PC zero. Replace its idle HALT
+    // The transaction harness loads each image at PC zero. Replace its idle HALT
     // with a test-only jump to the compiler's public call/HALT wrapper. This
     // selects an invocation without moving code, literals, or CNTR targets.
     let target_words = i32::try_from(entry.entry_pc / 4).unwrap();
@@ -60,6 +63,42 @@ fn transaction_main(source: &str) -> Vec<u8> {
     );
     code[metadata.code_offset..metadata.code_offset + 4].copy_from_slice(&jump.to_le_bytes());
     code
+}
+
+/// Execute `code` as one transaction against the VM's installed host `H`.
+///
+/// The host is checkpointed first and restored when execution fails, when the
+/// host cannot finish the transaction, or when it reports accesses outside
+/// `declared`, so a failed transaction leaves no host side effects.
+fn run_transaction<H: IVMHost + 'static>(
+    vm: &mut IVM,
+    code: &[u8],
+    declared: &StateAccessSet,
+) -> bool {
+    fn host<H: 'static>(vm: &mut IVM) -> &mut H {
+        vm.host_mut_any()
+            .and_then(|host| host.downcast_mut::<H>())
+            .expect("transaction host type")
+    }
+    let snapshot = host::<H>(vm)
+        .checkpoint()
+        .expect("transactional host checkpoint");
+    host::<H>(vm).begin_tx(declared).expect("begin transaction");
+    vm.load_program(code).expect("load transaction");
+    vm.set_gas_limit(1_000_000_000);
+    vm.reset();
+    let ran = vm.run().is_ok();
+    let success = host::<H>(vm).finish_tx().is_ok_and(|log| {
+        ran && log.read_keys.is_subset(&declared.read_keys)
+            && log.write_keys.is_subset(&declared.write_keys)
+            && log.reg_tags.is_subset(&declared.reg_tags)
+    });
+    if !success {
+        host::<H>(vm)
+            .restore(snapshot.as_ref())
+            .expect("restore transactional host checkpoint");
+    }
+    success
 }
 
 #[test]
@@ -106,17 +145,9 @@ fn checked_list_errors_revert_prior_state_effects_with_exact_identity() {
         let mut transactional = IVM::new(1_000_000_000);
         transactional.set_host(CoreHost::new());
         let execute = |vm: &mut IVM, source: &str| {
-            let mut access = crate::parallel::StateAccessSet::new();
+            let mut access = StateAccessSet::new();
             access.write_keys.insert("changed".to_owned());
-            vm.execute_block(crate::parallel::Block {
-                transactions: vec![crate::parallel::Transaction {
-                    code: transaction_main(source),
-                    gas_limit: 1_000_000_000,
-                    access,
-                }],
-            })
-            .tx_results[0]
-                .success
+            run_transaction::<CoreHost>(vm, &transaction_main(source), &access)
         };
         assert!(!execute(&mut transactional, &source));
         assert!(
@@ -455,18 +486,9 @@ fn saved_transfer_lists_apply_in_order_and_roll_back_on_failure() {
         wsv.grant_permission(&alice, PermissionToken::TransferAsset(asset.clone()));
         let mut vm = IVM::new(1_000_000_000);
         vm.set_host(WsvHost::new_with_subject(wsv, alice.clone()));
-        let outcome = vm.execute_block(crate::parallel::Block {
-            transactions: vec![crate::parallel::Transaction {
-                code: transaction_main(&source),
-                gas_limit: 1_000_000_000,
-                access: crate::parallel::StateAccessSet::new(),
-            }],
-        });
-        assert_eq!(
-            outcome.tx_results[0].success, success,
-            "{second_amount}: {:?}",
-            outcome.tx_results[0]
-        );
+        let outcome =
+            run_transaction::<WsvHost>(&mut vm, &transaction_main(&source), &StateAccessSet::new());
+        assert_eq!(outcome, success, "{second_amount}");
         let host = vm
             .host_mut_any()
             .unwrap()

@@ -102,11 +102,13 @@ impl ConfidentialComputeStore {
     ) -> Option<&ConfidentialComputeWithLocation> {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
     }
+    #[cfg(test)]
     /// Receipts stored for a specific block height.
     #[must_use]
     pub fn receipts_at(&self, block_height: u64) -> Option<&[ConfidentialComputeWithLocation]> {
         self.by_block.get(&block_height).map(Vec::as_slice)
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Return all receipts ordered by `(lane, epoch, sequence)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &ConfidentialComputeWithLocation> {
         self.by_lane_epoch.values()
