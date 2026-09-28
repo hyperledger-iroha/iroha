@@ -124,7 +124,7 @@ fn call_signed_plan_and_transaction_reject_substitution() -> Result<()> {
         Box::new(|p| p.plan.alias = "other::universal".parse().unwrap()),
         Box::new(|p| p.plan.created_at_ns += 1),
         Box::new(|p| p.plan.chain_id = "other".into()),
-        Box::new(|p| p.plan.payload = Some(norito::json::json!({"amount": "1000"}))),
+        Box::new(|p| p.plan.payload = Some(norito::json!({"amount": "1000"}))),
         Box::new(|p| p.plan.artifact_hex.push_str("00")),
         Box::new(|p| {
             let mut bytes = hex::decode(&p.signature_hex).unwrap();
@@ -448,7 +448,7 @@ fn call_standalone_resolution_uses_configured_discriminant_and_restores_caller()
     let alias = prepared.plan.alias.clone();
     let expected_address = prepared.plan.intent.invocation.contract_address.clone();
     let capabilities = norito::json::to_vec(&norito::json!({
-        "data_model_version": iroha::data_model::DATA_MODEL_VERSION,
+        "data_model_version": (iroha::data_model::DATA_MODEL_VERSION),
         "signed_transaction_schema_hash_hex": (hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>()))
     }))?;
     let state = norito::json::to_vec(&norito::json!({

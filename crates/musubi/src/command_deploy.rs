@@ -181,7 +181,8 @@ pub(super) fn run_deploy(
                 build.network.name,
                 render_preflight(prepared.preflight()),
                 journal.display(),
-                deployment_resume_command(
+                contract_resume_command(
+                    "deploy",
                     build.workspace.root_manifest_path(),
                     &build.network,
                     &journal,
@@ -476,20 +477,23 @@ fn ensure_previous_terminal(
         )
         .with_help(format!(
             "resume the exact plan with `{}`",
-            deployment_resume_command(manifest, network, &journal)
+            contract_resume_command("deploy", manifest, network, &journal)
         )));
     }
     Ok(())
 }
 
-fn deployment_resume_command(
+/// Render an exact continuation using the selected project, network and client file.
+pub(super) fn contract_resume_command(
+    subcommand: &str,
     manifest: &Path,
     network: &network::SelectedNetwork,
     journal: &Path,
 ) -> String {
     let mut command = format!(
-        "musubi --manifest-path {} deploy --network {}",
+        "musubi --manifest-path {} {} --network {}",
         quote_cli_argument(&manifest.display().to_string()),
+        quote_cli_argument(subcommand),
         quote_cli_argument(&network.name),
     );
     if let Some(config) = &network.config {
@@ -798,7 +802,7 @@ mod tests {
             contracts: BTreeMap::new(),
         };
         assert_eq!(
-            deployment_resume_command(manifest, &network, journal),
+            contract_resume_command("deploy", manifest, &network, journal),
             r#"musubi --manifest-path '/projects/coffee club/Musubi.toml' deploy --network other-taira --config '/runtime/owner'"'"'s wallet/client.toml' --resume '/projects/coffee club/target/deploy/exact-journal'"#
         );
         let parsed = Cli::try_parse_from([
@@ -828,7 +832,7 @@ mod tests {
         assert_eq!(args.resume.as_deref(), Some(journal));
         network.config = None;
         assert_eq!(
-            deployment_resume_command(manifest, &network, journal),
+            contract_resume_command("deploy", manifest, &network, journal),
             "musubi --manifest-path '/projects/coffee club/Musubi.toml' deploy --network other-taira --resume '/projects/coffee club/target/deploy/exact-journal'"
         );
     }
