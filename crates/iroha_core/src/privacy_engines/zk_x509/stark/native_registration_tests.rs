@@ -434,7 +434,8 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     let document = [0x30, 0x03, 0x02, 0x01, 0x01];
     let private_shape = build_zk_x509_der_stark_base_v1(&[&document])
         .expect("DER base")
-        .private_shape;
+        .private_shape
+        .clone();
     private_shape.validate().expect("private DER shape");
     let shape = ZkX509DerStarkShapeV1;
     let mut rng = StdRng::from_seed([0xD3; 32]);
