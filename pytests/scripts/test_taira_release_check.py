@@ -99,6 +99,22 @@ def isolate_shipping_fixture(case, *, keep_network_prerequisites=False):
     capacity = patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=16 * 1024**3))
     capacity.start()
     case.addCleanup(capacity.stop)
+    isolate_inventory_fixture(case)
+
+
+def isolate_inventory_fixture(case):
+    """Mock inventory with the synthetic artifact batch in orchestration-only tests."""
+    def listed(copies, _root, _env, stages, _locks):
+        listings = {}
+        for selection, groups in stages.items():
+            if groups and selection in copies:
+                listings.setdefault(copies[selection], "")
+                listings[copies[selection]] += "".join(name + ": test\n"
+                    for _, names in groups for name in names)
+        return listings
+    inventory = patch.object(gate, "preflight_native_test_inventories", side_effect=listed)
+    inventory.start()
+    case.addCleanup(inventory.stop)
 
 
 def isolate_stage_fixture(stack, *, keep=()):
@@ -989,8 +1005,91 @@ class FixtureCopies(dict):
         pass
 
 
+class NativeInventoryPreflightTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.env = dict(os.environ) | {"CARGO": "/unused/cargo", "CARGO_HOME": "/unused/home",
+                                      "CARGO_TARGET_DIR": str(self.root)}
+
+    def harness(self, name, names, *, listing_exit=0):
+        path = self.root / name
+        path.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+            f"with Path({str(self.root / 'calls')!r}).open('a') as f: f.write({name!r} + ':' + '|'.join(sys.argv[1:]) + '\\n')\n"
+            f"if '--list' in sys.argv:\n print({''.join(n + ': test' + chr(10) for n in names)!r}); sys.exit({listing_exit})\n"
+            "name=sys.argv[1]\nprint('test '+name+' ... ok')\n"
+            "print('test result: ok. 1 passed; 0 failed; 0 ignored;')\n")
+        path.chmod(0o700)
+        return str(path)
+
+    def test_missing_deferred_cli_or_network_selector_stops_every_runtime_action(self):
+        scoped = {name: () for name in gate.HARNESS_TARGETS}
+        scoped.update(config=(("config", ("config",)),),
+                      cli=(("priority", ("priority",)), ("deferred", ("deferred",))),
+                      network=(("runtime", ("network_case",)),))
+        for missing in ("deferred", "network_case"):
+            with self.subTest(missing=missing), contextlib.ExitStack() as stack:
+                copies = FixtureCopies({name: self.harness(name,
+                    [test for _, tests in groups for test in tests if test != missing])
+                    for name, groups in scoped.items() if groups})
+                stack.enter_context(patch.object(gate, "qualification_stages", return_value=scoped))
+                stack.enter_context(patch.object(gate, "PRIORITY_CLI_TESTS", ("priority",)))
+                stack.enter_context(patch.object(gate, "PRIORITY_TORII_STAGE_LABELS", ()))
+                stack.enter_context(patch.object(gate, "native_harness_plan", return_value=((), tuple(copies), ())))
+                stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=("cli",)))
+                for method in ("require_native_artifact_inspector", "require_network_fixture_prerequisites",
+                               "run_lifecycle_source_checks", "check_test_harnesses"):
+                    stack.enter_context(patch.object(gate, method))
+                stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
+                later = [stack.enter_context(patch.object(gate, method)) for method in
+                         ("run_config_checks", "run_stages", "compile_network_binaries",
+                          "check_shipping_binaries", "run_network_checks", "independent_check_evidence")]
+                checkpoint = MagicMock()
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(
+                        gate.CheckError, "native selector preflight failed.*" + missing):
+                    gate.run_checks(self.root, environment=self.env, source_commit="a" * 40,
+                                    update_pre_network_checks=checkpoint, update_independent_checks=checkpoint)
+                for action in later:
+                    action.assert_not_called()
+                checkpoint.assert_not_called()
+
+    def test_inventory_cache_belongs_to_one_artifact_and_is_not_test_execution(self):
+        harness = self.harness("emitted", ("first", "second"))
+        before = hashlib.sha256(Path(harness).read_bytes()).hexdigest()
+        stages = {"cli": (("first group", ("first",)),),
+                  "network": (("second group", ("second",)),)}
+        copies = FixtureCopies({"cli": harness, "network": harness})
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            cache = gate.preflight_native_test_inventories(copies, self.root, self.env, stages, ())
+        self.assertIn("test execution remains required", output.getvalue())
+        self.assertNotIn("PASS", output.getvalue())
+        self.assertEqual((self.root / "calls").read_text().splitlines(), ["emitted:--list|--format|terse"])
+        for groups in stages.values():
+            with contextlib.redirect_stdout(io.StringIO()):
+                gate.run_stages(harness, self.root, self.env, groups, (), inventories=cache)
+        calls = (self.root / "calls").read_text().splitlines()
+        self.assertEqual(sum("--list" in line for line in calls), 1)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(hashlib.sha256(Path(harness).read_bytes()).hexdigest(), before)
+        with self.assertRaisesRegex(gate.CheckError, "current artifact's preflight inventory"):
+            gate.run_stages(harness + "-replacement", self.root, self.env, stages["cli"], (), inventories=cache)
+        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+            gate.run_stages(harness, self.root, self.env, (("changed census", ("absent",)),), (), inventories=cache)
+        self.assertEqual((self.root / "calls").read_text().splitlines(), calls)
+
+    def test_listing_failure_and_missing_artifact_are_not_cached_success(self):
+        stages = {"cli": (("current", ("selected",)),)}
+        harness = self.harness("failure", ("selected",), listing_exit=7)
+        with self.assertRaisesRegex(gate.CheckError, "cannot list native harness tests.*7"):
+            gate.preflight_native_test_inventories(FixtureCopies({"cli": harness}), self.root, self.env, stages, ())
+        with self.assertRaisesRegex(gate.CheckError, "lacks emitted artifact: cli"):
+            gate.preflight_native_test_inventories(FixtureCopies({}), self.root, self.env, stages, ())
+
+
 class BasicReleaseQualificationTests(unittest.TestCase):
     def setUp(self):
+        isolate_inventory_fixture(self)
         metadata = patch.object(gate, "check_test_harnesses")
         self.test_metadata = metadata.start()
         self.addCleanup(metadata.stop)
@@ -1430,10 +1529,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "kura::tests::startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guards",
                 "kura::tests::startup_replay_geometry_transition_rejects_unretained_request",
                 "kura::tests::startup_replay_geometry_transition_creates_only_missing_retained_namespace_and_cleans_failure",
-                "sumeragi::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes",
-                "sumeragi::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery",
-                "sumeragi::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
-                "sumeragi::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
+                "snapshot::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes",
+                "snapshot::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery",
+                "snapshot::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
+                "snapshot::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
                 "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
                 "block::valid::tests::account_profile_validation_preserves_delegated_metadata_results",
                 "block::valid::tests::account_profile_validation_rejects_foreign_permission_payloads",
@@ -3685,7 +3784,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")))
             compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
-            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")]))
+            stack.enter_context(patch.object(gate, "preflight_native_test_inventories", return_value={"/fixture/harness": "fixture: test\n"}))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")))
             stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
             stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(),
@@ -3712,18 +3812,18 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "mutable_source_observation",
                                              side_effect=AssertionError("immutable prepare must not inspect mutable source")))
             gate.run_checks(Path("/frozen"), qualification_scope="full", environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
-        self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
+        self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm")])
         self.assertNotIn("frozen", compile.call_args.kwargs)
         self.assertEqual(compile.call_args.args[1]["VERGEN_GIT_SHA"], "a" * 40)
 
 
     def test_mutable_check_keeps_git_checks_and_inherits_lane_lock_in_every_child(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine", "CARGO_INCREMENTAL": "0"}
-        results = [subprocess.CompletedProcess([], 0, "fixture: test\n", ""),
-                   subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")]
+        results = [subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")]
         with contextlib.ExitStack() as stack:
             git = stack.enter_context(patch.object(gate.subprocess, "check_output", return_value="a" * 40))
             compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
+            stack.enter_context(patch.object(gate, "preflight_native_test_inventories", return_value={"/fixture/harness": "fixture: test\n"}))
             run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
             stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
             stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
@@ -3760,9 +3860,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_torii_contract_failure_prevents_overall_pass_and_keeps_same_custody(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        results = [subprocess.CompletedProcess([], 0, "cli: test\n", ""),
-                   subprocess.CompletedProcess([], 0, "running 1 test\ntest cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", ""),
-                   subprocess.CompletedProcess([], 0, "route: test\n", ""),
+        results = [subprocess.CompletedProcess([], 0, "running 1 test\ntest cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", ""),
                    subprocess.CompletedProcess([], 101, "test route ... FAILED\n", "")]
         output = io.StringIO()
         with contextlib.ExitStack() as stack:
@@ -3839,14 +3937,17 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "run_stages") as stages, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "consensus stalled"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
+        inventory = stages.call_args.kwargs["inventories"]
         network.assert_called_once_with(Path("/frozen"), Path("/warm"),
             env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,),
-            harness="/warm/network", stages=gate.NETWORK_STAGES)
+            harness="/warm/network", stages=gate.NETWORK_STAGES, inventories=inventory)
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
         self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "torii-unit", "daemon", "cli", "torii-unit")])
-        self.assertEqual([call.kwargs for call in stages.call_args_list],
+        self.assertTrue(all(call.kwargs["inventories"] is inventory for call in stages.call_args_list))
+        self.assertEqual([{key: value for key, value in call.kwargs.items() if key != "inventories"}
+                          for call in stages.call_args_list],
                          [{"batch": True} if call.args[0] == "/warm/cli" else {} for call in stages.call_args_list])
         priority_cli, _ = gate.partition_priority_stages(
             gate.STAGES, test_names=gate.PRIORITY_CLI_TESTS)
@@ -4351,6 +4452,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
         libraries = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "executor", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
 
         def run_stage(harness, root, env, stages, lock_fds, **kwargs):
+            self.assertIn(harness, kwargs.pop("inventories"))
             self.assertEqual(kwargs, {"batch": True} if harness == "/warm/cli" else {})
             self.assertEqual((root, lock_fds), (Path("/warm"), (77,)))
             events.append("config-pass" if stages == gate.CONFIG_STAGES else harness)

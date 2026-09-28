@@ -1072,10 +1072,10 @@ CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred s
     "kura::tests::startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guards",
     "kura::tests::startup_replay_geometry_transition_rejects_unretained_request",
     "kura::tests::startup_replay_geometry_transition_creates_only_missing_retained_namespace_and_cleans_failure",
-    "sumeragi::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes",
-    "sumeragi::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery",
-    "sumeragi::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
-    "sumeragi::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
+    "snapshot::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes",
+    "snapshot::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery",
+    "snapshot::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
+    "snapshot::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
     "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
     "block::valid::tests::account_profile_validation_preserves_delegated_metadata_results",
     "block::valid::tests::account_profile_validation_rejects_foreign_permission_payloads",
@@ -4096,19 +4096,63 @@ def run_native_test_batch(harness: str, fixture_root: Path, env: dict[str, str],
     print(f"[taira-check] passed CLI batch ({len(names)} tests; {time.monotonic() - started:.1f}s)", flush=True)
 
 
-def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
-               lock_fds: tuple[int, ...], *, batch: bool = False) -> None:
-    names = tuple(name for _, selected in stages for name in selected) if batch else ()
-    if batch and (not names or len(set(names)) != len(names)):
-        raise CheckError("CLI batch selection must be nonempty and contain unique exact test names")
+def native_test_listing(harness: str, fixture_root: Path, env: dict[str, str],
+                        lock_fds: tuple[int, ...]) -> str:
     listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
                              env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False,
                              pass_fds=lock_fds, umask=0o077)
     if listing.returncode:
         raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
-    require_tests(listing.stdout, stages)
+    return listing.stdout
+
+
+def preflight_native_test_inventories(harnesses: NativeArtifactCopies, fixture_root: Path,
+                                     env: dict[str, str], scoped_stages,
+                                     lock_fds: tuple[int, ...]) -> dict[str, str]:
+    """List the frozen artifact batch before any selected test or shipping build.
+
+    Cache only within this artifact-copy lifetime, keyed by its exact execution
+    path. Inventories do not attest test execution or alter qualification hashes
+    and checkpoints; every later subset still checks its required names.
+    """
+    inventories = {}
+    failures = []
+    count = 0
+    for selection, stages in scoped_stages.items():
+        if not stages:
+            continue
+        if selection not in harnesses:
+            raise CheckError(f"native selector preflight lacks emitted artifact: {selection}")
+        harness = harnesses[selection]
+        if harness not in inventories:
+            inventories[harness] = native_test_listing(harness, fixture_root, env, lock_fds)
+        try:
+            require_tests(inventories[harness], stages)
+        except CheckError as error:
+            failures.append(f"{selection}: {error}")
+        count += sum(len(names) for _, names in stages)
+    if failures:
+        raise CheckError("native selector preflight failed before test execution: " + "; ".join(failures))
+    print(f"[taira-check] native selector inventory passed: {count} selected tests across "
+          f"{len(inventories)} emitted artifacts; test execution remains required", flush=True)
+    return inventories
+
+
+def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
+               lock_fds: tuple[int, ...], *, batch: bool = False,
+               inventories: dict[str, str] | None = None) -> None:
+    names = tuple(name for _, selected in stages for name in selected) if batch else ()
+    if batch and (not names or len(set(names)) != len(names)):
+        raise CheckError("CLI batch selection must be nonempty and contain unique exact test names")
+    if inventories is None:
+        listing = native_test_listing(harness, fixture_root, env, lock_fds)
+    elif harness in inventories:
+        listing = inventories[harness]
+    else:
+        raise CheckError("native stage lacks the current artifact's preflight inventory")
+    require_tests(listing, stages)
     if batch:
-        run_native_test_batch(harness, fixture_root, env, stages, lock_fds, names, listing.stdout)
+        run_native_test_batch(harness, fixture_root, env, stages, lock_fds, names, listing)
         return
     failures = []
     for label, names in stages:
@@ -4234,10 +4278,11 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
 
 
 def run_config_checks(harnesses: NativeArtifactCopies, fixture_root: Path, env: dict[str, str],
-                      lock_fds: tuple[int, ...]) -> None:
+                      lock_fds: tuple[int, ...], *, inventories: dict[str, str] | None = None) -> None:
     """Execute the shared graph's configuration artifact before all other tests."""
     if CONFIG_STAGES:
-        run_stages(harnesses["config"], fixture_root, env, CONFIG_STAGES, lock_fds)
+        options = {"inventories": inventories} if inventories is not None else {}
+        run_stages(harnesses["config"], fixture_root, env, CONFIG_STAGES, lock_fds, **options)
         harnesses.release("config")
 
 
@@ -4256,13 +4301,15 @@ def split_network_stages(stages: tuple) -> tuple[tuple, tuple]:
 
 
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
-                       *, harness: str, stages: tuple, focused_diagnostic: bool = False) -> None:
+                       *, harness: str, stages: tuple, focused_diagnostic: bool = False,
+                       inventories: dict[str, str] | None = None) -> None:
+    inventory_options = {"inventories": inventories} if inventories is not None else {}
     observations, runtime = split_network_stages(stages)
     # These contracts use the completed test harness alone. Run every selected
     # observation, including a focused subset of a group, before compiling any
     # shipping executable or creating a four-peer workspace.
     if observations:
-        run_stages(harness, fixture_root, env, observations, lock_fds)
+        run_stages(harness, fixture_root, env, observations, lock_fds, **inventory_options)
     if not runtime:
         return
     # A future runtime fixture may need another shipping executable. Limit the
@@ -4297,9 +4344,9 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
                         "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
                         "KAGAMI_BIN": binaries["kagami"],
                     }
-                    run_stages(harness, fixture_root, beacon_env, (stage,), lock_fds)
+                    run_stages(harness, fixture_root, beacon_env, (stage,), lock_fds, **inventory_options)
             else:
-                run_stages(harness, fixture_root, network_env, (stage,), lock_fds)
+                run_stages(harness, fixture_root, network_env, (stage,), lock_fds, **inventory_options)
 
 
 def beacon_fixture_root() -> Path:
@@ -5111,11 +5158,13 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
         check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
+            inventories = preflight_native_test_inventories(
+                harnesses, fixture_root, env, scoped_stages, lock_fds)
             for name in compile_only:
                 harnesses.release(name)
             # Always rerun configuration, including exact checkpoint reuse.
             # A schema failure propagates immediately and releases the whole batch.
-            run_config_checks(harnesses, fixture_root, env, lock_fds)
+            run_config_checks(harnesses, fixture_root, env, lock_fds, inventories=inventories)
             independent_stages = ((("cli", STAGES),) if STAGES else ()) + early_stages
             # Startup fixtures are part of the same canonical census, but execute
             # before CLI and long consensus/proof groups. Retain each immutable copy
@@ -5152,12 +5201,14 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # does not claim to run before Core harness compilation.
                 for name in MV_OWNERSHIP_HARNESSES:
                     if prefix.get(name):
-                        run_stages(harnesses[name], fixture_root, env, prefix[name], lock_fds)
+                        run_stages(harnesses[name], fixture_root, env, prefix[name], lock_fds,
+                                   inventories=inventories)
                 # Actual post-Kura recovery is a prerequisite for every later
                 # stage. Keep the shared Cargo graph and exact checkpoint census,
                 # but do not bury a publication failure among other startup cases.
                 if pending_kura:
-                    run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds)
+                    run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds,
+                               inventories=inventories)
                 startup_failures = []
                 for name, _ in early_stages:
                     # MV ownership and pending-Kura ran above; priority Torii
@@ -5167,7 +5218,8 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                         stage for stage in prefix.get(name, ()) if stage not in separate)
                     if stages:
                         try:
-                            run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+                            run_stages(harnesses[name], fixture_root, env, stages, lock_fds,
+                                       inventories=inventories)
                         except SelectedRegressionFailures as error:
                             startup_failures.extend(error.failures)
                 # Collect all startup groups, then avoid expensive unrelated tests
@@ -5183,9 +5235,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                     try:
                         if name == "cli":
                             run_stages(harnesses[name], fixture_root, env, stages,
-                                       lock_fds, batch=True)
+                                       lock_fds, batch=True, inventories=inventories)
                         else:
-                            run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+                            run_stages(harnesses[name], fixture_root, env, stages, lock_fds,
+                                       inventories=inventories)
                     except SelectedRegressionFailures as error:
                         priority_failures.extend(error.failures)
                 if priority_failures:
@@ -5210,7 +5263,8 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # release blocker. Qualify the real four-peer path before the
                 # remaining long census, using the same isolated native artifacts.
                 run_network_checks(root, fixture_root, env, lock_fds,
-                                   harness=harnesses["network"], stages=scoped_stages["network"])
+                                   harness=harnesses["network"], stages=scoped_stages["network"],
+                                   inventories=inventories)
                 harnesses.release("network")
             failures = []
             for name, _ in independent_stages:
@@ -5223,9 +5277,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                     try:
                         if name == "cli":
                             run_stages(harnesses[name], fixture_root, env, remaining,
-                                       lock_fds, batch=True)
+                                       lock_fds, batch=True, inventories=inventories)
                         else:
-                            run_stages(harnesses[name], fixture_root, env, remaining, lock_fds)
+                            run_stages(harnesses[name], fixture_root, env, remaining, lock_fds,
+                                       inventories=inventories)
                     except SelectedRegressionFailures as error:
                         failures.extend(error.failures)
                 harnesses.release(name)
