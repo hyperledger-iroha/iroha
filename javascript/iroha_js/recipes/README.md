@@ -274,3 +274,12 @@ node ./recipes/soradns.mjs docs.sora --gar-patterns hash.gw.sora.id,*.gw.sora.id
 
 The script also respects `SORADNS_NAME` and `SORADNS_GAR` environment variables
 when you want to avoid passing command-line arguments.
+
+## confidential_redemption.mjs
+
+This source-only recipe uses OS randomness, `ConfidentialProver` and the native
+`computeConfidentialRoot` helper for a locally verified full-redemption proof.
+It closes the wallet while the accepted native job runs and reports event-loop
+progress. It creates no ledger note and submits no transaction; a computed local
+root does not establish ledger authorization. Rebuild the verified native addon
+from this source, then run `node recipes/confidential_redemption.mjs`.

@@ -80,6 +80,13 @@ every route group.
 
 ## Routed Request Diagnostics
 
+An exact signed `FindAssetById` for a locally known `Global` asset definition
+and a `Global` balance bucket routes to the universal ledger. The holder's
+other dataspace bindings and the definition's owning domain do not expand that
+read. Account-scoped route authorization and the executor's exact-holder read
+permissions still apply. Unknown definitions and explicit dataspace buckets
+do not inherit this shortcut.
+
 Cross-dataspace Torii proxy failures return structured headers in addition to
 the normal reject-code body. A `503` with `x-iroha-reject-code:
 route_unavailable` should be triaged from these headers before treating the

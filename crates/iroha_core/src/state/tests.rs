@@ -25483,6 +25483,10 @@ fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
         }
         peers.apply();
     }
+    seed_consensus_key_records_with_pops(&mut world_block, keypairs);
+    world_block.commit();
+}
+fn seed_consensus_key_records_with_pops(world_block: &mut WorldBlock<'_>, keypairs: &[KeyPair]) {
     for keypair in keypairs {
         let_row! { pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key()) .expect("generate pop for consensus key") };
         // Shared fixtures use each peer on the global and participant routes.
@@ -25509,7 +25513,6 @@ fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
             }
         }
     }
-    world_block.commit();
 }
 fn remove_world_peer_for_test(state: &State, peer: &PeerId) {
     let mut world_block = state.world.block();
@@ -35850,10 +35853,14 @@ state_test! { sync pure_zk_and_sccp_policy_hashes_are_independent_and_domain_sep
         "ZK consensus configuration must remain bound into genesis"
     );
 }
-state_test! { sync sccp_policy_hash_v1_is_a_fixed_domain_separated_constant
+state_test! { sync sccp_policy_hash_v1_binds_the_compiled_light_client_profiles
     let expected: [u8; 32] = {
         let mut hasher = Sha256::new();
         zk_policy_put_bytes(&mut hasher, b"iroha:sccp:policy:v1");
+        zk_policy_put_bytes(
+            &mut hasher,
+            &iroha_sccp::light_client::profile::policy_hash_contribution(),
+        );
         Sha2Digest::finalize(hasher).into()
     };
     assert_eq!(sccp_policy_hash_v1(), expected);
@@ -35964,11 +35971,11 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
         core::num::NonZeroU32::new(262_145).expect("262,145 is nonzero")
     );
     assert_field_bound!(
-        max_ed25519_validator_key_checks_per_transaction,
+        max_bls_vote_attestations_per_transaction,
         core::num::NonZeroU32::new(198_655).expect("198,655 is nonzero")
     );
     assert_field_bound!(
-        max_ed25519_validator_key_checks_per_block,
+        max_bls_vote_attestations_per_block,
         core::num::NonZeroU32::new(794_625).expect("794,625 is nonzero")
     );
 }

@@ -89,8 +89,8 @@ const TON_CONSENSUS_CANDIDATE_ORDINARY_TL_CONSTRUCTOR: u32 = 0xe8f9_bcdc;
 const TON_CONSENSUS_CANDIDATE_EMPTY_TL_CONSTRUCTOR: u32 = 0x72b4_d933;
 const TON_CONSENSUS_SIMPLEX_FINALIZE_TL_CONSTRUCTOR: u32 = 0x40a7_e105;
 const TON_MAX_CELL_DATA_BYTES: usize = 128;
-const TON_MAX_BOC_BYTES: usize = 64 * 1024;
-const TON_MAX_BOC_CELLS: usize = 4_096;
+const TON_MAX_BOC_BYTES: usize = 256 * 1024;
+const TON_MAX_BOC_CELLS: usize = 8_192;
 const TON_MAX_REFS: usize = 4;
 /// Maximum cell depth admitted by TON's reference cell traits.
 const TON_MAX_CELL_DEPTH: u16 = 1_024;
@@ -631,7 +631,7 @@ fn validate_validator_config(config: &TonValidatorConfigV1) -> Option<()> {
     Some(())
 }
 
-fn ton_block_id_tl_bytes(block: TonBlockIdExtV1) -> Vec<u8> {
+pub(crate) fn ton_block_id_tl_bytes(block: TonBlockIdExtV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(68);
     push_u32_le(&mut out, TON_BLOCK_ID_TL_CONSTRUCTOR);
     out.extend_from_slice(&block.root_hash);
@@ -861,9 +861,8 @@ fn verify_block_signatures(
     if u128::from(signed_weight) * 3 <= u128::from(total_weight) * 2 {
         return Err(TonNativeSourceError::InvalidSignatures);
     }
-    // The batch verifier's signer-key parsing is charged by
-    // `ed25519_signature_checks`; roster parsing above is charged separately
-    // by `validator_key_checks_upper_bound`.
+    // Signer keys are decoded only by the batch verifier, which
+    // `ed25519_signature_checks` charges; roster parsing above only hashes.
     iroha_crypto::ed25519_verify_batch_deterministic(&messages, &raw_signatures, &raw_keys)
         .map_err(|_| TonNativeSourceError::InvalidSignatures)
 }
@@ -880,19 +879,21 @@ fn ton_crc32c(bytes: &[u8]) -> u32 {
     !crc
 }
 
+/// One raw `BoC` cell: descriptors, data bytes and child indices.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct TonBocCell {
-    descriptor: u8,
-    data_descriptor: u8,
-    data: Vec<u8>,
-    refs: Vec<usize>,
-    exotic: bool,
+pub(crate) struct TonBocCell {
+    pub(crate) descriptor: u8,
+    pub(crate) data_descriptor: u8,
+    pub(crate) data: Vec<u8>,
+    pub(crate) refs: Vec<usize>,
+    pub(crate) exotic: bool,
 }
 
+/// A parsed `BoC`: root indices and cells.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct TonBoc {
-    roots: Vec<usize>,
-    cells: Vec<TonBocCell>,
+pub(crate) struct TonBoc {
+    pub(crate) roots: Vec<usize>,
+    pub(crate) cells: Vec<TonBocCell>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -918,11 +919,12 @@ struct TonPrunedBranch {
     depths: Vec<u16>,
 }
 
+/// Level mask, hashes and depths of a cell.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct TonComputedCell {
-    mask: u8,
-    hashes: [H256; 4],
-    depths: [u16; 4],
+pub(crate) struct TonComputedCell {
+    pub(crate) mask: u8,
+    pub(crate) hashes: [H256; 4],
+    pub(crate) depths: [u16; 4],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -946,7 +948,7 @@ fn ton_read_sized_uint(bytes: &[u8], cursor: &mut usize, size: usize) -> Option<
     Some(value)
 }
 
-fn ton_cell_serialized_bit_len(data_descriptor: u8, data: &[u8]) -> Option<usize> {
+pub(crate) fn ton_cell_serialized_bit_len(data_descriptor: u8, data: &[u8]) -> Option<usize> {
     if data_descriptor & 1 == 0 {
         let byte_len = usize::from(data_descriptor) / 2;
         return (byte_len == data.len()).then_some(byte_len.checked_mul(8)?);
@@ -1170,7 +1172,7 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
     clippy::too_many_lines,
     reason = "one linear canonical BoC header and cell-table parser"
 )]
-fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
+pub(crate) fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     if bytes.len() < 6 || bytes.len() > TON_MAX_BOC_BYTES || bytes.get(..4)? != TON_BOC_MAGIC {
         return None;
     }
@@ -1355,7 +1357,7 @@ fn ton_reject_duplicate_subgraphs(boc: &TonBoc) -> Option<()> {
     Some(())
 }
 
-fn encode_canonical_ton_boc(boc: &TonBoc, root: usize) -> Option<Vec<u8>> {
+pub(crate) fn encode_canonical_ton_boc(boc: &TonBoc, root: usize) -> Option<Vec<u8>> {
     let order = ton_canonical_cell_order(boc, root)?;
     ton_reject_duplicate_subgraphs(boc)?;
     let mut canonical_index = vec![usize::MAX; boc.cells.len()];
@@ -1449,6 +1451,46 @@ fn parse_canonical_single_root_boc(bytes: &[u8]) -> Option<(TonBoc, Vec<TonCompu
     Some((boc, computed, root))
 }
 
+/// Re-encode a single-root `BoC` (any serialization flags) in the canonical proof form the
+/// light client accepts: checksum-free, unindexed, minimal widths, root index zero.
+#[must_use]
+pub fn ton_canonical_boc_v1(bytes: &[u8]) -> Option<Vec<u8>> {
+    let boc = parse_ton_boc(bytes)?;
+    if boc.roots.len() != 1 {
+        return None;
+    }
+    ton_boc_cell_hashes(&boc)?;
+    encode_canonical_ton_boc(&boc, *boc.roots.first()?)
+}
+
+/// The payload of the `sccp_transfer_to_taira` external-out message `message_index` of
+/// `minter`'s transaction `transaction_boc` at `transaction_lt` (wallets read the burned payload
+/// they claim from it; the light client re-verifies everything).
+#[must_use]
+pub fn ton_sccp_transfer_payload_v1(
+    transaction_boc: &[u8],
+    minter: H256,
+    transaction_lt: u64,
+    message_index: u16,
+) -> Option<Vec<u8>> {
+    let (boc, computed, root) = parse_single_root_boc(transaction_boc)?;
+    let transaction = ton_parse_transaction(&boc, &computed, root, minter, transaction_lt)?;
+    let message = ton_transaction_out_message(&boc, transaction, message_index)?;
+    match ton_parse_sccp_ext_out(&boc, message, &minter)? {
+        TonSccpEventV1::TransferToTaira { payload, .. } => Some(payload),
+        TonSccpEventV1::Voided { .. } => None,
+    }
+}
+
+/// Seqno, key-block flag and `prev_key_block_seqno` of a masterchain block header proof
+/// (builders; the proof must be canonical, see [`ton_canonical_boc_v1`]).
+#[must_use]
+pub fn ton_header_key_block_v1(header_proof: &[u8]) -> Option<(u32, bool, u32)> {
+    let (boc, computed, root) = parse_canonical_single_root_boc(header_proof)?;
+    let info = ton_parse_block(&boc, &computed, root)?.info;
+    Some((info.seqno, info.key_block, info.prev_key_block_seqno))
+}
+
 /// Derive the authenticated root hash only when a proof `BoC` has the one
 /// canonical final-V1 byte representation.
 ///
@@ -1477,7 +1519,7 @@ fn ton_boc_child_for_hash_level(
     clippy::too_many_lines,
     reason = "one bottom-up pass computing every level hash and depth per cell"
 )]
-fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
+pub(crate) fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
     let empty = TonComputedCell {
         mask: 0,
         hashes: [[0_u8; 32]; 4],
@@ -2132,6 +2174,7 @@ struct TonParsedBlockInfo {
     not_master: bool,
     after_merge: bool,
     before_split: bool,
+    after_split: bool,
     key_block: bool,
     seqno: u32,
     workchain: i32,
@@ -2140,7 +2183,10 @@ struct TonParsedBlockInfo {
     validator_list_hash_short: u32,
     catchain_seqno: u32,
     min_ref_mc_seqno: u32,
+    prev_key_block_seqno: u32,
     previous: Option<TonBlockIdExtV1>,
+    /// Both predecessors of a block after a merge (left child shard, right child shard).
+    merged_previous: Option<(TonBlockIdExtV1, TonBlockIdExtV1)>,
     master_ref: Option<TonBlockIdExtV1>,
 }
 
@@ -2156,7 +2202,7 @@ fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBloc
     let not_master = reader.read_bit()?;
     let after_merge = reader.read_bit()?;
     let before_split = reader.read_bit()?;
-    reader.read_bit()?; // after_split
+    let after_split = reader.read_bit()?;
     reader.read_bit()?; // want_split
     reader.read_bit()?; // want_merge
     let key_block = reader.read_bit()?;
@@ -2180,7 +2226,7 @@ fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBloc
     let validator_list_hash_short = u32::try_from(reader.read_u64(32)?).ok()?;
     let catchain_seqno = u32::try_from(reader.read_u64(32)?).ok()?;
     let min_ref_mc_seqno = u32::try_from(reader.read_u64(32)?).ok()?;
-    reader.read_u64(32)?; // prev_key_block_seqno
+    let prev_key_block_seqno = u32::try_from(reader.read_u64(32)?).ok()?;
     if flags & 1 != 0 {
         if reader.read_u64(8)? != u64::from(TON_GLOBAL_VERSION_CONSTRUCTOR) {
             return None;
@@ -2200,17 +2246,39 @@ fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBloc
     if !reader.exhausted() {
         return None;
     }
-    let previous = if after_merge {
-        // A merged shard has two predecessors; SCCP never relies on a single
-        // ambiguous predecessor for masterchain replay.
-        None
+    // After a split the predecessor lives in the parent shard; after a merge the two
+    // predecessors live in the child shards, referenced from the `prev_blks_info` cell.
+    let (previous, merged_previous) = if after_merge {
+        let pair = ton_virtual_root_index(boc, previous_ref_index)?;
+        let cell = boc.cells.get(pair)?;
+        let mut pair_reader = TonBitReader::new(cell)?;
+        let left = pair_reader.read_ref()?;
+        let right = pair_reader.read_ref()?;
+        if !pair_reader.exhausted() {
+            return None;
+        }
+        (
+            None,
+            Some((
+                ton_parse_ext_block_ref(boc, left, workchain, ton_shard_child(shard, false)?)?,
+                ton_parse_ext_block_ref(boc, right, workchain, ton_shard_child(shard, true)?)?,
+            )),
+        )
     } else {
-        Some(ton_parse_ext_block_ref(
-            boc,
-            previous_ref_index,
-            workchain,
-            shard,
-        )?)
+        let previous_shard = if after_split {
+            ton_shard_parent(shard)?
+        } else {
+            shard
+        };
+        (
+            Some(ton_parse_ext_block_ref(
+                boc,
+                previous_ref_index,
+                workchain,
+                previous_shard,
+            )?),
+            None,
+        )
     };
     let master_ref = match master_ref_index {
         Some(reference) => Some(ton_parse_ext_block_ref(
@@ -2225,6 +2293,7 @@ fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBloc
         not_master,
         after_merge,
         before_split,
+        after_split,
         key_block,
         seqno,
         workchain,
@@ -2233,7 +2302,9 @@ fn ton_parse_block_info(boc: &TonBoc, cell_index: usize) -> Option<TonParsedBloc
         validator_list_hash_short,
         catchain_seqno,
         min_ref_mc_seqno,
+        prev_key_block_seqno,
         previous,
+        merged_previous,
         master_ref,
     })
 }
@@ -2677,6 +2748,12 @@ fn ton_finality_signature_shape(
         return Err(TonNativeSourceError::InvalidSignatures);
     }
     Ok(entries)
+}
+
+fn ton_shard_parent(shard: u64) -> Option<u64> {
+    let terminator = shard & shard.wrapping_neg();
+    let parent_terminator = terminator.checked_shl(1).filter(|value| *value != 0)?;
+    Some((shard & !(terminator | parent_terminator)) | parent_terminator)
 }
 
 fn ton_shard_child(shard: u64, right: bool) -> Option<u64> {
@@ -3398,6 +3475,492 @@ fn ton_exact_point<const N: usize>(boc: &TonBoc, index: usize) -> Option<[u8; N]
         .as_slice()
         .try_into()
         .ok()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Light-client entry points (`light_client::ton`)
+// ---------------------------------------------------------------------------------------------
+
+/// Config 15 constructor-free layout: `validators_elected_for elections_start_before
+/// elections_end_before stake_held_for`, four `uint32`.
+const TON_CONFIG_ELECTION_TIMINGS: u32 = 15;
+const TON_MC_STATE_EXTRA_CONSTRUCTOR: u16 = 0xcc26;
+const TON_SCCP_TRANSFER_TO_TAIRA_OP: u32 = 0x5343_5454;
+const TON_SCCP_VOIDED_OP: u32 = 0x5343_564f;
+const TON_SNAKE_CHUNK_BYTES: usize = 127;
+const TON_MAX_SNAKE_BYTES: usize = 4 * 1024;
+
+/// An opened masterchain block header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TonMcHeaderV1 {
+    /// Block id (the signed identity).
+    pub(crate) block_id: TonBlockIdExtV1,
+    /// Generation time (seconds).
+    pub(crate) gen_utime: u32,
+    /// Whether the block is a key block.
+    pub(crate) key_block: bool,
+    /// Key block whose config names this block's validators.
+    pub(crate) prev_key_block_seqno: u32,
+    /// Catchain session of the signing validator subset.
+    pub(crate) catchain_seqno: u32,
+    /// `validator_list_hash_short` of the signing subset.
+    pub(crate) validator_list_hash_short: u32,
+    /// Post-state hash (`state_update` new hash).
+    pub(crate) new_state_hash: H256,
+}
+
+/// Validator epoch read from a key block's state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TonEpochConfigV1 {
+    /// Config 34 (with the config-28 shuffle flag).
+    pub(crate) validators: TonValidatorConfigV1,
+    /// Config 15 `stake_held_for` (seconds).
+    pub(crate) stake_held_for: u32,
+}
+
+/// An opened shard block header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TonShardHeaderV1 {
+    /// Block id.
+    pub(crate) block_id: TonBlockIdExtV1,
+    /// Predecessor (after a split: in the parent shard).
+    pub(crate) previous: Option<TonBlockIdExtV1>,
+    /// Both predecessors after a merge.
+    pub(crate) merged_previous: Option<(TonBlockIdExtV1, TonBlockIdExtV1)>,
+    /// Generation time (seconds).
+    pub(crate) gen_utime: u32,
+}
+
+/// An SCCP external-out message of the minter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TonSccpEventV1 {
+    /// `sccp_transfer_to_taira`.
+    TransferToTaira {
+        /// Message id the minter computed.
+        message_id: H256,
+        /// Minter outbound nonce.
+        nonce: u64,
+        /// Burning owner (workchain 0 account id).
+        sender: H256,
+        /// Burned amount.
+        amount: u128,
+        /// Canonical payload bytes.
+        payload: Vec<u8>,
+    },
+    /// `sccp_voided` (`message_id = 0` for frozen voids).
+    Voided {
+        /// Voided message id, or zero.
+        message_id: H256,
+        /// First voided nonce.
+        first_nonce: u64,
+        /// Voided nonces.
+        count: u16,
+    },
+}
+
+fn ton_open_canonical(
+    bytes: &[u8],
+    root_hash: &H256,
+) -> Result<(TonBoc, Vec<TonComputedCell>, usize), TonNativeSourceError> {
+    if bytes.is_empty() || bytes.len() > TON_MAX_BOC_BYTES {
+        return Err(TonNativeSourceError::ResourceLimit);
+    }
+    let (boc, computed, root) =
+        parse_canonical_single_root_boc(bytes).ok_or(TonNativeSourceError::InvalidBoc)?;
+    if ton_proven_root_hash(&boc, &computed, root) != Some(*root_hash) {
+        return Err(TonNativeSourceError::InvalidBoc);
+    }
+    Ok((boc, computed, root))
+}
+
+/// Open a masterchain block header proof rooted at `block_id.root_hash`; when `account` is
+/// given, also select the shard block registered for that basechain account (the proof must
+/// include the `ShardHashes` path).
+pub(crate) fn ton_open_masterchain_block(
+    block_id: TonBlockIdExtV1,
+    header_proof: &[u8],
+    account: Option<H256>,
+) -> Result<(TonMcHeaderV1, Option<TonBlockIdExtV1>), TonNativeSourceError> {
+    if block_id.workchain != TON_MASTERCHAIN_WORKCHAIN
+        || block_id.shard != TON_MASTERCHAIN_SHARD
+        || !valid_block_id(block_id)
+    {
+        return Err(TonNativeSourceError::BrokenMasterchainLink);
+    }
+    let (boc, computed, root) = ton_open_canonical(header_proof, &block_id.root_hash)?;
+    let block = ton_parse_block(&boc, &computed, root).ok_or(TonNativeSourceError::InvalidBoc)?;
+    if block.global_id != TON_MAINNET_GLOBAL_ID {
+        return Err(TonNativeSourceError::WrongNetwork);
+    }
+    let info = block.info;
+    if info.not_master
+        || info.workchain != TON_MASTERCHAIN_WORKCHAIN
+        || info.shard != TON_MASTERCHAIN_SHARD
+        || info.seqno != block_id.seqno
+    {
+        return Err(TonNativeSourceError::BrokenMasterchainLink);
+    }
+    let shard = match account {
+        None => None,
+        Some(account) => {
+            let extra = ton_parse_masterchain_extra(&boc, block.extra_index)
+                .ok_or(TonNativeSourceError::ShardNotFinalized)?;
+            let root = extra
+                .shard_hashes_root
+                .ok_or(TonNativeSourceError::ShardNotFinalized)?;
+            let (shard_block, _) = ton_select_shard_descriptor(
+                &boc,
+                root,
+                TonStdAddress {
+                    workchain: TON_BASECHAIN_WORKCHAIN,
+                    account,
+                },
+            )
+            .ok_or(TonNativeSourceError::ShardNotFinalized)?;
+            Some(shard_block)
+        }
+    };
+    Ok((
+        TonMcHeaderV1 {
+            block_id,
+            gen_utime: info.gen_utime,
+            key_block: info.key_block,
+            prev_key_block_seqno: info.prev_key_block_seqno,
+            catchain_seqno: info.catchain_seqno,
+            validator_list_hash_short: info.validator_list_hash_short,
+            new_state_hash: block.new_state_hash,
+        },
+        shard,
+    ))
+}
+
+/// Verify `signatures` over `header` by the masterchain subset of `epoch` for the header's
+/// catchain session (more than two thirds of the subset weight).
+pub(crate) fn ton_verify_masterchain_signatures(
+    header: &TonMcHeaderV1,
+    epoch: &TonValidatorConfigV1,
+    signatures: &TonBlockSignaturesV1,
+) -> Result<(), TonNativeSourceError> {
+    let subset = ton_select_masterchain_validator_set(epoch, header.catchain_seqno)
+        .ok_or(TonNativeSourceError::InvalidValidatorSet)?;
+    if subset.validator_list_hash_short != header.validator_list_hash_short {
+        return Err(TonNativeSourceError::InvalidValidatorSet);
+    }
+    verify_block_signatures(header.block_id, &subset, signatures)
+}
+
+/// Walk `ShardStateUnsplit` of the masterchain to its `McStateExtra` cell.
+fn ton_mc_state_extra(boc: &TonBoc, root: usize) -> Option<usize> {
+    let index = ton_virtual_root_index(boc, root)?;
+    let cell = boc.cells.get(index)?;
+    let mut reader = TonBitReader::new(cell)?;
+    if u32::try_from(reader.read_u64(32)?).ok()? != TON_SHARD_STATE_CONSTRUCTOR
+        || reader.read_i32(32)? != TON_MAINNET_GLOBAL_ID
+    {
+        return None;
+    }
+    let (workchain, shard) = ton_read_shard_ident(&mut reader)?;
+    if workchain != TON_MASTERCHAIN_WORKCHAIN || shard != TON_MASTERCHAIN_SHARD {
+        return None;
+    }
+    reader.skip_bits(32 + 32 + 32 + 64 + 32)?;
+    reader.read_ref()?; // out_msg_queue_info
+    reader.read_bit()?; // before_split
+    reader.read_ref()?; // accounts
+    reader.read_ref()?; // balances, libraries, master_ref
+    if !reader.read_bit()? {
+        return None;
+    }
+    let custom = reader.read_ref()?;
+    reader.exhausted().then_some(custom)?;
+    ton_virtual_root_index(boc, custom)
+}
+
+/// Open the validator epoch (configs 34, 28 and 15) from a masterchain state proof rooted at
+/// `state_hash`.
+pub(crate) fn ton_open_state_config(
+    state_hash: &H256,
+    config_proof: &[u8],
+) -> Result<TonEpochConfigV1, TonNativeSourceError> {
+    let invalid = TonNativeSourceError::InvalidValidatorTransition;
+    let (boc, _computed, root) = ton_open_canonical(config_proof, state_hash)?;
+    let extra = ton_mc_state_extra(&boc, root).ok_or(invalid)?;
+    let cell = boc.cells.get(extra).ok_or(invalid)?;
+    let mut reader = TonBitReader::new(cell).ok_or(invalid)?;
+    if u16::try_from(reader.read_u64(16).ok_or(invalid)?).ok()
+        != Some(TON_MC_STATE_EXTRA_CONSTRUCTOR)
+    {
+        return Err(invalid);
+    }
+    if reader.read_bit().ok_or(invalid)? {
+        reader.read_ref().ok_or(invalid)?; // shard_hashes
+    }
+    reader.read_h256().ok_or(invalid)?; // config address
+    let dictionary = reader.read_ref().ok_or(invalid)?;
+    let validators = ton_config_from_dictionary(&boc, dictionary).ok_or(invalid)?;
+    let timings = ton_hashmap_ref_value(
+        &boc,
+        dictionary,
+        &TON_CONFIG_ELECTION_TIMINGS.to_be_bytes(),
+        TON_CONFIG_KEY_BITS,
+    )
+    .ok_or(invalid)?;
+    let mut timings = TonBitReader::new(boc.cells.get(timings).ok_or(invalid)?).ok_or(invalid)?;
+    timings.skip_bits(96).ok_or(invalid)?;
+    let stake_held_for =
+        u32::try_from(timings.read_u64(32).ok_or(invalid)?).map_err(|_| invalid)?;
+    if !timings.exhausted() {
+        return Err(invalid);
+    }
+    Ok(TonEpochConfigV1 {
+        validators,
+        stake_held_for,
+    })
+}
+
+/// Look up masterchain block `seqno` in `OldMcBlocksInfo` of a masterchain state proof rooted
+/// at `state_hash` (the back-link from a fresh block to an older one).
+pub(crate) fn ton_open_previous_masterchain_block(
+    state_hash: &H256,
+    state_proof: &[u8],
+    seqno: u32,
+) -> Result<TonBlockIdExtV1, TonNativeSourceError> {
+    fn skip_key_max_lt(reader: &mut TonBitReader<'_>) -> Option<()> {
+        reader.skip_bits(65)
+    }
+    let broken = TonNativeSourceError::BrokenMasterchainLink;
+    let (boc, _computed, root) = ton_open_canonical(state_proof, state_hash)?;
+    let extra = ton_mc_state_extra(&boc, root).ok_or(broken)?;
+    let mut reader = TonBitReader::new(boc.cells.get(extra).ok_or(broken)?).ok_or(broken)?;
+    reader.skip_bits(16).ok_or(broken)?;
+    if reader.read_bit().ok_or(broken)? {
+        reader.read_ref().ok_or(broken)?;
+    }
+    reader.read_h256().ok_or(broken)?;
+    reader.read_ref().ok_or(broken)?; // config dictionary
+    let auxiliary = ton_virtual_root_index(&boc, reader.read_ref().ok_or(broken)?).ok_or(broken)?;
+    let mut auxiliary = TonBitReader::new(boc.cells.get(auxiliary).ok_or(broken)?).ok_or(broken)?;
+    auxiliary.skip_bits(16 + 65).ok_or(broken)?; // flags, validator_info
+    if !auxiliary.read_bit().ok_or(broken)? {
+        return Err(broken);
+    }
+    let prev_blocks = auxiliary.read_ref().ok_or(broken)?;
+    let mut leaf =
+        ton_hashmap_aug_leaf_reader(&boc, prev_blocks, &seqno.to_be_bytes(), 32, skip_key_max_lt)
+            .ok_or(broken)?;
+    leaf.skip_bits(65).ok_or(broken)?; // KeyMaxLt
+    leaf.read_bit().ok_or(broken)?; // key flag
+    leaf.read_u64(64).ok_or(broken)?; // end_lt
+    if u32::try_from(leaf.read_u64(32).ok_or(broken)?).ok() != Some(seqno) {
+        return Err(broken);
+    }
+    let block = TonBlockIdExtV1 {
+        workchain: TON_MASTERCHAIN_WORKCHAIN,
+        shard: TON_MASTERCHAIN_SHARD,
+        seqno,
+        root_hash: leaf.read_h256().ok_or(broken)?,
+        file_hash: leaf.read_h256().ok_or(broken)?,
+    };
+    if !leaf.exhausted() || !valid_block_id(block) {
+        return Err(broken);
+    }
+    Ok(block)
+}
+
+/// Open a basechain shard block header proof rooted at `block_id.root_hash`.
+pub(crate) fn ton_open_shard_block(
+    block_id: TonBlockIdExtV1,
+    header_proof: &[u8],
+) -> Result<TonShardHeaderV1, TonNativeSourceError> {
+    if block_id.workchain != TON_BASECHAIN_WORKCHAIN || !valid_block_id(block_id) {
+        return Err(TonNativeSourceError::ShardNotFinalized);
+    }
+    let (boc, computed, root) = ton_open_canonical(header_proof, &block_id.root_hash)?;
+    let block = ton_parse_block(&boc, &computed, root).ok_or(TonNativeSourceError::InvalidBoc)?;
+    let info = block.info;
+    if block.global_id != TON_MAINNET_GLOBAL_ID
+        || !info.not_master
+        || info.workchain != block_id.workchain
+        || info.shard != block_id.shard
+        || info.seqno != block_id.seqno
+    {
+        return Err(TonNativeSourceError::ShardNotFinalized);
+    }
+    Ok(TonShardHeaderV1 {
+        block_id,
+        previous: info.previous,
+        merged_previous: info.merged_previous,
+        gen_utime: info.gen_utime,
+    })
+}
+
+fn ton_read_snake_bytes(boc: &TonBoc, index: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut next = Some(index);
+    while let Some(index) = next {
+        let index = ton_virtual_root_index(boc, index)?;
+        let cell = boc.cells.get(index)?;
+        let mut reader = TonBitReader::new(cell)?;
+        let bits = reader.remaining_bits()?;
+        if bits == 0 || bits % 8 != 0 || bits / 8 > TON_SNAKE_CHUNK_BYTES {
+            return None;
+        }
+        for _ in 0..bits / 8 {
+            out.push(u8::try_from(reader.read_u64(8)?).ok()?);
+        }
+        next = match reader.remaining_refs()? {
+            0 => None,
+            1 if bits / 8 == TON_SNAKE_CHUNK_BYTES => Some(reader.read_ref()?),
+            _ => return None,
+        };
+        if out.len() > TON_MAX_SNAKE_BYTES {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn ton_parse_sccp_ext_out(boc: &TonBoc, message: usize, minter: &H256) -> Option<TonSccpEventV1> {
+    let index = ton_virtual_root_index(boc, message)?;
+    let mut reader = TonBitReader::new(boc.cells.get(index)?)?;
+    if reader.read_u64(2)? != 0b11 {
+        return None;
+    }
+    let source = ton_read_internal_address(&mut reader)?;
+    if source.workchain != TON_BASECHAIN_WORKCHAIN || source.account != *minter {
+        return None;
+    }
+    match reader.read_u64(2)? {
+        0b00 => {}
+        0b01 => {
+            let length = reader.read_usize(9)?;
+            reader.skip_bits(length)?;
+        }
+        _ => return None,
+    }
+    reader.skip_bits(64 + 32)?; // created_lt, created_at
+    if reader.read_bit()? {
+        return None; // no StateInit on an event
+    }
+    let mut body = if reader.read_bit()? {
+        let reference = reader.read_ref()?;
+        reader.exhausted().then_some(())?;
+        TonBitReader::new(boc.cells.get(ton_virtual_root_index(boc, reference)?)?)?
+    } else {
+        reader
+    };
+    let op = u32::try_from(body.read_u64(32)?).ok()?;
+    let message_id = body.read_h256()?;
+    let event = match op {
+        TON_SCCP_TRANSFER_TO_TAIRA_OP => {
+            let nonce = body.read_u64(64)?;
+            let sender = ton_read_canonical_std_address(&mut body)?;
+            let amount = ton_read_canonical_coins(&mut body)?;
+            let payload = ton_read_snake_bytes(boc, body.read_ref()?)?;
+            TonSccpEventV1::TransferToTaira {
+                message_id,
+                nonce,
+                sender: sender.account,
+                amount,
+                payload,
+            }
+        }
+        TON_SCCP_VOIDED_OP => TonSccpEventV1::Voided {
+            message_id,
+            first_nonce: body.read_u64(64)?,
+            count: u16::try_from(body.read_u64(16)?).ok()?,
+        },
+        _ => return None,
+    };
+    body.exhausted().then_some(event)
+}
+
+/// The transaction reference of `account` at `lt` in a block's `account_blocks`, possibly a
+/// pruned branch: its (merkle-opened) cell index.
+fn ton_transaction_ref_in_block(
+    boc: &TonBoc,
+    account_blocks_wrapper: usize,
+    account: H256,
+    transaction_lt: u64,
+) -> Option<usize> {
+    let root = ton_hashmap_aug_e_root(boc, account_blocks_wrapper, ton_skip_currency_collection)?;
+    if root == usize::MAX {
+        return None;
+    }
+    let mut leaf = ton_hashmap_aug_leaf_reader(
+        boc,
+        root,
+        &account,
+        TON_SHARD_ACCOUNT_KEY_BITS,
+        ton_skip_currency_collection,
+    )?;
+    ton_skip_currency_collection(&mut leaf)?;
+    if u8::try_from(leaf.read_u64(4)?).ok()? != TON_ACCOUNT_BLOCK_CONSTRUCTOR
+        || leaf.read_h256()? != account
+    {
+        return None;
+    }
+    let mut reader = leaf;
+    let key = transaction_lt.to_be_bytes();
+    let mut key_offset = 0_usize;
+    let mut remaining = usize::from(TON_ACCOUNT_TRANSACTION_KEY_BITS);
+    for _ in 0..=boc.cells.len() {
+        let label = ton_read_hashmap_label(
+            &mut reader,
+            &key,
+            TON_ACCOUNT_TRANSACTION_KEY_BITS,
+            key_offset,
+            remaining,
+        )?;
+        key_offset += label;
+        remaining -= label;
+        if remaining == 0 {
+            ton_skip_currency_collection(&mut reader)?;
+            return ton_merkle_opened_index(boc, reader.read_ref()?);
+        }
+        let go_right = ton_key_bit(&key, TON_ACCOUNT_TRANSACTION_KEY_BITS, key_offset)?;
+        key_offset += 1;
+        remaining -= 1;
+        let left = reader.read_ref()?;
+        let right = reader.read_ref()?;
+        let child = ton_virtual_root_index(boc, if go_right { right } else { left })?;
+        reader = TonBitReader::new(boc.cells.get(child)?)?;
+    }
+    None
+}
+
+/// Open the SCCP event of `minter` in the event block: the transaction at `transaction_lt`
+/// (whose cell the block proof may prune; `transaction_boc` supplies it), which must have
+/// succeeded, and its external-out message `message_index`.
+pub(crate) fn ton_open_sccp_event(
+    block_id: TonBlockIdExtV1,
+    block_proof: &[u8],
+    transaction_boc: &[u8],
+    minter: H256,
+    transaction_lt: u64,
+    message_index: u16,
+) -> Result<TonSccpEventV1, TonNativeSourceError> {
+    let invalid = TonNativeSourceError::InvalidTransaction;
+    let (boc, computed, root) = ton_open_canonical(block_proof, &block_id.root_hash)?;
+    let block = ton_parse_block(&boc, &computed, root).ok_or(TonNativeSourceError::InvalidBoc)?;
+    if block.info.seqno != block_id.seqno || block.info.shard != block_id.shard {
+        return Err(TonNativeSourceError::ShardNotFinalized);
+    }
+    let account_blocks =
+        ton_parse_block_extra_account_blocks(&boc, block.extra_index).ok_or(invalid)?;
+    let reference = ton_transaction_ref_in_block(&boc, account_blocks, minter, transaction_lt)
+        .ok_or(invalid)?;
+    let transaction_hash = ton_original_tree_hash(&computed, reference).ok_or(invalid)?;
+    let (tx_boc, tx_computed, tx_root) = ton_open_canonical(transaction_boc, &transaction_hash)?;
+    let transaction = ton_parse_transaction(&tx_boc, &tx_computed, tx_root, minter, transaction_lt)
+        .ok_or(invalid)?;
+    if ton_transaction_succeeded(&tx_boc, transaction) != Some(true) {
+        return Err(TonNativeSourceError::UnsuccessfulTransaction);
+    }
+    let message = ton_transaction_out_message(&tx_boc, transaction, message_index)
+        .ok_or(TonNativeSourceError::InvalidOutboundMessage)?;
+    ton_parse_sccp_ext_out(&tx_boc, message, &minter)
+        .ok_or(TonNativeSourceError::InvalidOutboundMessage)
 }
 
 #[cfg(test)]
@@ -4844,16 +5407,16 @@ mod tests {
 
     #[test]
     fn boc_parser_enforces_byte_and_cell_caps_before_allocation() {
-        assert_eq!(TON_NATIVE_MAX_BOC_BYTES_V1, 64 * 1024);
-        assert_eq!(TON_MAX_BOC_CELLS, 4_096);
+        assert_eq!(TON_NATIVE_MAX_BOC_BYTES_V1, 256 * 1024);
+        assert_eq!(TON_MAX_BOC_CELLS, 8_192);
         let mut oversized = vec![0_u8; TON_MAX_BOC_BYTES + 1];
         oversized[..4].copy_from_slice(&TON_BOC_MAGIC);
         assert_eq!(parse_ton_boc(&oversized), None);
 
-        // size_bytes=2, offset_bytes=1, cells_count=4097. The parser must
+        // size_bytes=2, offset_bytes=1, cells_count=8193. The parser must
         // reject the declared count before attempting to allocate cell data.
         let excessive_cells = [
-            0xb5, 0xee, 0x9c, 0x72, 0x02, 0x01, 0x10, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0xb5, 0xee, 0x9c, 0x72, 0x02, 0x01, 0x20, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
             0x00,
         ];
         assert_eq!(parse_ton_boc(&excessive_cells), None);
@@ -4875,7 +5438,7 @@ mod tests {
         for _ in 0..count {
             multi_root.extend_from_slice(&[0, 0]);
         }
-        assert_eq!(multi_root.len(), 16_398);
+        assert_eq!(multi_root.len(), 14 + 4 * usize::from(count));
         assert_eq!(parse_ton_boc(&multi_root), None);
     }
 }

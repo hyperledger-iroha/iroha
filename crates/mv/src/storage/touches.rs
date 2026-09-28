@@ -98,10 +98,7 @@ impl<K: Key> SortedTouches<K> {
         P: ClonePlanning<K, V> + NodeFunding<Charge = AllocationCharge>,
     {
         let entries = self.buffer.as_ref().map_or(&[][..], Buffer::as_slice);
-        let index = match entries.binary_search(key) {
-            Ok(_) => None,
-            Err(index) => Some(index),
-        };
+        let index = entries.binary_search(key).err();
         let growth = if index.is_some() {
             let capacity = self
                 .buffer

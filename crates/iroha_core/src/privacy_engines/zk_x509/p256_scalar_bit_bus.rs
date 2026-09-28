@@ -497,12 +497,8 @@ pub(crate) struct P256ScalarBitBusStarkTraceV1 {
 #[cfg(test)]
 impl P256ScalarBitBusStarkTraceV1 {
     fn zeroize_private_v1(&mut self) {
-        for row in &mut self.base {
-            row.fill(F::ZERO);
-        }
-        for row in &mut self.aux {
-            row.fill(F::ZERO);
-        }
+        super::private_table::zeroize_field_rows_v1(&mut self.base);
+        super::private_table::zeroize_field_rows_v1(&mut self.aux);
         self.base.clear();
         self.aux.clear();
     }
@@ -771,9 +767,7 @@ impl P256ScalarBitBusBaseMaterialV1 {
         Ok(value)
     }
     pub(crate) fn zeroize_private_v1(&mut self) {
-        for row in &mut self.rows {
-            row.fill(F::ZERO);
-        }
+        super::private_table::zeroize_field_rows_v1(&mut self.rows);
         self.rows.clear();
     }
     #[cfg(test)]
@@ -859,7 +853,7 @@ impl<'a> P256ScalarBitBusColumnFillGuardV1<'a> {
 impl Drop for P256ScalarBitBusColumnFillGuardV1<'_> {
     fn drop(&mut self) {
         if !self.committed {
-            self.output.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut self.output[..]);
         }
     }
 }
@@ -1166,7 +1160,7 @@ impl P256ScalarBitBusBoundSourceV1 {
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.post_base = None;
         for terminal in &mut self.terminals {
-            terminal.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut terminal[..]);
         }
         if let Some(material) = self.material.as_mut() {
             material.zeroize_private_v1();
@@ -1303,13 +1297,13 @@ impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
     }
     pub(crate) fn zeroize_private_v1(&mut self) {
         for lane in &mut self.challenges.lanes {
-            lane.terms.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut lane.terms[..]);
         }
         for terminal in &mut self.terminals {
-            terminal.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut terminal[..]);
         }
-        self.arithmetic_running.fill(F::ZERO);
-        self.window_running.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.arithmetic_running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.window_running[..]);
         self.next_row = P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1;
     }
     #[cfg(test)]
@@ -2254,6 +2248,13 @@ mod tests {
     }
     #[test]
     fn phased_private_state_zeroizes_recursively() {
+        let (_, observations) = super::super::private_table::inspection::observe_v1(
+            phased_private_state_zeroizes_recursively_body_v1,
+        );
+        assert!(observations.iter().any(|item| item.nonzero_before > 0));
+        assert!(observations.iter().all(|item| item.nonzero_after == 0));
+    }
+    fn phased_private_state_zeroizes_recursively_body_v1() {
         let fixture = fixture_v1();
         let mut material = P256ScalarBitBusBaseMaterialV1::from_sources_for_test_v1(
             &fixture.sources,

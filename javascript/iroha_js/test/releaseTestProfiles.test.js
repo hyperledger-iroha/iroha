@@ -71,11 +71,10 @@ test("release-scoped JavaScript tests contain no capability skip declarations", 
   }
 });
 
-test("retired browser verifier surface and unsupported target cannot return", () => {
+test("retired browser verifier surface cannot return", () => {
   const retiredSubpath = "./ivm-" + "artifact-admission-wasm";
   const retiredSelector = "IROHA_IVM_" + "ARTIFACT_ADMISSION_WASM";
   const retiredVerifierOption = "artifactAdmission" + "Verifier";
-  const unsupportedTarget = "wasm32-" + "unknown-unknown";
   const packageDocument = JSON.parse(
     readFileSync(path.join(SDK_DIRECTORY, "package.json"), "utf8"),
   );
@@ -121,12 +120,6 @@ test("retired browser verifier surface and unsupported target cannot return", ()
       `${relativePath} has retired verifier option`,
     );
   }
-  assert.equal(
-    readRepositoryFile(".github/workflows/kotodama_perf.yml").includes(
-      unsupportedTarget,
-    ),
-    false,
-  );
 });
 
 test("release workflows require platform provenance, heavy, and SoraFS native lanes", () => {

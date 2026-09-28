@@ -123,8 +123,14 @@ mod tests {
                 b"another network",
             ))),
         );
-        foreign_kura.store_block(chain.genesis().clone()).unwrap();
-        foreign.push_block_hash_for_testing(chain.genesis().hash());
+        let executed_genesis = chain
+            .kura()
+            .get_block(std::num::NonZeroUsize::MIN)
+            .expect("retained executed genesis");
+        assert!(executed_genesis.commit_certificate().is_some());
+        let genesis_hash = executed_genesis.hash();
+        foreign_kura.store_block(executed_genesis).unwrap();
+        foreign.push_block_hash_for_testing(genesis_hash);
         assert_eq!(
             foreign_kura
                 .canonical_block_wire_bytes_for_testing(std::num::NonZeroUsize::MIN)

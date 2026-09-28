@@ -14,7 +14,7 @@ iroha_sccp = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_config = { workspace = true }
-norito = { workspace = true, features = ["base-codec"] }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # Blocking HTTP over rustls only; JSON is parsed with `norito::json`, never reqwest's `json`.
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 tiny-keccak = { workspace = true, features = ["keccak"] }

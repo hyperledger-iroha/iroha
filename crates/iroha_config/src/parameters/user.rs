@@ -4883,12 +4883,14 @@ pub struct Sccp {
     /// Maximum Ed25519 signature checks committed in one block.
     #[config(default = "defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK")]
     pub max_ed25519_signature_checks_per_block: NonZeroU32,
-    /// Maximum TON Ed25519 validator-key checks in one transaction.
-    #[config(default = "defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION")]
-    pub max_ed25519_validator_key_checks_per_transaction: NonZeroU32,
-    /// Maximum TON Ed25519 validator-key checks committed in one block.
-    #[config(default = "defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK")]
-    pub max_ed25519_validator_key_checks_per_block: NonZeroU32,
+    /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) in one
+    /// transaction.
+    #[config(default = "defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_TRANSACTION")]
+    pub max_bls_vote_attestations_per_transaction: NonZeroU32,
+    /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) committed in one
+    /// block.
+    #[config(default = "defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_BLOCK")]
+    pub max_bls_vote_attestations_per_block: NonZeroU32,
 }
 impl Default for Sccp {
     fn default() -> Self {
@@ -4917,10 +4919,10 @@ impl Default for Sccp {
                 defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION,
             max_ed25519_signature_checks_per_block:
                 defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK,
-            max_ed25519_validator_key_checks_per_transaction:
-                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION,
-            max_ed25519_validator_key_checks_per_block:
-                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK,
+            max_bls_vote_attestations_per_transaction:
+                defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_TRANSACTION,
+            max_bls_vote_attestations_per_block:
+                defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_BLOCK,
         }
     }
 }
@@ -5004,10 +5006,10 @@ impl Sccp {
             "max_ed25519_signature_checks_per_block",
         );
         require_order(
-            self.max_ed25519_validator_key_checks_per_transaction,
-            self.max_ed25519_validator_key_checks_per_block,
-            "max_ed25519_validator_key_checks_per_transaction",
-            "max_ed25519_validator_key_checks_per_block",
+            self.max_bls_vote_attestations_per_transaction,
+            self.max_bls_vote_attestations_per_block,
+            "max_bls_vote_attestations_per_transaction",
+            "max_bls_vote_attestations_per_block",
         );
         actual::Sccp {
             max_proofs_per_transaction: self.max_proofs_per_transaction,
@@ -5028,10 +5030,9 @@ impl Sccp {
             max_ed25519_signature_checks_per_transaction: self
                 .max_ed25519_signature_checks_per_transaction,
             max_ed25519_signature_checks_per_block: self.max_ed25519_signature_checks_per_block,
-            max_ed25519_validator_key_checks_per_transaction: self
-                .max_ed25519_validator_key_checks_per_transaction,
-            max_ed25519_validator_key_checks_per_block: self
-                .max_ed25519_validator_key_checks_per_block,
+            max_bls_vote_attestations_per_transaction: self
+                .max_bls_vote_attestations_per_transaction,
+            max_bls_vote_attestations_per_block: self.max_bls_vote_attestations_per_block,
         }
     }
 }
@@ -5076,8 +5077,8 @@ mod sccp_limit_tests {
         assert!(actual.max_proof_bytes_per_proof <= actual.max_proof_bytes_per_transaction);
         assert!(actual.max_proof_bytes_per_transaction <= actual.max_proof_bytes_per_block);
         assert!(
-            actual.max_ed25519_validator_key_checks_per_transaction
-                <= actual.max_ed25519_validator_key_checks_per_block
+            actual.max_bls_vote_attestations_per_transaction
+                <= actual.max_bls_vote_attestations_per_block
         );
     }
     #[test]

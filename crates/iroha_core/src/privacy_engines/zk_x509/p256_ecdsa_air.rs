@@ -41,11 +41,11 @@ impl P256EcdsaWitnessV1 {
     /// Overwrite the complete private ECDSA input tuple.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.public_key_x_be.fill(0);
-        self.public_key_y_be.fill(0);
-        self.r_be.fill(0);
-        self.s_be.fill(0);
-        self.digest_be.fill(0);
+        super::private_table::zeroize_words_v1(&mut self.public_key_x_be[..]);
+        super::private_table::zeroize_words_v1(&mut self.public_key_y_be[..]);
+        super::private_table::zeroize_words_v1(&mut self.r_be[..]);
+        super::private_table::zeroize_words_v1(&mut self.s_be[..]);
+        super::private_table::zeroize_words_v1(&mut self.digest_be[..]);
     }
     #[cfg(test)]
     pub(crate) fn private_is_zeroized_v1(&self) -> bool {

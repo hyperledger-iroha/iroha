@@ -978,7 +978,6 @@ mod tests {
         codec::ZkX509WitnessCodecErrorV1,
         engine::{ZkX509EngineErrorV1, prepare_zk_x509_prover_input_v1},
         merkle::ZkX509MerkleErrorV1,
-        profile::ZK_X509_ATTRIBUTE_SALT_BYTES_V1,
     };
     #[test]
     fn canonical_release_fixture_is_exact_round_trippable_and_state_joined() {
@@ -1278,22 +1277,14 @@ mod tests {
     fn production_preflight_rejects_noncanonical_and_suffix_witness_bytes_without_proving() {
         let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
             .expect("maximum release fixture");
-        let mut noncanonical = fixture
-            .witness
-            .encode_v1()
-            .expect("maximum witness encoding");
-        let opening_count = fixture.witness.attribute_openings.len();
-        let opening_count_offset = noncanonical
-            .len()
-            .checked_sub(1 + opening_count * (1 + ZK_X509_ATTRIBUTE_SALT_BYTES_V1))
-            .expect("opening suffix offset");
-        assert_eq!(
-            usize::from(noncanonical[opening_count_offset]),
-            opening_count
+        let mut duplicate = fixture.witness.clone();
+        assert_eq!(duplicate.attribute_openings.len(), 4);
+        duplicate.attribute_openings[1].index = duplicate.attribute_openings[0].index;
+        let noncanonical = zeroize::Zeroizing::new(
+            duplicate
+                .encode_unchecked_for_test_v1()
+                .expect("Norito frame with duplicate semantic opening"),
         );
-        let first_opening_index = opening_count_offset + 1;
-        let second_opening_index = first_opening_index + 1 + ZK_X509_ATTRIBUTE_SALT_BYTES_V1;
-        noncanonical[second_opening_index] = noncanonical[first_opening_index];
         assert_eq!(
             production_preflight_error_v1(
                 &fixture.statement,
@@ -1302,10 +1293,15 @@ mod tests {
             ),
             ZkX509EngineErrorV1::WitnessCodec(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
         );
-        let mut suffix = fixture
-            .witness
-            .encode_v1()
-            .expect("maximum witness encoding");
+        let canonical = zeroize::Zeroizing::new(
+            fixture
+                .witness
+                .encode_v1()
+                .expect("maximum witness encoding"),
+        );
+        // Reserve the complete malformed extent before copying private bytes.
+        let mut suffix = zeroize::Zeroizing::new(Vec::with_capacity(canonical.len() + 1));
+        suffix.extend_from_slice(&canonical);
         suffix.push(0);
         assert_eq!(
             production_preflight_error_v1(

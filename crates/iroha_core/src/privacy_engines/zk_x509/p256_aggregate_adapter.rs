@@ -309,26 +309,26 @@ impl<'a> P256AggregateColumnDestinationGuardV1<'a> {
 impl Drop for P256AggregateColumnDestinationGuardV1<'_> {
     fn drop(&mut self) {
         if !self.committed {
-            self.output.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut self.output[..]);
         }
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_cross_challenges_v1(challenges: &mut P256CrossTraceChallengesV1) {
     for lane in &mut challenges.lanes {
-        lane.terms.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut lane.terms[..]);
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_scalar_challenges_v1(challenges: &mut P256ScalarBitBusChallengesV1) {
     for lane in &mut challenges.lanes {
-        lane.terms.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut lane.terms[..]);
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_arithmetic_copy_challenges_v1(challenges: &mut P256ArithmeticCopyChallengesV1) {
     for lane in &mut challenges.lanes {
-        lane.terms.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut lane.terms[..]);
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1328,10 +1328,10 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.value_aux = None;
         self.writer = None;
-        self.writer_terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.writer_terminal[..]);
         zeroize_arithmetic_copy_challenges_v1(&mut self.arithmetic_copy_challenges);
-        self.arithmetic_copy_running.fill(F::ZERO);
-        self.arithmetic_copy_terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.arithmetic_copy_running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.arithmetic_copy_terminal[..]);
         self.next_row = P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1;
     }
     #[cfg(test)]
@@ -1869,11 +1869,11 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
     /// arithmetic rows and their verifier-owned fixed provider remain intact.
     pub(crate) fn zeroize_private_v1(&mut self) {
         zeroize_scalar_challenges_v1(&mut self.scalar_challenges);
-        self.scalar_running.fill(F::ZERO);
-        self.scalar_terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.scalar_running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.scalar_terminal[..]);
         zeroize_arithmetic_copy_challenges_v1(&mut self.arithmetic_copy_challenges);
-        self.arithmetic_copy_running.fill(F::ZERO);
-        self.arithmetic_copy_terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.arithmetic_copy_running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.arithmetic_copy_terminal[..]);
         self.next_row = P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1;
     }
     #[cfg(test)]
@@ -2274,11 +2274,11 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
     pub(crate) fn zeroize_private_v1(&mut self) {
         zeroize_cross_challenges_v1(&mut self.cross_challenges);
         zeroize_scalar_challenges_v1(&mut self.scalar_challenges);
-        self.cross_start.fill(F::ZERO);
-        self.cross_running.fill(F::ZERO);
-        self.cross_terminal.fill(F::ZERO);
-        self.scalar_running.fill(F::ZERO);
-        self.scalar_terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.cross_start[..]);
+        super::private_table::zeroize_fields_v1(&mut self.cross_running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.cross_terminal[..]);
+        super::private_table::zeroize_fields_v1(&mut self.scalar_running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.scalar_terminal[..]);
         self.next_row = P256_WINDOW_AGGREGATE_TRACE_SIZE_V1;
     }
     #[cfg(test)]
@@ -2662,9 +2662,9 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
     /// public role and fixed schedule in `rows`.
     pub(crate) fn zeroize_private_v1(&mut self) {
         zeroize_cross_challenges_v1(&mut self.challenges);
-        self.start.fill(F::ZERO);
-        self.running.fill(F::ZERO);
-        self.terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.start[..]);
+        super::private_table::zeroize_fields_v1(&mut self.running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.terminal[..]);
         self.next_row = P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1;
     }
     #[cfg(test)]
@@ -2998,9 +2998,9 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
     /// role/fixed topology in `rows`.
     pub(crate) fn zeroize_private_v1(&mut self) {
         zeroize_cross_challenges_v1(&mut self.challenges);
-        self.start.fill(F::ZERO);
-        self.running.fill(F::ZERO);
-        self.terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.start[..]);
+        super::private_table::zeroize_fields_v1(&mut self.running[..]);
+        super::private_table::zeroize_fields_v1(&mut self.terminal[..]);
         self.next_row = P256_LOW_S_AGGREGATE_TRACE_SIZE_V1;
     }
     #[cfg(test)]
@@ -3403,7 +3403,7 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
     /// the independently compiled verifier-owned fixed topology.
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.sink = None;
-        self.terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.terminal[..]);
     }
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
@@ -4214,20 +4214,14 @@ impl P256MainVerifierFixedSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_arithmetic_trace_v1(trace: &mut ZkX509P256ArithmeticTraceV1) {
-    for row in &mut trace.base {
-        row.fill(F::ZERO);
-    }
+    super::private_table::zeroize_field_rows_v1(&mut trace.base);
     trace.base.clear();
     trace.fixed.clear();
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_window_batch_v1(trace: &mut P256WindowBatchStarkTraceV1) {
-    for row in &mut trace.base {
-        row.fill(F::ZERO);
-    }
-    for row in &mut trace.aux {
-        row.fill(F::ZERO);
-    }
+    super::private_table::zeroize_field_rows_v1(&mut trace.base);
+    super::private_table::zeroize_field_rows_v1(&mut trace.aux);
     trace.base.clear();
     trace.aux.clear();
 }
@@ -4897,11 +4891,11 @@ impl Drop for P256MainSignatureTerminalClaimsV1 {
     fn drop(&mut self) {
         zeroize_p256_main_bus_claims_v1(&mut self.buses);
         for source in &mut self.cross_sources {
-            source.start.fill(F::ZERO);
-            source.terminal.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut source.start[..]);
+            super::private_table::zeroize_fields_v1(&mut source.terminal[..]);
         }
         self.cross_sources.clear();
-        self.sink.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.sink[..]);
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -4916,8 +4910,8 @@ impl P256MainCrossClaimsGuardV1 {
 impl Drop for P256MainCrossClaimsGuardV1 {
     fn drop(&mut self) {
         for source in &mut self.0 {
-            source.start.fill(F::ZERO);
-            source.terminal.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut source.start[..]);
+            super::private_table::zeroize_fields_v1(&mut source.terminal[..]);
         }
         self.0.clear();
     }
@@ -4934,17 +4928,17 @@ impl Drop for P256MainTerminalAssemblyGuardV1 {
         for signature in &mut self.certificate_or_crl {
             zeroize_p256_main_bus_claims_v1(&mut signature.buses);
             for source in &mut signature.cross_sources {
-                source.start.fill(F::ZERO);
-                source.terminal.fill(F::ZERO);
+                super::private_table::zeroize_fields_v1(&mut source.start[..]);
+                super::private_table::zeroize_fields_v1(&mut source.terminal[..]);
             }
-            signature.sink.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut signature.sink[..]);
         }
         zeroize_p256_main_bus_claims_v1(&mut self.wallet.buses);
         for source in &mut self.wallet.cross_sources {
-            source.start.fill(F::ZERO);
-            source.terminal.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut source.start[..]);
+            super::private_table::zeroize_fields_v1(&mut source.terminal[..]);
         }
-        self.wallet.sink.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut self.wallet.sink[..]);
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -5171,31 +5165,31 @@ fn p256_main_terminal_claims_v1(
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_p256_main_bus_claims_v1(claims: &mut P256BusTerminalClaimsV1) {
-    claims.value_execution.fill(F::ZERO);
-    claims.value_sorted.fill(F::ZERO);
-    claims.value_arithmetic_copy.fill(F::ZERO);
-    claims.arithmetic_value_copy.fill(F::ZERO);
-    claims.arithmetic_scalar.fill(F::ZERO);
-    claims.window_scalar.fill(F::ZERO);
-    claims.scalar_bus_arithmetic.fill(F::ZERO);
-    claims.scalar_bus_window.fill(F::ZERO);
+    super::private_table::zeroize_fields_v1(&mut claims.value_execution[..]);
+    super::private_table::zeroize_fields_v1(&mut claims.value_sorted[..]);
+    super::private_table::zeroize_fields_v1(&mut claims.value_arithmetic_copy[..]);
+    super::private_table::zeroize_fields_v1(&mut claims.arithmetic_value_copy[..]);
+    super::private_table::zeroize_fields_v1(&mut claims.arithmetic_scalar[..]);
+    super::private_table::zeroize_fields_v1(&mut claims.window_scalar[..]);
+    super::private_table::zeroize_fields_v1(&mut claims.scalar_bus_arithmetic[..]);
+    super::private_table::zeroize_fields_v1(&mut claims.scalar_bus_window[..]);
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256TerminalClaimsV1) {
     for signature in &mut claims.certificate_or_crl {
         zeroize_p256_main_bus_claims_v1(&mut signature.buses);
         for source in &mut signature.cross_sources {
-            source.start.fill(F::ZERO);
-            source.terminal.fill(F::ZERO);
+            super::private_table::zeroize_fields_v1(&mut source.start[..]);
+            super::private_table::zeroize_fields_v1(&mut source.terminal[..]);
         }
-        signature.sink.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut signature.sink[..]);
     }
     zeroize_p256_main_bus_claims_v1(&mut claims.wallet.buses);
     for source in &mut claims.wallet.cross_sources {
-        source.start.fill(F::ZERO);
-        source.terminal.fill(F::ZERO);
+        super::private_table::zeroize_fields_v1(&mut source.start[..]);
+        super::private_table::zeroize_fields_v1(&mut source.terminal[..]);
     }
-    claims.wallet.sink.fill(F::ZERO);
+    super::private_table::zeroize_fields_v1(&mut claims.wallet.sink[..]);
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBaseSourceV1 {
@@ -5761,7 +5755,7 @@ impl Drop for P256MainCanonicalTestMaterialsV1 {
         }
         self.selection.real.zeroize_private_v1();
         self.selection.selected.zeroize_private_v1();
-        self.selection.active = F::ZERO;
+        super::private_table::zeroize_fields_v1(core::slice::from_mut(&mut self.selection.active));
     }
 }
 #[cfg(test)]
@@ -5859,6 +5853,45 @@ mod arithmetic_fp4_tests;
 mod sink_fp4_tests;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_main_p256_erasure_observes_live_retained_source_allocations() {
+        use super::super::private_table::inspection::observe_v1;
+        let source = P256MainBaseSourceV1 {
+            signatures: Some(core::array::from_fn(|_| P256MainSignatureBaseV1 {
+                role: P256EcdsaRoleV1::CertificateOrCrl,
+                value: None,
+                scalar: None,
+                arithmetic: Some(ZkX509P256ArithmeticTraceV1 {
+                    fixed: Vec::new(),
+                    base: vec![[F(37); P256_ARITHMETIC_BASE_WIDTH_V1]; 2],
+                }),
+                window: Some(P256WindowBatchStarkTraceV1 {
+                    base: vec![[F(41); P256_WINDOW_BASE_WIDTH_V1]; 3],
+                    aux: vec![[F(43); P256_WINDOW_STARK_AUX_WIDTH_V1]; 3],
+                }),
+                digest_reduction: None,
+                result_x_reduction: None,
+                low_s: None,
+                sink: None,
+            })),
+            fixed: None,
+            bind_attempted: false,
+        };
+        let expected = 5
+            * (2 * P256_ARITHMETIC_BASE_WIDTH_V1
+                + 3 * P256_WINDOW_BASE_WIDTH_V1
+                + 3 * P256_WINDOW_STARK_AUX_WIDTH_V1);
+        let (_, observed) = observe_v1(|| drop(source));
+        assert_eq!(
+            observed
+                .iter()
+                .map(|item| item.nonzero_before)
+                .sum::<usize>(),
+            expected
+        );
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+
     #[test]
     fn p256_main_capacity_payload_counts_retained_matrices_and_schedule_clones() {
         use super::super::allocation_payload::vector_v1;
@@ -6445,6 +6478,13 @@ mod tests {
     }
     #[test]
     fn aggregate_column_destinations_are_transactional_and_fail_closed() {
+        let (_, observed) = super::super::private_table::inspection::observe_v1(
+            aggregate_column_destinations_are_transactional_and_fail_closed_body_v1,
+        );
+        assert!(observed.iter().any(|item| item.nonzero_before > 0));
+        assert!(observed.iter().all(|item| item.nonzero_after == 0));
+    }
+    fn aggregate_column_destinations_are_transactional_and_fail_closed_body_v1() {
         const SENTINEL: F = F(0x5a5a);
         // Shape and column-index failures happen before the destination guard
         // exists, so caller-owned storage remains byte-for-byte untouched.
@@ -6546,6 +6586,13 @@ mod tests {
     }
     #[test]
     fn aggregate_private_zeroization_is_idempotent_and_preserves_fixed_topology() {
+        let (_, observations) = super::super::private_table::inspection::observe_v1(
+            aggregate_private_zeroization_is_idempotent_and_preserves_fixed_topology_body_v1,
+        );
+        assert!(observations.iter().any(|item| item.nonzero_before > 0));
+        assert!(observations.iter().all(|item| item.nonzero_after == 0));
+    }
+    fn aggregate_private_zeroization_is_idempotent_and_preserves_fixed_topology_body_v1() {
         const SENTINEL: F = F(0x6b6b);
         let reduction_trace =
             build_p256_reduction_trace_v1([0_u8; 32]).expect("canonical reduction");

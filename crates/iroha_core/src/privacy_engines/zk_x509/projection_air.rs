@@ -13,6 +13,11 @@
 //! separate four-lane copy product binds every repeated byte occurrence. Padding rows and unused
 //! hash slots are algebraically zero.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::private_table::{
+    PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1, zeroize_words_v1,
+};
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::{
     ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1, ZkX509IoEndpointV1,
     ZkX509IoSegmentRoleV1,
@@ -143,7 +148,7 @@ const FIX_LAST_ROW: usize = 23;
 const FIX_USED_MONOTONE_TRANSITION: usize = 24;
 /// Wallet-local projection witness extracted by the constrained DER segment.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509ProjectionWitnessV1 {
     /// Exact leaf-to-root SPKI DER values.
     pub(crate) chain_spki_der: Vec<Vec<u8>>,
@@ -153,6 +158,26 @@ pub(crate) struct ZkX509ProjectionWitnessV1 {
     pub(crate) disclosed_attribute_values: Vec<Vec<u8>>,
     /// Private salts for disclosures in statement order.
     pub(crate) attribute_salts: Vec<[u8; ZK_X509_ATTRIBUTE_SALT_BYTES_V1]>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for ZkX509ProjectionWitnessV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509ProjectionWitnessV1 { <private material redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509ProjectionWitnessV1 {
+    fn drop(&mut self) {
+        for value in self
+            .chain_spki_der
+            .iter_mut()
+            .chain(&mut self.disclosed_attribute_values)
+        {
+            zeroize_words_v1(value);
+        }
+        zeroize_words_v1(&mut self.leaf_serial);
+        zeroize_words_v1(&mut self.attribute_salts);
+    }
 }
 /// Semantic projection hash slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -364,12 +389,24 @@ pub(crate) struct ZkX509ProjectionBaseTraceV1 {
     /// Exact base rows.
     pub(crate) rows: Vec<[F; ZK_X509_PROJECTION_BASE_WIDTH_V1]>,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509ProjectionBaseTraceV1 {
+    fn drop(&mut self) {
+        zeroize_field_rows_v1(&mut self.rows);
+    }
+}
 /// Challenge-dependent copy and compaction products.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ProjectionAuxTraceV1 {
     /// Exact auxiliary rows.
     pub(crate) rows: Vec<[F; ZK_X509_PROJECTION_AUX_WIDTH_V1]>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509ProjectionAuxTraceV1 {
+    fn drop(&mut self) {
+        zeroize_field_rows_v1(&mut self.rows);
+    }
 }
 /// One copy-product challenge lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -416,6 +453,15 @@ pub(crate) struct ZkX509ProjectionIoChannelV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ProjectionIoChannelV1 {
+    fn zeroize_private_v1(&mut self) {
+        zeroize_words_v1(&mut self.value);
+        self.value.clear();
+        if let Some(value) = &mut self.public_value {
+            zeroize_words_v1(value);
+            value.clear();
+        }
+    }
+
     /// Convert plans to the shared sequential channel-witness format.
     ///
     /// # Errors
@@ -423,22 +469,38 @@ impl ZkX509ProjectionIoChannelV1 {
     /// Returns a resource error if a channel identifier or byte length does
     /// not fit the fixed wire types.
     pub(crate) fn into_witness(
-        self,
+        mut self,
         channel: u32,
     ) -> Result<ZkX509IoChannelWitnessV1, ZkX509ProjectionAirErrorV1> {
         let byte_len =
             u32::try_from(self.value.len()).map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
-        Ok(ZkX509IoChannelWitnessV1 {
+        // Establish the returned clearing owner before any consumer-copy
+        // allocation can fail. The source relinquishes only transferred cells.
+        let mut witness = ZkX509IoChannelWitnessV1 {
             declaration: ZkX509IoChannelDeclarationV1 {
                 channel,
                 producer: self.producer,
-                consumers: self.consumers.clone(),
+                consumers: core::mem::take(&mut self.consumers),
                 byte_len,
-                public_value: self.public_value,
+                public_value: self.public_value.take(),
             },
-            producer_value: self.value.clone(),
-            consumer_values: vec![self.value; self.consumers.len()],
-        })
+            producer_value: core::mem::take(&mut self.value),
+            consumer_values: Vec::new(),
+        };
+        witness
+            .consumer_values
+            .try_reserve_exact(witness.declaration.consumers.len())
+            .map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
+        for _ in &witness.declaration.consumers {
+            witness.consumer_values.push(witness.producer_value.clone());
+        }
+        Ok(witness)
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509ProjectionIoChannelV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
     }
 }
 /// Complete projection witness material.
@@ -459,21 +521,22 @@ impl core::fmt::Debug for ZkX509ProjectionTraceV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509ProjectionTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ProjectionTraceV1 {
     /// Overwrite every witness-bearing projection row and private channel.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_private_v1(&mut self) {
         for row in &mut self.base.rows {
-            row.fill(F::ZERO);
+            zeroize_fields_v1(row);
         }
         self.base.rows.clear();
         for channel in &mut self.io_channels {
-            channel.value.fill(0);
-            channel.value.clear();
-            if let Some(public_value) = &mut channel.public_value {
-                public_value.fill(0);
-                public_value.clear();
-            }
+            channel.zeroize_private_v1();
         }
         self.io_channels.clear();
     }
@@ -1335,13 +1398,36 @@ fn build_base_trace_v1(
     fixed: &ZkX509ProjectionFixedTraceV1,
     invocations: &[InvocationSpecV1],
     witness: &ZkX509ProjectionWitnessV1,
-) -> Result<(ZkX509ProjectionBaseTraceV1, Vec<Vec<u8>>, Vec<[u8; 32]>), ZkX509ProjectionAirErrorV1>
-{
-    let mut rows = Vec::new();
+) -> Result<
+    (
+        ZkX509ProjectionBaseTraceV1,
+        PrivateTableV1<Vec<u8>>,
+        PrivateTableV1<[u8; 32]>,
+    ),
+    ZkX509ProjectionAirErrorV1,
+> {
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     rows.try_reserve_exact(fixed.rows.len())
         .map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
-    let mut messages = vec![Vec::new(); ZK_X509_PROJECTION_HASH_SLOTS_V1];
-    let mut digests = vec![[0_u8; 32]; ZK_X509_PROJECTION_HASH_SLOTS_V1];
+    let mut messages = PrivateTableV1::new(
+        vec![Vec::new(); ZK_X509_PROJECTION_HASH_SLOTS_V1],
+        |messages| {
+            for message in messages {
+                zeroize_words_v1(message);
+            }
+        },
+    );
+    // Reserve the fixed public bound before writing bytes: growing a private
+    // Vec would otherwise leave its prior allocation outside the clearing owner.
+    for message in messages.iter_mut() {
+        message
+            .try_reserve_exact(ZK_X509_PROJECTION_HASH_BUFFER_BYTES_V1)
+            .map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
+    }
+    let mut digests = PrivateTableV1::new(
+        vec![[0_u8; 32]; ZK_X509_PROJECTION_HASH_SLOTS_V1],
+        zeroize_words_v1,
+    );
     let mut source_counts = [0_usize; ZK_X509_PROJECTION_HASH_SLOTS_V1];
     let mut output_counts = [0_usize; ZK_X509_PROJECTION_HASH_SLOTS_V1];
     for fixed_row in fixed.rows.iter().copied() {
@@ -1371,6 +1457,9 @@ fn build_base_trace_v1(
                 row[USED] = F(u64::from(used));
                 row[MESSAGE_BEFORE] = f_usize_v1(before)?;
                 if used {
+                    if messages[invocation_index].len() == ZK_X509_PROJECTION_HASH_BUFFER_BYTES_V1 {
+                        return Err(ZkX509ProjectionAirErrorV1::Topology);
+                    }
                     source_counts[invocation_index] = before
                         .checked_add(1)
                         .ok_or(ZkX509ProjectionAirErrorV1::Resource)?;
@@ -1455,7 +1544,13 @@ fn build_base_trace_v1(
             return Err(ZkX509ProjectionAirErrorV1::Topology);
         }
     }
-    Ok((ZkX509ProjectionBaseTraceV1 { rows }, messages, digests))
+    Ok((
+        ZkX509ProjectionBaseTraceV1 {
+            rows: rows.into_vec(),
+        },
+        messages,
+        digests,
+    ))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn padded_v1(value: &[u8], length: usize) -> Result<Vec<u8>, ZkX509ProjectionAirErrorV1> {
@@ -1892,7 +1987,7 @@ pub(crate) fn build_zk_x509_projection_aux_trace_v1(
     let mut copy_denominator = [F::ONE; COPY_LANES];
     let mut source = [F::ONE; COPY_LANES];
     let mut output = [F::ONE; COPY_LANES];
-    let mut rows = Vec::new();
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1);
     rows.try_reserve_exact(base.rows.len())
         .map_err(|_| ZkX509ProjectionAirErrorV1::Resource)?;
     for index in 0..base.rows.len() {
@@ -1941,7 +2036,9 @@ pub(crate) fn build_zk_x509_projection_aux_trace_v1(
     {
         return Err(ZkX509ProjectionAirErrorV1::Constraint);
     }
-    Ok(ZkX509ProjectionAuxTraceV1 { rows })
+    Ok(ZkX509ProjectionAuxTraceV1 {
+        rows: rows.into_vec(),
+    })
 }
 #[cfg(test)]
 fn add_residue_v1(residues: &mut Vec<F>, left: F, right: F) {
@@ -3232,7 +3329,7 @@ pub(crate) mod tests {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixed account seed");
         AccountId::new(key_pair.public_key().clone())
     }
-    fn challenges() -> ZkX509ProjectionChallengesV1 {
+    pub(super) fn challenges() -> ZkX509ProjectionChallengesV1 {
         ZkX509ProjectionChallengesV1 {
             copy: [
                 ZkX509ProjectionCopyChallengesV1 {
@@ -3897,3 +3994,7 @@ pub(crate) mod tests {
 #[cfg(test)]
 #[path = "projection_air_fp4_tests.rs"]
 mod fp4_tests;
+
+#[cfg(test)]
+#[path = "projection_air_cleanup_tests.rs"]
+mod cleanup_tests;

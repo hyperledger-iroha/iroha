@@ -7,9 +7,10 @@ with one explicit Zstandard JNI runtime dependency.
 
 ## Features
 - Header parsing/serialization (`NRT0`, major 0 with fixed v1 minor `0x00`) with CRC64-XZ validation
-- Flag support: packed sequences, compact lengths, packed structs, field bitset
+- Layout flags: `0x00` (fixed-width u64 length prefixes) and `0x02`
+  (`COMPACT_LEN`, varint length prefixes); every other flag bit is rejected
 - Adapters for signed/unsigned integers, booleans, UTF-8 strings, byte arrays,
-  options (`Optional`), sequences, maps, and packed structs with hybrid bitset layout
+  options (`Optional`), sequences, maps, and structs
 - Canonical type-name schema hashing
 - Columnar helpers and adaptive AoS layouts for `(u64, String, boolean)`,
   `(u64, Optional<String>, boolean)`, `(u64, Optional<u32>, boolean)`,

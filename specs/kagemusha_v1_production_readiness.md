@@ -33,42 +33,47 @@ Collect already-running test results without expanding the implementation scope.
 Stop this milestone after its acceptance criteria pass; do not automatically
 continue into the later milestones or claim production readiness.
 
-Current validation blocker: the merged native target fails before tests in
-`crates/sorafs_car/src/multi_fetch.rs`: its `runtime` module is absent, and its
-wrappers require `InternalFetchOutcome` while the inner fetch still returns
-`FetchOutcome` (`E0583`, `E0609`). Merge `44ac7ef9f1` introduced this incomplete
-dependency change; neither merge parent contains the missing implementation.
-Repair belongs to the SoraFS dependency owner, followed by the focused native
-rerun. The earlier 94 passing native tests remain component evidence from that
-build; they do not establish native compilation of the merged candidate. The
-bounded goal remains incomplete while this acceptance gate is blocked.
+**Completed September 28, 2026:** the focused host milestone passes on the
+repaired dependency graph. The former SoraFS missing-runtime/result-type blocker
+is resolved in the checkout at `77f8b948e3`. The final combined run passes **97
+native, 79 model, 29 Kagami and 37 provider-admission tests**, with no failures or
+ignored cases. This completes the bounded bootstrap/startup gate; the production
+milestones below remain separate and unqualified.
 
-Completed focused validation on September 26: 70 model tests and 29 Kagami tests
-pass, including the immutable capture, separate identities for the two later
-experimental-release declarations, all 28 bootstrap/release CLI cases and the
-generated-help comparison. The capture fixture itself is unchanged. Exact command:
+Exact focused validation command:
 
 ```sh
 scripts/cargo_fast.sh --target-slot kagemusha-v1 --stable-local-metadata --incremental -- \
-  test -p iroha_data_model -p iroha_kagami --lib --bin kagami \
+  test --locked -p iroha_data_model -p connect_norito_bridge -p iroha_kagami \
+  -p sorafs_manifest --lib --bin kagami \
   --features iroha_core/default,iroha_core/zk-halo2-ipa -- \
-  mobile_bootstrap kagemusha_release_v1 'kagemusha::tests::' \
+  kagemusha_testnet mobile_bootstrap native_deadline kagemusha_release_v1 \
+  'kagemusha::tests::' committed_transaction_inclusion provider_admission::tests \
   tests::checked_in_markdown_help_matches_generated_help --nocapture
 ```
 
-The normal Kagami binary regenerated `crates/iroha_kagami/CommandLineHelp.md`
-using `advanced markdown-help`; an independent byte comparison also passes.
-`python3 -m unittest scripts.tests.kagemusha_release_cli_hard_cut_test` passes
-all nine checks; changed-source formatting passes for 31 Rust files using
-`rustfmt --edition 2024 --check --config skip_children=true`, and
-`scripts/check_no_legacy_codec.sh` passes. These are host component checks,
-not physical-device, full-workspace or production qualification.
+The native selection covers signed freshness, exact replay, suspend-inclusive
+deadlines, process ownership, partial startup installation, concurrent publication
+and panic revocation. The model selection covers canonical bootstrap/freshness,
+release validation and both captured/current schema identity checks; the immutable
+capture fixture is unchanged. All 28 KAGEMUSHA CLI cases and the generated-help
+comparison pass. Provider-admission coverage includes the extracted structural
+validator and signature-verification regression.
 
-The separate dependency regression suite passes 35 tests, including
-`revocation_structural_validation_preserves_signature_verification`, with
-`scripts/cargo_fast.sh --target-slot kagemusha-v1 --stable-local-metadata --incremental -- test -p sorafs_manifest --lib provider_admission::tests -- --nocapture`.
-This validates the extracted structural validator without weakening signature
-verification; it does not repair the separate SoraFS fetch blocker above.
+The current normal Kagami binary regenerated `crates/iroha_kagami/CommandLineHelp.md`
+with `target/cargo-fast/kagemusha-v1/debug/kagami advanced markdown-help`; a second
+invocation byte-matches the saved file. The refresh corrects three stale genesis
+help lines. `python3 -m unittest scripts.tests.kagemusha_release_cli_hard_cut_test`
+passes all nine checks after following the canonical shared immutable-file helper.
+Formatting passes for 32 relevant Rust files with
+`rustfmt --edition 2024 --check --config skip_children=true`, and
+`scripts/check_no_legacy_codec.sh` passes. Core emits existing warnings; this is
+focused host validation, not a workspace-wide lint or physical-device gate.
+
+The signed implementation and preceding fixes are retained in `88bb6a28a1`,
+`a790e3def8` and `234222b13b`; this completion change contains only the scoped
+command guard, formatting, generated help and validation records. No server,
+app provisioning, recursive proof or hardware qualification work is included.
 
 ## Subsequent production milestones
 
@@ -123,8 +128,8 @@ assembles the canonical bootstrap package; its generated command help matches th
 normal binary. Native verification anchors its lease before reading freshness to
 charge suspension during the read. The signed freshness model and native
 nonce/deadline owner bind authority time uncertainty and exact retained
-checkpoints. The earlier focused run passed 94 native tests; current native
-revalidation is blocked by the unrelated SoraFS dependency described above.
+checkpoints. The September 28 focused run passes 97 native tests on the repaired
+dependency graph, including startup, publication, freshness and deadline checks.
 Operational authority deployment and app provisioning remain required.
 The Pixel restart
 diagnostic now verifies a fresh StrongBox control before classifying exhaustion;

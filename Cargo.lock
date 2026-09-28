@@ -4767,6 +4767,8 @@ dependencies = [
  "iroha_model_base",
  "iroha_primitives",
  "iroha_sccp",
+ "iroha_sccp_rpc",
+ "iroha_sccp_wallet",
  "iroha_service_model",
  "iroha_storage_client",
  "iroha_sumeragi",
@@ -5129,23 +5131,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iroha_executor"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "iroha_crypto",
- "iroha_data_model",
- "iroha_executor_data_model",
- "iroha_executor_derive",
- "iroha_model_base",
- "iroha_schema",
- "iroha_smart_contract",
- "iroha_smart_contract_codec",
- "iroha_smart_contract_utils",
- "norito",
- "sorafs_manifest",
-]
-
-[[package]]
 name = "iroha_executor_data_model"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5168,20 +5153,6 @@ dependencies = [
  "iroha_schema",
  "manyhow",
  "norito",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "trybuild",
-]
-
-[[package]]
-name = "iroha_executor_derive"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "darling",
- "iroha_derive",
- "iroha_executor",
- "manyhow",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -5615,51 +5586,6 @@ name = "iroha_service_model"
 version = "2.0.0-rc.2.0"
 
 [[package]]
-name = "iroha_smart_contract"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "derive_more",
- "displaydoc",
- "iroha_data_model",
- "iroha_macro",
- "iroha_smart_contract_codec",
- "iroha_smart_contract_derive",
- "iroha_smart_contract_utils",
- "norito",
- "trybuild",
-]
-
-[[package]]
-name = "iroha_smart_contract_codec"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "norito",
-]
-
-[[package]]
-name = "iroha_smart_contract_derive"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "iroha_derive",
- "iroha_smart_contract",
- "manyhow",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "trybuild",
-]
-
-[[package]]
-name = "iroha_smart_contract_utils"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "getrandom 0.3.4",
- "iroha_data_model",
- "iroha_smart_contract_codec",
- "norito",
-]
-
-[[package]]
 name = "iroha_storage_client"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5988,6 +5914,8 @@ dependencies = [
  "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
+ "iroha_sccp",
+ "iroha_sccp_rpc",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",
@@ -6007,6 +5935,7 @@ dependencies = [
  "sorafs_node",
  "supports-color",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
@@ -12935,8 +12864,6 @@ dependencies = [
  "rand_core 0.6.4",
  "rand_distr",
  "reqwest",
- "serde",
- "serde_json",
  "sha2",
  "sorafs_car",
  "sorafs_chunker",

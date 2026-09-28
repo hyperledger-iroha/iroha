@@ -76,7 +76,6 @@ The supported field-level attributes are:
 - `#[norito(bounded_with = "path::to::function")]` supplies only the checked
   writer and can be paired with `with` when the functions are not colocated.
 - `#[norito(flatten)]` flattens a named field into its enclosing JSON object.
-- `#[norito(needs_size)]` forces an explicit packed-struct size entry.
 
 Container-level options are `rename_all`,
 `deny_unknown_fields`, `decode_from_slice`, `reuse_archived`, `validate`,
@@ -184,33 +183,26 @@ Header size is 40 bytes. After header validation, decoders verify the checksum a
 
 The trailing header byte encodes feature/layout flags for the payload and is applied to the decoder context for the duration of decoding.
 
-- `PACKED_SEQ (0x01)`: Variable-length collections (e.g., `Vec<T>`) use a packed layout:
-  - `[len:u64][(len+1)*u64 offsets][data...]`
-  - Offsets start at 0, are monotonic, and the last offset equals the size of the contiguous data segment.
+- `COMPACT_LEN (0x02)`: Per-value length prefixes (fields, string-like values, element payloads, blobs) are varint-encoded instead of fixed `u64` prefixes.
+- Every other bit (`0x01`, `0x04`, `0x08`, `0x10`, `0x20`, `0x40`, `0x80`) is reserved and rejected.
 
-- `COMPACT_LEN (0x02)`: Per-value length prefixes (string-like values, element payloads, blobs) are varint-encoded instead of fixed `u64` prefixes.
-
-- `PACKED_STRUCT (0x04)`: Derive-generated structs use packed layout. With `COMPACT_LEN`, derives emit a compact bitset of which fields carry explicit sizes, then only those sizes and the data block (no redundant per-field headers).
-
-- `VARINT_OFFSETS (0x08)`: Reserved in v1; packed sequences always use fixed `u64` offsets.
-
-- `COMPACT_SEQ_LEN (0x10)`: Reserved in v1; sequence length headers are fixed `u64`.
-
-- `FIELD_BITSET (0x20)`: Hybrid packed-struct encodes a bitset selecting fields that carry explicit sizes.
+Sequences are `[len:u64]` followed by one `[len][payload]` entry per element
+(`Vec<u8>` is `[len:u64][raw bytes]`). Derived records encode each field as
+`[len][payload]` in declaration order.
 
 Flags are set explicitly by the encoder and recorded in the header. The
 default v1 helpers (`to_bytes`, `to_compressed_bytes`, `to_bytes_auto`) emit
-`flags = 0x02` (`COMPACT_LEN`) unless you opt into another layout and frame
-those bytes with the corresponding header flags. The minor version remains
-`0x00`; the header flag byte advertises compact length prefixes.
+`flags = 0x02` (`COMPACT_LEN`) unless you opt into the fixed-width layout
+(`flags = 0x00`) and frame those bytes with the corresponding header flags. The
+minor version remains `0x00`; the header flag byte advertises compact length
+prefixes.
 
-Every offset table and length-framed field is bounded by its active payload
-context. A nested decoder cannot widen that context to an outer/root frame, and
-enum fields cannot consume sibling bytes beyond their declared length.
+Every length-framed field is bounded by its active payload context. A nested
+decoder cannot widen that context to an outer/root frame, and enum fields cannot
+consume sibling bytes beyond their declared length.
 
-Flag scoping:
-- `COMPACT_LEN` affects per-value length prefixes only.
-- Reserved layout bits are rejected when decoding headers.
+Flag scoping: `COMPACT_LEN` affects per-value length prefixes only; sequence and
+map entry counts stay fixed `u64`.
 
 ## Error Mapping
 
@@ -530,7 +522,7 @@ Norito derives now implement an optional `encoded_len_hint(&self) -> Option<usiz
 
 - Purpose: allow the encoder to pre‑reserve buffer capacity, reducing reallocations and copies during serialization.
 - Behavior: hints are exact or tight upper bounds when cheap to compute; returning `None` lets the encoder fall back to a conservative default.
-- Coverage: built‑in primitives and common containers return accurate hints; derive code sums field hints (plus per-field length prefixes in per-element layouts). Packed sequence layouts compute `len + offsets + data`.
+- Coverage: built‑in primitives and common containers return accurate hints; derive code sums field hints plus their per-field length prefixes.
 - Usage: automatic — `to_bytes()` calls `encoded_len_hint()` internally; no user action required.
 
 ## Exact Encoded Length
@@ -538,7 +530,7 @@ Norito derives now implement an optional `encoded_len_hint(&self) -> Option<usiz
 `SerializePayload` owns bare serialization and the `encoded_len_exact(&self) -> Option<usize>` sizing hint. `NoritoSerialize` adds the typed frame contract. Erased writers accept `dyn SerializePayload`; borrowed field adapters can derive `SerializePayload` without acquiring a frame identity. Framed encoders require `NoritoSerialize`:
 
 - Returns the precise number of bytes that `serialize()` will write for the value (payload only).
-- Implemented for primitives, strings/`&str`/`Box<str>`, `Option<T>`, `Result<T,E>`, arrays `[T; N]`, and `Vec<T>` (packed‑seq), and is derived for structs/enums by summing field exact sizes plus their per‑field length prefixes.
+- Implemented for primitives, strings/`&str`/`Box<str>`, `Option<T>`, `Result<T,E>`, arrays `[T; N]`, and `Vec<T>`, and is derived for structs/enums by summing field exact sizes plus their per‑field length prefixes.
 - `to_bytes()` and `to_compressed_bytes()` now prefer `encoded_len_exact()` and fall back to `encoded_len_hint()` when unavailable, improving buffer preallocation and reducing copies.
 
 ## Exact Slice Decoding

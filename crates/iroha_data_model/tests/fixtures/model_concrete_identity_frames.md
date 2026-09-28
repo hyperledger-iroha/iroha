@@ -6,15 +6,15 @@ those fields describe the fixture provenance.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_concrete_identity_frames.json` | 12 populated families, each as root, Vec, Some and BTreeMap: 48 frames | `ba37c9b267242b2733972245fbeeca14b6e7653ebfd42f0b00b2ed261989b7d3` |
+| `model_concrete_identity_frames.json` | 11 populated families, each as root, Vec, Some and BTreeMap: 44 frames | `df37ff7fa0f1a2ed003ad34f7271401a14fb726bd635240d1d334dda0db341ca` |
 | `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `609a71f1cd38dd9b421b187cca8caaf6b38a533e0e2cf74b0d9e667f056d8cb5` |
 | `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `7a4bdb7eae4c9aca0351bd6549628e185d3e24da0aa03cf54669f9e853c14ae1` |
 
-The six concrete owners are Action, DataEvent, SmartContractContext,
-ExecutorContext, BlockSubscriptionRequest and BlockMessage.
+The five concrete owners are Action, DataEvent, ExecutorContext,
+BlockSubscriptionRequest and BlockMessage.
 Actions cover schedules with and without retry and explicit execution. Data events
-cover peer addition, account metadata, GameSession and Governance. The two
-contexts contain populated authority/header values. Stream cases cover two
+cover peer addition, account metadata, GameSession and Governance. The executor
+context contains populated authority/header values. Stream cases cover two
 requested heights and a deterministic signed block with transaction results.
 
 `actual_type_name` retains the compiler name observed before declaration, including
@@ -85,3 +85,9 @@ option (absent in these fixtures): `smart-contract-context` and
 adapter gain four. Nominal names and schema hashes are unchanged, and every other
 family is byte-for-byte unchanged. Frame counts in the earlier run summaries
 above predate this refresh.
+
+Also on 2026-09-28, the unused `SmartContractContext` payload was removed together
+with the retired Rust smart-contract SDK, and its `smart-contract-context` family
+(four frames) was dropped from the capture. The captured-header regression now
+decodes the `executor-context` frame. Every remaining family is byte-for-byte
+unchanged.

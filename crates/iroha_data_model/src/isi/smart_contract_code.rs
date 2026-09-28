@@ -599,11 +599,6 @@ mod tests {
         }
         .encode();
         let flags = norito::core::default_encode_flags();
-        assert_eq!(
-            flags & norito::core::header_flags::PACKED_STRUCT,
-            0,
-            "truncation fixture requires the canonical AoS layout"
-        );
         let mut offset = 0usize;
         for _ in 0..4 {
             crate::isi::read_aos_field(&encoded, &mut offset, flags).expect("required field");
@@ -621,11 +616,6 @@ mod tests {
     #[test]
     fn lifecycle_activation_payloads_reject_missing_cas_revision() {
         let flags = norito::core::default_encode_flags();
-        assert_eq!(
-            flags & norito::core::header_flags::PACKED_STRUCT,
-            0,
-            "truncation fixture requires the canonical AoS layout"
-        );
         let activation = ActivateContractInstance {
             contract_address: contract_address(),
             expected_revision: 8,

@@ -722,11 +722,6 @@ async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
         .await
         .expect("weighted accounting remains isolated by caller key");
 }
-fn clone_private_key(
-    src: &iroha_data_model::prelude::ExposedPrivateKey,
-) -> iroha_data_model::prelude::ExposedPrivateKey {
-    iroha_data_model::prelude::ExposedPrivateKey(src.0.clone())
-}
 #[derive(Clone)]
 struct TestLocalReadRuntime {
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,

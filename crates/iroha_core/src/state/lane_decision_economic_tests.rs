@@ -326,7 +326,13 @@ fn native_economic_fixture_from_state_with_initializer(
         kura.configured_lane_catalog_baseline().unwrap(),
         Some(configured_catalog_hash),
     );
-    let (ids, validators) = bls_accounts_in("validators", 4);
+    // Admission and global finality resolve the same scheduled committee.
+    // Use its exact keys for peers, manifests and every certified input.
+    let validators = merge_carrier_finality_fixture_keypairs();
+    let ids = validators
+        .iter()
+        .map(|keypair| AccountId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
     seed_consensus_keys_with_pops(&state, &validators);
     // Peers serving participant lane 1 need Committee-role keys in addition
     // to their global Validator keys for the next carrier's QueuePlan admission.
@@ -347,12 +353,7 @@ fn native_economic_fixture_from_state_with_initializer(
     // The State prefix and its frozen global finality must use the same exact
     // four-validator roster. A random one-member metadata topology cannot be
     // authenticated as the first context of a restored snapshot.
-    let mut global_validators = (0xD3_u8..=0xD6)
-        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
-        .collect::<Vec<_>>();
-    global_validators.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-    set_commit_topology_from_keypairs(&state, &global_validators);
-    seed_consensus_keys_with_pops(&state, &global_validators);
+    set_commit_topology_from_keypairs(&state, &validators);
     // The fixture starts with live asset definitions before executing genesis
     // instructions. Seed their real genesis incarnations while the parent history
     // is still empty, using the production finalizer at this exact header.
@@ -422,6 +423,23 @@ fn native_economic_fixture_from_state_with_initializer(
     let parent = advance_queue_plan_fixture_to_beacon_parent(&state, genesis);
     let primary = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let secondary = crate::queue::RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+    let expected_committee = validators
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(expected_committee.len(), 4);
+    for route in [primary, secondary] {
+        assert_eq!(
+            crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                &state.view(),
+                route,
+                parent.header().height().get() + 1,
+            )
+            .expect("native fixture route has a scheduled global committee"),
+            expected_committee,
+            "native admission and finality must use the same four-validator committee",
+        );
+    }
     let mut controls = Vec::new();
     let mut first_binding = None;
     let mut shared_commitment = None;

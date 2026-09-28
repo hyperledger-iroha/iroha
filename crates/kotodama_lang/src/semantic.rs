@@ -1427,6 +1427,10 @@ enum TypedStatementClone<'a> {
     MapSet,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the explicit clone stack moves each value once; boxing would allocate per statement"
+)]
 enum TypedCloneValue {
     Expr(TypedExpr),
     Kind(ExprKind),
@@ -7809,6 +7813,10 @@ fn analyze_statement(
     }
     result
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the struct-pattern variant's parts have no standalone type; the scope pair is shared"
+)]
 fn analyze_named_struct_binding(
     context: &SemanticContext,
     name: &str,

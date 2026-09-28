@@ -492,8 +492,62 @@ fn configure_commit_topology(state: &State, count: usize) -> Vec<KeyPair> {
 fn configure_commit_topology_preserving_world_peers(state: &State, count: usize) -> Vec<KeyPair> {
     let_row! { keypairs: Vec<_> = (0..count) .map(|_| crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)) .collect() };
     set_commit_topology_from_keypairs(state, &keypairs);
-    seed_consensus_keys_with_pops(state, &keypairs);
+    // These component-test signing keys are not registered network validators.
+    // Adding them to World peers silently changes every route's global committee.
+    let mut world = state.world.block();
+    seed_consensus_key_records_with_pops(&mut world, &keypairs);
+    world.commit();
     keypairs
+}
+
+state_test!(consensus_stack component_commit_topology_preserves_scheduled_network_authority
+    component_commit_topology_preserves_scheduled_network_authority_on_consensus_stack();
+);
+fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_stack() {
+    let state = blank_test_state();
+    let validators = merge_carrier_finality_fixture_keypairs();
+    seed_consensus_keys_with_pops(&state, &validators);
+    let before = state
+        .view()
+        .world
+        .peers()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let expected = crate::sumeragi::schedule::scheduled_committee(state.view().world(), 1)
+        .expect("four registered validators have current consensus keys");
+    assert_eq!(expected.len(), 4);
+
+    let component_keys = configure_commit_topology_preserving_world_peers(&state, 1);
+    let view = state.view();
+    assert_eq!(
+        view.world.peers().iter().cloned().collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(
+        crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+            &view,
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("component signing metadata does not alter route authority"),
+        expected,
+    );
+    assert_eq!(
+        view.commit_topology.iter().cloned().collect::<Vec<_>>(),
+        component_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>(),
+    );
+    for key in &component_keys {
+        for id in [
+            derive_validator_key_id(key.public_key()),
+            derive_committee_key_id(key.public_key()),
+        ] {
+            assert!(view.world.consensus_keys().get(&id).is_some());
+        }
+    }
 }
 fn record_commit_ready_merge_candidate_with_lanes(
     state: &mut State,
@@ -560,6 +614,16 @@ fn merge_carrier_finality_fixture_keypair() -> KeyPair {
     KeyPair::try_from_seed(vec![0xD3; 32], Algorithm::BlsNormal)
         .expect("derive deterministic merge-carrier finality fixture key")
 }
+fn merge_carrier_finality_fixture_keypairs() -> Vec<KeyPair> {
+    let mut keypairs = (0xD3_u8..=0xD6)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("derive deterministic merge-carrier finality fixture key")
+        })
+        .collect::<Vec<_>>();
+    keypairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    keypairs
+}
 fn merge_carrier_finality_artifact(
     block: &SignedBlock,
     parent: Option<&V2FinalityArtifact>,
@@ -608,12 +672,7 @@ fn merge_carrier_finality_artifact_with_genesis_layout(
     let execution_policy_hash = parent.map_or(genesis_execution_policy_hash, |artifact| {
         artifact.height_context.execution_policy_hash
     });
-    let mut keypairs = vec![merge_carrier_finality_fixture_keypair()];
-    keypairs.extend((0xD4_u8..=0xD6).map(|seed| {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-            .expect("derive deterministic merge-carrier finality fixture key")
-    }));
-    keypairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let keypairs = merge_carrier_finality_fixture_keypairs();
     let_row! { roster = keypairs.iter().map(|keypair| ValidatorPower { validator: PeerId::new(keypair.public_key().clone()), power: 1, }).collect::<Vec<_>>() };
     let height = block.header().height().get();
     assert_eq!(

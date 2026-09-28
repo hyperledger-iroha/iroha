@@ -19,8 +19,8 @@ fn compressed_roundtrip_preserves_layout_flags() {
     assert_eq!(decoded, value);
     let flags = bytes[norito::core::Header::SIZE - 1];
     assert_eq!(
-        flags & header_flags::PACKED_SEQ,
+        flags & !header_flags::COMPACT_LEN,
         0,
-        "sequential layout must not set packed sequence flag"
+        "only COMPACT_LEN may be advertised"
     );
 }

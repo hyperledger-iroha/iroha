@@ -3,7 +3,7 @@
 use crate::metal;
 #[cfg(test)]
 use crate::trace::PoseidonColumnBatch;
-use crate::{backend::GpuBackend, fastpq_cuda};
+use crate::{backend::GpuBackend, fastpq_cuda, gpu_secret::SecretWords};
 #[cfg(test)]
 use fastpq_isi::poseidon::STATE_WIDTH;
 use std::fmt;
@@ -12,6 +12,11 @@ use std::fmt;
 pub enum GpuError {
     /// Backend is detected but not wired for acceleration yet.
     Unsupported(GpuBackend),
+    /// A submitted command may still own private storage; reuse is quarantined.
+    CompletionUncertain {
+        /// Backend whose completion could not be established.
+        backend: GpuBackend,
+    },
     /// Kernel launch or runtime failure.
     Execution {
         backend: GpuBackend,
@@ -24,6 +29,12 @@ impl fmt::Display for GpuError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsupported(backend) => write!(f, "{backend:?} backend unsupported"),
+            Self::CompletionUncertain { backend } => {
+                write!(
+                    f,
+                    "{backend:?} completion uncertain; process device reuse quarantined"
+                )
+            }
             Self::Execution { backend, message } => {
                 write!(f, "{backend:?} backend failure: {message}")
             }
@@ -32,6 +43,30 @@ impl fmt::Display for GpuError {
     }
 }
 impl std::error::Error for GpuError {}
+
+/// Private device storage may outlive the failed call until process teardown.
+pub(crate) fn transform_completion_uncertain_v1() -> bool {
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    if crate::metal::backend_quarantined() {
+        return true;
+    }
+    crate::fastpq_cuda::backend_quarantined()
+}
+
+fn classify_completion_error(error: GpuError) -> GpuError {
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    if crate::metal::backend_quarantined() {
+        return GpuError::CompletionUncertain {
+            backend: GpuBackend::Metal,
+        };
+    }
+    if crate::fastpq_cuda::backend_quarantined() {
+        return GpuError::CompletionUncertain {
+            backend: GpuBackend::Cuda,
+        };
+    }
+    error
+}
 /// Pending in-place column operation.
 pub(crate) struct ColumnDispatch<'a> {
     inner: ColumnDispatchInner<'a>,
@@ -45,7 +80,7 @@ enum ColumnDispatchInner<'a> {
 struct PendingCudaColumns<'a> {
     columns: &'a mut [Vec<u64>],
     extent: usize,
-    buffer: Option<Vec<u64>>,
+    buffer: Option<SecretWords>,
     pending: Option<fastpq_cuda::PendingCudaDispatch>,
 }
 impl PendingCudaColumns<'_> {
@@ -105,6 +140,7 @@ impl<'a> ColumnDispatch<'a> {
             #[cfg(target_os = "macos")]
             ColumnDispatchInner::Metal(pending) => pending.wait(),
         }
+        .map_err(classify_completion_error)
     }
 }
 /// Pending LDE evaluation dispatch.
@@ -121,7 +157,7 @@ enum LdeDispatchInner {
 }
 struct PendingCudaLde {
     eval_len: usize,
-    eval_buffer: Option<Vec<u64>>,
+    eval_buffer: Option<SecretWords>,
     pending: Option<fastpq_cuda::PendingCudaDispatch>,
 }
 impl PendingCudaLde {
@@ -155,14 +191,14 @@ impl PendingCudaLde {
             GpuError::InvalidInput("CUDA LDE result list exceeds available host memory")
         })?;
         for chunk in eval_buffer.chunks_exact(self.eval_len) {
-            let mut column = Vec::new();
-            column.try_reserve_exact(chunk.len()).map_err(|_| {
+            let column = SecretWords::copy_from(chunk).map_err(|_| {
                 GpuError::InvalidInput("CUDA LDE result column exceeds available host memory")
             })?;
-            column.extend_from_slice(chunk);
             result.push(column);
         }
-        Ok(Some(result))
+        Ok(Some(crate::gpu_secret::release_columns(result).map_err(
+            |_| GpuError::InvalidInput("CUDA LDE output list exceeds available host memory"),
+        )?))
     }
 }
 impl Drop for PendingCudaLde {
@@ -203,6 +239,7 @@ impl LdeDispatch {
             #[cfg(test)]
             LdeDispatchInner::TestError(err) => Err(err),
         }
+        .map_err(classify_completion_error)
     }
 }
 /// Execute an in-place FFT across the provided columns.
@@ -229,9 +266,9 @@ pub fn fft_columns_async<'a>(
     match backend {
         GpuBackend::Cuda => fft_cuda_async(columns, log_size, root, shape),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        GpuBackend::Metal => {
-            metal::fft_columns_async(columns, log_size, root).map(ColumnDispatch::metal)
-        }
+        GpuBackend::Metal => metal::fft_columns_async(columns, log_size, root)
+            .map(ColumnDispatch::metal)
+            .map_err(classify_completion_error),
         other => Err(GpuError::Unsupported(other)),
     }
 }
@@ -258,9 +295,9 @@ pub fn ifft_columns_async<'a>(
     match backend {
         GpuBackend::Cuda => ifft_cuda_async(columns, log_size, root, shape),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-        GpuBackend::Metal => {
-            metal::ifft_columns_async(columns, log_size, root).map(ColumnDispatch::metal)
-        }
+        GpuBackend::Metal => metal::ifft_columns_async(columns, log_size, root)
+            .map(ColumnDispatch::metal)
+            .map_err(classify_completion_error),
         other => Err(GpuError::Unsupported(other)),
     }
 }
@@ -295,6 +332,7 @@ pub fn lde_columns_async(
         GpuBackend::Metal => {
             metal::lde_columns_async(coeffs, trace_log, blowup_log, lde_root, coset)
                 .map(LdeDispatch::metal)
+                .map_err(classify_completion_error)
         }
         other => Err(GpuError::Unsupported(other)),
     }
@@ -440,11 +478,8 @@ fn lde_cuda_async(
     shape: LdeColumnShape,
 ) -> Result<LdeDispatch, GpuError> {
     let coeff_buffer = flatten(coeffs, shape.coefficients.total_len)?;
-    let mut eval_buffer = Vec::new();
-    eval_buffer
-        .try_reserve_exact(shape.eval_total_len)
+    let mut eval_buffer = SecretWords::zeroed(shape.eval_total_len)
         .map_err(|_| GpuError::InvalidInput("CUDA LDE output exceeds available host memory"))?;
-    eval_buffer.resize(shape.eval_total_len, 0);
     let pending = fastpq_cuda::fastpq_lde_submit(
         &coeff_buffer,
         coeffs.len(),
@@ -464,15 +499,16 @@ fn lde_cuda_async(
         pending: Some(pending),
     }))
 }
-fn flatten(columns: &[Vec<u64>], total_len: usize) -> Result<Vec<u64>, GpuError> {
-    let mut buffer = Vec::new();
-    buffer
-        .try_reserve_exact(total_len)
+fn flatten(columns: &[Vec<u64>], total_len: usize) -> Result<SecretWords, GpuError> {
+    let mut buffer = SecretWords::zeroed(total_len)
         .map_err(|_| GpuError::InvalidInput("CUDA staging buffer exceeds available host memory"))?;
+    let mut offset = 0;
     for column in columns {
-        buffer.extend_from_slice(column);
+        let end = offset + column.len();
+        buffer[offset..end].copy_from_slice(column);
+        offset = end;
     }
-    debug_assert_eq!(buffer.len(), total_len);
+    debug_assert_eq!(offset, total_len);
     Ok(buffer)
 }
 fn restore(columns: &mut [Vec<u64>], buffer: &[u64], extent: usize) {
@@ -511,7 +547,9 @@ fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, G
         return Ok(vec![0; batch.columns()]);
     }
     let _lane = crate::backend::acquire_gpu_lane();
-    let mut states = vec![0u64; batch.columns() * STATE_WIDTH];
+    let mut states = SecretWords::zeroed(batch.columns() * STATE_WIDTH).map_err(|_| {
+        GpuError::InvalidInput("CUDA Poseidon staging exceeds available host memory")
+    })?;
     fastpq_cuda::fastpq_poseidon_hash_columns(
         batch.payloads(),
         batch.offsets(),
@@ -532,7 +570,8 @@ fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, G
 mod tests {
     use super::{
         ColumnDispatch, GpuBackend, GpuError, LdeDispatch, PendingCudaColumns, PendingCudaLde,
-        checked_cardinality, fft_columns_async, ifft_columns_async, lde_columns_async,
+        SecretWords, checked_cardinality, fft_columns_async, flatten, ifft_columns_async,
+        lde_columns_async,
     };
     use crate::fastpq_cuda::PendingCudaDispatch;
     use std::sync::{
@@ -562,7 +601,7 @@ mod tests {
             let dispatch = ColumnDispatch::cuda(PendingCudaColumns {
                 columns: &mut columns,
                 extent: 2,
-                buffer: Some(vec![0; 2]),
+                buffer: Some(SecretWords::zeroed(2).unwrap()),
                 pending: Some(pending),
             });
             drop(dispatch);
@@ -580,12 +619,107 @@ mod tests {
         });
         let dispatch = LdeDispatch::cuda(PendingCudaLde {
             eval_len: 4,
-            eval_buffer: Some(vec![0; 4]),
+            eval_buffer: Some(SecretWords::zeroed(4).unwrap()),
             pending: Some(pending),
         });
         drop(dispatch);
         assert!(waited.load(Ordering::Acquire));
     }
+    #[test]
+    fn cuda_private_staging_clears_after_success_wait_error_and_unwind() {
+        use crate::gpu_secret::ErasureObservation;
+        let observed = ErasureObservation::begin();
+        let mut columns = vec![vec![11, 13], vec![17, 19]];
+        let staging = flatten(&columns, 4).unwrap();
+        let pending = PendingCudaDispatch::from_wait_hook(4, |output| {
+            output.copy_from_slice(&[31, 37, 41, 43]);
+        });
+        ColumnDispatch::cuda(PendingCudaColumns {
+            columns: &mut columns,
+            extent: 2,
+            buffer: Some(staging),
+            pending: Some(pending),
+        })
+        .wait()
+        .unwrap();
+        assert_eq!(columns, [vec![31, 37], vec![41, 43]]);
+        assert_eq!(observed.counts(), (4, 0));
+
+        // This genuine pending-wrapper shape error occurs before any native
+        // CUDA call; the staging still contains copied private inputs.
+        let staging = flatten(&columns, 4).unwrap();
+        let pending =
+            PendingCudaDispatch::from_wait_hook(5, |_| panic!("shape error must precede callback"));
+        let error = ColumnDispatch::cuda(PendingCudaColumns {
+            columns: &mut columns,
+            extent: 2,
+            buffer: Some(staging),
+            pending: Some(pending),
+        })
+        .wait();
+        assert!(error.is_err());
+        assert_eq!(columns, [vec![31, 37], vec![41, 43]]);
+        assert_eq!(observed.counts(), (8, 0));
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let staging = flatten(&columns, 4).unwrap();
+            let pending = PendingCudaDispatch::from_wait_hook(4, |output| {
+                output.copy_from_slice(&[47, 53, 59, 61]);
+                panic!("private CUDA staging unwind fixture");
+            });
+            let _ = ColumnDispatch::cuda(PendingCudaColumns {
+                columns: &mut columns,
+                extent: 2,
+                buffer: Some(staging),
+                pending: Some(pending),
+            })
+            .wait();
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(columns, [vec![31, 37], vec![41, 43]]);
+        assert_eq!(observed.counts(), (12, 0));
+    }
+
+    #[test]
+    fn cuda_private_lde_staging_clears_after_output_transfer_error_and_drop() {
+        use crate::gpu_secret::ErasureObservation;
+        let observed = ErasureObservation::begin();
+        let pending = PendingCudaDispatch::from_wait_hook(4, |output| {
+            output.copy_from_slice(&[67, 71, 73, 79]);
+        });
+        let output = LdeDispatch::cuda(PendingCudaLde {
+            eval_len: 2,
+            eval_buffer: Some(SecretWords::zeroed(4).unwrap()),
+            pending: Some(pending),
+        })
+        .wait()
+        .unwrap()
+        .unwrap();
+        assert_eq!(output, [vec![67, 71], vec![73, 79]]);
+        assert_eq!(observed.counts(), (4, 0));
+
+        let pending =
+            PendingCudaDispatch::from_wait_hook(5, |_| panic!("shape error must precede callback"));
+        let error = LdeDispatch::cuda(PendingCudaLde {
+            eval_len: 2,
+            eval_buffer: Some(SecretWords::copy_from(&[83, 89, 97, 101]).unwrap()),
+            pending: Some(pending),
+        })
+        .wait();
+        assert!(error.is_err());
+        assert_eq!(observed.counts(), (8, 0));
+
+        let pending = PendingCudaDispatch::from_wait_hook(4, |output| {
+            output.copy_from_slice(&[103, 107, 109, 113])
+        });
+        drop(LdeDispatch::cuda(PendingCudaLde {
+            eval_len: 2,
+            eval_buffer: Some(SecretWords::zeroed(4).unwrap()),
+            pending: Some(pending),
+        }));
+        assert_eq!(observed.counts(), (12, 0));
+    }
+
     #[test]
     fn lde_dispatch_from_error_returns_payload_error() {
         let dispatch = LdeDispatch::from_error(GpuError::Execution {

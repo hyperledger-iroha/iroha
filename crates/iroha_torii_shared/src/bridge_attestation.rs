@@ -288,8 +288,8 @@ mod tests {
         assert!(mixed.matches(1, [71; 32], &progress.node_id, progress.network_id));
         for (height, challenge) in [(0, [71; 32]), (1, [0; 32])] {
             let invalid = FinalityAttestationFailure {
-                height,
                 challenge,
+                height,
                 ..mixed.clone()
             };
             assert!(!invalid.matches(height, challenge, &progress.node_id, progress.network_id));

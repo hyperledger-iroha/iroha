@@ -40,15 +40,6 @@ private val FIXED_ARRAY_U8_32: TypeAdapter<ByteArray> =
             require(value.size == LENGTH) {
                 "expected $LENGTH bytes, found ${value.size}"
             }
-            if ((encoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                var offset = 0L
-                for (i in 0 until LENGTH) {
-                    offset += 1L
-                    encoder.writeUInt(offset, 64)
-                }
-                encoder.writeBytes(value)
-                return
-            }
             val compactLen = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
             for (b in value) {
                 encoder.writeLength(1L, compactLen)
@@ -58,21 +49,6 @@ private val FIXED_ARRAY_U8_32: TypeAdapter<ByteArray> =
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
             val out = ByteArray(LENGTH)
-            if ((decoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
-                var previous = 0L
-                for (i in 0 until LENGTH) {
-                    val current = decoder.readUInt(64)
-                    val delta = current - previous
-                    if (delta != 1L) {
-                        throw IllegalArgumentException("Invalid packed [u8;32] offset delta: $delta")
-                    }
-                    previous = current
-                }
-                for (i in 0 until LENGTH) {
-                    out[i] = decoder.readByte().toByte()
-                }
-                return out
-            }
             val compactLen = decoder.compactLenActive()
             for (i in 0 until LENGTH) {
                 val elemLen = decoder.readLength(compactLen)

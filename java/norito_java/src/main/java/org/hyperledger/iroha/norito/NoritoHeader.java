@@ -12,17 +12,11 @@ public final class NoritoHeader {
   public static final byte[] MAGIC = new byte[] {'N', 'R', 'T', '0'};
   public static final int MAJOR_VERSION = 0;
 
-  public static final int PACKED_SEQ = 0x01;
+  /** Compact (varint) length prefixes; the only layout flag Norito v1 defines. */
   public static final int COMPACT_LEN = 0x02;
-  public static final int PACKED_STRUCT = 0x04;
-  // Reserved in v1; packed sequence offsets are fixed-width u64.
-  public static final int VARINT_OFFSETS = 0x08;
-  // Reserved in v1; sequence length headers are fixed-width u64.
-  public static final int COMPACT_SEQ_LEN = 0x10;
-  public static final int FIELD_BITSET = 0x20;
 
-  private static final int SUPPORTED_FLAGS_MASK =
-      PACKED_SEQ | COMPACT_LEN | PACKED_STRUCT | FIELD_BITSET;
+  /** Every other flag bit is reserved and rejected. */
+  private static final int SUPPORTED_FLAGS_MASK = COMPACT_LEN;
 
   /** Minor version is fixed for v1; layout flags are declared in the header flag byte. */
   public static final int MINOR_VERSION = 0;
@@ -128,13 +122,6 @@ public final class NoritoHeader {
     if (unsupportedFlags != 0) {
       throw new IllegalArgumentException(
           String.format("Unsupported Norito layout flags: 0x%02x", unsupportedFlags));
-    }
-    if ((normalizedFlags & FIELD_BITSET) != 0) {
-      int required = PACKED_STRUCT | COMPACT_LEN;
-      if ((normalizedFlags & required) != required) {
-        throw new IllegalArgumentException(
-            String.format("Unsupported Norito layout flag combination: 0x%02x", normalizedFlags));
-      }
     }
   }
 

@@ -28,7 +28,7 @@ impl ClassifyTopic for EmptyMsg {
     fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
         // Unit fixture decode is fixed and performs no dynamic allocation.
         norito::core::validate_header_flags(flags)?;
-        // A unit struct is bounded by the one-entry nonhybrid offset table.
+        // Bound the unit-struct probe before decoding it.
         if payload.len() > 8 {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -245,14 +245,7 @@ async fn puzzle_mismatch_rejects_handshake() {
 fn puzzle_unit_fixture_raw_layout_is_exact() {
     use norito::core;
     let value = EmptyMsg;
-    for requested in [
-        0,
-        core::header_flags::COMPACT_LEN,
-        core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
-        core::header_flags::PACKED_STRUCT
-            | core::header_flags::COMPACT_LEN
-            | core::header_flags::FIELD_BITSET,
-    ] {
+    for requested in [0, core::header_flags::COMPACT_LEN] {
         let (bytes, flags) = {
             let _flags = core::DecodeFlagsGuard::enter(requested);
             norito::codec::encode_with_header_flags(&value)

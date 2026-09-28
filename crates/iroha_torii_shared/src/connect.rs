@@ -1020,7 +1020,7 @@ mod tests {
     use iroha_crypto::{Hash, HashOf, PublicKey};
     use iroha_data_model::{account::AccountId, block::BlockHeader};
     use iroha_model_base::domain::DomainId;
-    use norito::core::{Error, header_flags};
+    use norito::core::Error;
     use rand::{Rng, SeedableRng};
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1212,10 +1212,11 @@ mod tests {
             },
         };
         let envelope_bytes = encode_connect_envelope_framed(&envelope).expect("encode envelope");
-        let packed_flags =
-            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
-        let _ambient = DecodeFlagsGuard::enter(packed_flags);
+        // Any supported ambient layout other than Connect's own exposes a leaked guard.
+        let ambient_flags = norito::core::header_flags::COMPACT_LEN;
+        let _ambient = DecodeFlagsGuard::enter(ambient_flags);
         let before = norito::core::effective_decode_flags();
+        assert_eq!(before, Some(ambient_flags));
         assert_eq!(
             decode_connect_frame_framed(&frame_bytes).expect("decode framed"),
             frame
@@ -1393,7 +1394,7 @@ mod tests {
         let frame = sample_open_frame();
         let mut bytes = encode_connect_frame_framed(&frame).expect("encode framed");
         let idx = Header::SIZE - 1;
-        bytes[idx] = header_flags::PACKED_SEQ;
+        bytes[idx] = 0x01; // retired PACKED_SEQ bit
         let result = decode_connect_frame_framed(&bytes);
         assert!(matches!(result, Err(Error::Message(_))));
     }

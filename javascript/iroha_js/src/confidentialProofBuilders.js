@@ -13,6 +13,14 @@ function requireRecord(value, context) {
   return value;
 }
 
+function requireCanonicalFields(value, allowed, context) {
+  const record = requireRecord(value, context);
+  for (const field of Object.keys(record)) {
+    if (!allowed.includes(field)) throw new TypeError(`${context}.${field} is not a canonical field`);
+  }
+  return record;
+}
+
 function rejectRetiredFields(record, fields, context) {
   for (const [field, canonical] of fields) {
     if (Object.prototype.hasOwnProperty.call(record, field)) {
@@ -21,88 +29,6 @@ function rejectRetiredFields(record, fields, context) {
       );
     }
   }
-}
-
-function normalizeInlineVerifyingKeyRecord(value, context) {
-  const detail = requireRecord(value, `${context}.verifyingKey`);
-  rejectRetiredFields(
-    detail,
-    [
-      ["inlineKey", "verifyingKey.record.inline_key"],
-      ["inline_key", "verifyingKey.record.inline_key"],
-      ["bytesBase64", "verifyingKey.record.inline_key.bytes_b64"],
-      ["bytes_b64", "verifyingKey.record.inline_key.bytes_b64"],
-      ["backend", "verifyingKey.id.backend"],
-      ["circuitId", "verifyingKey.record.circuit_id"],
-      ["circuit_id", "verifyingKey.record.circuit_id"],
-    ],
-    `${context}.verifyingKey`,
-  );
-  const id = requireRecord(detail.id, `${context}.verifyingKey.id`);
-  const record = requireRecord(detail.record, `${context}.verifyingKey.record`);
-  rejectRetiredFields(
-    record,
-    [
-      ["circuitId", "verifyingKey.record.circuit_id"],
-      ["inlineKey", "verifyingKey.record.inline_key"],
-      ["bytesBase64", "verifyingKey.record.inline_key.bytes_b64"],
-      ["bytes_b64", "verifyingKey.record.inline_key.bytes_b64"],
-    ],
-    `${context}.verifyingKey.record`,
-  );
-  const inlineKey = requireRecord(
-    record.inline_key,
-    `${context}.verifyingKey.record.inline_key`,
-  );
-  rejectRetiredFields(
-    inlineKey,
-    [["bytesBase64", "verifyingKey.record.inline_key.bytes_b64"]],
-    `${context}.verifyingKey.record.inline_key`,
-  );
-  const idBackend = normalizeExactMetadataString(
-    id.backend,
-    `${context}.verifyingKey.id.backend`,
-  );
-  const recordBackend = normalizeExactMetadataString(
-    record.backend,
-    `${context}.verifyingKey.record.backend`,
-  );
-  const inlineBackend = normalizeExactMetadataString(
-    inlineKey.backend,
-    `${context}.verifyingKey.record.inline_key.backend`,
-  );
-  if (idBackend !== recordBackend || idBackend !== inlineBackend) {
-    throw new TypeError(`${context}.verifyingKey backend fields must match exactly`);
-  }
-  const circuitId = normalizeExactMetadataString(
-    record.circuit_id,
-    `${context}.verifyingKey.record.circuit_id`,
-  );
-  return {
-    backend: idBackend,
-    circuitId,
-    bytes: normalizeExactBase64Bytes(
-      inlineKey.bytes_b64,
-      `${context}.verifyingKey.record.inline_key.bytes_b64`,
-    ),
-  };
-}
-
-function normalizeExactBase64Bytes(value, context) {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
-      value,
-    )
-  ) {
-    throw new TypeError(`${context} must be canonical non-empty base64`);
-  }
-  const bytes = Buffer.from(value, "base64");
-  if (bytes.length === 0 || bytes.toString("base64") !== value) {
-    throw new TypeError(`${context} must be canonical non-empty base64`);
-  }
-  return bytes;
 }
 
 function normalizeExactMetadataString(value, context) {
@@ -223,16 +149,6 @@ function normalizeRequiredArray(value, context, normalizeEntry, minimum = 0, max
   return Array.from(value, normalizeEntry);
 }
 
-function normalizeOptionalOutputs(value) {
-  if (value === undefined) {
-    return [];
-  }
-  return normalizeRequiredArray(
-    value, "outputs", (entry, index) => normalizeConfidentialOutput(entry, index, false),
-    0, 1,
-  );
-}
-
 function toNamedBuffer(value, context) {
   if (Buffer.isBuffer(value)) {
     return value;
@@ -264,18 +180,14 @@ function normalizeNativeFixed32Array(value, context) {
   });
 }
 
-function normalizeNativeProofResult(value, context, includeOutputCommitments) {
+function normalizeNativeProofResult(value, context) {
   const result = requireRecord(value, context);
   rejectRetiredFields(
     result,
     [["output_commitments", "outputCommitments"]],
     context,
   );
-  const canonicalFields = new Set(
-    includeOutputCommitments
-      ? ["nullifiers", "outputCommitments", "root", "proof"]
-      : ["nullifiers", "root", "proof"],
-  );
+  const canonicalFields = new Set(["nullifiers", "outputCommitments", "root", "proof"]);
   for (const field of Object.keys(result)) {
     if (!canonicalFields.has(field)) {
       throw new TypeError(`${context}.${field} is not a canonical result field`);
@@ -298,265 +210,10 @@ function normalizeNativeProofResult(value, context, includeOutputCommitments) {
     root: Buffer.from(root),
     proof: Buffer.from(proof),
   };
-  if (includeOutputCommitments) {
-    normalized.outputCommitments = normalizeNativeFixed32Array(
-      result.outputCommitments,
-      `${context}.outputCommitments`,
-    );
-  }
+  normalized.outputCommitments = normalizeNativeFixed32Array(
+    result.outputCommitments, `${context}.outputCommitments`,
+  );
   return normalized;
-}
-
-/**
- * Build a confidential transfer v2 proof envelope.
- */
-function buildConfidentialTransferProofV2WithRuntime(
-  nativeRuntime,
-  {
-    networkId,
-    assetDefinitionId,
-    spendKey,
-    treeCommitments,
-    inputs,
-    outputs,
-    rootHintHex,
-    verifyingKey,
-  },
-) {
-  const native = resolveNativeRuntimeBinding(nativeRuntime);
-  if (
-    !native ||
-    typeof native.buildConfidentialTransferProofV2 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialTransferProofV2' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialTransferProofV2",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = normalizeRequiredArray(
-    inputs,
-    "inputs",
-    normalizeConfidentialInput,
-    1, 2,
-  );
-  const normalizedOutputs = normalizeRequiredArray(
-    outputs,
-    "outputs",
-    (entry, index) => normalizeConfidentialOutput(entry, index, true),
-    1, 2,
-  );
-  const normalizedTreeCommitments = normalizeRequiredArray(
-    treeCommitments,
-    "treeCommitments",
-    (entry, index) =>
-      normalizeFixed32BinaryLike(entry, `treeCommitments[${index}]`),
-    0, CONFIDENTIAL_TREE_CAPACITY,
-  );
-  const result = native.buildConfidentialTransferProofV2(
-    Buffer.from(
-      networkIdBytes(networkId, "confidentialTransferProofV2.networkId"),
-    ),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialTransferProofV2.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizedOutputs,
-    normalizeFixed32HexLiteral(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return normalizeNativeProofResult(
-    result,
-    "buildConfidentialTransferProofV2 result",
-    true,
-  );
-}
-
-/**
- * Build a confidential unshield v2 proof envelope.
- */
-function buildConfidentialUnshieldProofV2WithRuntime(
-  nativeRuntime,
-  {
-    networkId,
-    assetDefinitionId,
-    spendKey,
-    treeCommitments,
-    inputs,
-    publicAmount,
-    rootHintHex,
-    verifyingKey,
-  },
-) {
-  const native = resolveNativeRuntimeBinding(nativeRuntime);
-  if (
-    !native ||
-    typeof native.buildConfidentialUnshieldProofV2 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialUnshieldProofV2' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialUnshieldProofV2",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = normalizeRequiredArray(
-    inputs,
-    "inputs",
-    normalizeConfidentialInput,
-    1, 2,
-  );
-  const normalizedTreeCommitments = normalizeRequiredArray(
-    treeCommitments,
-    "treeCommitments",
-    (entry, index) =>
-      normalizeFixed32BinaryLike(entry, `treeCommitments[${index}]`),
-    0, CONFIDENTIAL_TREE_CAPACITY,
-  );
-  const result = native.buildConfidentialUnshieldProofV2(
-    Buffer.from(
-      networkIdBytes(networkId, "confidentialUnshieldProofV2.networkId"),
-    ),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialUnshieldProofV2.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
-    normalizeFixed32HexLiteral(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return normalizeNativeProofResult(
-    result,
-    "buildConfidentialUnshieldProofV2 result",
-    false,
-  );
-}
-
-/**
- * Build a confidential unshield v3 proof envelope with optional private change.
- */
-function buildConfidentialUnshieldProofV3WithRuntime(
-  nativeRuntime,
-  {
-    networkId,
-    assetDefinitionId,
-    spendKey,
-    treeCommitments,
-    inputs,
-    outputs,
-    publicAmount,
-    rootHintHex,
-    verifyingKey,
-  },
-) {
-  const native = resolveNativeRuntimeBinding(nativeRuntime);
-  if (
-    !native ||
-    typeof native.buildConfidentialUnshieldProofV3 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialUnshieldProofV3' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialUnshieldProofV3",
-  );
-  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
-  if (spendKeyBuffer.length !== 32) {
-    throw new TypeError("spendKey must be 32 bytes");
-  }
-  const normalizedInputs = normalizeRequiredArray(
-    inputs,
-    "inputs",
-    normalizeConfidentialInput,
-    1, 2,
-  );
-  const normalizedOutputs = normalizeOptionalOutputs(outputs);
-  const normalizedTreeCommitments = normalizeRequiredArray(
-    treeCommitments,
-    "treeCommitments",
-    (entry, index) =>
-      normalizeFixed32BinaryLike(entry, `treeCommitments[${index}]`),
-    0, CONFIDENTIAL_TREE_CAPACITY,
-  );
-  const result = native.buildConfidentialUnshieldProofV3(
-    Buffer.from(
-      networkIdBytes(networkId, "confidentialUnshieldProofV3.networkId"),
-    ),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "confidentialUnshieldProofV3.assetDefinitionId",
-    ),
-    spendKeyBuffer,
-    normalizedTreeCommitments,
-    normalizedInputs,
-    normalizedOutputs,
-    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
-    normalizeFixed32HexLiteral(rootHintHex, "rootHintHex"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return normalizeNativeProofResult(
-    result,
-    "buildConfidentialUnshieldProofV3 result",
-    true,
-  );
-}
-
-/** @internal Create confidential proof builders bound to one immutable runtime. */
-export function createConfidentialProofBuilders(nativeRuntime) {
-  return Object.freeze({
-    buildConfidentialTransferProofV2: (input) =>
-      buildConfidentialTransferProofV2WithRuntime(nativeRuntime, input),
-    buildConfidentialUnshieldProofV2: (input) =>
-      buildConfidentialUnshieldProofV2WithRuntime(nativeRuntime, input),
-    buildConfidentialUnshieldProofV3: (input) =>
-      buildConfidentialUnshieldProofV3WithRuntime(nativeRuntime, input),
-  });
-}
-
-const DEFAULT_CONFIDENTIAL_PROOF_BUILDERS =
-  createConfidentialProofBuilders(defaultNativeRuntime);
-
-export function buildConfidentialTransferProofV2(input) {
-  return DEFAULT_CONFIDENTIAL_PROOF_BUILDERS.buildConfidentialTransferProofV2(
-    input,
-  );
-}
-
-export function buildConfidentialUnshieldProofV2(input) {
-  return DEFAULT_CONFIDENTIAL_PROOF_BUILDERS.buildConfidentialUnshieldProofV2(
-    input,
-  );
-}
-
-export function buildConfidentialUnshieldProofV3(input) {
-  return DEFAULT_CONFIDENTIAL_PROOF_BUILDERS.buildConfidentialUnshieldProofV3(
-    input,
-  );
 }
 
 /** Failure from the local wallet API; `code` never depends on private values. */
@@ -608,7 +265,7 @@ export function createConfidentialProverClass(nativeRuntime) {
         throw new ConfidentialProverError("NATIVE_UNAVAILABLE", "The installed native runtime does not support canonical confidential wallet proving");
       }
       try {
-        const { networkId, assetDefinitionId, spendKey } = requireRecord(options, "wallet options");
+        const { networkId, assetDefinitionId, spendKey } = requireCanonicalFields(options, ["networkId", "assetDefinitionId", "spendKey"], "wallet options");
         this.#network = Buffer.from(networkIdBytes(networkId, "networkId"));
         this.#asset = normalizeExactMetadataString(assetDefinitionId, "assetDefinitionId");
         // Only mutable binary input is accepted; callers can erase their source.
@@ -662,7 +319,7 @@ export function createConfidentialProverClass(nativeRuntime) {
         } finally {
           key.fill(0);
         }
-        const result = normalizeNativeProofResult(await pending, "confidential proof", true);
+        const result = normalizeNativeProofResult(await pending, "confidential proof");
         if (result.nullifiers.length !== prepared.inputs.length || result.outputCommitments.length !== outputs ||
             result.root.toString("hex") !== prepared.root) {
           throw new Error("Native confidential proof returned inconsistent public outputs");
@@ -678,6 +335,7 @@ export function createConfidentialProverClass(nativeRuntime) {
       let prepared;
       let outputs;
       try {
+        requireCanonicalFields(request, ["inputs", "outputs", "treeCommitments", "rootHex"], "request");
         prepared = this.#prepare(request);
         outputs = normalizeRequiredArray(request.outputs, "outputs",
           (entry, index) => normalizeConfidentialOutput(entry, index, true), 1, 2);
@@ -698,6 +356,7 @@ export function createConfidentialProverClass(nativeRuntime) {
       let amount;
       let change;
       try {
+        requireCanonicalFields(request, ["inputs", "publicAmount", "change", "treeCommitments", "rootHex"], "request");
         prepared = this.#prepare(request);
         amount = walletAmount(request.publicAmount, "publicAmount");
         if (amount > prepared.total) throw new TypeError("publicAmount exceeds the input total");
@@ -724,3 +383,56 @@ export function createConfidentialProverClass(nativeRuntime) {
 
 /** Canonical local wallet prover. Always dispose it when the wallet operation ends. */
 export const ConfidentialProver = createConfidentialProverClass(defaultNativeRuntime);
+
+/** @internal Bind the canonical root helper to one immutable runtime. */
+export function createConfidentialRootComputer(nativeRuntime) {
+  return async function computeConfidentialRoot(options) {
+    const { commitments } = requireCanonicalFields(options, ["commitments"], "root options");
+    const leaves = normalizeRequiredArray(commitments, "commitments",
+      (entry, index) => normalizeFixed32BinaryLike(entry, `commitments[${index}]`),
+      0, CONFIDENTIAL_TREE_CAPACITY);
+    const native = resolveNativeRuntimeBinding(nativeRuntime);
+    if (!native || typeof native.computeConfidentialRoot !== "function") {
+      throw new ConfidentialProverError("NATIVE_UNAVAILABLE", "The installed native runtime does not support confidential Merkle roots");
+    }
+    const root = toNamedBuffer(await native.computeConfidentialRoot(leaves), "confidential root");
+    if (root.length !== 32) throw new Error("Native confidential root must be 32 bytes");
+    return Buffer.from(root);
+  };
+}
+
+/** Compute a local history root; this does not authenticate the root against ledger state. */
+export const computeConfidentialRoot = createConfidentialRootComputer(defaultNativeRuntime);
+
+/** @internal Bind public change-note helpers to one immutable native runtime. */
+export function createConfidentialChangeHelpers(nativeRuntime) {
+  function defaultConfidentialDiversifier() {
+    const native = resolveNativeRuntimeBinding(nativeRuntime);
+    if (!native || typeof native.defaultConfidentialDiversifier !== "function") {
+      throw new ConfidentialProverError("NATIVE_UNAVAILABLE", "The installed native runtime does not expose the confidential default diversifier");
+    }
+    const value = toNamedBuffer(native.defaultConfidentialDiversifier(), "default diversifier");
+    if (value.length !== 32) throw new Error("Native default diversifier must be 32 bytes");
+    return Buffer.from(value);
+  }
+  function confidentialChangeToInput(change, leafIndex) {
+    requireCanonicalFields(change, ["amount", "rhoHex"], "change");
+    const amount = walletAmount(change.amount, "change amount").toString();
+    const rhoHex = normalizeFixed32HexLiteral(change.rhoHex, "change.rhoHex");
+    const index = normalizeLeafIndex(leafIndex, "leafIndex");
+    return { amount, rhoHex, diversifierHex: defaultConfidentialDiversifier().toString("hex"), leafIndex: index };
+  }
+  return Object.freeze({ defaultConfidentialDiversifier, confidentialChangeToInput });
+}
+const DEFAULT_CHANGE_HELPERS = createConfidentialChangeHelpers(defaultNativeRuntime);
+/** The canonical native default diversifier used for redemption change. */
+export function defaultConfidentialDiversifier() {
+  return DEFAULT_CHANGE_HELPERS.defaultConfidentialDiversifier();
+}
+/** Create a later spend input from retained change and an authenticated leaf index.
+ * This does not consume the source opening, authenticate its index or prove membership.
+ * Private JavaScript strings remain caller-owned and runtime-managed.
+ */
+export function confidentialChangeToInput(change, leafIndex) {
+  return DEFAULT_CHANGE_HELPERS.confidentialChangeToInput(change, leafIndex);
+}

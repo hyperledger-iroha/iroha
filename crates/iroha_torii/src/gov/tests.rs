@@ -175,6 +175,7 @@ fn first_release_capabilities_expose_only_attempt_based_private_parliament() {
         [
             "/v1/gov/parliament/attempts/draft",
             "/v1/gov/parliament/attempts/{governance_attempt_id}",
+            "/v1/gov/parliament/attempts/{governance_attempt_id}/plan",
             "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context",
             "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
             "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context",

@@ -174,7 +174,7 @@ orchestrator, manifest, and Torii finalized-projection tests. Run:
     cargo test -p iroha_data_model moderation_ledger
     cargo test -p iroha_data_model sorafs_decode_from_slice_roundtrips
     cargo test -p iroha_core sorafs_moderation --lib
-    cargo test -p iroha_executor sorafs_permission_tests --lib
+    cargo test -p iroha_core initial_executor_mirrors_default_private_query_permissions --lib
     cargo test -p sorafs_node moderation_orchestrator
     cargo test -p sorafs_manifest moderation_ballot_event
     cargo test -p iroha_torii moderation_ballot --features app_api

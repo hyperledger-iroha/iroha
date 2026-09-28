@@ -93,10 +93,8 @@ enum DefaultedDecisionMode {
     },
 }
 
-fn binary_layouts() -> [u8; 3] {
-    let ordinary = default_encode_flags();
-    let packed = ordinary | header_flags::PACKED_STRUCT;
-    [ordinary, packed, packed | header_flags::FIELD_BITSET]
+fn binary_layouts() -> [u8; 2] {
+    [0, header_flags::COMPACT_LEN]
 }
 
 fn encode_bare_with_flags(value: &impl NoritoSerialize, flags: u8) -> Vec<u8> {
@@ -141,17 +139,16 @@ fn skip_and_default() {
 }
 
 #[test]
-fn default_fields_are_decoded_in_packed_layouts() {
+fn default_fields_are_decoded_in_every_layout() {
     let value = SkipDefault { a: 5, b: 7, c: 9 };
-    let packed = default_encode_flags() | header_flags::PACKED_STRUCT;
-    for flags in [packed, packed | header_flags::FIELD_BITSET] {
+    for flags in binary_layouts() {
         let _flags = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
         let mut encoder = Encoder::for_buffer(&mut payload);
-        value.serialize(&mut encoder).expect("encode packed value");
+        value.serialize(&mut encoder).expect("encode value");
 
         let (decoded, used) = decode_field_canonical::<SkipDefault>(&payload)
-            .expect("decode packed value with an encoded default field");
+            .expect("decode value with an encoded default field");
         assert_eq!(used, payload.len());
         assert_eq!(decoded.a, value.a);
         assert_eq!(decoded.b, 0);

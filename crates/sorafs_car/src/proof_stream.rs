@@ -10,15 +10,12 @@ use norito::{
     json::{Map, Value, from_slice},
 };
 use sorafs_manifest::{
-    PotrReceiptV1, PotrStatus, ProofStreamRequestV1, potr_request_scope_digest_v1,
+    PotrReceiptV1, PotrStatus, ProofStreamKind, ProofStreamRequestV1, ProofStreamTier,
+    potr_request_scope_digest_v1,
 };
 use std::collections::BTreeMap;
 const PROOF_STREAM_REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.proof-stream.request-digest.v1\0";
 const POR_REQUEST_SAMPLE_SEED_DOMAIN_V1: &[u8] = b"sorafs.proof-stream.por-sample-seed.v1\0";
-/// Canonical proof flavour shared with the request schema.
-pub use sorafs_manifest::ProofStreamKind as ProofKind;
-/// Canonical storage tier shared with the request schema.
-pub use sorafs_manifest::ProofStreamTier as ProofTier;
 /// Return the canonical digest of every field in an exact proof-stream request.
 ///
 /// Optional fields use an explicit presence byte before their fixed-width value. This transcript is
@@ -32,9 +29,9 @@ pub fn proof_stream_request_digest_v1(request: &ProofStreamRequestV1) -> Result<
     hasher.update(&request.manifest_digest);
     hasher.update(&request.provider_id);
     hasher.update(&[match request.proof_kind {
-        ProofKind::Por => 0,
-        ProofKind::Pdp => 1,
-        ProofKind::Potr => 2,
+        ProofStreamKind::Por => 0,
+        ProofStreamKind::Pdp => 1,
+        ProofStreamKind::Potr => 2,
     }]);
     update_optional_fixed(&mut hasher, request.challenge_id.as_ref());
     update_optional_u32(&mut hasher, request.sample_count);
@@ -49,9 +46,9 @@ pub fn proof_stream_request_digest_v1(request: &ProofStreamRequestV1) -> Result<
         Some(tier) => hasher.update(&[
             1,
             match tier {
-                ProofTier::Hot => 0,
-                ProofTier::Warm => 1,
-                ProofTier::Archive => 2,
+                ProofStreamTier::Hot => 0,
+                ProofStreamTier::Warm => 1,
+                ProofStreamTier::Archive => 2,
             },
         ]),
     };
@@ -95,7 +92,7 @@ pub fn por_request_sample_seed_v1(
     request: &ProofStreamRequestV1,
     trusted_por_root: &[u8; 32],
 ) -> Result<u64, String> {
-    if request.proof_kind != ProofKind::Por {
+    if request.proof_kind != ProofStreamKind::Por {
         return Err("PoR sample seed derivation requires `proof_kind=por`".to_string());
     }
     if trusted_por_root == &[0; 32] {
@@ -134,7 +131,7 @@ impl ProofStreamVerificationContext {
             .map_err(|error| format!("invalid proof-stream verification request: {error}"))?;
         let request_digest = proof_stream_request_digest_v1(&request)?;
         let por_sample_seed = match request.proof_kind {
-            ProofKind::Por => {
+            ProofStreamKind::Por => {
                 let root = trusted_por_root
                     .ok_or_else(|| "PoR verification requires `trusted_por_root`".to_string())?;
                 if root == [0; 32] {
@@ -142,7 +139,7 @@ impl ProofStreamVerificationContext {
                 }
                 Some(por_request_sample_seed_v1(&request, &root)?)
             }
-            ProofKind::Pdp | ProofKind::Potr => {
+            ProofStreamKind::Pdp | ProofStreamKind::Potr => {
                 if trusted_por_root.is_some() {
                     return Err(
                         "`trusted_por_root` is forbidden for PDP and PoTR verification".to_string(),
@@ -193,7 +190,7 @@ impl ProofStreamVerificationContext {
         &self,
         manifest_digest_hex: &str,
         provider_id_hex: &str,
-        proof_kind: ProofKind,
+        proof_kind: ProofStreamKind,
     ) -> Result<(), String> {
         if manifest_digest_hex != hex::encode(self.request.manifest_digest) {
             return Err(
@@ -214,13 +211,13 @@ impl ProofStreamVerificationContext {
     }
     pub(crate) fn item_limit(&self) -> usize {
         match self.request.proof_kind {
-            ProofKind::Por => usize::try_from(
+            ProofStreamKind::Por => usize::try_from(
                 self.request
                     .sample_count
                     .expect("validated PoR request has a sample count"),
             )
             .expect("u32 sample count must fit in usize"),
-            ProofKind::Pdp | ProofKind::Potr => 1,
+            ProofStreamKind::Pdp | ProofStreamKind::Potr => 1,
         }
     }
 }
@@ -284,7 +281,7 @@ pub struct ProofStreamItem {
     /// Governed PDP challenge identifier (hex).
     challenge_id_hex: Option<String>,
     /// Proof kind.
-    proof_kind: ProofKind,
+    proof_kind: ProofStreamKind,
     /// Verification status.
     status: VerificationStatus,
     /// Failure reason string (if provided).
@@ -302,7 +299,7 @@ pub struct ProofStreamItem {
     /// Leaf index within the segment (PoR).
     leaf_index: Option<u32>,
     /// Storage tier hint associated with the item.
-    tier: Option<ProofTier>,
+    tier: Option<ProofStreamTier>,
     /// Optional trace identifier.
     trace_id: Option<String>,
     /// Decoded PoR proof when supplied by the gateway.
@@ -442,7 +439,7 @@ impl ProofStreamItem {
     }
     /// Return the canonical proof kind.
     #[must_use]
-    pub const fn proof_kind(&self) -> ProofKind {
+    pub const fn proof_kind(&self) -> ProofStreamKind {
         self.proof_kind
     }
     /// Return the terminal verification status.
@@ -487,7 +484,7 @@ impl ProofStreamItem {
     }
     /// Return the canonical storage tier hint or signed PoTR tier.
     #[must_use]
-    pub const fn tier(&self) -> Option<ProofTier> {
+    pub const fn tier(&self) -> Option<ProofStreamTier> {
         self.tier
     }
     /// Return the signed PoTR trace identifier when present.
@@ -568,7 +565,7 @@ impl ProofStreamItem {
         }
         let proof_kind = match obj.get("proof_kind") {
             Some(Value::String(kind)) => {
-                ProofKind::parse(kind).map_err(|error| error.to_string())?
+                ProofStreamKind::parse(kind).map_err(|error| error.to_string())?
             }
             Some(_) => return Err("`proof_kind` must be a string".to_string()),
             None => return Err("proof stream item missing `proof_kind` field".to_string()),
@@ -692,7 +689,7 @@ impl ProofStreamItem {
         let leaf_index = optional_u32_field(obj, "leaf_index")?;
         let tier = match obj.get("tier") {
             Some(Value::String(tier)) => {
-                Some(ProofTier::parse(tier).map_err(|error| error.to_string())?)
+                Some(ProofStreamTier::parse(tier).map_err(|error| error.to_string())?)
             }
             Some(_) => return Err("`tier` must be a string when present".to_string()),
             None => None,
@@ -721,7 +718,7 @@ impl ProofStreamItem {
             None => None,
         };
         match proof_kind {
-            ProofKind::Por => {
+            ProofStreamKind::Por => {
                 if status != VerificationStatus::Success
                     || latency_ms.is_none()
                     || sample_index.is_none()
@@ -789,7 +786,7 @@ impl ProofStreamItem {
                     );
                 }
             }
-            ProofKind::Pdp => {
+            ProofStreamKind::Pdp => {
                 let challenge = challenge_id_hex
                     .as_ref()
                     .ok_or_else(|| "PDP item requires `challenge_id_hex`".to_string())?;
@@ -859,7 +856,7 @@ impl ProofStreamItem {
                     return Err("PDP item tier does not match the verification request".to_string());
                 }
             }
-            ProofKind::Potr => {
+            ProofStreamKind::Potr => {
                 if challenge_id_hex.is_some()
                     || sample_index.is_some()
                     || chunk_index.is_some()
@@ -939,7 +936,7 @@ impl ProofStreamItem {
                     sorafs_manifest::ProofStreamTier::Warm => "warm",
                     sorafs_manifest::ProofStreamTier::Archive => "archive",
                 };
-                if tier.map(ProofTier::as_str) != Some(receipt_tier) {
+                if tier.map(ProofStreamTier::as_str) != Some(receipt_tier) {
                     return Err(
                         "PoTR JSON projection tier does not match the signed receipt".to_string(),
                     );
@@ -1132,8 +1129,8 @@ impl ProofStreamSequenceVerifier {
     #[must_use]
     pub fn new(context: &ProofStreamVerificationContext) -> Self {
         let expected_item_count = match context.request.proof_kind {
-            ProofKind::Por => None,
-            ProofKind::Pdp | ProofKind::Potr => Some(1),
+            ProofStreamKind::Por => None,
+            ProofStreamKind::Pdp | ProofStreamKind::Potr => Some(1),
         };
         Self {
             context: *context,
@@ -1168,7 +1165,7 @@ impl ProofStreamSequenceVerifier {
             ));
         }
         match self.context.request.proof_kind {
-            ProofKind::Por => {
+            ProofStreamKind::Por => {
                 let proof = item
                     .por_proof()
                     .ok_or_else(|| "PoR sequence item is missing its proof witness".to_string())?;
@@ -1240,7 +1237,7 @@ impl ProofStreamSequenceVerifier {
                     ));
                 }
             }
-            ProofKind::Pdp | ProofKind::Potr => {
+            ProofStreamKind::Pdp | ProofStreamKind::Potr => {
                 if self.item_count != 0 {
                     return Err(
                         "PDP and PoTR responses must contain exactly one terminal row".to_string(),
@@ -1498,7 +1495,7 @@ mod tests {
         ProofStreamRequestV1 {
             manifest_digest: [0xaa; 32],
             provider_id: [0xbb; 32],
-            proof_kind: ProofKind::Por,
+            proof_kind: ProofStreamKind::Por,
             challenge_id: None,
             sample_count: Some(1),
             deadline_ms: None,
@@ -1555,7 +1552,7 @@ mod tests {
         ProofStreamRequestV1 {
             manifest_digest: [0x22; 32],
             provider_id: [0x33; 32],
-            proof_kind: ProofKind::Pdp,
+            proof_kind: ProofStreamKind::Pdp,
             challenge_id: Some([0x11; 32]),
             sample_count: None,
             deadline_ms: None,
@@ -1578,7 +1575,7 @@ mod tests {
         ProofStreamRequestV1 {
             manifest_digest: receipt.manifest_digest,
             provider_id: receipt.provider_id,
-            proof_kind: ProofKind::Potr,
+            proof_kind: ProofStreamKind::Potr,
             challenge_id: None,
             sample_count: None,
             deadline_ms: Some(receipt.deadline_ms),
@@ -1755,7 +1752,7 @@ mod tests {
         changed.nonce[0] ^= 0x01;
         variants.push(changed);
         let mut changed = request;
-        changed.tier = Some(ProofTier::Warm);
+        changed.tier = Some(ProofStreamTier::Warm);
         variants.push(changed);
         for changed in variants {
             let seed = por_request_sample_seed_v1(&changed, &trusted_root)
@@ -1868,7 +1865,7 @@ mod tests {
         let wrong_kind = ProofStreamRequestV1 {
             manifest_digest: [0xaa; 32],
             provider_id: [0xbb; 32],
-            proof_kind: ProofKind::Pdp,
+            proof_kind: ProofStreamKind::Pdp,
             challenge_id: Some([0x12; 32]),
             sample_count: None,
             deadline_ms: None,
@@ -2090,7 +2087,7 @@ mod tests {
     fn item_accepts_only_terminal_chain_backed_pdp_projection() {
         let failed = verify_pdp_item(&Value::Object(canonical_pdp_item_map()))
             .expect("canonical committed PDP failure");
-        assert_eq!(failed.proof_kind, ProofKind::Pdp);
+        assert_eq!(failed.proof_kind, ProofStreamKind::Pdp);
         assert_eq!(failed.status, VerificationStatus::Failure);
         assert_eq!(failed.failure_reason.as_deref(), Some("invalid_proof"));
         assert_eq!(
@@ -2160,7 +2157,7 @@ mod tests {
         let (map, receipt) = canonical_potr_item_map();
         let item =
             verify_potr_item(&Value::Object(map)).expect("canonical committed PoTR projection");
-        assert_eq!(item.proof_kind, ProofKind::Potr);
+        assert_eq!(item.proof_kind, ProofStreamKind::Potr);
         assert_eq!(item.status, VerificationStatus::Success);
         assert_eq!(item.potr_receipt.as_ref(), Some(&receipt));
         assert_eq!(

@@ -394,3 +394,47 @@ fn physical_source_shape_canonicality_and_public_projection_precede_entropy() {
     ));
     assert_eq!(rng.calls, 0);
 }
+
+#[test]
+fn selected_leaf_and_sibling_stripes_preserve_masked_bytes_and_pass_limits() {
+    let (mut replay, _) = small(16, 3, 7, 1);
+    let columns = explicit_columns(&replay);
+    let plan = replay.plan();
+    for invalid in [
+        vec![],
+        vec![0, 0],
+        vec![3, 1],
+        vec![plan.lde_rows()],
+        (0..129).collect(),
+    ] {
+        assert!(
+            replay
+                .visit_selected_stripes(&invalid, |_| panic!("invalid selection visited"))
+                .is_err()
+        );
+        assert!(replay.ensure_pass_available().is_ok());
+    }
+    let indices = [0, 1, 63, 64, 127, 128, 129, 2047];
+    let mut visited = [false; 128];
+    replay
+        .visit_selected_stripes(&indices, |stripe| {
+            let index = stripe.stripe_index();
+            assert!(!visited[index]);
+            visited[index] = true;
+            for &row in &indices {
+                if row % 128 == index {
+                    let mut actual = [0; 3];
+                    stripe.fill_row(row / 128, &mut actual)?;
+                    for (column, &value) in actual.iter().enumerate() {
+                        assert_eq!(value, horner(&columns[column], plan.domain.point(row)));
+                    }
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    for (stripe, &seen) in visited.iter().enumerate() {
+        assert_eq!(seen, indices.iter().any(|i| i % 128 == stripe));
+    }
+    assert!(replay.ensure_pass_available().is_err());
+}

@@ -283,7 +283,7 @@ pub mod codec {
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
-        use crate::{NoritoSerialize, SerializePayload};
+        use crate::SerializePayload;
         use std::sync::atomic::{AtomicUsize, Ordering};
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
         static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -347,14 +347,6 @@ pub mod codec {
                 ))
             }
         }
-        #[derive(Debug, PartialEq, Eq, NoritoSerialize, crate::NoritoDeserialize)]
-        #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
-        #[derive(crate::NoritoSchema)]
-        #[norito_schema(name = "norito.test.lib.AdaptiveFixedFields")]
-        struct AdaptiveFixedFields {
-            tag: u8,
-            digest: [u8; 32],
-        }
         #[test]
         fn encode_to_matches_encode() {
             let value = vec![1u8, 2, 3, 4, 5];
@@ -396,43 +388,6 @@ pub mod codec {
                 matches!(error, crate::Error::Message(message) if message == "intentional serializer failure")
             );
             assert!(out.is_empty());
-        }
-        #[test]
-        fn adaptive_field_bitset_paths_retain_required_header_flags() {
-            let value = AdaptiveFixedFields {
-                tag: 7,
-                digest: [0xA5; 32],
-            };
-            let requested = crate::core::header_flags::FIELD_BITSET
-                | crate::core::header_flags::PACKED_STRUCT
-                | crate::core::header_flags::COMPACT_LEN;
-            let (payload, flags) = {
-                let _layout = crate::core::DecodeFlagsGuard::enter(requested);
-                crate::core::encode_bare_with_flags(&value)
-                    .expect("adaptive vector encode returns its flags")
-            };
-            let mut streamed_payload = Vec::new();
-            let written =
-                super::encode_adaptive_into_with_flags(&value, &mut streamed_payload, requested)
-                    .expect("stream adaptive field-bitset payload");
-            assert_eq!(written, streamed_payload.len());
-            assert_eq!(streamed_payload, payload);
-            for (label, payload) in [("vector", payload), ("stream", streamed_payload)] {
-                crate::core::validate_header_flags(flags)
-                    .expect("adaptive encoder must advertise valid field-bitset dependencies");
-                assert_eq!(
-                    flags & requested,
-                    requested,
-                    "{label} adaptive encode dropped a field-bitset dependency"
-                );
-                let framed = crate::core::frame_bare_with_header_flags::<AdaptiveFixedFields>(
-                    &payload, flags,
-                )
-                .expect("frame adaptive fixed-field payload");
-                let decoded: AdaptiveFixedFields =
-                    crate::decode_from_bytes(&framed).expect("decode adaptive fixed-field frame");
-                assert_eq!(decoded, value, "{label} adaptive frame changed the value");
-            }
         }
     }
     /// Encode `value` and return both the bare payload and the exact header flags required

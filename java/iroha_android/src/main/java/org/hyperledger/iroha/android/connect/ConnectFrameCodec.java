@@ -46,15 +46,6 @@ public final class ConnectFrameCodec {
             throw new IllegalArgumentException(
                 "expected " + LENGTH + " bytes, found " + (value == null ? 0 : value.length));
           }
-          if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-            long offset = 0L;
-            for (int i = 0; i < LENGTH; i++) {
-              offset += 1L;
-              encoder.writeUInt(offset, 64);
-            }
-            encoder.writeBytes(value);
-            return;
-          }
           final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
           for (byte b : value) {
             encoder.writeLength(1L, compactLen);
@@ -65,21 +56,6 @@ public final class ConnectFrameCodec {
         @Override
         public byte[] decode(final NoritoDecoder decoder) {
           final byte[] out = new byte[LENGTH];
-          if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-            long previous = 0L;
-            for (int i = 0; i < LENGTH; i++) {
-              final long current = decoder.readUInt(64);
-              final long delta = current - previous;
-              if (delta != 1L) {
-                throw new IllegalArgumentException("Invalid packed [u8;32] offset delta: " + delta);
-              }
-              previous = current;
-            }
-            for (int i = 0; i < LENGTH; i++) {
-              out[i] = (byte) decoder.readByte();
-            }
-            return out;
-          }
           final boolean compactLen = decoder.compactLenActive();
           for (int i = 0; i < LENGTH; i++) {
             final long elemLen = decoder.readLength(compactLen);

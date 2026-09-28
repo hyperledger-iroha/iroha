@@ -33,17 +33,20 @@ pub const fn route_id_for(network: SccpNetworkV1) -> Option<&'static str> {
     }
 }
 
+/// The four external networks with a route, in registry order (§4.14.1).
+pub const SCCP_ROUTE_NETWORKS_V1: [SccpNetworkV1; 4] = [
+    SccpNetworkV1::EthereumMainnet,
+    SccpNetworkV1::BscMainnet,
+    SccpNetworkV1::TronMainnet,
+    SccpNetworkV1::TonMainnet,
+];
+
 /// Return the external network whose route id is exactly `route_id`.
 #[must_use]
 pub fn network_for_route_id(route_id: &str) -> Option<SccpNetworkV1> {
-    [
-        SccpNetworkV1::EthereumMainnet,
-        SccpNetworkV1::BscMainnet,
-        SccpNetworkV1::TronMainnet,
-        SccpNetworkV1::TonMainnet,
-    ]
-    .into_iter()
-    .find(|network| route_id_for(*network) == Some(route_id))
+    SCCP_ROUTE_NETWORKS_V1
+        .into_iter()
+        .find(|network| route_id_for(*network) == Some(route_id))
 }
 
 /// Activation state of one route revision (§4.14.2).
@@ -376,6 +379,11 @@ mod tests {
         }
         assert_eq!(network_for_route_id("TAIRA_ETH_XOR"), None);
         assert_eq!(network_for_route_id(""), None);
+        assert!(
+            SCCP_ROUTE_NETWORKS_V1
+                .iter()
+                .all(|network| network.is_external() && route_id_for(*network).is_some())
+        );
     }
 
     #[test]

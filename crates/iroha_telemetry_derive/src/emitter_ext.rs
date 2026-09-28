@@ -4,11 +4,6 @@ use proc_macro2::TokenStream;
 pub trait EmitterExt {
     fn handle<E: ToTokensError + 'static, T>(&mut self, result: manyhow::Result<T, E>)
     -> Option<T>;
-    #[allow(dead_code)]
-    fn handle_or_default<E: ToTokensError + 'static, T: Default>(
-        &mut self,
-        result: manyhow::Result<T, E>,
-    ) -> T;
     fn finish_token_stream(self) -> TokenStream
     where
         Self: Sized;
@@ -28,12 +23,6 @@ impl EmitterExt for Emitter {
                 None
             }
         }
-    }
-    fn handle_or_default<E: ToTokensError + 'static, T: Default>(
-        &mut self,
-        result: manyhow::Result<T, E>,
-    ) -> T {
-        self.handle(result).unwrap_or_default()
     }
     fn finish_token_stream(self) -> TokenStream
     where
@@ -70,13 +59,6 @@ mod tests {
             e.handle::<Error, _>(Err(Error::new(proc_macro2::Span::call_site(), "oops")));
         assert!(value.is_none());
         assert!(!e.finish_token_stream().is_empty());
-    }
-    #[test]
-    fn handle_or_default_returns_default() {
-        let mut e = Emitter::new();
-        let value: i32 = e
-            .handle_or_default::<Error, _>(Err(Error::new(proc_macro2::Span::call_site(), "oops")));
-        assert_eq!(value, 0);
     }
     #[test]
     fn finish_token_stream_with_appends_tokens() {

@@ -46,14 +46,7 @@ fn test_encryption() {
 #[test]
 fn scalar_fixture_raw_topics_match_every_declared_layout() {
     use norito::core;
-    for requested in [
-        0,
-        core::header_flags::COMPACT_LEN,
-        core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
-        core::header_flags::PACKED_STRUCT
-            | core::header_flags::COMPACT_LEN
-            | core::header_flags::FIELD_BITSET,
-    ] {
+    for requested in [0, core::header_flags::COMPACT_LEN] {
         for chan in [0, 1, 2, 3, u8::MAX] {
             let value = MultiTopic {
                 chan,

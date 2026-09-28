@@ -141,15 +141,7 @@ fn admission_digest_preimages_ignore_caller_layout() {
         envelope_digest,
         revocation_digest,
     ];
-    use norito::core::header_flags::{COMPACT_LEN, PACKED_SEQ, PACKED_STRUCT};
-    let layouts = crate::canonical_test_support::supported_layouts()
-        .into_iter()
-        .chain([
-            PACKED_SEQ | PACKED_STRUCT,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-        ]);
-    assert_eq!(layouts.clone().count(), 10);
-    for flags in layouts {
+    for flags in crate::canonical_test_support::supported_layouts() {
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
             [

@@ -3450,10 +3450,6 @@ pub fn sha256_pairs_reduce_cuda(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
 #[cfg(not(feature = "cuda"))]
-pub(crate) fn sha256_merkle_root_cuda(_blocks: &[[u8; 64]]) -> Option<[u8; 32]> {
-    None
-}
-#[cfg(not(feature = "cuda"))]
 pub fn poseidon2_cuda(_a: u64, _b: u64) -> Option<u64> {
     None
 }

@@ -5,8 +5,6 @@ use iroha_data_model::{
     prelude::{Json, *},
 };
 use iroha_schema::IntoSchema;
-#[allow(unused_imports)]
-use std::eprintln;
 use std::{
     collections::BTreeMap,
     format,
@@ -53,8 +51,6 @@ pub mod multisig {
     use iroha_crypto::{HashOf, KeyPair};
     use iroha_model_base::domain::DomainId;
     use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
-    #[allow(unused_imports)]
-    use std::eprintln;
     use std::{borrow::ToOwned, collections::BTreeSet};
     /// Multisig-related instructions
     #[derive(

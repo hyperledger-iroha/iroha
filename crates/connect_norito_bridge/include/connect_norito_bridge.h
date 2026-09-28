@@ -1282,12 +1282,41 @@ int32_t connect_norito_blake3_hash(
     unsigned long* out_digest_len);
 
 // ---------------- Confidential-note derivation ----------------
+// Confidential wallet prover: local proof generation, never ledger authorization.
+// Revision 1; handles never repeat. At most 64 open provers and 64 prepared jobs.
+// Status: 0 success; -1 malformed ABI/operation/state; -2 closed/consumed handle;
+// -3 resource limit; -10 invalid key; -11 input count; -12 tree capacity;
+// -13 path count; -14 path shape; -15 input index; -16 path/index mismatch;
+// -17 duplicate input; -18 output count; -19 transfer amounts; -20 input amounts;
+// -21 public amount; -22 change; -23 key preparation; -24 proof; -100 internal.
+// Create/job_create zero the output handle on failure. Set inputs and outputs
+// before exactly one tree-evidence call. Only actual inputs need paths.
+// Amounts are unsigned (high << 64) | low. close blocks future job creation;
+// existing jobs retain the native key until consumed or job_close. job_prove
+// consumes its job on success/error and returns public Norito JSON with keys:
+// relation, backend, proof_hex, root_hex, nullifiers_hex, output_commitments_hex.
+// Public JSON is capped at 16 MiB, checked before native hexadecimal allocation.
+// Relation is confidential_transfer, confidential_full_unshield, or
+// confidential_change_unshield. Free JSON output with connect_norito_free.
+uint32_t connect_norito_confidential_prover_revision_v1(void);
+int32_t connect_norito_confidential_prover_create_v1(const uint8_t* network, unsigned long network_len, const uint8_t* asset, unsigned long asset_len, const uint8_t* key, unsigned long key_len, uint64_t* out_handle);
+int32_t connect_norito_confidential_prover_close_v1(uint64_t handle);
+int32_t connect_norito_confidential_prover_job_create_v1(uint64_t handle, uint8_t operation, const uint8_t* root, unsigned long root_len, uint64_t amount_low, uint64_t amount_high, uint64_t* out_job);
+int32_t connect_norito_confidential_prover_job_input_v1(uint64_t job, uint64_t amount_low, uint64_t amount_high, const uint8_t* rho, unsigned long rho_len, const uint8_t* diversifier, unsigned long diversifier_len, uint64_t leaf_index);
+int32_t connect_norito_confidential_prover_job_output_v1(uint64_t job, uint64_t amount_low, uint64_t amount_high, const uint8_t* rho, unsigned long rho_len, const uint8_t* owner, unsigned long owner_len);
+int32_t connect_norito_confidential_prover_job_commitments_v1(uint64_t job, const uint8_t* leaves, unsigned long leaves_len);
+int32_t connect_norito_confidential_prover_job_paths_v1(uint64_t job, const uint8_t* siblings, unsigned long siblings_len, const uint8_t* directions, unsigned long directions_len);
+int32_t connect_norito_confidential_prover_job_prove_v1(uint64_t job, uint8_t** out_json, unsigned long* out_len);
+int32_t connect_norito_confidential_prover_job_close_v1(uint64_t job);
+
+
 // All digests are canonical 32-byte Pasta scalar encodings. Every derivation
 // is owned by iroha_core's complete V3 Poseidon permutation; SDK-local
 // substitutes are not part of the first-release contract. Caller-owned output
 // buffers must be exactly 32 bytes. Zero is success; failures use the common
 // bridge codes (-1 null pointer, -2 UTF-8, -11 output length, -15 invalid
 // confidential derivation).
+
 uint32_t connect_norito_confidential_note_derivation_revision_v3(void);
 int32_t connect_norito_confidential_default_diversifier_v3(
     uint8_t* out_digest_ptr, unsigned long out_digest_len);

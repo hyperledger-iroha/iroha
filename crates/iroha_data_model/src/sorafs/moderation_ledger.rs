@@ -2868,7 +2868,7 @@ mod tests {
 
     #[test]
     fn moderation_pop_presentation_binding_pins_intake_and_authenticated_account() {
-        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+        use norito::core::header_flags::COMPACT_LEN;
 
         let intake = [0x31; 32];
         let juror = account(21);
@@ -2899,16 +2899,7 @@ mod tests {
         assert_eq!(binding, *expected.finalize().as_bytes());
         let display = juror.to_i105_for_discriminant(73).unwrap();
         assert_ne!(display, juror.to_i105_for_discriminant(74).unwrap());
-        let layouts = [
-            0,
-            COMPACT_LEN,
-            PACKED_SEQ,
-            PACKED_SEQ | COMPACT_LEN,
-            PACKED_STRUCT,
-            PACKED_STRUCT | COMPACT_LEN,
-            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        ];
+        let layouts = [0, COMPACT_LEN];
         for prefix in [73, 74] {
             let _prefix = crate::account::address::ChainDiscriminantGuard::enter(prefix);
             for flags in layouts {

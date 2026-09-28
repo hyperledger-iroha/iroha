@@ -19,11 +19,13 @@ use std::{
     norito::NoritoDeserialize,
     norito::NoritoSchema,
 )]
-#[norito_schema(name = "norito.test.stream_iter.PackedRow")]
-struct PackedRow {
+#[norito_schema(name = "norito.test.stream_iter.Row")]
+struct Row {
     id: u32,
     tag: u16,
 }
+/// Reserved layout bits; every one must be rejected before payload parsing.
+const RESERVED_FLAGS: [u8; 4] = [0x01, 0x04, 0x10, 0x20];
 fn overflow_varint() -> Vec<u8> {
     let mut bytes = vec![0x80; 9];
     bytes.push(0x02);
@@ -105,23 +107,23 @@ fn stream_seq_iter_compact_len_roundtrip() {
     norito_core::reset_decode_state();
 }
 #[test]
-fn stream_seq_iter_packed_struct_roundtrip() {
+fn stream_seq_iter_derived_struct_roundtrip() {
     let values = vec![
-        PackedRow { id: 1, tag: 9 },
-        PackedRow { id: 2, tag: 7 },
-        PackedRow { id: 3, tag: 5 },
+        Row { id: 1, tag: 9 },
+        Row { id: 2, tag: 7 },
+        Row { id: 3, tag: 5 },
     ];
-    let flags = header_flags::PACKED_STRUCT;
+    let flags = 0;
     let payload = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
         norito_core::serialize_to_buffer(&values, &mut payload).expect("serialize");
         payload
     };
-    let bytes = norito_core::frame_bare_with_header_flags::<Vec<PackedRow>>(&payload, flags)
-        .expect("frame");
-    let mut iter = stream_seq_iter::<_, PackedRow>(Cursor::new(bytes)).expect("iter");
-    let collected: Vec<PackedRow> = iter.by_ref().map(|v| v.expect("value")).collect();
+    let bytes =
+        norito_core::frame_bare_with_header_flags::<Vec<Row>>(&payload, flags).expect("frame");
+    let mut iter = stream_seq_iter::<_, Row>(Cursor::new(bytes)).expect("iter");
+    let collected: Vec<Row> = iter.by_ref().map(|v| v.expect("value")).collect();
     iter.finish().expect("finish");
     assert_eq!(collected, values);
     norito_core::reset_decode_state();
@@ -167,53 +169,6 @@ fn stream_map_compact_len_roundtrip() {
     norito_core::reset_decode_state();
 }
 #[test]
-fn stream_map_packed_fixed_offsets_roundtrip() {
-    let flags = header_flags::PACKED_SEQ;
-    let entries: Vec<(u8, u32)> = vec![(1, 10), (2, 20), (3, 30)];
-    let mut key_payloads = Vec::new();
-    let mut val_payloads = Vec::new();
-    for (key, value) in entries.iter() {
-        let mut key_buf = Vec::new();
-        norito_core::serialize_to_buffer(key, &mut key_buf).expect("serialize key");
-        key_payloads.push(key_buf);
-        let mut val_buf = Vec::new();
-        norito_core::serialize_to_buffer(value, &mut val_buf).expect("serialize value");
-        val_payloads.push(val_buf);
-    }
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&(entries.len() as u64).to_le_bytes());
-    let mut key_total = 0u64;
-    for key_buf in &key_payloads {
-        payload.extend_from_slice(&key_total.to_le_bytes());
-        key_total = key_total.saturating_add(key_buf.len() as u64);
-    }
-    payload.extend_from_slice(&key_total.to_le_bytes());
-    let mut val_total = 0u64;
-    for val_buf in &val_payloads {
-        payload.extend_from_slice(&val_total.to_le_bytes());
-        val_total = val_total.saturating_add(val_buf.len() as u64);
-    }
-    payload.extend_from_slice(&val_total.to_le_bytes());
-    for key_buf in &key_payloads {
-        payload.extend_from_slice(key_buf);
-    }
-    for val_buf in &val_payloads {
-        payload.extend_from_slice(val_buf);
-    }
-    let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u32>>(&payload, flags)
-        .expect("frame");
-    let iter_out: HashMap<u8, u32> = StreamMapIter::new_hash(Cursor::new(bytes.clone()))
-        .expect("iter")
-        .map(|kv| kv.expect("entry"))
-        .collect();
-    let expected: HashMap<u8, u32> = entries.into_iter().collect();
-    assert_eq!(iter_out, expected);
-    let collected =
-        stream_hashmap_collect_from_reader::<_, u8, u32>(Cursor::new(bytes)).expect("collect");
-    assert_eq!(collected, expected);
-    norito_core::reset_decode_state();
-}
-#[test]
 fn stream_seq_iter_rejects_short_seq_header() {
     let flags = 0;
     let payload = vec![0xAA; 4];
@@ -227,14 +182,15 @@ fn stream_seq_iter_rejects_short_seq_header() {
 }
 #[test]
 fn stream_seq_iter_rejects_reserved_flags() {
-    let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = vec![0u8; 8];
-    let bytes = frame_with_unchecked_flags::<Vec<u32>>(&payload, flags);
-    let err = stream_seq_iter::<_, u32>(Cursor::new(bytes))
-        .err()
-        .expect("iter");
-    assert!(matches!(err, Error::UnsupportedFeature(_)));
-    norito_core::reset_decode_state();
+    for flags in RESERVED_FLAGS {
+        let payload = vec![0u8; 8];
+        let bytes = frame_with_unchecked_flags::<Vec<u32>>(&payload, flags);
+        let err = stream_seq_iter::<_, u32>(Cursor::new(bytes))
+            .err()
+            .expect("iter");
+        assert!(matches!(err, Error::UnsupportedFeature(_)));
+        norito_core::reset_decode_state();
+    }
 }
 #[test]
 fn stream_map_iter_rejects_short_entry_count_header() {
@@ -250,24 +206,26 @@ fn stream_map_iter_rejects_short_entry_count_header() {
 }
 #[test]
 fn stream_map_iter_rejects_reserved_flags() {
-    let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = vec![0u8; 8];
-    let bytes = frame_with_unchecked_flags::<HashMap<u8, u8>>(&payload, flags);
-    let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes))
-        .err()
-        .expect("iter");
-    assert!(matches!(err, Error::UnsupportedFeature(_)));
-    norito_core::reset_decode_state();
+    for flags in RESERVED_FLAGS {
+        let payload = vec![0u8; 8];
+        let bytes = frame_with_unchecked_flags::<HashMap<u8, u8>>(&payload, flags);
+        let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes))
+            .err()
+            .expect("iter");
+        assert!(matches!(err, Error::UnsupportedFeature(_)));
+        norito_core::reset_decode_state();
+    }
 }
 #[test]
 fn stream_map_collect_rejects_reserved_flags() {
-    let flags = header_flags::COMPACT_SEQ_LEN;
-    let payload = vec![0u8; 8];
-    let bytes = frame_with_unchecked_flags::<HashMap<u8, u8>>(&payload, flags);
-    let err =
-        stream_hashmap_collect_from_reader::<_, u8, u8>(Cursor::new(bytes)).expect_err("collect");
-    assert!(matches!(err, Error::UnsupportedFeature(_)));
-    norito_core::reset_decode_state();
+    for flags in RESERVED_FLAGS {
+        let payload = vec![0u8; 8];
+        let bytes = frame_with_unchecked_flags::<HashMap<u8, u8>>(&payload, flags);
+        let err = stream_hashmap_collect_from_reader::<_, u8, u8>(Cursor::new(bytes))
+            .expect_err("collect");
+        assert!(matches!(err, Error::UnsupportedFeature(_)));
+        norito_core::reset_decode_state();
+    }
 }
 #[test]
 fn stream_map_iter_rejects_overflowing_key_len_varint() {

@@ -168,9 +168,36 @@ test("non-Error input failures keep the typed contract and original cause", asyn
     ...options(), get networkId() { throw null; },
   }), invalid);
   const prover = new Prover(options());
-  const request = { ...spend, outputs: [output], publicAmount: 7n, get rootHex() { throw null; } };
-  await assert.rejects(prover.proveTransfer(request), invalid);
-  await assert.rejects(prover.proveRedemption(request), invalid);
+  await assert.rejects(prover.proveTransfer({ ...spend, outputs: [output], get rootHex() { throw null; } }), invalid);
+  await assert.rejects(prover.proveRedemption({ ...spend, publicAmount: 7n, get rootHex() { throw null; } }), invalid);
   assert.equal(calls.length, 0);
   prover.dispose();
+});
+
+test("canonical wallet preserves exact native outputs and all witness arguments for its three relations", async () => {
+  const { Prover, calls } = fixture();
+  const configuration = options(), prover = new Prover(configuration);
+  try {
+    const results = [
+      await prover.proveTransfer({ ...spend, outputs: [output] }),
+      await prover.proveRedemption({ ...spend, publicAmount: "7" }),
+      await prover.proveRedemption({ ...spend, publicAmount: "6", change: { amount: "1", rhoHex: hex } }),
+    ];
+    for (let index = 0; index < results.length; index += 1) {
+      assert.deepEqual(results[index], {
+        relation: ["confidential-transfer", "confidential-redemption", "confidential-redemption-with-change"][index],
+        nullifiers: [Buffer.alloc(32, 1)], outputCommitments: index === 1 ? [] : [Buffer.alloc(32, 2)],
+        root: Buffer.from(hex, "hex"), proof: Buffer.from([3]),
+      });
+      assert.deepEqual(calls[index].args[0], Buffer.from(configuration.networkId.toBytes()));
+      assert.equal(calls[index].args[1], configuration.assetDefinitionId);
+      assert.deepEqual(calls[index].args[3], [hex]);
+      assert.deepEqual(calls[index].args[4], [input]);
+      assert.equal(calls[index].args[6], hex);
+    }
+    assert.deepEqual(calls[0].args[5], [output]);
+    assert.equal(calls[1].args[5], "7");
+    assert.equal(calls[1].args[7], undefined);
+    assert.deepEqual(calls[2].args[7], { amount: "1", rhoHex: hex });
+  } finally { prover.dispose(); }
 });

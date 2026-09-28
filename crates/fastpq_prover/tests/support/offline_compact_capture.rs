@@ -1,6 +1,6 @@
-//! Independent public inputs for the retained two-segment MixedScale DEEP fixture.
+//! Independent public inputs for bounded MixedScale DEEP artifact fixtures.
 //!
-//! These facts reproduce QuantityFixture::new(MixedScale, 2) from its source constants.
+//! These facts reproduce the one- or two-occurrence MixedScale source constants.
 //! Neither the statement, roots, ordering hash nor AXT expectations are read from a proof.
 
 use super::*;
@@ -17,6 +17,7 @@ use sha2::{Digest as _, Sha256};
 
 /// Complete caller expectations derived before either retained artifact is read.
 pub(super) struct CaptureFixture {
+    pub(super) statement: FastpqPublicTransferStatementV1,
     pub(super) expected: ExpectedStatement,
     binding: AxtFastpqBinding,
     metadata: FastpqAxtPublicMetadataV1,
@@ -27,6 +28,12 @@ pub(super) struct CaptureFixture {
 impl CaptureFixture {
     /// Reconstruct the generator's two ordered full-domain public transfer occurrences.
     pub(super) fn new() -> Self {
+        Self::with_occurrences(2)
+    }
+
+    /// Select the known fixture count before constructing or reading any artifact.
+    pub(super) fn with_occurrences(occurrences: usize) -> Self {
+        assert!((1..=2).contains(&occurrences));
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -44,7 +51,7 @@ impl CaptureFixture {
         let batch_hash = Hash::new(b"compact AXT public entry");
         let mut claims = Vec::new();
         let mut remote = Vec::new();
-        for counter in 1..=2 {
+        for counter in 1..=occurrences {
             let next_sender = sender.try_sub(&Quantity::one()).unwrap();
             let next_receiver = receiver.try_add(&Quantity::one()).unwrap();
             let delta = FastpqPublicTransferDeltaV1 {
@@ -68,7 +75,7 @@ impl CaptureFixture {
                     DataSpaceId::new(7),
                     AxtHandleIssuerContextV1::default().asset_definition_incarnation,
                     [8; 32],
-                    counter,
+                    u64::try_from(counter).unwrap(),
                     1,
                     LaneId::new(0),
                 ),
@@ -97,13 +104,13 @@ impl CaptureFixture {
             perm_root: Hash::new(b"caller expected permission context").into(),
             tx_set_hash: Hash::new(b"caller expected transaction set").into(),
         };
-        // This builds only a bounded four-update touched tree, never a proof trace or LDE.
+        // This builds only the bounded touched tree, never a proof trace or LDE.
         let (rows, inputs, ordering_hash, private) = materialize_quantity_public_transfers(
             &claims,
             inputs,
             ProofSemantics::AxtTransferClaim,
             PublicTransferLimits::default(),
-            TransferSmtBuildLimits::for_update_limit(4).unwrap(),
+            TransferSmtBuildLimits::for_update_limit(2 * occurrences).unwrap(),
         )
         .unwrap()
         .into_parts();
@@ -158,14 +165,17 @@ impl CaptureFixture {
             .iter()
             .map(compute_remote_spend_claim_commitment_v1)
             .collect();
+        let outer_amount = 5 * u128::try_from(occurrences).unwrap();
         Self {
+            statement,
             expected,
             binding,
             metadata: FastpqAxtPublicMetadataV1 {
                 parameter: AXT_DEFAULT_PARAMETER.into(),
                 entry_hash: batch_hash.into(),
-                // Generator metadata retains the original two five-unit outer mirror.
-                committed_amount: Some(10_u128.to_le_bytes()),
+                // Retain the original five-unit outer mirror per occurrence,
+                // independently of the replaced MixedScale transfer quantities.
+                committed_amount: Some(outer_amount.to_le_bytes()),
                 expiry_slot: 456_u64.to_le_bytes(),
                 manifest_root: [5; 32],
                 da_commitment: core::array::from_fn(|index| if index == 0 { 1 } else { 6 }),
@@ -174,7 +184,7 @@ impl CaptureFixture {
                 dsid: DataSpaceId::new(7),
                 manifest_root: [5; 32],
                 da_commitment: Some([6; 32]),
-                committed_amount: Some(10),
+                committed_amount: Some(outer_amount),
                 expiry_slot: Some(456),
             },
             remote,

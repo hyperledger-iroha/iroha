@@ -18,10 +18,10 @@ mod public_contract_creation_fees {
                 let (developer, key) = gen_account_in("public-builder");
                 let (sink, _) = gen_account_in("fee-sink");
                 let domain_id = DomainId::try_new("fees", "universal").expect("domain");
-                let fee_id = AssetDefinitionId::derive_from_components(
-                    domain_id.clone(),
-                    "xor".parse().unwrap(),
-                );
+                let fee_id: AssetDefinitionId =
+                    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                        .parse()
+                        .expect("canonical network XOR asset");
                 let payer_asset = AssetId::of(fee_id.clone(), developer.clone());
                 let sink_asset = AssetId::of(fee_id.clone(), sink.clone());
                 let initial = Quantity::from(if funded { 10_u32 } else { 0_u32 });
@@ -122,10 +122,37 @@ mod public_contract_creation_fees {
                     .chain(1, Some(&genesis))
                     .sign(leader.private_key())
                     .unpack(|_| {});
-                let mut state_block = state.block(block.header());
-                let valid = block
-                    .validate_and_record_transactions(&mut state_block)
-                    .unpack(|_| {});
+                let source: SignedBlock = block.into();
+                // Reserve the exact signed carrier before block-start effects and
+                // retain its original recorder through both paid artifact stages.
+                let (mut state_block, recorder) = state
+                    .block_with_recorded_pristine_carrier_stage(
+                        &source,
+                        |_| Ok::<(), String>(()),
+                        |error| error,
+                    )
+                    .expect("ordinary artifact carrier retains prepaid membership custody");
+                assert_eq!(
+                    crate::block::resolve_network_xor_asset_definition(
+                        &state_block.world,
+                        &state_block.nexus.fees.fee_asset_id,
+                        20,
+                    ),
+                    Some(payer_asset.definition().clone()),
+                    "the payer and signed fee limits use the network XOR identity"
+                );
+                assert!(
+                    state_block
+                        .world
+                        .account_permissions_iter(&developer)
+                        .unwrap()
+                        .next()
+                        .is_none(),
+                    "ordinary artifact publication has no management permission grants"
+                );
+                let valid =
+                    ValidBlock::validate_recorded_unchecked(source, &mut state_block, recorder)
+                        .unpack(|_| {});
                 assert_eq!(valid.as_ref().network_entrypoint_count(), 2);
                 assert_eq!(valid.as_ref().execution_outputs().len(), 2);
                 let errors = valid

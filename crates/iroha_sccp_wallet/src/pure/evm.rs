@@ -834,6 +834,31 @@ impl fmt::Display for KeyFileError {
 
 impl std::error::Error for KeyFileError {}
 
+/// Parse key-file content: optional `0x`, 64 hex digits, optional trailing newline.
+///
+/// # Errors
+///
+/// Returns [`KeyFileError::BadFormat`].
+pub(crate) fn parse_key_file_secret(bytes: &[u8]) -> Result<Zeroizing<[u8; 32]>, KeyFileError> {
+    let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let body = body.strip_prefix(b"0x").unwrap_or(body);
+    if body.len() != 64 {
+        return Err(KeyFileError::BadFormat);
+    }
+    let mut secret = Zeroizing::new([0_u8; 32]);
+    hex::decode_to_slice(body, &mut secret[..]).map_err(|_| KeyFileError::BadFormat)?;
+    Ok(secret)
+}
+
+/// Read the 32-byte secret of an owner-only key file (TON keys use it as an Ed25519 seed).
+///
+/// # Errors
+///
+/// Returns the [`KeyFileError`] of the first failed check.
+pub(crate) fn load_key_file_secret(path: &Path) -> Result<Zeroizing<[u8; 32]>, KeyFileError> {
+    parse_key_file_secret(&read_owner_only_file(path)?)
+}
+
 /// A secp256k1 key for EVM transactions; the secret is zeroized on drop and never printed.
 pub struct EvmSigningKey {
     secret: Zeroizing<[u8; 32]>,
@@ -868,14 +893,7 @@ impl EvmSigningKey {
     ///
     /// Returns [`KeyFileError::BadFormat`] or [`KeyFileError::InvalidSecret`].
     pub fn from_key_file_bytes(bytes: &[u8]) -> Result<Self, KeyFileError> {
-        let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
-        let body = body.strip_prefix(b"0x").unwrap_or(body);
-        if body.len() != 64 {
-            return Err(KeyFileError::BadFormat);
-        }
-        let mut secret = Zeroizing::new([0_u8; 32]);
-        hex::decode_to_slice(body, &mut secret[..]).map_err(|_| KeyFileError::BadFormat)?;
-        Self::from_secret(*secret)
+        Self::from_secret(*parse_key_file_secret(bytes)?)
     }
 
     /// Load an owner-only key file: a regular, non-symlink file of mode `0600` or stricter

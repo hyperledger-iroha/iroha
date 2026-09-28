@@ -35,6 +35,7 @@ const NATIVE_BUILD_SOURCE_STATE_READER = "read-native-build-source-state.mjs";
 let cachedBinding;
 let cachedBindingPath;
 let cachedSnapshotDir;
+const ownedSnapshotDirectories = new Set();
 
 function nativeBindingError(reason, status = "unknown") {
   const error = new Error(`Native binding required; ${reason}`);
@@ -470,6 +471,10 @@ function materializeVerifiedSnapshot(verification) {
     throw new TypeError("verified native bytes are unavailable");
   }
   const directory = mkdtempSync(join(tmpdir(), "iroha-js-host-"));
+  if (ownedSnapshotDirectories.size === 0) {
+    process.once("exit", cleanupOwnedSnapshots);
+  }
+  ownedSnapshotDirectories.add(directory);
   let descriptor;
   try {
     if (process.platform !== "win32") {
@@ -515,15 +520,25 @@ function materializeVerifiedSnapshot(verification) {
   }
 }
 
+function cleanupOwnedSnapshots() {
+  for (const directory of ownedSnapshotDirectories) {
+    cleanupSnapshotDirectory(directory);
+  }
+}
+
 function cleanupSnapshotDirectory(directory) {
   if (!directory) {
     return;
   }
   try {
     rmSync(directory, { recursive: true, force: true });
+    ownedSnapshotDirectories.delete(directory);
+    if (ownedSnapshotDirectories.size === 0) {
+      process.removeListener("exit", cleanupOwnedSnapshots);
+    }
   } catch {
-    // A loaded Windows addon can remain locked until process exit. The random,
-    // owner-only directory is safe to leave for operating-system cleanup.
+    // Keep failed removals for a final synchronous retry at normal process exit.
+    // Windows can still lock a mapped addon then; cleanup remains best effort.
   }
 }
 

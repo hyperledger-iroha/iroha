@@ -655,4 +655,36 @@ mod tests {
         assert_eq!(parsed.network_id, network(1));
         assert_eq!(parsed.chain_discriminant, 777);
     }
+
+    #[test]
+    fn deployment_config_resolves_discriminant_like_the_canonical_client() {
+        let account = |body: &str| -> toml::Table {
+            let root: toml::Table = format!("[account]\n{body}").parse().unwrap();
+            root["account"].as_table().unwrap().clone()
+        };
+        assert_eq!(
+            resolve_deploy_chain_discriminant(&account("")).unwrap(),
+            iroha_config::parameters::defaults::common::chain_discriminant()
+        );
+        assert_eq!(
+            resolve_deploy_chain_discriminant(&account("chain_discriminant = 777")).unwrap(),
+            777
+        );
+        assert_eq!(
+            resolve_deploy_chain_discriminant(&account("profile = 'taira'")).unwrap(),
+            iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
+        );
+        assert!(
+            resolve_deploy_chain_discriminant(&account(
+                "profile = 'taira'\nchain_discriminant = 753"
+            ))
+            .unwrap_err()
+            .contains("does not match profile")
+        );
+        assert!(
+            resolve_deploy_chain_discriminant(&account("profile = 'unknown'"))
+                .unwrap_err()
+                .contains("not supported")
+        );
+    }
 }

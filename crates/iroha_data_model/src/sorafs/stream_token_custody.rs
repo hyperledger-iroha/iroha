@@ -132,6 +132,9 @@ pub struct StreamTokenCustodyCommitmentErrorV1;
 
 /// Compute the exact authority-bound native request commitment used by custody history.
 /// This is public material derivation, not execution or finality evidence.
+///
+/// # Errors
+/// Returns an error when the instruction or authority cannot be encoded canonically.
 pub fn stream_token_custody_request_digest_v1(
     instruction: &crate::isi::sorafs::MutateSorafsStreamTokenCustody,
     authority: &AccountId,
@@ -147,6 +150,9 @@ pub fn stream_token_custody_request_digest_v1(
 }
 impl StreamTokenCustodyControlRecordV1 {
     /// Compute the canonical native record digest, without claiming execution or finality.
+    ///
+    /// # Errors
+    /// Returns an error when the record cannot be encoded canonically.
     pub fn canonical_digest(&self) -> Result<[u8; 32], StreamTokenCustodyCommitmentErrorV1> {
         let invalid = StreamTokenCustodyCommitmentErrorV1;
         if norito::canonical_frame_len(self).map_err(|_| invalid)?

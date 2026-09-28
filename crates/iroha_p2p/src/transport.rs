@@ -103,7 +103,7 @@ pub mod quic {
     /// ALPN negotiated for Iroha P2P QUIC connections.
     pub use super::P2P_ALPN;
     use quinn::{
-        ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt,
+        ClientConfig, Connection, Endpoint, TransportConfig, VarInt,
         crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
     use rustls::client::danger::ServerCertVerifier;
@@ -463,40 +463,6 @@ or later and requalify QUIC before re-enabling it";
             connecting
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
-        }
-        /// Connect and open a single bi-directional stream.
-        pub async fn connect_and_open_bi(
-            &self,
-            remote: std::net::SocketAddr,
-            server_name: &str,
-        ) -> io::Result<(Connection, SendStream, RecvStream)> {
-            let connection = self.connect(remote, server_name).await?;
-            let (send, recv) = connection
-                .open_bi()
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-            Ok((connection, send, recv))
-        }
-        /// Connect and open two bi-directional streams (recommended for separating priorities).
-        pub async fn connect_and_open_two_bi(
-            &self,
-            remote: std::net::SocketAddr,
-            server_name: &str,
-        ) -> io::Result<(
-            Connection,
-            (SendStream, RecvStream),
-            (SendStream, RecvStream),
-        )> {
-            let connection = self.connect(remote, server_name).await?;
-            let hi = connection
-                .open_bi()
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-            let lo = connection
-                .open_bi()
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-            Ok((connection, hi, lo))
         }
     }
     fn build_transport_config(_cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {

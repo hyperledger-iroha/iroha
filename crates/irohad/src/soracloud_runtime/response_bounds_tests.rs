@@ -25,8 +25,7 @@ fn assert_soracloud_response_bound_matches(
 #[test]
 fn soracloud_response_preflight_is_independent_of_ambient_decode_flags() {
     let canonical = {
-        let _flags =
-            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         encoded_soracloud_response_len(
             SoracloudHostOperationV1::ReadConfig,
             SoracloudHostResponsePayloadV1::ReadConfig(SoracloudReadConfigResponseV1 {
@@ -35,12 +34,7 @@ fn soracloud_response_preflight_is_independent_of_ambient_decode_flags() {
             }),
         )
     };
-    for flags in [
-        0,
-        norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::COMPACT_LEN
-            | norito::core::header_flags::FIELD_BITSET,
-    ] {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
             soracloud_response_encoded_len_bound(

@@ -160,7 +160,7 @@ fn ambient_layout_cannot_change_signing_bytes_or_admit_alternate_wire_layouts() 
     let payload = fixture.statement.signing_payload().expect("signing bytes");
     let alternate = {
         let _ambient = norito::core::DecodeFlagsGuard::enter(
-            norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN,
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
         );
         assert_eq!(
             fixture.statement.signing_payload().expect("fixed layout"),

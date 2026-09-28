@@ -99,12 +99,6 @@ pub fn decode_bytes_state_value(payload: &[u8]) -> Vec<u8> {
     assert_eq!(tlv.type_id, PointerType::Blob);
     tlv.payload.to_vec()
 }
-/// Decode one non-negative pointer-backed Kotodama `int` return as `u64`.
-pub fn decode_u64_register(vm: &IVM, register: usize) -> u64 {
-    decode_int_register(vm, register)
-        .try_to_u64()
-        .unwrap_or_else(|| panic!("int return in r{register} does not fit u64"))
-}
 /// Encode one pointer-backed value using the schema-bound Kotodama V1 record.
 pub fn encode_pointer_state_value(
     kind: StateValueKindV1,
@@ -194,10 +188,6 @@ fn assemble_contract_syscalls_with_states(
     program.extend_from_slice(&HALT);
     program
 }
-/// Assemble an admitted contract fixture that may perform dynamic ledger writes.
-pub fn assemble_ledger_write_contract_syscalls(numbers: &[u8]) -> Vec<u8> {
-    assemble_contract_syscalls_with_states(numbers, Vec::new(), vec!["*".to_owned()])
-}
 /// Assemble an admitted contract fixture over declared `Bytes` durable state.
 pub fn assemble_bytes_state_contract_syscalls(numbers: &[u8], state_names: &[&str]) -> Vec<u8> {
     let states = state_names
@@ -239,45 +229,6 @@ pub fn syscall_memory_compact_bundle(
     vm.set_register(12, depth_cap.unwrap_or(0) as u64);
     vm.set_register(13, root_out);
     let prog = syscall_prog(syscalls::SYSCALL_GET_MERKLE_COMPACT as u8);
-    vm.load_program(&prog).expect("load program");
-    vm.run().expect("syscall");
-    // Parse header and decode typed compact proof
-    let mut hdr = [0u8; 1 + 4 + 4];
-    vm.memory.load_bytes(out_ptr, &mut hdr).expect("hdr");
-    let depth = hdr[0] as usize;
-    let total = 1 + 4 + 4 + depth * 32;
-    let mut buf = vec![0u8; total];
-    vm.memory.load_bytes(out_ptr, &mut buf).expect("body");
-    let (cp, _) = ivm::merkle_utils::decode_compact_proof_bytes(&buf).expect("decode");
-    // Read root
-    let mut root = [0u8; 32];
-    vm.memory.load_bytes(root_out, &mut root).expect("root");
-    // Build bundle
-    let siblings: Vec<[u8; 32]> = cp
-        .siblings()
-        .iter()
-        .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
-        .collect();
-    ivm::merkle_utils::CompactProofBundle {
-        depth: cp.depth(),
-        dirs: cp.dirs(),
-        siblings,
-        root,
-    }
-}
-/// Issue GET_REGISTER_MERKLE_COMPACT via SCALL and decode into a CompactProofBundle.
-pub fn syscall_registers_compact_bundle(
-    vm: &mut IVM,
-    idx: usize,
-    depth_cap: Option<usize>,
-) -> ivm::merkle_utils::CompactProofBundle {
-    let out_ptr = ivm::Memory::OUTPUT_START;
-    let root_out = out_ptr + 12288;
-    vm.set_register(10, idx as u64);
-    vm.set_register(11, out_ptr);
-    vm.set_register(12, depth_cap.unwrap_or(0) as u64);
-    vm.set_register(13, root_out);
-    let prog = syscall_prog(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("syscall");
     // Parse header and decode typed compact proof

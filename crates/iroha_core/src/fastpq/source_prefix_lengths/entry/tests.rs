@@ -408,7 +408,7 @@ fn canonical_framing_restores_ambient_layout_and_clone_only_restores_the_meter()
         transcript(vec![delta(28, true)], 2),
     ];
     let expected = reference(&bundle);
-    for flags in [0, header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let _ambient = DecodeFlagsGuard::enter(flags);
         let before = norito::core::encoded_payload_len(&vec![1_u32, 2]).unwrap();
         let mut sizer = SourceEntryFrameSizer::new(hash(), limits()).unwrap();

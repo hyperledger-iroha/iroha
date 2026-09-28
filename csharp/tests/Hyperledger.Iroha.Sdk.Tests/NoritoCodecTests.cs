@@ -31,13 +31,7 @@ public sealed class NoritoCodecTests
 
     [Theory]
     [InlineData(0x00)]
-    [InlineData(0x01)]
     [InlineData(CompactLenFlag)]
-    [InlineData(0x03)]
-    [InlineData(0x04)]
-    [InlineData(0x06)]
-    [InlineData(0x26)]
-    [InlineData(0x27)]
     public void EncodeDecodeAcceptsSupportedNoritoV1Flags(byte flags)
     {
         var payload = new byte[] { 1, 2, 3 };
@@ -49,22 +43,27 @@ public sealed class NoritoCodecTests
         Assert.Equal(flags, decodedFlags);
     }
 
-    [Theory]
-    [InlineData(0x08)]
-    [InlineData(0x10)]
-    [InlineData(0x20)]
-    [InlineData(0x22)]
-    [InlineData(0x40)]
-    [InlineData(0x80)]
-    public void EncodeDecodeRejectUnsupportedNoritoV1Flags(byte flags)
+    [Fact]
+    public void EncodeDecodeRejectEveryNonCanonicalNoritoV1Flag()
     {
         var payload = new byte[] { 1, 2, 3 };
+        var valid = NoritoCodec.Encode(TestTypeName, payload, CompactLenFlag);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => NoritoCodec.Encode(TestTypeName, payload, flags));
+        for (var value = 0; value <= byte.MaxValue; value++)
+        {
+            var flags = (byte)value;
+            if (flags is 0x00 or CompactLenFlag)
+            {
+                continue;
+            }
 
-        var encoded = NoritoCodec.Encode(TestTypeName, payload, CompactLenFlag);
-        encoded[39] = flags;
-        Assert.Throws<ArgumentException>(() => NoritoCodec.Decode(TestTypeName, encoded));
+            Assert.Throws<ArgumentOutOfRangeException>(() => NoritoCodec.Encode(TestTypeName, payload, flags));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new NoritoHeader(new byte[16], NoritoCompression.None, 0, 0, flags).Encode());
+
+            var encoded = Mutate(valid, 39, flags);
+            Assert.Throws<ArgumentException>(() => NoritoCodec.Decode(TestTypeName, encoded));
+        }
     }
 
     [Fact]
@@ -113,7 +112,7 @@ public sealed class NoritoCodecTests
     public void NoritoHeaderSnapshotsSchemaHashConstructorGetterAndInitValues()
     {
         var schemaHash = Convert.FromHexString("862a7d77075d4d23ff6c1261db027811");
-        var header = new NoritoHeader(schemaHash, NoritoCompression.None, 3, 4, 5);
+        var header = new NoritoHeader(schemaHash, NoritoCompression.None, 3, 4, CompactLenFlag);
         var encoded = header.Encode();
 
         schemaHash[0] = 0xFF;
@@ -138,8 +137,8 @@ public sealed class NoritoCodecTests
     [Fact]
     public void NoritoHeaderEqualityUsesSchemaHashContents()
     {
-        var first = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, 5);
-        var second = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, 5);
+        var first = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, CompactLenFlag);
+        var second = new NoritoHeader(new byte[16], NoritoCompression.None, 3, 4, CompactLenFlag);
 
         Assert.Equal(first, second);
         Assert.True(first == second);

@@ -84,6 +84,8 @@ pub trait SccpStatementDigests {
     fn statement_digest(&self, height: u64) -> Option<[u8; 32]>;
     /// Return the live Taira `NetworkId` (the EIP-712 domain salt and binding network).
     fn taira_network_id(&self) -> iroha_data_model::NetworkId;
+    /// Return the Taira time of the latest committed block (admission-time freshness checks).
+    fn committed_time_ms(&self) -> u64;
 }
 
 impl<T: StateReadOnly + ?Sized> SccpStatementDigests for T {
@@ -92,6 +94,9 @@ impl<T: StateReadOnly + ?Sized> SccpStatementDigests for T {
     }
     fn taira_network_id(&self) -> iroha_data_model::NetworkId {
         *self.network_id()
+    }
+    fn committed_time_ms(&self) -> u64 {
+        self.query_ledger_time_ms()
     }
 }
 

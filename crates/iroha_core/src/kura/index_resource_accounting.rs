@@ -326,6 +326,7 @@ impl Kura {
     }
 
     /// Nonblocking observation of a complete inventory while its owner remains recovered.
+    #[cfg(any(test, feature = "telemetry"))]
     pub(crate) fn resource_inventory_snapshot(
         &self,
     ) -> std::result::Result<resource_inventory::Snapshot, resource_inventory::Unavailable> {
@@ -333,6 +334,7 @@ impl Kura {
     }
 
     /// The no-op production hook allows a deterministic poison race in owner tests.
+    #[cfg(any(test, feature = "telemetry"))]
     fn resource_inventory_snapshot_after_observation(
         &self,
         after_observation: impl FnOnce(),
@@ -347,6 +349,7 @@ impl Kura {
     }
 
     /// Read only immutable/atomic completeness flags and a nonblocking bootstrap state.
+    #[cfg(any(test, feature = "telemetry"))]
     fn resource_inventory_observation_allowed(
         &self,
     ) -> std::result::Result<(), resource_inventory::Unavailable> {

@@ -4,8 +4,8 @@ Source contract: 2026-09-28. The normal-library
 [`offline_compact`](../crates/fastpq_prover/src/backend/offline_compact.rs)
 quantity producer and verifier select this single fixed profile. Core transfer
 proofs and AXT envelopes use canonical artifacts with bounded verification.
-This is an implementation contract, not evidence that complete proof generation,
-cryptographic or deployment qualification has passed. A verifier result grants no execution authority,
+This implementation contract does not establish cryptographic or deployment
+qualification. A verifier result grants no execution authority,
 source finality or AXT spend authorization. The implemented producer samples
 trace, quotient and independent composition masks. The complete construction
 still has no independently qualified zero-knowledge claim. Current evidence and remaining release
@@ -114,27 +114,37 @@ divides by `X^N-1`; no zero-mask adapter or pointwise 8M AIR replay is used.
 Private coefficient/evaluation buffers use the existing erased-storage owner.
 Base trace replay retains the source, coefficients, masks and one N-row stripe;
 it visits 128 stripes per complete row pass. The numerator uses only its four
-nested stripes. Q0/Q1/R and all FRI layers use coefficient replay too. Streamed
-Merkle stacks retain exact queried frontiers and compare replayed roots before
-emitting openings. No complete 20,199,768,064-byte base LDE is retained.
+nested stripes. Q0/Q1/R and all FRI layers use coefficient replay too. The first
+commitment passes retain internal Merkle nodes under the same immutable attempt
+context. Once the transcript chooses queries, replay regenerates only stripes
+containing queried leaves or leaf-level siblings, including every coordinate of
+FRI fibers. Each opening reconstructs the original root with the existing
+canonical multiproof before exposing values. Entropy, challenges, leaf/parent
+framing and proof encoding remain unchanged. No complete 20,199,768,064-byte base
+LDE or full leaf-digest array is retained.
 
 The fixed trace replay subtotal is 499,759,968 bytes, including borrowed source,
 coefficients, one stripe, entropy and maximum selected-row storage. The whole
 `ProducerPlan` additionally charges quotient/FRI coefficients, active tree and
 hash buffers, both full public prefix caches and codec/self-verification buffers.
+It also conservatively sums all seven internal-node caches and construction
+coverage bitmaps (834,439,424 bytes), their retained owner metadata and maximum
+selected-opening workspace. The prior full replay work remains charged even
+when only selected stripes are evaluated.
 It preflights payload, arithmetic/inspection work, hash calls and proof bytes
 before private transforms. The offline wrapper also checks source conversion,
 private SMT, bundle and decode budgets. These are checked payload/work charges,
 not RSS or latency bounds. Defaults allow a 2 GiB segment charge and 2^42
 structural work units; an oversized plan fails before private computation.
 
-The September 28 fixed-SMT preflight fixture reports 1,065,090,768 payload bytes,
-3,468,335,009,584 structural work units and 69,362,447 hash calls. These are
-checked plan charges for that public context, unchanged with 1024-job buffers
-because another phase determines the peak. They are not measurements of a complete
-proof attempt. The [native validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md)
-separates the passing library, kernel and actual Metal tests from the outstanding
-full-size producer execution.
+Before internal-node retention, the September 28 fixed-SMT preflight fixture
+reported 1,065,090,768 payload bytes, 3,468,335,009,584 structural work units and
+69,362,447 hash calls. Those historical plan charges do not describe the new
+cache integration. Its native budget, root/frontier equivalence and complete
+seeded proof-byte checks are pending. The
+[native validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md)
+separates these pending checks from the completed pre-cache child and ordinary/AXT
+proof runs. Checked payload charges are not measurements of peak RSS.
 
 Fresh entropy comes from an explicit `TryCryptoRng`; the normal offline wrapper
 uses `OsRng`. Failed attempts do not reuse masks. CPU and required-device policies

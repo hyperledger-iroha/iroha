@@ -4,12 +4,6 @@ use norito::{
     core::{Compression, Error, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, header_flags},
     decode_from_bytes,
 };
-#[derive(NoritoSerialize, norito::NoritoSchema)]
-#[norito_schema(name = "norito.test.header_minor_validation.FixedFields")]
-struct FixedFields {
-    tag: u8,
-    digest: [u8; 32],
-}
 fn frame_payload<T: NoritoSerialize>(minor: u8, flags: u8, payload: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(norito::core::Header::SIZE + payload.len());
     bytes.extend_from_slice(b"NRT0");
@@ -37,12 +31,25 @@ fn header_minor_mismatch_is_rejected() {
 }
 #[test]
 fn header_flags_are_accepted_when_supported() {
-    let bytes = frame_payload::<()>(
-        VERSION_MINOR,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        &[],
-    );
-    decode_from_bytes::<()>(&bytes).expect("supported flags must be accepted");
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let bytes = frame_payload::<()>(VERSION_MINOR, flags, &[]);
+        decode_from_bytes::<()>(&bytes).expect("supported flags must be accepted");
+    }
+}
+#[test]
+fn only_fixed_width_and_compact_length_layouts_are_accepted() {
+    for flags in 0..=u8::MAX {
+        let bytes = frame_payload::<()>(VERSION_MINOR, flags, &[]);
+        let result = decode_from_bytes::<()>(&bytes);
+        if flags & !header_flags::COMPACT_LEN == 0 {
+            result.expect("0x00 and COMPACT_LEN must be accepted");
+        } else {
+            assert!(
+                matches!(result, Err(Error::UnsupportedFeature("layout flag"))),
+                "flags {flags:#04x} must be rejected"
+            );
+        }
+    }
 }
 #[test]
 fn header_flags_outside_supported_mask_are_rejected() {
@@ -53,59 +60,12 @@ fn header_flags_outside_supported_mask_are_rejected() {
 #[test]
 fn reserved_header_flags_are_rejected() {
     for reserved in [
-        header_flags::VARINT_OFFSETS,
-        header_flags::COMPACT_SEQ_LEN,
-        header_flags::VARINT_OFFSETS | header_flags::COMPACT_SEQ_LEN,
+        0x08, 0x10, 0x18, 0x01, 0x04, 0x20, 0x03, 0x06, 0x22, 0x26, 0x27,
     ] {
         let bytes = frame_payload::<()>(VERSION_MINOR, reserved, &[]);
         let err = decode_from_bytes::<()>(&bytes).expect_err("reserved flags must be rejected");
         assert!(matches!(err, Error::UnsupportedFeature("layout flag")));
     }
-}
-#[test]
-fn field_bitset_requires_packed_struct_and_compact_len() {
-    for flags in [
-        header_flags::FIELD_BITSET,
-        header_flags::FIELD_BITSET | header_flags::COMPACT_LEN,
-        header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT,
-    ] {
-        let bytes = frame_payload::<()>(VERSION_MINOR, flags, &[]);
-        let err =
-            decode_from_bytes::<()>(&bytes).expect_err("invalid field bitset flags must fail");
-        assert!(matches!(
-            err,
-            Error::UnsupportedFeature("layout flag combination")
-        ));
-    }
-    let bytes = frame_payload::<()>(
-        VERSION_MINOR,
-        header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        &[],
-    );
-    decode_from_bytes::<()>(&bytes).expect("complete field bitset combination must be accepted");
-}
-#[test]
-fn encoder_rejects_incomplete_field_bitset_dependencies() {
-    let value = FixedFields {
-        tag: 7,
-        digest: [0xA5; 32],
-    };
-    for flags in [
-        header_flags::FIELD_BITSET,
-        header_flags::FIELD_BITSET | header_flags::COMPACT_LEN,
-        header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT,
-    ] {
-        norito::core::reset_decode_state();
-        let error = {
-            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-            norito::to_bytes(&value).expect_err("encoder must reject incomplete dependencies")
-        };
-        assert!(matches!(
-            error,
-            Error::UnsupportedFeature("layout flag combination")
-        ));
-    }
-    norito::core::reset_decode_state();
 }
 #[test]
 fn header_checksum_mismatch_is_rejected() {

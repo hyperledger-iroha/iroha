@@ -177,26 +177,6 @@ fn crc64_matches_digest() {
     assert_eq!(crc64(data), digest.sum64());
 }
 #[test]
-fn packed_offsets_are_bounded_by_the_supplied_payload() {
-    let mut valid = Vec::new();
-    for offset in [0_u64, 1, 3] {
-        valid.extend_from_slice(&offset.to_le_bytes());
-    }
-    valid.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
-    let (offsets, header_len, data_len, tail_len) =
-        decode_packed_offsets_slice(&valid, 2).expect("bounded offsets");
-    assert_eq!(offsets, [0, 1, 3]);
-    assert_eq!(header_len, 24);
-    assert_eq!(data_len, 3);
-    assert_eq!(tail_len, 0);
-    let mut out_of_bounds = valid;
-    out_of_bounds[16..24].copy_from_slice(&4_u64.to_le_bytes());
-    assert!(matches!(
-        decode_packed_offsets_slice(&out_of_bounds, 2),
-        Err(Error::LengthMismatch)
-    ));
-}
-#[test]
 fn copy_from_payload_allows_zero_len() {
     let mut out = 0u8;
     let ptr = core::ptr::NonNull::<u8>::dangling().as_ptr();
@@ -1402,21 +1382,6 @@ fn truncated_derived_enum_tag_is_a_length_error() {
     assert!(matches!(error, Error::LengthMismatch));
 }
 #[test]
-fn truncated_derived_struct_bitset_is_a_length_error() {
-    #[derive(Clone, Debug, PartialEq, Eq, crate::Encode, crate::Decode)]
-    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
-    struct BitsetRecord {
-        code: u8,
-        digest: [u8; 32],
-    }
-    let flags =
-        header_flags::PACKED_STRUCT | header_flags::FIELD_BITSET | header_flags::COMPACT_LEN;
-    let _flags = DecodeFlagsGuard::enter(flags);
-    let error = decode_archived_field::<BitsetRecord>(&[])
-        .expect_err("a packed struct archive without its bitset must be rejected");
-    assert!(matches!(error, Error::LengthMismatch));
-}
-#[test]
 fn result_uses_actual_length_prefix() {
     let value: Result<BadExactLen, BadExactLen> = Ok(BadExactLen(0x01020304));
     let bytes = encode_adaptive(&value);
@@ -1643,7 +1608,7 @@ fn payload_slice_from_ptr_cannot_escape_the_active_field() {
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
-struct PackedProof {
+struct SignInProof {
     domain: String,
     uri: String,
     statement: String,
@@ -1653,17 +1618,14 @@ struct PackedProof {
 #[test]
 fn option_roundtrip_respects_compact_flags() {
     reset_decode_state();
-    let payload: Option<PackedProof> = Some(PackedProof {
+    let payload: Option<SignInProof> = Some(SignInProof {
         domain: "example.org".into(),
         uri: "https://example.org/login".into(),
         statement: "Please sign in".into(),
         issued_at: "2025-01-01T00:00:00Z".into(),
         nonce: "abc123".into(),
     });
-    let flags = header_flags::COMPACT_LEN
-        | header_flags::PACKED_STRUCT
-        | header_flags::FIELD_BITSET
-        | header_flags::PACKED_SEQ;
+    let flags = header_flags::COMPACT_LEN;
     let encoded = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut buf = Vec::new();
@@ -1673,7 +1635,7 @@ fn option_roundtrip_respects_compact_flags() {
     reset_decode_state();
     let decoded = {
         let _guard = DecodeFlagsGuard::enter(flags);
-        let (decoded, used) = <Option<PackedProof> as DecodeFromSlice>::decode_from_slice(&encoded)
+        let (decoded, used) = <Option<SignInProof> as DecodeFromSlice>::decode_from_slice(&encoded)
             .expect("decode option");
         assert_eq!(used, encoded.len());
         decoded
@@ -1765,15 +1727,15 @@ fn from_bytes_rejects_trailing_bytes() {
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
 #[test]
-fn from_bytes_rejects_invalid_flag_combo() {
+fn from_bytes_rejects_reserved_layout_flag() {
     reset_decode_state();
     let value: u64 = 0xABCD_EF01_2345_6789;
     let mut bytes = to_bytes(&value).expect("encode header-framed payload");
-    bytes[Header::SIZE - 1] = header_flags::FIELD_BITSET;
+    bytes[Header::SIZE - 1] = 0x20;
     let result = from_bytes::<u64>(&bytes);
     assert!(matches!(
         result,
-        Err(Error::UnsupportedFeature("layout flag combination"))
+        Err(Error::UnsupportedFeature("layout flag"))
     ));
     reset_decode_state();
 }
@@ -1878,10 +1840,10 @@ fn encode_with_header_flags_exposes_explicit_layout() {
 #[test]
 fn encode_with_header_flags_respects_decode_guard() {
     reset_decode_state();
-    let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+    let _guard = DecodeFlagsGuard::enter(0);
     let value = vec![1u32, 2, 3, 4];
     let (_payload, flags) = crate::codec::encode_with_header_flags(&value);
-    assert_ne!(flags & header_flags::PACKED_SEQ, 0);
+    assert_eq!(flags, 0);
     reset_decode_state();
 }
 #[test]
@@ -1908,9 +1870,8 @@ fn read_len_readers_honor_compact_flags() {
     let mut seq_fixed = Vec::new();
     seq_fixed.extend_from_slice(&3u64.to_le_bytes());
     seq_fixed.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
-    let seq_flags_without_seq = header_flags::PACKED_SEQ;
-    {
-        let _guard = DecodeFlagsGuard::enter(seq_flags_without_seq);
+    for seq_flags in [0, header_flags::COMPACT_LEN] {
+        let _guard = DecodeFlagsGuard::enter(seq_flags);
         let (seq_len_slice, seq_hdr_slice) =
             read_seq_len_slice(&seq_fixed).expect("sequence len slice");
         assert_eq!(seq_len_slice, 3);
@@ -1926,18 +1887,13 @@ fn read_len_readers_honor_compact_flags() {
 fn decode_flags_guard_clears_state_between_payloads() {
     reset_decode_state();
     {
-        let _packed = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
+        let _compact = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
         assert!(decode_flags_active());
-        assert_eq!(
-            get_decode_flags(),
-            header_flags::PACKED_SEQ | header_flags::COMPACT_LEN
-        );
-        assert!(use_packed_seq());
+        assert_eq!(get_decode_flags(), header_flags::COMPACT_LEN);
         assert!(use_compact_len());
     }
     assert!(!decode_flags_active());
     assert_eq!(get_decode_flags(), 0);
-    assert!(!use_packed_seq());
     assert!(
         use_compact_len(),
         "without an explicit guard, helpers use the V1 default layout"
@@ -1946,7 +1902,6 @@ fn decode_flags_guard_clears_state_between_payloads() {
         let _neutral = DecodeFlagsGuard::enter(0);
         assert!(decode_flags_active());
         assert_eq!(get_decode_flags(), 0);
-        assert!(!use_packed_seq());
         assert!(!use_compact_len());
     }
     reset_decode_state();
@@ -2048,51 +2003,6 @@ fn btreemap_entry_slices_detects_out_of_bounds() {
     assert!(matches!(err, Error::LengthMismatch));
 }
 #[test]
-fn packed_maps_keep_key_then_value_payload_layout() {
-    fn read_u64_at(bytes: &[u8], offset: usize) -> u64 {
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(&bytes[offset..offset + 8]);
-        u64::from_le_bytes(buf)
-    }
-    reset_decode_state();
-    let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
-    let mut tree = std::collections::BTreeMap::new();
-    tree.insert(0x0102_u16, 0x0304_0506_u32);
-    tree.insert(0x0708_u16, 0x090A_0B0C_u32);
-    let mut bytes = Vec::new();
-    serialize_to_buffer(&tree, &mut bytes).expect("serialize packed map");
-    assert_eq!(read_u64_at(&bytes, 0), 2);
-    assert_eq!(read_u64_at(&bytes, 8), 0);
-    assert_eq!(read_u64_at(&bytes, 16), 2);
-    assert_eq!(read_u64_at(&bytes, 24), 4);
-    assert_eq!(read_u64_at(&bytes, 32), 0);
-    assert_eq!(read_u64_at(&bytes, 40), 4);
-    assert_eq!(read_u64_at(&bytes, 48), 8);
-    assert_eq!(
-        &bytes[56..],
-        &[
-            0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x0C, 0x0B, 0x0A, 0x09
-        ]
-    );
-    let (decoded_tree, used) =
-        <std::collections::BTreeMap<u16, u32> as DecodeFromSlice>::decode_from_slice(&bytes)
-            .expect("decode packed btree map");
-    assert_eq!(used, bytes.len());
-    assert_eq!(decoded_tree, tree);
-    let mut hash = std::collections::HashMap::new();
-    hash.insert(0x0708_u16, 0x090A_0B0C_u32);
-    hash.insert(0x0102_u16, 0x0304_0506_u32);
-    let mut hash_bytes = Vec::new();
-    serialize_to_buffer(&hash, &mut hash_bytes).expect("serialize packed hash map");
-    assert_eq!(hash_bytes, bytes);
-    let (decoded_hash, used) =
-        <std::collections::HashMap<u16, u32> as DecodeFromSlice>::decode_from_slice(&hash_bytes)
-            .expect("decode packed hash map");
-    assert_eq!(used, hash_bytes.len());
-    assert_eq!(decoded_hash, hash);
-    reset_decode_state();
-}
-#[test]
 fn collection_decoders_handle_u8_element_sequences_directly() {
     use std::collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque};
     reset_decode_state();
@@ -2156,7 +2066,7 @@ fn collection_and_map_encoded_lengths_match_payloads() {
     assert_lengths(&HashSet::from([13_u16, 14, 15]));
     assert_lengths(&BTreeMap::from([(1_u16, 2_u32), (3, 4)]));
     assert_lengths(&HashMap::from([(5_u16, 6_u32), (7, 8)]));
-    let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+    let _guard = DecodeFlagsGuard::enter(0);
     assert_lengths(&VecDeque::from([1_u16, 2, 3]));
     assert_lengths(&LinkedList::from([4_u16, 5, 6]));
     assert_lengths(&BinaryHeap::from([7_u16, 8, 9]));
@@ -2210,16 +2120,7 @@ fn tuple_serialization_preserves_explicit_flags_in_nested_containers() {
         "an absent layout override must retain the canonical default bytes"
     );
 
-    for flags in [
-        0,
-        header_flags::PACKED_SEQ,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT,
-        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-    ] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         reset_decode_state();
         let (tuple_payload, expected_payload) = {
             let _guard = DecodeFlagsGuard::enter(flags);
@@ -2409,70 +2310,42 @@ fn vec_roundtrip() {
     assert_eq!(value, decoded);
 }
 #[test]
-fn decode_from_slice_vec_u32_packed_offsets() {
-    let elems = [1u32, 2, 3];
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&(elems.len() as u64).to_le_bytes());
-    let mut offset = 0u64;
-    for _ in 0..elems.len() {
-        buf.extend_from_slice(&offset.to_le_bytes());
-        offset += 4;
-    }
-    buf.extend_from_slice(&offset.to_le_bytes());
-    for value in elems {
-        buf.extend_from_slice(&value.to_le_bytes());
-    }
-    let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
-    let (decoded, used) = <Vec<u32> as DecodeFromSlice>::decode_from_slice(&buf).unwrap();
-    assert_eq!(decoded, elems);
-    assert_eq!(used, buf.len());
-}
-#[test]
 fn decode_from_slice_vec_u32() {
-    // Build payload for packed-seq Vec<T>: [len:u64][(len+1) offsets][data]
+    // Length-prefixed Vec<T> payload: [len:u64] then `[len][element]` per element.
     let elems = [1u32, 2, 3];
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&(elems.len() as u64).to_le_bytes());
-    // Compute element encodings and cumulative offsets
-    let mut encs: Vec<Vec<u8>> = Vec::new();
-    let mut offsets: Vec<u64> = Vec::new();
-    let mut total: u64 = 0;
-    for &e in &elems {
-        offsets.push(total);
-        let mut eb = Vec::new();
-        serialize_to_buffer(&e, &mut eb).unwrap();
-        total += eb.len() as u64;
-        encs.push(eb);
+    for flags in [0, header_flags::COMPACT_LEN] {
+        reset_decode_state();
+        let _guard = DecodeFlagsGuard::enter(flags);
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(elems.len() as u64).to_le_bytes());
+        for &e in &elems {
+            let mut eb = Vec::new();
+            serialize_to_buffer(&e, &mut eb).unwrap();
+            write_len_to_vec_with_flags(&mut buf, eb.len() as u64, flags);
+            buf.extend_from_slice(&eb);
+        }
+        let (out, used) = <Vec<u32> as DecodeFromSlice>::decode_from_slice(&buf).unwrap();
+        assert_eq!(out, elems, "flags 0x{flags:02x}");
+        assert_eq!(used, buf.len(), "flags 0x{flags:02x}");
     }
-    offsets.push(total);
-    for off in offsets {
-        buf.extend_from_slice(&off.to_le_bytes());
-    }
-    for eb in encs {
-        buf.extend_from_slice(&eb);
-    }
-    let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
-    let (out, used) = <Vec<u32> as DecodeFromSlice>::decode_from_slice(&buf).unwrap();
-    assert_eq!(out, elems);
-    assert_eq!(used, buf.len());
+    reset_decode_state();
 }
 #[test]
 fn vec_header_is_u64() {
     use crate::core::header_flags;
     let value = vec![42u8; 3];
+    for flags in [0, header_flags::COMPACT_LEN] {
+        reset_decode_state();
+        let guard = DecodeFlagsGuard::enter(flags);
+        let bytes = encode_adaptive(&value);
+        drop(guard);
+        assert!(bytes.len() >= 8);
+        let mut hdr = [0u8; 8];
+        hdr.copy_from_slice(&bytes[..8]);
+        let reported = u64::from_le_bytes(hdr);
+        assert_eq!(reported as usize, value.len(), "flags 0x{flags:02x}");
+    }
     reset_decode_state();
-    let flags = header_flags::PACKED_SEQ
-        | header_flags::PACKED_STRUCT
-        | header_flags::FIELD_BITSET
-        | header_flags::COMPACT_LEN;
-    let guard = DecodeFlagsGuard::enter(flags);
-    let bytes = encode_adaptive(&value);
-    drop(guard);
-    assert!(bytes.len() >= 8);
-    let mut hdr = [0u8; 8];
-    hdr.copy_from_slice(&bytes[..8]);
-    let reported = u64::from_le_bytes(hdr);
-    assert_eq!(reported as usize, value.len());
 }
 #[test]
 fn decode_from_slice_option_and_result() {
@@ -2944,20 +2817,6 @@ fn vec_u8_decode_rejects_len_prefixed_elements() {
     let result = decode_field_canonical::<Vec<u8>>(&payload);
     assert!(matches!(result, Err(Error::LengthMismatch)));
     drop(guard);
-    reset_decode_state();
-}
-#[test]
-fn vec_u8_raw_decode_works_even_with_packed_seq_flag() {
-    reset_decode_state();
-    let value: Vec<u8> = vec![7, 8, 9];
-    let mut raw = Vec::new();
-    raw.extend_from_slice(&(value.len() as u64).to_le_bytes());
-    raw.extend_from_slice(&value);
-    let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
-    let (decoded, used) =
-        <Vec<u8> as DecodeFromSlice>::decode_from_slice(&raw).expect("decode raw vec");
-    assert_eq!(used, raw.len());
-    assert_eq!(decoded, value);
     reset_decode_state();
 }
 // Preserve pointer and length boundary coverage under `core::tests`.

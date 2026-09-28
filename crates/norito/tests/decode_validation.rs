@@ -265,7 +265,7 @@ fn malformed_fields_reject_before_validation_and_unit_failures_are_fallible() {
 }
 
 #[test]
-fn unit_validation_preserves_empty_archives_and_canonical_packed_metadata() {
+fn unit_validation_preserves_empty_archives_and_rejects_trailing_bytes() {
     let empty = layout_frame(&Unit, 0);
     CALLS.set(0);
     let archived = norito::from_bytes::<Unit>(&empty).unwrap();
@@ -275,22 +275,21 @@ fn unit_validation_preserves_empty_archives_and_canonical_packed_metadata() {
     );
     assert_eq!(CALLS.get(), 1);
 
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::header_flags::PACKED_STRUCT);
-    let (payload, actual) = norito::codec::encode_with_header_flags(&Unit);
-    assert_eq!(actual, norito::core::header_flags::PACKED_STRUCT);
-    assert_eq!(payload, [0; 8]);
-    let mut wrong_offset = payload.clone();
-    wrong_offset[0] = 1;
-    let mut trailing = payload.clone();
-    trailing.push(0xff);
-    for malformed in [wrong_offset, trailing] {
-        let frame = norito::core::frame_bare_with_header_flags::<Unit>(&malformed, actual).unwrap();
+    for requested in [0, norito::core::header_flags::COMPACT_LEN] {
+        let _flags = norito::core::DecodeFlagsGuard::enter(requested);
+        let (payload, actual) = norito::codec::encode_with_header_flags(&Unit);
+        norito::core::validate_header_flags(actual).unwrap();
+        assert!(
+            payload.is_empty(),
+            "unit payload for flags {requested:#04x}"
+        );
+        let frame = norito::core::frame_bare_with_header_flags::<Unit>(&[0xff], actual).unwrap();
         CALLS.set(0);
         assert!(matches!(
             decode_frame::<Unit>(&frame),
             Err(Error::LengthMismatch)
         ));
         assert_eq!(CALLS.get(), 1);
-        frame_roundtrip(&Unit, actual);
+        frame_roundtrip(&Unit, requested);
     }
 }

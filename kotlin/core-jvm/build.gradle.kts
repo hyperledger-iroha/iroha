@@ -176,3 +176,15 @@ publishing {
         }
     }
 }
+
+// Runnable local proof example. A same-source JNI bridge is required; no network is contacted.
+tasks.register<JavaExec>("confidentialRedemptionExample") {
+    description = "Generate and locally verify one confidential full-redemption proof."
+    group = "verification"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("org.hyperledger.iroha.sdk.examples.ConfidentialRedemptionExample")
+    val nativeDirectory = providers.environmentVariable("IROHA_NATIVE_LIBRARY_PATH")
+        .orElse(rootProject.projectDir.parentFile.resolve("target/debug").absolutePath)
+    systemProperty("java.library.path", nativeDirectory.get())
+}

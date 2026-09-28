@@ -209,7 +209,7 @@ Refer to `status.md` for the per-crate migration checklist and current status.
 > `serde_with` dependencies; configuration defaults, visitors, and emitters now
 > rely exclusively on Norito traits.
 
-### Core runtime (`iroha_core`, `iroha_data_model`, `iroha_executor`, `ivm`)
+### Core runtime (`iroha_core`, `iroha_data_model`, `ivm`)
 
 - Update state/snapshot IO to call `norito::core::{to_bytes, from_bytes}` and
   delete Serde bridges (for example `serde_json::to_vec`).

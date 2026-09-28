@@ -293,6 +293,16 @@ impl TronClient {
         Ok(blocks)
     }
 
+    /// `POST /wallet/getnextmaintenancetime`: the next maintenance time (ms).
+    ///
+    /// # Errors
+    /// Any [`RpcError`].
+    pub fn next_maintenance_time(&self) -> Result<u64, RpcError> {
+        let value = self.call("/wallet/getnextmaintenancetime", Map::new())?;
+        let what = "next maintenance time";
+        number_or_zero(expect_object(&value, what)?, "num", what)
+    }
+
     /// `POST /walletsolidity/getnowblock`: the newest solidified block.
     ///
     /// # Errors

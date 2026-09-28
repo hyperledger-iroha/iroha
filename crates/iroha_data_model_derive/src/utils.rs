@@ -1,5 +1,5 @@
 use manyhow::{Error as ManyhowError, ToTokensError};
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::ToTokens;
 
 /// Parse the one explicit nominal identity owned by a generated child type.
@@ -53,25 +53,6 @@ pub fn required_child_schema_name(
             format!("{derive_name} requires #[{attribute_name}(schema_name = \"captured child identity\")]"),
         )
     })
-}
-/// Extension trait for [`darling::Error`] adding a `with_spans` helper.
-#[allow(dead_code)]
-pub trait DarlingErrorExt: Sized {
-    /// Attaches multiple spans to the error.
-    fn with_spans(self, spans: impl IntoIterator<Item = impl Into<Span>>) -> Self;
-}
-impl DarlingErrorExt for darling::Error {
-    fn with_spans(self, spans: impl IntoIterator<Item = impl Into<Span>>) -> Self {
-        let mut iter = spans.into_iter();
-        let Some(first) = iter.next() else {
-            return self;
-        };
-        let first: Span = first.into();
-        let r = iter
-            .try_fold(first, |a, b| a.join(b.into()))
-            .unwrap_or(first);
-        self.with_span(&r)
-    }
 }
 /// Finds an optional single attribute with specified name.
 ///
@@ -141,7 +122,6 @@ pub fn darling_result<T>(result: darling::Result<T>) -> manyhow::Result<T, Darli
     result.map_err(DarlingErrorWrapper)
 }
 // Macro for automatic `syn::parse::Parse` implementation for keyword attribute structs.
-#[allow(unused_macros)]
 macro_rules! attr_struct {
     (
         $( #[$meta:meta] )*
@@ -168,7 +148,6 @@ macro_rules! attr_struct {
         }
     };
 }
-#[allow(unused_imports)]
 pub(crate) use attr_struct;
 #[cfg(test)]
 mod tests {
@@ -278,11 +257,6 @@ mod tests {
         let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[test_attr(foo)])];
         let parsed: syn::Ident = parse_single_list_attr("test_attr", &attrs).unwrap();
         assert_eq!(parsed.to_string(), "foo");
-    }
-    #[test]
-    fn darling_error_ext_with_spans() {
-        let err = darling::Error::custom("err").with_spans([Span::call_site()]);
-        let _ = err;
     }
     #[test]
     fn attr_struct_macro_parses() {

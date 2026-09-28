@@ -100,8 +100,8 @@ The source now has a distinct closed context identity, a three-value leaf
 descriptor, bounded codec and query linkage. The coefficient source requires
 explicit trace/chunk inputs and all 2N mask coefficients, with no default mask.
 It checks all input coordinates and retains zeroizing result/scratch buffers.
-Whole-transcript soundness/hiding analysis and execution of the complete masked
-producer remain mandatory; construction code alone does not establish either.
+Whole-transcript soundness/hiding analysis remains mandatory; successful
+construction and verification alone do not establish that reduction.
 In particular, justify power batching with the committed `R`, the larger
 malicious trace-degree envelope, all mixed-arity FRI steps, finite challenge
 sampling/abort probabilities, and the concrete hash/Fiat–Shamir reduction.
@@ -206,11 +206,16 @@ streamed tree stacks; no complete LDE or digest tree is retained. A failed attem
 does not retry with reused entropy. This normal-library module serves the offline
 quantity facade. Its full-size roundtrip diagnostic is explicitly selected
 separately because one attempt hashes over 69 million typed leaves/parents; it
-has not yet completed in the September 28 validation. No full-size runtime,
-peak-RSS or complete hiding result is claimed.
+passes in the September 28 captured binary at 482,978 proof bytes, 4,346.20s wall
+time and 1,118,158,848 bytes maximum RSS on the contended M1 Ultra host. The same
+test rejects a different statement context, a deficient byte cap and an altered
+proof. See the receipt for exact source scope and concurrent workspace drift.
+This is a raw fixed-SMT child, not an ordinary/AXT quantity artifact, deployment
+latency qualification or a complete hiding result.
 
-Next execute full-size valid/invalid relation witnesses and qualify complete
-bytes/work/memory and the cryptographic reduction. Small arithmetic tests independently compare
+Next execute the actual ordinary/AXT public producers, retain artifacts for
+independent controls, and qualify multiple-child semantics, production resources
+and the cryptographic reduction. Small arithmetic tests independently compare
 128 stripes to materialized FFT/Horner evaluation, current/next rotations,
 virtual/dense composition, and numerator/quotient coefficient convolution;
 nonzero remainders, entropy failures and exhausted work budgets reject. Separately

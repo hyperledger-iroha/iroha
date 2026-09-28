@@ -415,6 +415,9 @@ pub mod uri {
     /// URI template used to read one exact Parliament attempt.
     pub const GOV_PARLIAMENT_ATTEMPT_READ: &str =
         crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ.path();
+    /// URI template used to read the driver plan of one Parliament attempt.
+    pub const GOV_PARLIAMENT_ATTEMPT_PLAN: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_PLAN.path();
     /// URI template used to inspect one node-local timed-OVN casting context.
     pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ: &str =
         crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
@@ -1855,31 +1858,23 @@ mod tests {
             AccountId::new(checked_test_keypair(0x35).public_key().clone()),
             "other".parse().expect("valid sponsor-program name"),
         );
+        let sponsor_program_id = quote
+            .intent
+            .sponsor_program()
+            .expect("sponsored fixture")
+            .0
+            .clone();
         let sponsor_decision_mutations = [
             FeeQuoteDecision::Accepted {
                 debit_source: FeeDebitSource::SponsorProgram(other_program_id),
                 program_revision: Some(7),
             },
             FeeQuoteDecision::Accepted {
-                debit_source: FeeDebitSource::SponsorProgram(
-                    quote
-                        .intent
-                        .sponsor_program()
-                        .expect("sponsored fixture")
-                        .0
-                        .clone(),
-                ),
+                debit_source: FeeDebitSource::SponsorProgram(sponsor_program_id.clone()),
                 program_revision: Some(8),
             },
             FeeQuoteDecision::Accepted {
-                debit_source: FeeDebitSource::SponsorProgram(
-                    quote
-                        .intent
-                        .sponsor_program()
-                        .expect("sponsored fixture")
-                        .0
-                        .clone(),
-                ),
+                debit_source: FeeDebitSource::SponsorProgram(sponsor_program_id.clone()),
                 program_revision: None,
             },
             FeeQuoteDecision::Accepted {
@@ -1915,14 +1910,7 @@ mod tests {
                 program_revision: Some(1),
             },
             FeeQuoteDecision::Accepted {
-                debit_source: FeeDebitSource::SponsorProgram(
-                    quote
-                        .intent
-                        .sponsor_program()
-                        .expect("sponsored fixture")
-                        .0
-                        .clone(),
-                ),
+                debit_source: FeeDebitSource::SponsorProgram(sponsor_program_id),
                 program_revision: Some(7),
             },
         ];
@@ -2428,7 +2416,7 @@ mod tests {
             }
         }
         for invalid in [
-            r#"{}"#,
+            r"{}",
             r#"{"hash":"abc","scope":"global","extra":0}"#,
             r#"{"hash":"abc","scope":"global","scope":"local"}"#,
         ] {

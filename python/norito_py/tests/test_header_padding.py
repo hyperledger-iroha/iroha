@@ -4,13 +4,10 @@
 import unittest
 
 from norito.crc64 import crc64
+from norito.errors import UnsupportedFeatureError
 from norito.header import (
     COMPACT_LEN,
-    COMPACT_SEQ_LEN,
-    FIELD_BITSET,
     MAX_HEADER_PADDING,
-    PACKED_STRUCT,
-    VARINT_OFFSETS,
     NoritoHeader,
 )
 
@@ -45,35 +42,28 @@ class NoritoHeaderPaddingTests(unittest.TestCase):
         with self.assertRaises(Exception):
             NoritoHeader.decode(framed)
 
-    def test_decode_rejects_reserved_flags(self) -> None:
+    def test_header_accepts_only_fixed_width_and_compact_length_layouts(self) -> None:
         payload = b"x"
         checksum = crc64(payload)
-        for flags in (VARINT_OFFSETS, COMPACT_SEQ_LEN, VARINT_OFFSETS | COMPACT_SEQ_LEN):
-            header = self._frame_with_unchecked_flags(payload, checksum, flags)
-            with self.subTest(flags=flags), self.assertRaises(Exception):
-                NoritoHeader.decode(header)
-            with self.subTest(flags=flags), self.assertRaises(Exception):
-                NoritoHeader(
-                    schema_hash=b"\x00" * 16,
-                    payload_length=len(payload),
-                    checksum=checksum,
-                    flags=flags,
-                ).encode()
-
-    def test_decode_rejects_invalid_field_bitset_flags(self) -> None:
-        payload = b"x"
-        checksum = crc64(payload)
-        for flags in (FIELD_BITSET, FIELD_BITSET | COMPACT_LEN, FIELD_BITSET | PACKED_STRUCT):
-            header = self._frame_with_unchecked_flags(payload, checksum, flags)
-            with self.subTest(flags=flags), self.assertRaises(Exception):
-                NoritoHeader.decode(header)
-            with self.subTest(flags=flags), self.assertRaises(Exception):
-                NoritoHeader(
-                    schema_hash=b"\x00" * 16,
-                    payload_length=len(payload),
-                    checksum=checksum,
-                    flags=flags,
-                ).encode()
+        for flags in range(256):
+            framed = self._frame_with_unchecked_flags(payload, checksum, flags)
+            header = NoritoHeader(
+                schema_hash=b"\x00" * 16,
+                payload_length=len(payload),
+                checksum=checksum,
+                flags=flags,
+            )
+            with self.subTest(flags=flags):
+                if flags in (0, COMPACT_LEN):
+                    decoded_header, decoded_payload = NoritoHeader.decode(framed)
+                    self.assertEqual(decoded_header.flags, flags)
+                    self.assertEqual(decoded_payload, payload)
+                    self.assertEqual(header.encode()[-1], flags)
+                else:
+                    with self.assertRaises(UnsupportedFeatureError):
+                        NoritoHeader.decode(framed)
+                    with self.assertRaises(UnsupportedFeatureError):
+                        header.encode()
 
     def _frame_with_unchecked_flags(self, payload: bytes, checksum: int, flags: int) -> bytes:
         header = NoritoHeader(

@@ -3,7 +3,7 @@
 //! These nominal values belong to an agreed genesis policy, never node-local
 //! prover settings. Construction and sizing do not authenticate an execution,
 //! reserve State capacity, bound non-source mandatory work, or enable proof admission.
-//! The bootstrap profile is carried by BlockParameters; Core owns authenticated
+//! The bootstrap profile is carried by `BlockParameters`; Core owns authenticated
 //! genesis installation, frozen block snapshots and complete reservation lifecycles.
 
 use super::ExecutionOutputPolicyV1;

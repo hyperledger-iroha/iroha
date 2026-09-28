@@ -28,13 +28,13 @@ Every Norito-RPC payload begins with the canonical header defined in `crates/nor
 | Offset | Field        | Type      | Notes |
 |--------|-------------|-----------|-------|
 | 0      | Magic       | `[u8;4]`  | ASCII `NRT0`; rejects malformed payloads. |
-| 4      | Major       | `u8`      | Current value `1`; mismatches return HTTP 400. |
-| 5      | Minor       | `u8` set  | Bitmask of negotiated layout flags. |
+| 4      | Major       | `u8`      | Current value `0`; mismatches return HTTP 400. |
+| 5      | Minor       | `u8`      | Fixed `0`; any other value is rejected. |
 | 6      | Schema hash | `[u8;16]` | Deterministic hash of the DTO (see Section 3). |
 | 22     | Compression | `u8`      | `0 = none`, `1 = zstd`. |
 | 23     | Length      | `u64`     | Uncompressed payload length in bytes. |
 | 31     | CRC64       | `u64`     | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the uncompressed bytes. |
-| 39     | Flags       | `u8`      | Layout bits (packed sequences, compact lengths, field bitset). |
+| 39     | Flags       | `u8`      | Layout bits: `0x00` (fixed-width per-value prefixes) or `0x02` (`COMPACT_LEN`); every other bit is rejected. |
 
 Validation rules:
 1. Magic + major version must match or Torii returns `400 schema mismatch`.

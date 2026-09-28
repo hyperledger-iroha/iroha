@@ -25,7 +25,7 @@ pub struct BlockAcquisitionSlot<'a, K: Key, V: Value, M: StorageMode<K, V> = Unt
 enum WriterPhase<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> {
     Empty,
     Raw(ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V, M>>),
-    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>),
+    Writer(MapWriter<'a, K, V, M>),
     Retired(BptreeMapAbandonment<K, V, M>),
 }
 
@@ -47,7 +47,7 @@ impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> WriterPhase<'a, K, V,
         }
     }
 
-    fn take_writer(&mut self) -> ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>> {
+    fn take_writer(&mut self) -> MapWriter<'a, K, V, M> {
         match std::mem::replace(self, Self::Empty) {
             Self::Writer(writer) => writer,
             other => {
@@ -81,6 +81,10 @@ impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> WriterPhase<'a, K, V,
 
 // Once both converted writers move into Block, the earlier phase storage is
 // reused. The block is installed here before any reset/replacement payload code.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "phases change in place; boxing a variant would allocate on the allocation-free path"
+)]
 enum AcquisitionPhase<'a, K: Key, V: Value, M: StorageMode<K, V>> {
     Empty,
     Pending {

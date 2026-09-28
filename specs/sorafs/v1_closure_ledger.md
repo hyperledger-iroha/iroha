@@ -304,7 +304,9 @@ and `82e2fd43bac0b642f99f8f18a425a01b9c9f49fcbb988c24ecdac0fc891ece73`.
 These bounded historical local results do not qualify the entire merged source.
 Rebuild and reconcile the exact current inventory, execute the custody and
 retained selections, then run the complete `sorafs_manifest`, `iroha_data_model`,
-`iroha_executor`, `iroha_core` and `iroha_torii` library suites. In particular,
+`iroha_core` and `iroha_torii` library suites. The Rust executor SDK named in the
+historical results above was removed on 2026-09-28; Core owns those permission
+regressions. In particular,
 the native durable-finality and generic-state runtime witnesses remain pending.
 An old Native30 build plan is not an executed build.
 

@@ -50,6 +50,9 @@ pub struct InitialProviderAdmissionCouncilV1 {
 }
 impl InitialProviderAdmissionCouncilV1 {
     /// Derive the sole revision-one policy for an already-derived genesis network identity.
+    ///
+    /// # Errors
+    /// Rejects a council that cannot form a valid revision-one policy.
     pub fn bind(
         &self,
         network_id: [u8; 32],
@@ -138,6 +141,9 @@ pub enum ProviderAdmissionGovernanceActionV1 {
 pub struct InvalidProviderAdmissionEffectV1;
 
 /// Decode one bounded exact canonical frame.
+///
+/// # Errors
+/// Rejects empty, oversized or noncanonical frames.
 pub fn decode_frame<T>(bytes: &[u8]) -> Result<T, InvalidProviderAdmissionEffectV1>
 where
     T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
@@ -160,6 +166,9 @@ where
 
 impl ProviderAdmissionGovernanceActionV1 {
     /// Validate the complete canonical material and return its provider, or `None` for council policy.
+    ///
+    /// # Errors
+    /// Rejects incomplete or noncanonical admission material.
     pub fn provider_id(&self) -> Result<Option<ProviderId>, InvalidProviderAdmissionEffectV1> {
         let id = match self {
             Self::ConfigureCouncil(bytes) => {

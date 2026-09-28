@@ -5,13 +5,12 @@
 //! instances that the orchestrator can schedule deterministically. Each run
 //! evaluates capability constraints, honouring range and stream budgets, and
 //! applies the weighting formula described in `specs/sorafs_orchestrator_plan.md`.
+use crate::set_no_follow_flag;
 use crate::{
     CarBuildPlan, ChunkFetchSpec,
     multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
 };
 use norito::json::{Map, Number, Value, to_string_pretty};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::HashMap,
     fs,
@@ -392,47 +391,6 @@ fn validate_output_path(path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }
 /// Build a scoreboard for the supplied manifest and provider metadata.
 pub fn build_scoreboard(

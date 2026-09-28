@@ -15538,6 +15538,7 @@ impl NodeHandle {
     ///
     /// Returns a permanent error for an unbound or foreign-instance claim and
     /// a retryable error when admitted storage is temporarily unavailable.
+    #[cfg(test)]
     #[doc(hidden)]
     pub fn verify_provider_ingest_completed_musubi_capture_bundle(
         &self,

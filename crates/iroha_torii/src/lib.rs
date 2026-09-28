@@ -78,6 +78,8 @@ pub mod privacy_issuance_api;
 pub mod profile_stats;
 #[cfg(feature = "push")]
 mod push;
+/// SCCP v1 public read API.
+mod sccp;
 #[cfg(any(test, feature = "bench"))]
 #[doc(hidden)]
 pub mod query_load_profiles;
@@ -1183,7 +1185,8 @@ pub use gov::{
     ReferendumGetResponse, TallyGetResponse, handle_gov_capabilities, handle_gov_citizen_draft,
     handle_gov_citizen_status, handle_gov_contract_get, handle_gov_get_locks,
     handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
-    handle_gov_parliament_attempt_draft, handle_gov_parliament_attempt_read,
+    handle_gov_parliament_attempt_draft, handle_gov_parliament_attempt_plan,
+    handle_gov_parliament_attempt_read,
     handle_gov_parliament_tle_release_context_read, handle_gov_parliament_transition_draft,
     handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
 };
@@ -6378,7 +6381,7 @@ pub(crate) struct QueryAdmissionPermit {
     _body: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 impl QueryAdmissionPermit {
-    #[cfg(feature = "app_api")]
+    #[cfg(all(test, feature = "app_api"))]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         self._body = Some(permit);
         self
@@ -7735,6 +7738,23 @@ async fn handler_gov_parliament_attempt_read(
     )
     .await?;
     crate::gov::handle_gov_parliament_attempt_read(app.state.clone(), governance_attempt_id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_parliament_attempt_plan(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(governance_attempt_id): AxPath<String>,
+) -> Result<JsonBody<iroha_torii_shared::parliament_api::ParliamentAttemptPlanResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/parliament/attempts/{governance_attempt_id}/plan",
+    )
+    .await?;
+    crate::gov::handle_gov_parliament_attempt_plan(app.state.clone(), governance_attempt_id).await
 }
 
 #[cfg(feature = "app_api")]
@@ -17466,6 +17486,11 @@ fn resolve_signed_query_routing_for_app(
     query: &SignedQuery,
 ) -> Result<RoutingDecision, queue::RoutingResolveError> {
     match signed_query_scope_for_app(app, query) {
+        SignedQueryScope::TargetAccount(account_id)
+            if is_known_global_asset_balance_query(app, query, &account_id) =>
+        {
+            resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL)
+        }
         SignedQueryScope::TargetAccount(account_id) => {
             resolve_torii_target_account_routes(app, &account_id)
                 .and_then(|routes| require_signed_query_route(routes, DataSpaceId::UNIVERSAL))
@@ -20456,6 +20481,28 @@ fn signed_query_scope_for_app_bounded(
     };
     Ok(scope)
 }
+fn is_known_global_asset_balance_query(
+    app: &AppState,
+    request: &impl SignedQueryScopeInput,
+    target: &AccountId,
+) -> bool {
+    use iroha_data_model::{
+        asset::{AssetBalancePolicy, AssetBalanceScope},
+        query::{QueryRequest, SingularQueryBox},
+    };
+    let QueryRequest::Singular(SingularQueryBox::FindAssetById(query)) =
+        request.request_with_authority().request()
+    else {
+        return false;
+    };
+    query.id.account() == target
+        && matches!(query.id.scope(), AssetBalanceScope::Global)
+        && app
+            .state
+            .world_view()
+            .asset_definition(query.id.definition())
+            .is_ok_and(|definition| definition.balance_scope_policy() == AssetBalancePolicy::Global)
+}
 fn torii_authorized_signed_query_routes(
     app: &AppState,
     request: &impl SignedQueryScopeInput,
@@ -20491,6 +20538,15 @@ fn torii_authorized_signed_query_routes(
         SignedQueryScope::LocalReplicated => Vec::new(),
         SignedQueryScope::AuthorityRouted => unreachable!("handled above"),
         SignedQueryScope::CrossDataspaceFanout => torii_all_dataspace_routes(app),
+        SignedQueryScope::TargetAccount(account_id)
+            if is_known_global_asset_balance_query(app, request, account_id) =>
+        {
+            // Global balances have one authoritative bucket, independently of
+            // the holder's aliases or the definition's owning domain. Preserve
+            // TargetAccount authorization below and the executor's exact-holder
+            // permission check without querying unrelated dataspaces.
+            vec![torii_nexus_route(app)?]
+        }
         SignedQueryScope::TargetAccount(account_id) => {
             torii_target_account_routes(app, account_id)?
         }
@@ -43040,6 +43096,25 @@ impl Torii {
                 ),
         );
     }
+    /// SCCP v1 public read routes (`specs/sccp.md` §6).
+    #[allow(clippy::unused_self)]
+    fn add_sccp_routes(&self, builder: &mut RouterBuilder) {
+        mount_catalog_route_rows!(
+            builder, sccp;
+            CAPABILITIES => public_get(sccp::handler_capabilities);
+            GOVERNANCE => public_get(sccp::handler_governance);
+            GOVERNANCE_PROPOSALS => public_get(sccp::handler_governance_proposals);
+            LIGHT_CLIENTS => public_get(sccp::handler_light_clients);
+            LIGHT_CLIENT_SETS => public_get(sccp::handler_light_client_sets);
+            REGISTRY => public_get(sccp::handler_registry);
+            MESSAGE => public_get(sccp::handler_message);
+            MESSAGE_PROOF => public_get(sccp::handler_message_proof);
+            CONTROL_PROOF => public_get(sccp::handler_control_proof);
+            ROSTER_CURRENT => public_get(sccp::handler_roster_current);
+            ROSTER_ROTATIONS => public_get(sccp::handler_rotations);
+            ROSTER => public_get(sccp::handler_roster);
+        );
+    }
     /// Musubi Kotodama package-registry routes.
     #[allow(clippy::unused_self)]
     #[cfg(not(feature = "app_api"))]
@@ -44120,6 +44195,7 @@ impl Torii {
                 GOV_CITIZEN_DRAFT => canonical_account_post(handler_gov_citizen_draft, app_state, runtime_governance_body_limit);
                 GOV_PARLIAMENT_ATTEMPT_DRAFT => canonical_account_post(handler_gov_parliament_attempt_draft, app_state, runtime_governance_body_limit);
                 GOV_PARLIAMENT_ATTEMPT_READ => canonical_account_get(handler_gov_parliament_attempt_read, app_state, 0);
+                GOV_PARLIAMENT_ATTEMPT_PLAN => canonical_account_get(handler_gov_parliament_attempt_plan, app_state, 0);
                 GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ => canonical_account_get(handler_gov_parliament_timed_ovn_casting_context_read, app_state, 0);
                 GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF => canonical_account_post(handler_gov_parliament_timed_ovn_casting_proof, app_state, runtime_governance_body_limit);
                 GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ => canonical_account_get(handler_gov_parliament_tle_release_context_read, app_state, 0);
@@ -47172,6 +47248,7 @@ impl Torii {
         // Transaction, Contracts, VK
         self.add_transaction_routes(&mut builder);
         self.add_da_routes(&mut builder);
+        self.add_sccp_routes(&mut builder);
         self.add_contracts_and_vk_routes(&mut builder);
         // Signed Norito query and proof endpoints
         self.add_query_routes(&mut builder);

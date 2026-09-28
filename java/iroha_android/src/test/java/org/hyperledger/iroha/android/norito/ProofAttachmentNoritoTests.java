@@ -23,20 +23,15 @@ public final class ProofAttachmentNoritoTests {
   public static void main(final String[] args) {
     final ProofAttachmentNoritoTests tests = new ProofAttachmentNoritoTests();
     tests.thirdTailMatchesCanonicalNoritoLayout();
-    tests.roundtripsEverySupportedSequenceLayout();
+    tests.roundtripsEverySupportedLengthLayout();
     tests.decoderRejectsMalformedAndResourceHostilePaths();
     System.out.println("[IrohaAndroid] ProofAttachmentNoritoTests passed.");
   }
 
   @Test
-  public void roundtripsEverySupportedSequenceLayout() {
+  public void roundtripsEverySupportedLengthLayout() {
     final ProofAttachment attachment = sampleAttachment();
-    for (final int flags :
-        new int[] {
-          NoritoHeader.COMPACT_LEN,
-          NoritoHeader.PACKED_SEQ,
-          NoritoHeader.COMPACT_LEN | NoritoHeader.PACKED_SEQ
-        }) {
+    for (final int flags : new int[] {0, NoritoHeader.COMPACT_LEN}) {
       final byte[] encoded =
           TransactionPayloadAdapter.encodeProofAttachmentPayload(attachment, flags);
       assert attachment.equals(

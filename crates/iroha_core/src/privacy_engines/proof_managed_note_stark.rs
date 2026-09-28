@@ -364,7 +364,8 @@ impl ProofManagedNoteStarkProtocolV1 {
             || self.parameters.maximum_proof_bytes > consensus_proof_cap
             || PROOF_MANAGED_NOTE_MASK_DEGREE_V1 < mask_geometry.minimum_mask_degree
             || fri_soundness.query_error_bits != PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1
-            || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
+            || fri_soundness.commitment_error_bits
+                < PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1
             || fri_soundness.query_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || fri_soundness.commitment_error_bits < PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1
             || self.profile_binding_label.is_empty()
@@ -2369,14 +2370,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         phases.finish(false);
     }
     result
-}
-/// Construct a canonical proof with operating-system masking entropy.
-#[allow(dead_code)]
-pub(crate) fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
-    adapter: &A,
-    base_columns: &[Vec<F>],
-) -> Result<ProofManagedNoteCandidateV1, ProofManagedNoteStarkErrorV1> {
-    prove_proof_managed_note_stark_v1_with_rng(adapter, base_columns, &mut rand::rngs::OsRng)
 }
 struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     adapter: &'a A,

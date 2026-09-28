@@ -1517,7 +1517,7 @@ mod replay_checkpoint_tests {
         let entries = vec![entry(1, 10)];
         let canonical = to_bytes(&entries).unwrap();
         let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::PACKED_SEQ;
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let alternate = to_bytes(&entries).unwrap();
         drop(guard);

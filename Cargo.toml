@@ -66,11 +66,6 @@ iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
 iroha_zkp_poseidon = { path = "crates/iroha_zkp_poseidon" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 
-iroha_smart_contract = { path = "crates/iroha_smart_contract" }
-iroha_smart_contract_utils = { path = "crates/iroha_smart_contract_utils" }
-iroha_executor = { path = "crates/iroha_executor" }
-iroha_smart_contract_codec = { path = "crates/iroha_smart_contract_codec" }
-
 # Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
 # request them locally so focused builds do not compile the broadest model.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }

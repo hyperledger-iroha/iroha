@@ -3,11 +3,12 @@
 //! [`v1`] holds the network-free contract-visible encodings, [`light_client`] the stateless
 //! inbound light-client checks and [`api`] the Torii read-API records. The Ethereum consensus
 //! primitives (`ethereum_native`, re-exported at the crate root) and the Ethereum wire and
-//! execution-layer primitives ([`ethereum_source`]) back [`light_client::ethereum`]. The BSC,
-//! TRON and TON modules (`bsc_native`, `tron_native`, `ton_native`) keep the native
-//! chain-verification primitives their v1 light clients are being built from; the retired
-//! Groth16, replay-archive and anchor-based message paths are gone. `test_support` (under
-//! `cfg(test)` and the `test-fixtures` feature) holds deterministic synthetic source chains.
+//! execution-layer primitives ([`ethereum_source`]) back [`light_client::ethereum`] and the
+//! receipt openings of [`light_client::bsc`]. The TON module (`ton_native`) keeps the native
+//! chain-verification primitives its v1 light client is being built from; the retired Groth16,
+//! replay-archive and anchor-based message paths and the full Parlia and TRON schedule replays
+//! are gone. `test_support` (under `cfg(test)` and the `test-fixtures` feature)
+//! holds deterministic synthetic source chains.
 //!
 //! The crate targets the Rust standard library unconditionally, and BLS verification is not
 //! feature-gated, so Cargo feature selection cannot change consensus admission results.
@@ -19,12 +20,8 @@ pub mod ethereum_source;
 pub mod light_client;
 pub mod v1;
 pub use ethereum_native::*;
-mod bsc_native;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
-pub use bsc_native::*;
-mod tron_native;
-pub use tron_native::*;
 mod ton_native;
 pub use ton_native::*;
 #[cfg(any(test, feature = "test-fixtures"))]

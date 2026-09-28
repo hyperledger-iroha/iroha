@@ -1,3 +1,10 @@
+//! Shared confidential note, tree, and verifier-key primitives.
+//!
+//! Wallet applications construct proofs through
+//! [`super::confidential::ConfidentialProver`], which owns secret inputs and
+//! selects the canonical relation and key. Circuit-specific proof builders are
+//! restricted to this ZK module so callers cannot bypass that workflow.
+
 use blake3::Hasher as Blake3Hasher;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use halo2_proofs::{
@@ -301,7 +308,7 @@ pub struct ConfidentialTransferOutputV2 {
 /// Generated confidential transfer evidence and its public outputs.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
-pub struct ConfidentialTransferProofV2 {
+pub(super) struct ConfidentialTransferProofV2 {
     /// Nullifiers consumed by the transfer.
     pub nullifiers: Vec<[u8; 32]>,
     /// Commitments created by the transfer.
@@ -328,7 +335,7 @@ pub struct ConfidentialUnshieldInputV2 {
 /// Generated full-unshield evidence and public state.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
-pub struct ConfidentialUnshieldProofV2 {
+pub(super) struct ConfidentialUnshieldProofV2 {
     /// Nullifiers consumed by the unshield.
     pub nullifiers: Vec<[u8; 32]>,
     /// Authenticated input commitment-tree root.
@@ -349,7 +356,7 @@ pub struct ConfidentialUnshieldOutputV3 {
 /// Generated V3 full-or-change unshield evidence and public state.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
-pub struct ConfidentialUnshieldProofV3 {
+pub(super) struct ConfidentialUnshieldProofV3 {
     /// Nullifiers consumed by the unshield.
     pub nullifiers: Vec<[u8; 32]>,
     /// Confidential change commitments, empty for a full redemption.
@@ -4535,8 +4542,15 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
     })
 }
 /// Build a confidential transfer proof, deriving input paths from the tree.
+///
+/// Wallet callers use [`super::confidential::ConfidentialProver`].
+/// This circuit-specific entrypoint is internal:
+///
+/// ```compile_fail,E0603
+/// use iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2;
+/// ```
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn build_confidential_transfer_proof_v2(
+pub(super) fn build_confidential_transfer_proof_v2(
     network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
@@ -4641,8 +4655,15 @@ fn normalize_confidential_transfer_paths_v3(
 }
 /// Build a confidential transfer proof with one membership path per actual input.
 /// An absent second input is padded internally and needs no caller-supplied path.
+///
+/// Wallet callers use [`super::confidential::ConfidentialProver`].
+/// This circuit-specific entrypoint is internal:
+///
+/// ```compile_fail,E0603
+/// use iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2_with_paths;
+/// ```
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn build_confidential_transfer_proof_v2_with_paths(
+pub(super) fn build_confidential_transfer_proof_v2_with_paths(
     network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
@@ -4817,8 +4838,15 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
     })
 }
 /// Build a full confidential unshield proof from an in-memory tree.
+///
+/// Wallet callers use [`super::confidential::ConfidentialProver`].
+/// This circuit-specific entrypoint is internal:
+///
+/// ```compile_fail,E0603
+/// use iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v2;
+/// ```
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn build_confidential_unshield_proof_v2(
+pub(super) fn build_confidential_unshield_proof_v2(
     network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
@@ -4921,9 +4949,16 @@ fn normalize_confidential_unshield_full_paths_v3(
 /// Build a terminal full-redemption proof with one canonically normalized
 /// membership path per actual input. No private change output is
 /// invented and no change-preserving circuit is selected.
+///
+/// Wallet callers use [`super::confidential::ConfidentialProver`].
+/// This circuit-specific entrypoint is internal:
+///
+/// ```compile_fail,E0603
+/// use iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v2_with_paths;
+/// ```
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
-pub fn build_confidential_unshield_proof_v2_with_paths(
+pub(super) fn build_confidential_unshield_proof_v2_with_paths(
     network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
@@ -5191,8 +5226,15 @@ fn build_confidential_unshield_proof_v3_resolved_paths(
     })
 }
 /// Build a terminal-full or change-preserving V3 unshield proof, deriving input paths.
+///
+/// Wallet callers use [`super::confidential::ConfidentialProver`].
+/// This circuit-specific entrypoint is internal:
+///
+/// ```compile_fail,E0603
+/// use iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3;
+/// ```
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn build_confidential_unshield_proof_v3(
+pub(super) fn build_confidential_unshield_proof_v3(
     network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
@@ -5301,8 +5343,15 @@ fn normalize_confidential_unshield_change_paths_v4(
 }
 /// Build a terminal-full or change-preserving V3 unshield with one path per actual input.
 /// An absent second input is padded internally and needs no caller-supplied path.
+///
+/// Wallet callers use [`super::confidential::ConfidentialProver`].
+/// This circuit-specific entrypoint is internal:
+///
+/// ```compile_fail,E0603
+/// use iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3_with_paths;
+/// ```
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn build_confidential_unshield_proof_v3_with_paths(
+pub(super) fn build_confidential_unshield_proof_v3_with_paths(
     network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],

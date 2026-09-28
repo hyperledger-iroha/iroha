@@ -1,6 +1,7 @@
 //! Shared implementation for the SoraFS chunk-store developer CLIs.
 #[cfg(feature = "cli")]
 use crate::FilePayload;
+use crate::set_no_follow_flag;
 use crate::{
     CarBuildPlan, CarChunk, ChunkStore, DirectoryChunkSinkOutput, DirectoryPublicationStatus,
     FileEntry, FilePlan, InMemoryPayload, ProfileId, chunker_registry,
@@ -11,8 +12,6 @@ use crate::{
 };
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_chunker::ChunkProfile;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::{
     env, fs,
     io::{self, Write},
@@ -144,7 +143,10 @@ fn run(flavor: Flavor) -> Result<(), String> {
             let mut object = Map::new();
             object.insert("offset".into(), Value::from(chunk.offset));
             object.insert("length".into(), Value::from(chunk.length));
-            object.insert("digest_blake3".into(), Value::from(to_hex(&chunk.blake3)));
+            object.insert(
+                "digest_blake3".into(),
+                Value::from(hex::encode(&chunk.blake3)),
+            );
             Value::Object(object)
         })
         .collect::<Vec<_>>();
@@ -155,12 +157,12 @@ fn run(flavor: Flavor) -> Result<(), String> {
     report.insert("input_bytes".into(), Value::from(store.payload_len()));
     report.insert(
         "payload_digest_blake3".into(),
-        Value::from(to_hex(store.payload_digest().as_bytes())),
+        Value::from(hex::encode(store.payload_digest().as_bytes())),
     );
     report.insert("chunk_count".into(), Value::from(chunks.len() as u64));
     report.insert(
         "por_root_hex".into(),
-        Value::from(to_hex(store.por_tree().root())),
+        Value::from(hex::encode(store.por_tree().root())),
     );
     report.insert(
         "por_chunk_count".into(),
@@ -649,7 +651,10 @@ fn persisted_chunks_to_value(directory: &Path, output: DirectoryChunkSinkOutput)
                     object.insert("file_name".into(), Value::from(record.file_name));
                     object.insert("offset".into(), Value::from(record.offset));
                     object.insert("length".into(), Value::from(record.length));
-                    object.insert("digest_blake3".into(), Value::from(to_hex(&record.digest)));
+                    object.insert(
+                        "digest_blake3".into(),
+                        Value::from(hex::encode(&record.digest)),
+                    );
                     Value::Object(object)
                 })
                 .collect(),
@@ -808,56 +813,6 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
         }
     }
     Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
-}
-fn to_hex(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        output.push(TABLE[(byte >> 4) as usize] as char);
-        output.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 fn parse_profile_handle_arg(value: &str, label: &str) -> Result<String, String> {
     if value.is_empty() {

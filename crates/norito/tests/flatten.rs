@@ -1,6 +1,6 @@
 use norito::{
     NoritoDeserialize, NoritoSerialize, SerializePayload,
-    core::{self as norito_core, DecodeFlagsGuard, DecodeFromSlice, header_flags},
+    core::{self as norito_core, DecodeFlagsGuard, DecodeFromSlice},
 };
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
@@ -22,13 +22,6 @@ struct OuterRequest {
 }
 fn bare_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter(flags);
-    let mut payload = Vec::new();
-    norito_core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
-    payload
-}
-fn sequential_bare_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
-    let _guard = DecodeFlagsGuard::enter(flags);
-    let _sequential = norito_core::SequentialOverrideGuard::enter();
     let mut payload = Vec::new();
     norito_core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
     payload
@@ -64,29 +57,5 @@ fn flattened_struct_fields_are_binary_inline() {
     assert_eq!(selector, request.selector);
     assert_eq!(used, selector_payload.len());
     let decoded: OuterRequest = norito::decode_from_bytes(&bytes).expect("decode request");
-    assert_eq!(decoded, request);
-}
-#[test]
-fn flattened_struct_uses_sequential_layout_even_when_packed_struct_is_requested() {
-    let request = OuterRequest {
-        selector: InnerSelector {
-            first: None,
-            second: Some("ubl.sbp".to_owned()),
-        },
-        signer: "operator-i105".to_owned(),
-        gas_limit: None,
-    };
-    let flags =
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
-    let payload = bare_payload_with_flags(&request, flags);
-    let selector_payload = sequential_bare_payload_with_flags(&request.selector, flags);
-    assert_eq!(
-        payload.get(..selector_payload.len()),
-        Some(selector_payload.as_slice()),
-        "packed-struct mode must not introduce a synthetic slot for a flattened field"
-    );
-    let framed =
-        norito_core::frame_bare_with_header_flags::<OuterRequest>(&payload, flags).expect("frame");
-    let decoded: OuterRequest = norito::decode_from_bytes(&framed).expect("decode packed request");
     assert_eq!(decoded, request);
 }

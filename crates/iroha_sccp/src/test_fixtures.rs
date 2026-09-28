@@ -6,25 +6,14 @@
 //!
 //! TODO(ws70): move the generic finalized-block fixture out of `iroha_sccp` once the `SoraFS`
 //! sessions land.
-#[cfg(test)]
-use core::{num::NonZeroU64, time::Duration};
 use halo2curves::{
     CurveAffine,
     group::{Curve, GroupEncoding},
     pasta::{Fp as PastaFp, Fq as PastaFq, PallasAffine, VestaAffine},
 };
-#[cfg(test)]
-use iroha_crypto::SignatureOf;
 use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature};
 #[cfg(test)]
-use iroha_data_model::{
-    account::AccountId,
-    block::{
-        BlockHeader, BlockSignature, execution_output::NetworkExecutionOutputV1,
-        output_budget::ExecutionOutputLimits,
-    },
-    transaction::{DataTriggerSequence, TransactionBuilder, TransactionResult},
-};
+use iroha_data_model::block::{BlockHeader, output_budget::ExecutionOutputLimits};
 use iroha_data_model::{
     block::consensus_v2::{
         BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,

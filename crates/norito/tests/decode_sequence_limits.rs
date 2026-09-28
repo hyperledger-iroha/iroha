@@ -592,28 +592,21 @@ fn bounded_lazy_sequence_retains_limits_after_constructor_returns() {
     assert_sequence_limit(error, 3, 2);
 }
 #[test]
-fn bounded_lazy_map_retains_limits_for_nonpacked_and_packed_values() {
+fn bounded_lazy_map_retains_limits_for_nested_values() {
     let map = HashMap::from([(1_u8, vec![1_u8, 2, 3])]);
-    let nonpacked = frame_with_flags(&map, 0);
-    let mut iterator = norito::StreamMapIter::<u8, Vec<u8>>::new_hash_with_limits(
-        Cursor::new(nonpacked),
-        limits(2),
-    )
-    .expect("outer map is within limit");
-    let error = iterator
-        .next()
-        .expect("map entry")
-        .expect_err("nonpacked nested value must retain limit");
-    assert_sequence_limit(error, 3, 2);
-    let packed = frame_with_flags(&map, norito::core::header_flags::PACKED_SEQ);
-    let mut iterator =
-        norito::StreamMapIter::<u8, Vec<u8>>::new_hash_with_limits(Cursor::new(packed), limits(2))
-            .expect("packed outer map is within limit");
-    let error = iterator
-        .next()
-        .expect("packed map entry")
-        .expect_err("packed nested value must retain limit");
-    assert_sequence_limit(error, 3, 2);
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+        let frame = frame_with_flags(&map, flags);
+        let mut iterator = norito::StreamMapIter::<u8, Vec<u8>>::new_hash_with_limits(
+            Cursor::new(frame),
+            limits(2),
+        )
+        .expect("outer map is within limit");
+        let error = iterator
+            .next()
+            .expect("map entry")
+            .expect_err("nested value must retain limit");
+        assert_sequence_limit(error, 3, 2);
+    }
 }
 #[test]
 fn compressed_and_additional_collection_decoders_are_bounded() {

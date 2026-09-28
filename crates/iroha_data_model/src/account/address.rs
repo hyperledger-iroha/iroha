@@ -230,13 +230,16 @@ impl AccountAddress {
         address.ensure_canonical_i105_literal(input, expected)?;
         Ok(address)
     }
+    /// Encode the canonical byte representation that [`Self::from_canonical_bytes`] parses
+    /// (the SCCP codec-3 account bytes).
+    ///
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] if encoding the controller payload fails.
     ///
     /// Canonical payloads are domain-agnostic and therefore do not include a
     /// serialized domain selector segment.
-    pub(crate) fn canonical_bytes(&self) -> Result<Vec<u8>, AccountAddressError> {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, AccountAddressError> {
         let mut canonical_len = 0_usize;
         self.emit_canonical_bytes(|chunk| {
             canonical_len = canonical_len

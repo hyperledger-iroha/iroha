@@ -63,10 +63,15 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
     kura: &iroha_core::kura::Kura,
     blocks: &[Arc<SignedBlock>],
 ) {
+    use iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1;
     use iroha_data_model::block::consensus_v2::{
         BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
         ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
         QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+    };
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+        KagemushaMintFinalityEpochAuthorizationV1,
     };
     let mut keypairs = (0_u8..4)
         .map(|index| {
@@ -94,6 +99,36 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
                 .expect("derive eviction-benchmark validator PoP")
         })
         .collect::<Vec<_>>();
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"kura-eviction-benchmark-genesis"),
+    ));
+    let epoch_end_height = u64::try_from(blocks.len())
+        .expect("benchmark chain length fits u64")
+        .saturating_add(1);
+    let kagemusha_mint_finality_authority = KagemushaMintFinalityAuthorityGenerationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        generation: 0,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                let seed = 0xA0_u8
+                    .wrapping_add(u8::try_from(index).expect("benchmark validator index fits u8"));
+                derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[seed; 32],
+                    0,
+                    validator.validator.clone(),
+                )
+                .expect("derive eviction-benchmark mint-finality keys")
+            })
+            .collect(),
+    };
+    let kagemusha_mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(
+        &kagemusha_mint_finality_authority,
+        epoch_end_height,
+    )
+    .expect("eviction-benchmark genesis mint-finality authorization");
     let mut parent: Option<V2FinalityArtifact> = None;
     for block in blocks {
         let height = block.header().height().get();
@@ -116,23 +151,19 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
         )
         .expect("eviction-benchmark execution commitment");
         let context = HeightContext {
-            network_id: NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"kura-eviction-benchmark-genesis",
-                )),
-            ),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
-            epoch_end_height: u64::try_from(blocks.len())
-                .expect("benchmark chain length fits u64")
-                .saturating_add(1),
+            epoch_end_height,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: parent.as_ref().map(|artifact| artifact.commit_qc.clone()),
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("eviction-benchmark quorum"),
             roster: roster.clone(),
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority: kagemusha_mint_finality_authority.clone(),
             nexus_amx_context_hash: Hash::new(b"eviction bench nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {

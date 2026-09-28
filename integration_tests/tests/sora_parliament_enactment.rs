@@ -100,6 +100,50 @@ pub(crate) fn builder(builder: NetworkBuilder) -> NetworkBuilder {
     builder
 }
 
+// Caller-registered citizens are absent from the network's fee bootstrap. Fund them with
+// ordinary signed transfers using the exact XOR definition in the signed NPoS parameters.
+async fn fund_citizen_fees(
+    network: &iroha_test_network::Network,
+    client: &Client,
+    citizens: &[AccountId],
+) -> Result<()> {
+    let mut snapshots = network
+        .genesis_isi()
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set| match set.inner() {
+            Parameter::Custom(custom) if custom.id() == &SumeragiNposParameters::parameter_id() => {
+                Some(custom)
+            }
+            _ => None,
+        });
+    let parameters = snapshots
+        .next()
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .ok_or_else(|| eyre!("citizen fee funding requires signed canonical NPoS parameters"))?;
+    if snapshots.next().is_some() {
+        return Err(eyre!(
+            "citizen fee funding refuses duplicate NPoS snapshots"
+        ));
+    }
+    let source = AssetId::of(
+        parameters.xor_asset_definition_id,
+        client.client().account().clone(),
+    );
+    submit_parliament_instructions(
+        client,
+        citizens.iter().map(|citizen| {
+            iroha_data_model::isi::Transfer::asset_quantity(
+                source.clone(),
+                10_000_u32,
+                citizen.clone(),
+            )
+        }),
+    )
+    .await
+}
+
 pub(crate) async fn enact(
     network: &iroha_test_network::Network,
     proposal: ProposalKind,
@@ -109,6 +153,7 @@ pub(crate) async fn enact(
     let citizen_keys = citizen_keys();
     let citizens = citizen_accounts(&citizen_keys);
     let client = network.client();
+    fund_citizen_fees(network, &client, &citizens).await?;
     let ordered_roster = ordered_validator_roster(&network, &client).await?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
@@ -135,7 +180,7 @@ pub(crate) async fn enact(
         InstructionBox::from(lifecycle_certificate(
             &network,
             &ordered_roster,
-            ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+            ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
             beacon_record.session.session_id,
             beacon_record.session.transcript_hash,
             norito::encode_canonical(&beacon_record)?,

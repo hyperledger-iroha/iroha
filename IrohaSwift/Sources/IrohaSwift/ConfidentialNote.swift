@@ -127,6 +127,22 @@ public enum ConfidentialOwnerTag {
 }
 
 public enum ConfidentialNoteCommitment {
+    /// Derive a note without constructing an opening that retains a spend key.
+    public static func derive(
+        asset: String,
+        amount: ConfidentialAmount,
+        rho: Data,
+        ownerTag: Data
+    ) throws -> Data {
+        let asset = try ConfidentialNoteCrypto.canonicalText(asset, field: "asset")
+        let amount = try ConfidentialNoteCrypto.canonicalU128(amount.decimal, field: "amount")
+        let rho = try ConfidentialNoteCrypto.fixedNonZeroBytes(rho, count: 32, field: "rho")
+        let owner = try ConfidentialNoteCrypto.fixedScalar(ownerTag, field: "ownerTag")
+        return try ConfidentialNoteNativeDerivation.deriveNoteCommitmentV3(
+            asset: Data(asset.utf8), amount: Data(amount.utf8), rho: rho, ownerTag: owner
+        )
+    }
+
     public static func deriveFromOpening(_ opening: ConfidentialNoteOpening) throws -> Data {
         try ConfidentialNoteNativeDerivation.deriveNoteCommitmentV3(
             asset: Data(opening.asset.utf8),

@@ -59,6 +59,7 @@ fn native_process_three_route_source_fixture() -> Box<NativeProcessFixture> {
     kura.store_block(Arc::new(genesis.clone())).unwrap();
     commit_block_metadata_with_genesis_checkpoint_to_state(&state, &genesis);
     let parent = advance_queue_plan_fixture_to_beacon_parent(&state, genesis);
+    native_process_pin_source_geometry_for_test(&state);
     let primary = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let secondary = crate::queue::RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
     let plan = crate::queue::RoutingPlan::native_amx(
@@ -160,6 +161,54 @@ fn native_process_three_route_source_fixture() -> Box<NativeProcessFixture> {
         binding,
         records: Vec::new(),
     })
+}
+
+// Freeze a bounded layout before the first admission carrier and lane contexts.
+// This fixture transports the complete signed three-route input and its enclosing
+// certified carrier; the small 4 KiB structural-fixture default cannot hold them.
+fn native_process_pin_source_geometry_for_test(state: &State) {
+    let layout = DataAvailabilityLayout {
+        encoding: PayloadEncoding::ReedSolomon16,
+        chunk_size_bytes: 8192,
+        data_shards: 1,
+        parity_shards: 1,
+        max_payload_size_bytes: 2 * 1024 * 1024,
+        max_chunk_count: 512,
+    };
+    assert_eq!(
+        iroha_data_model::block::consensus_v2::expected_encoded_chunk_count(
+            layout.max_payload_size_bytes,
+            layout,
+        )
+        .unwrap(),
+        layout.max_chunk_count,
+    );
+    let mut previous = None;
+    for height in 1..=state.committed_height() {
+        assert!(
+            state
+                .kura
+                .v2_finality_artifact(height as u64)
+                .unwrap()
+                .is_none()
+        );
+        let block = state
+            .kura
+            .get_block(NonZeroUsize::new(height).unwrap())
+            .unwrap();
+        let artifact = merge_carrier_finality_artifact_with_genesis_layout(
+            &block,
+            previous.as_ref(),
+            state.network_id,
+            layout,
+            Hash::new(b"state merge finality execution policy"),
+        );
+        let receipt = state.kura.store_v2_finality_artifact(&artifact).unwrap();
+        assert_eq!(receipt.height(), artifact.height);
+        assert_eq!(receipt.block_hash(), block.hash());
+        assert_eq!(artifact.height_context.da_layout, layout);
+        previous = Some(artifact);
+    }
 }
 
 struct NativeProcessFixture {

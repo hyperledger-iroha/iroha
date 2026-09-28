@@ -9,7 +9,7 @@
 ## Scope in v0.1.0
 - Header handling: encode/decode `NoritoHeader` with magic `NRT0`, version (major=0, minor=0), schema hash (16 bytes), compression byte, payload length, CRC64, flag byte.
 - CRC64-XZ implementation with table-driven fast path and portable fallback.
-- Flag support: `PACKED_SEQ`, `COMPACT_LEN`, `PACKED_STRUCT`, and `FIELD_BITSET` as documented in `norito.md` (reserved layout bits are rejected).
+- Flag support: the flags byte is either `0x00` (fixed-width length prefixes) or `COMPACT_LEN` (`0x02`, varint length prefixes) as documented in `norito.md`; every other bit is rejected on encode and decode.
 - Compression: optional Zstandard backend via the `zstandard` Python module. When the dependency is missing, attempts to use compression raise `UnsupportedCompressionError`.
 - Encoding/decoding primitives:
   - Unsigned integers up to 64 bits (`u8`, `u16`, `u32`, `u64`).
@@ -19,8 +19,8 @@
   - UTF-8 strings (`str`).
   - Optional values (Python `None` mapped to `Option::None`).
   - Results represented as `Ok(value)`/`Err(error)` helpers in Python.
-  - Sequences (`list`, `tuple`) encoded as Norito sequences honoring packed/unpacked layouts.
-  - Mappings (`dict`, `OrderedDict`) encoded as `Vec<(K,V)>` respecting packed sequence rules.
+  - Sequences (`list`, `tuple`) encoded as Norito sequences with a fixed-width u64 element count.
+  - Mappings (`dict`, `OrderedDict`) encoded as `Vec<(K,V)>` using the same sequence layout.
 - Streaming surface (module `norito.streaming`):
   - Data classes and adapters for the NSC manifest, telemetry, and control frames mirroring the Rust codec.
   - Enumerations and helper adapters for HPKE suites, capability roles, error codes, and telemetry events.
@@ -40,16 +40,16 @@
 - For results: define lightweight `Ok`/`Err` wrapper classes to disambiguate from plain tuples.
 
 ## Determinism & Flags
-- Encoder accepts `flags` set; when `PACKED_SEQ` and `COMPACT_LEN` are present simultaneously, default to the hybrid layout described in `norito.md` for sequences and struct-like adapters.
-- Packed sequence implementation writes a fixed u64 length header followed by `(len+1)` u64 offsets and concatenated data. Sequence length headers are fixed-width in v1.
-- Non-packed sequences fall back to compat layout (per-element header + payload).
+- Encoder accepts `flags` of `0` or `COMPACT_LEN`; `COMPACT_LEN` switches byte and string length prefixes from fixed-width u64 to varints.
+- Sequences write a fixed-width u64 element count followed by the encoded elements. Sequence length headers are fixed-width in v1.
+- Struct adapters write their fields in declaration order.
 
 ## Testing Plan
 - Unit tests using the standard library `unittest` module covering:
   - Roundtrip encoding/decoding for primitives, options, sequences, maps.
   - Header encode/decode parity including checksum failures.
   - CRC64 test vectors (cross-checked with known values from Rust implementation).
-- Flag-specific behaviors: packed vs compat sequences, reserved flag rejection.
+- Flag-specific behaviors: fixed-width vs `COMPACT_LEN` length prefixes, rejection of every other flag bit.
   - Deterministic outputs compared against golden byte arrays produced by minimal Rust fixtures (add static reference bytes sampled from the repo's tests).
 - Property-based fuzzing remains deferred until a lightweight pure-Python subset of the Rust harness is extracted (tracked in NORITO-PY#12); current unit tests cover the canonical encoders/decoders.
 

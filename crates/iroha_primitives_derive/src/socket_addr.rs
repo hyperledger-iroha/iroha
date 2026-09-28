@@ -24,17 +24,11 @@ fn stringify_tokens(tokens: TokenStream) -> String {
     result
 }
 enum IpAddress {
-    IPv4 {
-        ip_tokens: TokenStream,
-    },
+    IPv4 { ip_tokens: TokenStream },
     // In socket addresses, the IPv6 is wrapped in brackets
     // But to parse the IPv6 we need to remove those brackets
     // so we parse them separately on the `syn` level
-    IPv6 {
-        #[allow(unused)]
-        bracket_token: syn::token::Bracket,
-        ip_tokens: TokenStream,
-    },
+    IPv6 { ip_tokens: TokenStream },
 }
 impl IpAddress {
     fn parse_v4(input: ParseStream) -> syn::Result<Self> {
@@ -57,8 +51,8 @@ impl IpAddress {
     }
     fn parse_v6(input: ParseStream) -> syn::Result<Self> {
         let ip_tokens;
+        bracketed!(ip_tokens in input);
         Ok(IpAddress::IPv6 {
-            bracket_token: bracketed!(ip_tokens in input),
             ip_tokens: ip_tokens.parse()?,
         })
     }
@@ -76,7 +70,7 @@ impl IpAddress {
                         )
                     })
             }
-            IpAddress::IPv6 { ip_tokens, .. } => {
+            IpAddress::IPv6 { ip_tokens } => {
                 let ip_string = stringify_tokens(ip_tokens.clone());
                 ip_string
                     .parse::<net::Ipv6Addr>()
@@ -103,16 +97,14 @@ impl syn::parse::Parse for IpAddress {
 }
 struct SocketAddress {
     ip: IpAddress,
-    #[allow(unused)]
-    colon: Token![:],
     port: syn::Expr,
 }
 impl syn::parse::Parse for SocketAddress {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let ip = input.parse::<IpAddress>()?;
-        let colon = input.parse::<Token![:]>()?;
+        input.parse::<Token![:]>()?;
         let port = input.parse::<syn::Expr>()?;
-        Ok(SocketAddress { ip, colon, port })
+        Ok(SocketAddress { ip, port })
     }
 }
 // it's fine, these are just segments of IPv6 addresses

@@ -9,9 +9,7 @@ public static class NoritoCodec
     internal const byte CanonicalLayoutFlags = 0x02;
 
     private const int MaxHeaderPaddingBytes = 64;
-    private const byte SupportedLayoutFlags = 0x27;
-    private const byte FieldBitsetFlag = 0x20;
-    private const byte FieldBitsetRequiredFlags = 0x06;
+    private const byte SupportedLayoutFlags = CanonicalLayoutFlags; // 0x00 or COMPACT_LEN only
 
     private static readonly byte[] TypeNameSchemaHashDomain = Encoding.UTF8.GetBytes("norito:v1:type-name\0");
     private static ReadOnlySpan<byte> Magic => "NRT0"u8;
@@ -136,10 +134,5 @@ public static class NoritoCodec
         }
     }
 
-    private static bool AreFlagsSupported(byte flags)
-    {
-        return (flags & ~SupportedLayoutFlags) == 0
-            && ((flags & FieldBitsetFlag) == 0
-                || (flags & FieldBitsetRequiredFlags) == FieldBitsetRequiredFlags);
-    }
+    internal static bool AreFlagsSupported(byte flags) => (flags & ~SupportedLayoutFlags) == 0;
 }

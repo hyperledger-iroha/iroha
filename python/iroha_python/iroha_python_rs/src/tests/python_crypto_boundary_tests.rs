@@ -648,7 +648,7 @@ fn exported_vega_python_device_digest_fails_closed_with_unavailable_profile() {
     ));
     let issuer_public_key = *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
         .expect("P-256 parameters")
-        .value_generator()
+        .blinding_generator()
         .as_bytes();
 
     ensure_python();
@@ -696,7 +696,7 @@ fn vega_python_profile_is_unavailable_while_low_level_device_digest_binds_intent
     );
     let issuer_public_key = *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
         .expect("P-256 parameters")
-        .value_generator()
+        .blinding_generator()
         .as_bytes();
     // Explicit nonzero bindings exercise only the low-level hash boundary;
     // they are not a compiled profile or candidate admission authority.

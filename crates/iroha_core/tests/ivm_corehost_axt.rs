@@ -30,8 +30,7 @@ use iroha_data_model::{
     nexus::{
         AxtBinding, AxtDescriptor, AxtEffectBinding, AxtEnvelopeRecord, AxtHandleBudgetKey,
         AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
-        AxtPolicySnapshotValidationError, AxtRejectReason, AxtRemoteSpendClaimV1, AxtReplayRecord,
-        AxtTouchSpec,
+        AxtPolicySnapshotValidationError, AxtRejectReason, AxtRemoteSpendClaimV1, AxtTouchSpec,
     },
     prelude::*,
 };

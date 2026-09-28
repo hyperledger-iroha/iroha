@@ -278,7 +278,8 @@ impl VerificationLimits {
 /// and dropped one segment at a time. Verification limits also constrain output.
 #[derive(Debug, Clone, Copy)]
 pub struct ProvingLimits {
-    /// Explicit bulk-leaf hashing; streamed parents and transcript hashes use CPU.
+    /// Explicit bulk-leaf and lower-parent hashing. Ordered upper parents and
+    /// transcript hashes use CPU.
     /// Selected devices must pass public readiness before private work; execution
     /// errors never silently choose CPU. Both policies preserve canonical bytes.
     pub digest_execution: crate::DigestExecutionV1,

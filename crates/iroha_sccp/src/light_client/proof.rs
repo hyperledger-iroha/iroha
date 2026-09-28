@@ -25,12 +25,24 @@ use iroha_data_model::{
 
 use super::{
     SccpLcError,
+    bsc::{
+        BscHeaderSegmentV1, BscLcAdvanceV1, BscLcBootstrapV1, BscLcEvidenceV1, BscSourceProofV1,
+        BscValidatorSetV1,
+    },
     ethereum::{
         EthereumHeaderSegmentV1, EthereumLcAdvanceV1, EthereumLcEvidenceV1, EthereumSourceProofV1,
         EthereumSyncCommitteeSetV1,
     },
+    ton::{TonEpochV1, TonLcAdvanceV1, TonLcBootstrapV1, TonLcEvidenceV1, TonSourceProofV1},
+    tron::{
+        TronLcAdvanceV1, TronLcBootstrapV1, TronLcEvidenceV1, TronRawSegmentV1, TronSourceProofV1,
+        TronWitnessSetV1,
+    },
 };
-use crate::{ethereum_source::EthereumNativeLightClientBootstrapV1, v1::payload::PayloadAccountV1};
+use crate::{
+    ethereum_source::EthereumNativeLightClientBootstrapV1,
+    v1::{evm_abi::TransferToTairaCallV1, payload::PayloadAccountV1},
+};
 
 fn encode_frame<T: norito::NoritoSerialize>(
     value: &T,
@@ -72,9 +84,12 @@ fn mismatch(expected: SccpNetworkV1, found: SccpNetworkV1) -> Result<(), SccpLcE
 pub enum SccpSourceProofV1 {
     /// Ethereum finality or checkpoint anchor, ancestry, receipt and log selector.
     Ethereum(EthereumSourceProofV1),
-    // TODO(ws38): `Bsc(BscSourceProofV1)`: vote-attested header and receipt.
-    // TODO(ws39): `Tron(TronSourceProofV1)`: solid segment and transaction path.
-    // TODO(ws3A): `Ton(TonSourceProofV1)`: masterchain link, shard walk and transaction.
+    /// BSC vote-attested (or checkpoint-anchored) header chain, receipt and log selector.
+    Bsc(BscSourceProofV1),
+    /// TRON solid segment (or checkpoint-anchored raw headers) and transaction path.
+    Tron(TronSourceProofV1),
+    /// TON masterchain anchor, shard walk, transaction and external-out message.
+    Ton(TonSourceProofV1),
 }
 
 /// Light-client advance (`AdvanceSccpLightClientV1.advance`).
@@ -94,9 +109,13 @@ pub enum SccpSourceProofV1 {
 pub enum SccpLcAdvanceV1 {
     /// Ethereum finalized `LightClientUpdate`s.
     Ethereum(EthereumLcAdvanceV1),
-    // TODO(ws38): `Bsc(BscLcAdvanceV1)`: set-transition epoch headers with vote attestations.
-    // TODO(ws39): `Tron(TronLcAdvanceV1)`: self-authenticating header segments.
-    // TODO(ws3A): `Ton(TonLcAdvanceV1)`: key-block hops.
+    /// BSC skipping steps: set-transition checkpoints and finalized blocks with vote
+    /// attestations.
+    Bsc(BscLcAdvanceV1),
+    /// TRON self-authenticating signed header segments.
+    Tron(TronLcAdvanceV1),
+    /// TON key-block hops.
+    Ton(TonLcAdvanceV1),
     /// Proof-carrying backwards ancestry ending at a stored checkpoint; records the segment's
     /// first header as a checkpoint (`origin: Backfill`).
     Backfill {
@@ -122,8 +141,10 @@ pub enum SccpLcAdvanceV1 {
 pub enum SccpLcSegmentV1 {
     /// Ethereum execution header RLPs, ascending, the last one a stored checkpoint.
     Ethereum(EthereumHeaderSegmentV1),
-    // TODO(ws38): `Bsc(..)` header segments.
-    // TODO(ws39): `Tron(..)` unsigned `raw_data` header segments.
+    /// BSC header RLPs, ascending, the last one a stored checkpoint.
+    Bsc(BscHeaderSegmentV1),
+    /// TRON unsigned `raw_data` headers, ascending, the last one a stored checkpoint.
+    Tron(TronRawSegmentV1),
 }
 
 /// One quorum-valid record of equivocation evidence
@@ -145,9 +166,12 @@ pub enum SccpLcEvidenceV1 {
     /// A signed Ethereum `LightClientUpdate`, optionally with a proven finalized execution
     /// ancestor.
     Ethereum(EthereumLcEvidenceV1),
-    // TODO(ws38): `Bsc(..)` vote attestations.
-    // TODO(ws39): `Tron(..)` solid headers.
-    // TODO(ws3A): `Ton(..)` signed key blocks.
+    /// A BSC vote attestation, optionally with headers ending at its finalized block.
+    Bsc(BscLcEvidenceV1),
+    /// A TRON signed segment asserting its solid headers.
+    Tron(TronLcEvidenceV1),
+    /// A TON signed masterchain block.
+    Ton(TonLcEvidenceV1),
 }
 
 /// Weak-subjectivity bootstrap (`SccpLcBootstrapV1.bytes`).
@@ -167,9 +191,12 @@ pub enum SccpLcEvidenceV1 {
 pub enum SccpLcBootstrapDataV1 {
     /// Ethereum `LightClientBootstrap` of a finalized block.
     Ethereum(EthereumNativeLightClientBootstrapV1),
-    // TODO(ws38): `Bsc(..)` epoch checkpoint with its validator set.
-    // TODO(ws39): `Tron(..)` maintenance-period witness set.
-    // TODO(ws3A): `Ton(..)` key block with config 34 as a BoC.
+    /// BSC epoch checkpoint with its announced validator set, and the previous checkpoint.
+    Bsc(BscLcBootstrapV1),
+    /// TRON maintenance-period witness set and a solid header of that period.
+    Tron(TronLcBootstrapV1),
+    /// A TON key block with its config proof.
+    Ton(TonLcBootstrapV1),
 }
 
 /// Stored consensus set (`SccpLcConsensusSetV1.set_bytes`).
@@ -189,9 +216,12 @@ pub enum SccpLcBootstrapDataV1 {
 pub enum SccpLcSetDataV1 {
     /// Ethereum sync committee of one period.
     Ethereum(EthereumSyncCommitteeSetV1),
-    // TODO(ws38): `Bsc(..)` Parlia validator set with BLS keys and turn length.
-    // TODO(ws39): `Tron(..)` active witness set.
-    // TODO(ws3A): `Ton(..)` validator epoch.
+    /// BSC Parlia validator set with BLS keys and turn length.
+    Bsc(BscValidatorSetV1),
+    /// TRON active witness set of one maintenance period.
+    Tron(TronWitnessSetV1),
+    /// TON validator epoch of one key block.
+    Ton(TonEpochV1),
 }
 
 macro_rules! impl_frame {
@@ -234,11 +264,35 @@ macro_rules! impl_frame {
     };
 }
 
-impl_frame!(SccpSourceProofV1, "source proof", { Ethereum => EthereumMainnet });
-impl_frame!(SccpLcEvidenceV1, "evidence", { Ethereum => EthereumMainnet });
-impl_frame!(SccpLcBootstrapDataV1, "bootstrap", { Ethereum => EthereumMainnet });
-impl_frame!(SccpLcSetDataV1, "consensus set", { Ethereum => EthereumMainnet });
-impl_frame!(SccpLcSegmentV1, "segment", { Ethereum => EthereumMainnet });
+impl_frame!(SccpSourceProofV1, "source proof", {
+    Ethereum => EthereumMainnet,
+    Bsc => BscMainnet,
+    Tron => TronMainnet,
+    Ton => TonMainnet,
+});
+impl_frame!(SccpLcEvidenceV1, "evidence", {
+    Ethereum => EthereumMainnet,
+    Bsc => BscMainnet,
+    Tron => TronMainnet,
+    Ton => TonMainnet,
+});
+impl_frame!(SccpLcBootstrapDataV1, "bootstrap", {
+    Ethereum => EthereumMainnet,
+    Bsc => BscMainnet,
+    Tron => TronMainnet,
+    Ton => TonMainnet,
+});
+impl_frame!(SccpLcSetDataV1, "consensus set", {
+    Ethereum => EthereumMainnet,
+    Bsc => BscMainnet,
+    Tron => TronMainnet,
+    Ton => TonMainnet,
+});
+impl_frame!(SccpLcSegmentV1, "segment", {
+    Ethereum => EthereumMainnet,
+    Bsc => BscMainnet,
+    Tron => TronMainnet,
+});
 
 impl SccpLcAdvanceV1 {
     /// Encode the canonical headered Norito frame.
@@ -263,6 +317,9 @@ impl SccpLcAdvanceV1 {
     pub const fn network(&self) -> SccpNetworkV1 {
         match self {
             Self::Ethereum(_) => SccpNetworkV1::EthereumMainnet,
+            Self::Bsc(_) => SccpNetworkV1::BscMainnet,
+            Self::Tron(_) => SccpNetworkV1::TronMainnet,
+            Self::Ton(_) => SccpNetworkV1::TonMainnet,
             Self::Backfill { segment } => segment.network(),
         }
     }
@@ -388,6 +445,18 @@ pub enum SccpNormalizedEventV1 {
         /// Position of the event.
         locator: SccpSourceLocatorV1,
     },
+    /// A successful direct `transferToTaira` call whose logs are not header-committed (TRON):
+    /// Taira rebuilds the payload from the caller and the canonical call arguments.
+    TransferCall {
+        /// Called contract.
+        emitter: SccpSourceEmitterV1,
+        /// Calling account (the transaction owner) in its 20-byte form.
+        caller: [u8; 20],
+        /// Canonical call arguments.
+        call: TransferToTairaCallV1,
+        /// Position of the transaction.
+        locator: SccpSourceLocatorV1,
+    },
     /// Outbound nonces voided on the destination (`SccpVoided` and equivalents).
     Void {
         /// Emitting contract.
@@ -410,7 +479,9 @@ impl SccpNormalizedEventV1 {
     #[must_use]
     pub const fn emitter(&self) -> &SccpSourceEmitterV1 {
         match self {
-            Self::TransferToTaira { emitter, .. } | Self::Void { emitter, .. } => emitter,
+            Self::TransferToTaira { emitter, .. }
+            | Self::TransferCall { emitter, .. }
+            | Self::Void { emitter, .. } => emitter,
         }
     }
 
@@ -418,7 +489,9 @@ impl SccpNormalizedEventV1 {
     #[must_use]
     pub const fn locator(&self) -> &SccpSourceLocatorV1 {
         match self {
-            Self::TransferToTaira { locator, .. } | Self::Void { locator, .. } => locator,
+            Self::TransferToTaira { locator, .. }
+            | Self::TransferCall { locator, .. }
+            | Self::Void { locator, .. } => locator,
         }
     }
 }

@@ -274,6 +274,16 @@ The explicit `sorafs_publication_governance` target requires
 `four_peer_native_publication_repair_and_parliament_revocation` test adds the
 shared real seven-body Parliament corridor, then requires a specific admission
 denial across provider restart while an unaffected replica still serves bytes.
+The reusable corridor lives in `sora_parliament_lifecycle_support.rs`; it funds
+registered citizens with signed transfers of the signed-genesis NPoS fee asset.
+Its current finality reader validates the independently constructed genesis bundle
+and every contiguous embedded certificate, preserving exact four-validator,
+three-vote roster authority and per-peer enacted execution comparisons. The
+publication target does not collect unrelated mandatory-beacon scenarios.
+Those broader Parliament scenarios retain their existing epoch/KAGEMUSHA
+assertions and still require migration from retired V2 finality APIs before that
+entire separate target can be qualified; the current proof does not expose an
+equivalent epoch-authorization projection.
 Use the same-source Parliament daemon and ordinary CLI artifacts described above,
 `IROHA_TEST_REQUIRE_NETWORK=1`, and exact test filters. Native stream-token quota,
 sequencer and reputation deployment adapters remain separate qualification.

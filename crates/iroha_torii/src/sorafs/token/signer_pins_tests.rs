@@ -102,19 +102,7 @@ fn every_immutable_signer_attester_observer_pin_changes_the_catalog_digest() {
             baseline
         );
     }
-    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-    for flags in [
-        0,
-        COMPACT_LEN,
-        PACKED_SEQ,
-        PACKED_SEQ | COMPACT_LEN,
-        PACKED_STRUCT,
-        PACKED_STRUCT | COMPACT_LEN,
-        PACKED_SEQ | PACKED_STRUCT,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
-        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
-    ] {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
             StreamTokenSignerPinsV1::from_config(&fixture.storage, CHAIN, NETWORK)

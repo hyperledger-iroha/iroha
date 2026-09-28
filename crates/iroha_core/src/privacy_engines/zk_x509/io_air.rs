@@ -8,6 +8,8 @@
 //!
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::private_table::{PrivateTableV1, zeroize_fields_v1};
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
@@ -90,7 +92,7 @@ pub(crate) struct ZkX509IoChannelDeclarationV1 {
 }
 /// Endpoint values used to generate one channel witness.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509IoChannelWitnessV1 {
     /// Fixed topology.
     pub(crate) declaration: ZkX509IoChannelDeclarationV1,
@@ -100,6 +102,30 @@ pub(crate) struct ZkX509IoChannelWitnessV1 {
     pub(crate) consumer_values: Vec<Vec<u8>>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for ZkX509IoChannelWitnessV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509IoChannelWitnessV1 { <private material redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl ZkX509IoChannelWitnessV1 {
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        use super::private_table::zeroize_words_v1;
+        zeroize_words_v1(&mut self.producer_value);
+        for value in &mut self.consumer_values {
+            zeroize_words_v1(value);
+        }
+        self.producer_value.clear();
+        self.consumer_values.clear();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509IoChannelWitnessV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct IoAccessV1 {
     pub(crate) channel: F,
@@ -107,6 +133,16 @@ pub(crate) struct IoAccessV1 {
     pub(crate) value: F,
     pub(crate) is_write: F,
     pub(crate) endpoint: ZkX509IoEndpointV1,
+}
+/// Erase initialized private access cells while preserving public endpoint topology.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn zeroize_io_accesses_v1(accesses: &mut [IoAccessV1]) {
+    for access in accesses {
+        zeroize_fields_v1(core::slice::from_mut(&mut access.channel));
+        zeroize_fields_v1(core::slice::from_mut(&mut access.offset));
+        zeroize_fields_v1(core::slice::from_mut(&mut access.value));
+        zeroize_fields_v1(core::slice::from_mut(&mut access.is_write));
+    }
 }
 /// One independent tuple-compression lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,12 +199,37 @@ pub(crate) struct IoPermutationRowV1 {
 }
 /// Main byte-channel tables and challenge-dependent auxiliary products.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509IoTraceV1 {
     pub(crate) declarations: Vec<ZkX509IoChannelDeclarationV1>,
     pub(crate) execution: Vec<IoAccessV1>,
     pub(crate) sorted: Vec<IoAccessV1>,
     pub(crate) permutation_rows: Vec<IoPermutationRowV1>,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl core::fmt::Debug for ZkX509IoTraceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ZkX509IoTraceV1 { <private material redacted> }")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_io_permutation_rows_v1(rows: &mut [IoPermutationRowV1]) {
+    for row in rows {
+        zeroize_io_accesses_v1(core::slice::from_mut(&mut row.execution));
+        zeroize_io_accesses_v1(core::slice::from_mut(&mut row.sorted));
+        zeroize_fields_v1(&mut row.execution_product_before);
+        zeroize_fields_v1(&mut row.sorted_product_before);
+        zeroize_fields_v1(&mut row.execution_product_after);
+        zeroize_fields_v1(&mut row.sorted_product_after);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for ZkX509IoTraceV1 {
+    fn drop(&mut self) {
+        zeroize_io_accesses_v1(&mut self.execution);
+        zeroize_io_accesses_v1(&mut self.sorted);
+        zeroize_io_permutation_rows_v1(&mut self.permutation_rows);
+    }
 }
 /// Cross-segment I/O construction or constraint failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -231,9 +292,9 @@ pub(crate) fn build_zk_x509_io_trace_v1(
     let permutation_rows = build_permutation_rows_v1(&execution, &sorted, challenges)?;
     let trace = ZkX509IoTraceV1 {
         declarations,
-        execution,
-        sorted,
-        permutation_rows,
+        execution: execution.into_vec(),
+        sorted: sorted.into_vec(),
+        permutation_rows: permutation_rows.into_vec(),
     };
     trace.validate(challenges)?;
     Ok(trace)
@@ -243,13 +304,13 @@ pub(crate) fn build_zk_x509_io_trace_v1(
 /// A STARK prover commits these tables before deriving the permutation challenges. Keeping this
 /// phase separate prevents a caller from building a challenge-adaptive base trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn build_zk_x509_io_base_tables_v1(
+pub(super) fn build_zk_x509_io_base_tables_v1(
     witnesses: &[ZkX509IoChannelWitnessV1],
 ) -> Result<
     (
         Vec<ZkX509IoChannelDeclarationV1>,
-        Vec<IoAccessV1>,
-        Vec<IoAccessV1>,
+        PrivateTableV1<IoAccessV1>,
+        PrivateTableV1<IoAccessV1>,
     ),
     ZkX509IoAirErrorV1,
 > {
@@ -276,7 +337,7 @@ pub(crate) fn build_zk_x509_io_base_tables_v1(
     if expected_rows == 0 || expected_rows > capacity {
         return Err(ZkX509IoAirErrorV1::Resource);
     }
-    let mut execution = Vec::new();
+    let mut execution = PrivateTableV1::new(Vec::new(), zeroize_io_accesses_v1);
     execution
         .try_reserve_exact(expected_rows)
         .map_err(|_| ZkX509IoAirErrorV1::Resource)?;
@@ -286,8 +347,15 @@ pub(crate) fn build_zk_x509_io_base_tables_v1(
     if execution.len() != expected_rows {
         return Err(ZkX509IoAirErrorV1::Topology);
     }
-    let mut sorted = execution.clone();
-    sorted.sort_by_key(|access| {
+    let mut sorted = PrivateTableV1::new(Vec::new(), zeroize_io_accesses_v1);
+    sorted
+        .try_reserve_exact(execution.len())
+        .map_err(|_| ZkX509IoAirErrorV1::Resource)?;
+    sorted.extend_from_slice(&execution);
+    // Canonical consumers are unique and endpoint-sorted, which is precisely
+    // the prior stable tie order. The complete key lets the in-place sorter
+    // preserve those bytes without an unowned private merge scratch buffer.
+    sorted.sort_unstable_by_key(|access| {
         (
             access.channel.0,
             access.offset.0,
@@ -296,6 +364,7 @@ pub(crate) fn build_zk_x509_io_base_tables_v1(
             } else {
                 1_u8
             },
+            access.endpoint,
         )
     });
     validate_execution_topology_v1(&declarations, &execution)?;
@@ -615,11 +684,11 @@ fn build_permutation_rows_v1(
     execution: &[IoAccessV1],
     sorted: &[IoAccessV1],
     challenges: ZkX509IoChallengesV1,
-) -> Result<Vec<IoPermutationRowV1>, ZkX509IoAirErrorV1> {
+) -> Result<PrivateTableV1<IoPermutationRowV1>, ZkX509IoAirErrorV1> {
     if execution.len() != sorted.len() {
         return Err(ZkX509IoAirErrorV1::Permutation);
     }
-    let mut rows = Vec::new();
+    let mut rows = PrivateTableV1::new(Vec::new(), zeroize_io_permutation_rows_v1);
     rows.try_reserve_exact(execution.len())
         .map_err(|_| ZkX509IoAirErrorV1::Resource)?;
     let mut execution_product = [F::ONE; IO_PERMUTATION_LANES_V1];
@@ -702,7 +771,7 @@ mod tests {
     fn endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
         ZkX509IoEndpointV1 { role, instance }
     }
-    fn challenges() -> ZkX509IoChallengesV1 {
+    pub(super) fn challenges() -> ZkX509IoChallengesV1 {
         ZkX509IoChallengesV1 {
             lanes: [
                 ZkX509IoLaneChallengesV1 {
@@ -755,7 +824,7 @@ mod tests {
             consumer_values: vec![value.to_vec(); consumers.len()],
         }
     }
-    fn valid_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
+    pub(super) fn valid_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
         vec![
             witness(
                 0,
@@ -983,3 +1052,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "io_air_cleanup_tests.rs"]
+mod cleanup_tests;

@@ -26,8 +26,13 @@
 //! and Merkle path locally (`iroha_sccp_wallet::pure`). The conversions below map the records
 //! onto the contract-visible `v1` structures that the verifiers and ABI encoders take.
 //!
-//! TODO(ws35): add the remaining §6 read-API records (capabilities, registry, statuses,
-//! attestations, controls, history, bridge keys, governance).
+//! - [`SccpCapabilitiesV1`] (`GET /v1/sccp/capabilities`): identity, parameters and
+//!   attestation health.
+//!
+//! Routes that serve stored data-model records (registry, outbound records, rosters, bridge
+//! keys) use those records directly.
+//!
+//! TODO(ws35): add the remaining §6 read-API records (attestation views, history, governance).
 
 use iroha_data_model::{bridge::SccpNetworkV1, sccp::attestation::SccpAttestationStatementV1};
 use norito::codec::{Decode, Encode};
@@ -674,6 +679,137 @@ impl SccpRotationChainV1 {
 // ---------------------------------------------------------------------------------------------
 // JSON helper: padded standard base64 for byte strings
 // ---------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------
+// Capabilities
+// ---------------------------------------------------------------------------------------------
+
+/// One member of the current generation with its liveness (`GET /v1/sccp/capabilities`).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Decode,
+    Encode,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::api::SccpMemberLivenessV1")]
+pub struct SccpMemberLivenessV1 {
+    /// Member index in the generation.
+    pub index: u8,
+    /// Bridge-key address; zero for a keyless slot.
+    pub address: [u8; 20],
+    /// Last height this address signed, if any.
+    #[norito(required)]
+    pub last_signed_height: Option<u64>,
+}
+
+/// One open SCCP governance proposal (`GET /v1/sccp/governance/proposals`, §4.14.5 item 4).
+///
+/// The Parliament driver creates attempts for admissible proposals without one, oldest first.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::api::SccpGovernanceProposalStatusV1")]
+pub struct SccpGovernanceProposalStatusV1 {
+    /// Proposal content id (the key of every attempt).
+    pub content_id: iroha_data_model::governance::types::ProposalContentId,
+    /// Taira height at which the proposal was submitted.
+    pub created_height: u64,
+    /// The proposal.
+    pub proposal: iroha_data_model::sccp::governance::SccpGovernanceProposalV1,
+    /// A new attempt would pass the SCCP preflight: every base revision is current and every
+    /// registered destination word is unused.
+    pub admissible: bool,
+    /// The newest Parliament attempt, if any.
+    #[norito(required)]
+    pub latest_attempt: Option<iroha_data_model::governance::types::GovernanceAttemptV1>,
+}
+
+/// A rotation subject whose handoff is not attested yet (§4.3.3).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Decode,
+    Encode,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::api::SccpPendingHandoffV1")]
+pub struct SccpPendingHandoffV1 {
+    /// Rotation height.
+    pub height: u64,
+    /// Outgoing generation.
+    pub generation: u64,
+    /// Whether it stayed unattested for `attestation_stall_ms` of Taira time.
+    pub stalled: bool,
+}
+
+/// `GET /v1/sccp/capabilities`: the Taira identity, parameters and attestation health a wallet
+/// reads before any flow (§6, §7.1).
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Decode,
+    Encode,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::api::SccpCapabilitiesV1")]
+pub struct SccpCapabilitiesV1 {
+    /// Live Taira `NetworkId` (the EIP-712 salt).
+    pub network_id: [u8; 32],
+    /// EIP-712 domain separator of attestations (§3.6).
+    pub domain_separator: [u8; 32],
+    /// SCCP parameters; `None` when SCCP does not exist on this network.
+    #[norito(required)]
+    pub parameters: Option<iroha_data_model::sccp::params::SccpParametersV1>,
+    /// Latest committed Taira height.
+    pub committed_height: u64,
+    /// Highest attested subject height, if any.
+    #[norito(required)]
+    pub latest_attested_height: Option<u64>,
+    /// Current roster generation (0 before the first).
+    pub current_generation: u64,
+    /// Members of the current generation.
+    pub members: Vec<SccpMemberLivenessV1>,
+    /// Unattested rotation subjects, oldest first.
+    pub pending_handoffs: Vec<SccpPendingHandoffV1>,
+}
 
 /// Norito JSON field helper for `Vec<u8>` as padded standard base64 (RFC 4648 §4), the
 /// data-model convention for opaque byte strings. Decoding accepts only the canonical

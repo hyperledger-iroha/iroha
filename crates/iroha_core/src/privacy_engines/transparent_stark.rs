@@ -923,10 +923,10 @@ pub(crate) fn random_goldilocks_v1<R: TryRngCore>(
     rng: &mut R,
 ) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
-        let mut bytes = [0_u8; 8];
-        rng.try_fill_bytes(&mut bytes)
+        let mut bytes = zeroize::Zeroizing::new([0_u8; 8]);
+        rng.try_fill_bytes(bytes.as_mut())
             .map_err(|_| TransparentStarkErrorV1::RandomnessUnavailable)?;
-        if let Some(value) = GoldilocksFieldV1::canonical(u64::from_le_bytes(bytes)) {
+        if let Some(value) = GoldilocksFieldV1::canonical(u64::from_le_bytes(*bytes)) {
             return Ok(value);
         }
     }
@@ -936,13 +936,12 @@ pub(crate) fn random_goldilocks_v1<R: TryRngCore>(
 pub(crate) fn random_goldilocks_fp4_v1<R: TryRngCore>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
-    GoldilocksFp4V1::from_coefficients([
-        random_goldilocks_v1(rng)?,
-        random_goldilocks_v1(rng)?,
-        random_goldilocks_v1(rng)?,
-        random_goldilocks_v1(rng)?,
-    ])
-    .ok_or(TransparentStarkErrorV1::NonCanonicalField)
+    let mut coefficients = zeroize::Zeroizing::new([GoldilocksFieldV1::ZERO; 4]);
+    for coefficient in coefficients.iter_mut() {
+        *coefficient = random_goldilocks_v1(rng)?;
+    }
+    GoldilocksFp4V1::from_coefficients(*coefficients)
+        .ok_or(TransparentStarkErrorV1::NonCanonicalField)
 }
 /// Draw one uniform nonzero quartic-extension element.
 #[cfg(test)]
@@ -1089,9 +1088,13 @@ impl ReplayableTraceMaskV1 {
 }
 impl Drop for ReplayableTraceMaskV1 {
     fn drop(&mut self) {
+        #[cfg(test)]
+        let observed_nonzero = tests::observe_trace_mask_before_erasure_v1(&self.coefficients);
         for coefficient in &mut self.coefficients {
             coefficient.zeroize_v1();
         }
+        #[cfg(test)]
+        tests::observe_trace_mask_after_erasure_v1(observed_nonzero, &self.coefficients);
     }
 }
 /// Sample and retain the exact mask coefficients for one replayable column.
@@ -1106,13 +1109,17 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
     let mask_len = mask_degree
         .checked_add(1)
         .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
-    let mut mask = Vec::new();
-    mask.try_reserve_exact(mask_len)
+    // Own every draw before a later entropy failure or unwind can release it.
+    let mut mask = ReplayableTraceMaskV1 {
+        coefficients: Vec::new(),
+    };
+    mask.coefficients
+        .try_reserve_exact(mask_len)
         .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
     for _ in 0..mask_len {
-        mask.push(random_goldilocks_v1(rng)?);
+        mask.coefficients.push(random_goldilocks_v1(rng)?);
     }
-    Ok(ReplayableTraceMaskV1 { coefficients: mask })
+    Ok(mask)
 }
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2063,6 +2070,121 @@ mod tests {
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             Err(InjectedRngError)
         }
+    }
+    thread_local! {
+        static TRACE_MASK_ERASURES: std::cell::RefCell<Option<Vec<(usize, usize, usize)>>> = const { std::cell::RefCell::new(None) };
+    }
+    /// Count initialized nonzero cells only inside this test's observation scope.
+    pub(super) fn observe_trace_mask_before_erasure_v1(
+        values: &[GoldilocksFieldV1],
+    ) -> Option<usize> {
+        TRACE_MASK_ERASURES.with_borrow(|observations| {
+            observations.as_ref().map(|_| {
+                values
+                    .iter()
+                    .filter(|value| **value != GoldilocksFieldV1::ZERO)
+                    .count()
+            })
+        })
+    }
+    /// Inspect the same live allocation after erasure and before Vec destruction.
+    pub(super) fn observe_trace_mask_after_erasure_v1(
+        before: Option<usize>,
+        values: &[GoldilocksFieldV1],
+    ) {
+        if let Some(before) = before {
+            TRACE_MASK_ERASURES.with_borrow_mut(|observations| {
+                observations.as_mut().unwrap().push((
+                    values.len(),
+                    before,
+                    values
+                        .iter()
+                        .filter(|value| **value != GoldilocksFieldV1::ZERO)
+                        .count(),
+                ));
+            });
+        }
+    }
+    struct PartialMaskRng {
+        draws: usize,
+        panic_on_failure: bool,
+    }
+    impl TryRngCore for PartialMaskRng {
+        type Error = InjectedRngError;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            unreachable!("field sampler requests bytes")
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            unreachable!("field sampler requests bytes")
+        }
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            assert_eq!(destination.len(), 8);
+            if self.draws == 2 {
+                // Entropy sources may modify the output before reporting failure.
+                destination.fill(0x5a);
+                assert!(!self.panic_on_failure, "injected entropy-source unwind");
+                return Err(InjectedRngError);
+            }
+            destination.copy_from_slice(&(17 + self.draws as u64).to_le_bytes());
+            self.draws += 1;
+            Ok(())
+        }
+    }
+    #[test]
+    fn sampled_mask_clears_initialized_cells_on_entropy_error_unwind_and_drop() {
+        struct ObservationScope;
+        impl Drop for ObservationScope {
+            fn drop(&mut self) {
+                TRACE_MASK_ERASURES.set(None);
+            }
+        }
+        TRACE_MASK_ERASURES.set(Some(Vec::new()));
+        let _scope = ObservationScope;
+        let mut rng = PartialMaskRng {
+            draws: 0,
+            panic_on_failure: false,
+        };
+        assert!(matches!(
+            sample_trace_mask_v1(3, &mut rng),
+            Err(TransparentStarkErrorV1::RandomnessUnavailable)
+        ));
+        assert_eq!(rng.draws, 2);
+        assert!(
+            std::panic::catch_unwind(|| {
+                let mut rng = PartialMaskRng {
+                    draws: 0,
+                    panic_on_failure: true,
+                };
+                let _ = sample_trace_mask_v1(3, &mut rng);
+            })
+            .is_err()
+        );
+        let mut rng = PartialMaskRng {
+            draws: 0,
+            panic_on_failure: false,
+        };
+        let mask = sample_trace_mask_v1(1, &mut rng).expect("two successful draws");
+        assert_eq!(
+            mask.coefficients(),
+            &[GoldilocksFieldV1(17), GoldilocksFieldV1(18)]
+        );
+        drop(mask);
+        assert!(matches!(
+            sample_trace_mask_v1(usize::MAX, &mut rng),
+            Err(TransparentStarkErrorV1::InvalidDomain)
+        ));
+        TRACE_MASK_ERASURES.with_borrow(|observations| {
+            assert_eq!(observations.as_ref().unwrap(), &[(2, 2, 0); 3]);
+        });
+        let mut rng = PartialMaskRng {
+            draws: 0,
+            panic_on_failure: false,
+        };
+        assert_eq!(
+            random_goldilocks_fp4_v1(&mut rng),
+            Err(TransparentStarkErrorV1::RandomnessUnavailable)
+        );
+        assert_eq!(rng.draws, 2);
     }
     struct MaxValueRng;
     impl RngCore for MaxValueRng {

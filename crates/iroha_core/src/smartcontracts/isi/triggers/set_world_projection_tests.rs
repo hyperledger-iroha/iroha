@@ -181,11 +181,7 @@ fn borrowed_action_matches_owned_dto_for_all_executable_variants_and_flags() {
     for (_, action) in block.by_call_triggers.iter() {
         let expected = LoadedActionDto::from(action).encode();
         let expected_hash = hash_value(&LoadedActionDto::from(action)).unwrap();
-        for flags in [
-            0,
-            norito::core::default_encode_flags(),
-            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
-        ] {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(BorrowedWorldAction::new(action).encode(), expected);
             assert_eq!(hash_world_action(action).unwrap(), expected_hash);

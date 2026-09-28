@@ -1,0 +1,239 @@
+//! In-node inbound light-client keeper (`specs/sccp.md` §4.13.4).
+//!
+//! Every validator with an active or pending bridge key keeps Taira's inbound light clients
+//! fresh: when a light client's head is older than `advance_after` (default `ws_bound_ms / 4`),
+//! the keeper builds an advance from the configured (or compiled public) endpoints and submits
+//! it fee-exempt from its bridge key's account. Several keepers are harmless: the advance
+//! carries the expected state hash, so only the first one moves the head and the rest fail
+//! admission instead of paying.
+//!
+//! Ethereum, BSC and TRON advances use HTTP endpoints, TON advances ADNL liteservers.
+
+use std::time::Instant;
+
+use iroha_config::parameters::actual::SccpLightClientKeeper;
+use iroha_data_model::{
+    bridge::SccpNetworkV1, isi::sccp::AdvanceSccpLightClientV1,
+    sccp::light_client::SccpLightClientV1,
+};
+use iroha_sccp_rpc::{
+    BeaconClient, EvmClient, HttpEndpointKind, HttpTransport, TronClient,
+    builders::{bsc::BscBuilder, ethereum::EthereumBuilder, ton::TonBuilder, tron::TronBuilder},
+    ton::LiteClient,
+};
+
+/// The keeper's builders and cadence.
+pub(super) struct Keeper {
+    config: SccpLightClientKeeper,
+    ethereum: Option<EthereumBuilder>,
+    bsc: Option<BscBuilder>,
+    tron: Option<TronBuilder>,
+    ton: Option<TonBuilder>,
+    last_poll: Option<Instant>,
+}
+
+impl Keeper {
+    /// Build the keeper from `config`; a disabled keeper or unusable endpoints leave it idle.
+    pub(super) fn new(config: SccpLightClientKeeper) -> Self {
+        let seed = u64::from(std::process::id());
+        let ethereum = if config.enabled {
+            let beacon =
+                HttpTransport::from_keeper_config(&config, HttpEndpointKind::EthereumBeacon, seed);
+            let execution = HttpTransport::from_keeper_config(
+                &config,
+                HttpEndpointKind::EthereumExecution,
+                seed,
+            );
+            match (beacon, execution) {
+                (Ok(beacon), Ok(execution)) => Some(EthereumBuilder::new(
+                    BeaconClient::new(beacon),
+                    EvmClient::new(execution),
+                )),
+                (Err(error), _) | (_, Err(error)) => {
+                    iroha_logger::warn!(%error, "SCCP keeper: Ethereum endpoints are unusable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let bsc = if config.enabled {
+            match HttpTransport::from_keeper_config(&config, HttpEndpointKind::Bsc, seed) {
+                Ok(transport) => Some(BscBuilder::new(EvmClient::new(transport))),
+                Err(error) => {
+                    iroha_logger::warn!(%error, "SCCP keeper: BSC endpoints are unusable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let tron = if config.enabled {
+            match HttpTransport::from_keeper_config(&config, HttpEndpointKind::Tron, seed) {
+                Ok(transport) => Some(TronBuilder::new(TronClient::new(transport))),
+                Err(error) => {
+                    iroha_logger::warn!(%error, "SCCP keeper: TRON endpoints are unusable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let ton = if config.enabled {
+            match LiteClient::from_keeper_config(&config, seed) {
+                Ok(lite) => Some(TonBuilder::new(lite)),
+                Err(error) => {
+                    iroha_logger::warn!(%error, "SCCP keeper: TON liteservers are unusable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        Self {
+            config,
+            ethereum,
+            bsc,
+            tron,
+            ton,
+            last_poll: None,
+        }
+    }
+
+    /// Whether a poll is due now (at most once per `poll_interval`).
+    pub(super) fn due(&mut self) -> bool {
+        if self.ethereum.is_none()
+            && self.bsc.is_none()
+            && self.tron.is_none()
+            && self.ton.is_none()
+        {
+            return false;
+        }
+        let now = Instant::now();
+        if self
+            .last_poll
+            .is_some_and(|last| now.duration_since(last) < self.config.poll_interval)
+        {
+            return false;
+        }
+        self.last_poll = Some(now);
+        true
+    }
+
+    /// Build the advances of every stale light client this keeper can serve at Taira time
+    /// `now_ms`.
+    pub(super) fn advances(
+        &self,
+        light_clients: &[SccpLightClientV1],
+        now_ms: u64,
+    ) -> Vec<AdvanceSccpLightClientV1> {
+        light_clients
+            .iter()
+            .filter(|light_client| is_stale(&self.config, light_client, now_ms))
+            .filter_map(|light_client| {
+                let network = light_client.params.network;
+                let max_updates =
+                    usize::try_from(light_client.params.max_updates_per_advance).unwrap_or(1);
+                let latest = light_client.head.latest_set_id;
+                let built = match network {
+                    SccpNetworkV1::EthereumMainnet => {
+                        self.ethereum.as_ref()?.advance(latest, max_updates)
+                    }
+                    SccpNetworkV1::BscMainnet => self.bsc.as_ref()?.advance(latest, max_updates),
+                    SccpNetworkV1::TronMainnet => self.tron.as_ref()?.advance(latest, max_updates),
+                    SccpNetworkV1::TonMainnet => self.ton.as_ref()?.advance(latest, max_updates),
+                    SccpNetworkV1::SoraTaira => return None,
+                };
+                match built {
+                    Ok(advance) => Some(AdvanceSccpLightClientV1 {
+                        network,
+                        expected_state_hash: Some(light_client.state_hash),
+                        advance,
+                    }),
+                    Err(error) => {
+                        iroha_logger::warn!(
+                            %error,
+                            network = network.profile_key(),
+                            "SCCP keeper: building an advance failed"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect()
+    }
+}
+
+/// How often the keeper looks for a new TON key block: TON light clients have no
+/// `ws_bound_ms` (their freshness comes from the epoch's own validity).
+const TON_ADVANCE_AFTER_MS: u64 = 3_600_000;
+
+/// Whether `light_client` is unfrozen and its head is older than the keeper's staleness bound.
+fn is_stale(config: &SccpLightClientKeeper, light_client: &SccpLightClientV1, now_ms: u64) -> bool {
+    let after_ms = if light_client.params.ws_bound_ms == 0 {
+        TON_ADVANCE_AFTER_MS
+    } else {
+        let after = config.advance_after_for(light_client.params.ws_bound_ms);
+        u64::try_from(after.as_millis()).unwrap_or(u64::MAX)
+    };
+    !light_client.is_frozen()
+        && now_ms.saturating_sub(light_client.head.last_progress_taira_ms) >= after_ms
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_data_model::sccp::light_client::{
+        SccpLcHeadV1, SccpLcPointV1, SccpLightClientParamsV1,
+    };
+    use std::time::Duration;
+
+    fn light_client(last_progress_taira_ms: u64) -> SccpLightClientV1 {
+        SccpLightClientV1 {
+            params: SccpLightClientParamsV1::defaults_for(SccpNetworkV1::EthereumMainnet)
+                .expect("ethereum defaults"),
+            head: SccpLcHeadV1 {
+                latest_set_id: 1,
+                latest_finalized: SccpLcPointV1 {
+                    source_height: 1,
+                    block_hash: [1; 32],
+                    source_time_ms: 1,
+                },
+                last_progress_taira_ms,
+            },
+            frozen: None,
+            state_hash: [0; 32],
+        }
+    }
+
+    #[test]
+    fn staleness_follows_the_configured_or_derived_bound() {
+        let mut config = SccpLightClientKeeper::default();
+        config.advance_after = Some(Duration::from_secs(10));
+        assert!(!is_stale(&config, &light_client(5_000), 14_000));
+        assert!(is_stale(&config, &light_client(5_000), 15_000));
+        config.advance_after = None;
+        let derived = light_client(0).params.ws_bound_ms / 4;
+        assert!(!is_stale(&config, &light_client(0), derived - 1));
+        assert!(is_stale(&config, &light_client(0), derived));
+    }
+
+    #[test]
+    fn ton_light_clients_are_polled_hourly() {
+        let config = SccpLightClientKeeper::default();
+        let mut ton = light_client(0);
+        ton.params =
+            SccpLightClientParamsV1::defaults_for(SccpNetworkV1::TonMainnet).expect("ton defaults");
+        assert!(!is_stale(&config, &ton, TON_ADVANCE_AFTER_MS - 1));
+        assert!(is_stale(&config, &ton, TON_ADVANCE_AFTER_MS));
+    }
+
+    #[test]
+    fn a_disabled_keeper_never_polls() {
+        let mut config = SccpLightClientKeeper::default();
+        config.enabled = false;
+        let mut keeper = Keeper::new(config);
+        assert!(!keeper.due());
+        assert!(keeper.advances(&[light_client(0)], u64::MAX).is_empty());
+    }
+}

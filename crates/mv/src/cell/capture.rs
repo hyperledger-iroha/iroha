@@ -13,6 +13,10 @@ pub struct BlockCaptureSlot<'a, V: Value, Admission, C: Send + Sync + 'static = 
     cleanup: CaptureCleanup,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "phases change in place; boxing a variant would allocate on the allocation-free path"
+)]
 enum CapturePhase<'a, V: Value, Admission, C: Send + Sync + 'static> {
     Empty,
     Attached {

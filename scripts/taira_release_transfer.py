@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Import one prepared Taira release into fresh, inactive custody on the approved guest.
+"""Import a prepared Taira release or invoke its verified native operator tools.
 
 Requires Python 3.11+, local Git/GPG and the explicitly pinned MacStadium SSH
 routes. The Linux receiver requires root, Git, GPG and an existing private runtime
 root. Only signed public source, four executables and public receipts cross SSH.
-No service, deployment, runtime credential or activation command is exposed.
+Import never activates services. Explicit --native-plan delegates one operation
+to imported iroha/kagami; native code alone owns deployment and recovery.
+Guest credential files are passed as descriptors, never read by this transport.
 See docs/source/taira_release_transfer.md for the closed public plan.
 """
 from __future__ import annotations
@@ -22,6 +24,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import select
+import signal
 import shlex
 import shutil
 import stat
@@ -51,6 +54,10 @@ MODULES = ("release_artifact_contract", "taira_disk_capacity", "taira_source_cap
 CONTROLLERS = ("release_artifact_contract", "taira_cargo_cache", "taira_cargo_artifact",
                "taira_disk_capacity", "taira_source_capture", "taira_retry",
                "taira_release", "taira_release_transfer")
+NATIVE_SCHEMA = "taira.native-invocation.v1"
+NATIVE_RESULT_SCHEMA = "taira.native-invocation.result.v1"
+NATIVE_RUNTIME = "/private/runtime/taira-public-reset"
+NATIVE_OUTPUT_LIMIT = 256 * 1024
 BASE_FIELDS = frozenset("commit signer_fingerprint native_check_scope native_incremental native_linker "
     "environment_sha256 native_environment_sha256 tree target profile jobs source_unchanged "
     "toolchain_unchanged source_snapshot_sha256 source_root source_output_target compiler_tools "
@@ -521,7 +528,13 @@ class DeadlineReader:
 
 
 def remote_entry(envelope, stream):
-    """Only these three maintained operations are reachable through the fixed bootstrap."""
+    """Closed import/capacity operations and explicit native invocation only."""
+    if envelope.get("operation") == "native-exec":
+        need(set(envelope) == {"operation", "request", "modules"}, "native envelope differs")
+        need(not DeadlineReader(stream, 60).read(1), "native invocation has unexpected payload")
+        need(sys.platform == "linux" and platform.machine() in ("aarch64", "arm64")
+             and os.geteuid() == 0, "native invocation requires AArch64 Linux root")
+        return native_guest(envelope["request"])
     capacity = importlib.import_module("taira_disk_capacity")
     operation = envelope["operation"]
     stream = DeadlineReader(stream, TIMEOUT if operation == "import" else 60)
@@ -581,7 +594,9 @@ def remote_call(route, envelope, modules, output, retry, payloads=()):
     raw = canonical(envelope)
     need(len(raw) <= MAX_BOOTSTRAP, "remote bootstrap exceeds bound")
     started = time.monotonic()
-    timeout = TIMEOUT if envelope["operation"] == "import" else 60
+    timeout = (envelope["request"]["plan"]["timeout_seconds"] + 30
+               if envelope["operation"] == "native-exec" else
+               TIMEOUT if envelope["operation"] == "import" else 60)
     with (output.with_suffix(".stdout")).open("xb") as stdout, (output.with_suffix(".stderr")).open("xb") as stderr:
         os.chmod(stdout.name, 0o600)
         os.chmod(stderr.name, 0o600)
@@ -787,15 +802,363 @@ def transfer_admitted(plan, root, output, tree, modules, loaded):
     return completed
 
 
+def native_path(value):
+    need(isinstance(value, str) and value.startswith("/") and str(PurePosixPath(value)) == value
+         and os.path.normpath(value) == value and not re.search(r"[\x00-\x1f\x7f]", value),
+         "normalized absolute native path required")
+    return Path(value)
+
+
+def native_reference(value):
+    need(isinstance(value, dict) and set(value) == {"path", "sha256"} and digest(value["sha256"]),
+         "native public reference requires path and digest")
+    native_path(value["path"])
+
+
+def validate_native_plan(plan):
+    need(isinstance(plan, dict) and set(plan) == {"schema", "provider", "invocation_id",
+         "expected_commit", "expected_signer", "descriptor", "preparation", "import_request",
+         "import_completed", "program", "argv", "files", "stdout_file", "timeout_seconds"}
+         and plan["schema"] == NATIVE_SCHEMA and plan["provider"] == "macstadium-dublin",
+         "exact MacStadium native invocation plan required")
+    need(isinstance(plan["invocation_id"], str) and re.fullmatch(r"[0-9a-f]{32}", plan["invocation_id"])
+         and isinstance(plan["expected_commit"], str) and re.fullmatch(r"[0-9a-f]{40}", plan["expected_commit"])
+         and isinstance(plan["expected_signer"], str)
+         and re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64})", plan["expected_signer"]),
+         "native invocation/source identity differs")
+    for key in ("descriptor", "preparation", "import_request", "import_completed"):
+        native_reference(plan[key])
+    need(plan["program"] in ("iroha", "kagami"), "only imported iroha and kagami may execute")
+    need(isinstance(plan["argv"], list) and 0 < len(plan["argv"]) <= 128
+         and all(isinstance(arg, str) and len(arg.encode()) <= 8192
+                 and not re.search(r"[\x00-\x1f\x7f]", arg) for arg in plan["argv"])
+         and sum(len(arg.encode()) for arg in plan["argv"]) <= 64 * 1024, "native argv exceeds bound")
+    need(type(plan["timeout_seconds"]) is int and 1 <= plan["timeout_seconds"] <= 86400,
+         "native deadline must be 1 through 86400 seconds")
+    need(isinstance(plan["files"], list) and len(plan["files"]) <= 16, "native FD census exceeds bound")
+    descriptors = set()
+    for entry in plan["files"]:
+        need(isinstance(entry, dict) and set(entry) == {"fd", "path"}
+             and type(entry["fd"]) is int and 3 <= entry["fd"] <= 65535
+             and entry["fd"] not in descriptors, "native FD mapping is invalid or repeated")
+        descriptors.add(entry["fd"])
+        path = native_path(entry["path"])
+        need(path.is_relative_to(NATIVE_RUNTIME) and path != Path(NATIVE_RUNTIME),
+             "native input escaped private runtime")
+    if plan["stdout_file"] is not None:
+        path = native_path(plan["stdout_file"])
+        need(path.is_relative_to(NATIVE_RUNTIME) and path != Path(NATIVE_RUNTIME)
+             and all(entry["path"] != str(path) for entry in plan["files"]),
+             "native stdout escaped runtime or aliases an input")
+    return plan
+
+
+def admit_native_records(plan, tree, build, request, completed):
+    """Join bounded public receipts, not all imported payloads or the source tree."""
+    from release_artifact_contract import canonical_json_bytes
+    validate_request(request)
+    need(request["runtime_root"] == NATIVE_RUNTIME and request["commit"] == plan["expected_commit"]
+         and request["tree"] == tree and request["signer_fingerprint"] == plan["expected_signer"]
+         and request["result_sha256"] == plan["preparation"]["sha256"], "native import identity differs")
+    need(isinstance(build, dict) and set(build) == BASE_FIELDS | {"artifacts", "timings_seconds", "attempt"}
+         and sha(canonical_json_bytes(build)) == request["result_sha256"]
+         and build["commit"] == request["commit"] and build["tree"] == tree
+         and build["signer_fingerprint"] == request["signer_fingerprint"]
+         and build["target"] == "aarch64-unknown-linux-gnu" and build["profile"] == "release"
+         and build["source_unchanged"] is True and build["toolchain_unchanged"] is True
+         and build["release_qualified"] is False and build["deployed"] is False
+         and build["native_check_scope"] in ("basic", "full"), "native preparation identity differs")
+    need(isinstance(build["artifacts"], list) and len(build["artifacts"]) == 4,
+         "native preparation artifact census differs")
+    for artifact, row, package in zip(build["artifacts"], request["rows"], PACKAGES):
+        need(isinstance(artifact, dict) and set(artifact) == {"name", "package", "path", "size", "sha256"}
+             and artifact["package"] == package
+             and {key: artifact[key] for key in ("name", "size", "sha256")} == row,
+             "native preparation/import artifact differs")
+    destination = Path(NATIVE_RUNTIME) / import_name(request)
+    need(isinstance(completed, dict) and set(completed) == {"schema", "request_sha256",
+         "binary_transfer", "source_transfer", "activated", "binary", "source"},
+         "native import completion shape differs")
+    binary, source = expected_receipts(request, destination, completed["source"])
+    expected = {"schema": RESULT_SCHEMA, "request_sha256": sha(canonical(request)),
+        "binary_transfer": {"path": str(destination / "artifacts/verified-manifest.json"),
+                            "sha256": sha(canonical(binary))},
+        "source_transfer": {"path": str(destination / "source/verified-manifest.json"),
+                            "sha256": sha(canonical(source))}, "activated": False,
+        "binary": binary, "source": source}
+    need(completed == expected, "native completed import receipts differ")
+    return destination
+
+
+@contextlib.contextmanager
+def native_file(path, *, output=False):
+    """Open through held no-follow directories; never read runtime secret bytes."""
+    path = native_path(str(path))
+    need(path.is_relative_to(NATIVE_RUNTIME) and path != Path(NATIVE_RUNTIME), "native file escaped runtime")
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    opened = None
+    try:
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                            dir_fd=directory)
+            os.close(directory)
+            directory = child
+            info = os.fstat(directory)
+            need(info.st_uid in (0, os.geteuid()) and not info.st_mode & 0o022, "unsafe native file ancestry")
+        parent = os.fstat(directory)
+        need(parent.st_uid == os.geteuid() and stat.S_IMODE(parent.st_mode) == 0o700,
+             "native file parent must be owner-private")
+        flags = os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        flags |= (os.O_WRONLY | os.O_CREAT | os.O_EXCL) if output else os.O_RDONLY
+        opened = os.open(path.name, flags, 0o600, dir_fd=directory)
+        info = os.fstat(opened)
+        need(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and info.st_nlink == 1
+             and stat.S_IMODE(info.st_mode) in (0o400, 0o600), "unsafe native runtime file custody")
+        if output:
+            os.fsync(directory)
+        yield opened
+        if output:
+            os.fsync(opened)
+    finally:
+        if opened is not None:
+            os.close(opened)
+        os.close(directory)
+
+
+def exec_native_fd(executable, argv, environment):
+    os.execve(executable, argv, environment)
+
+
+def native_child(executable, program, plan, inputs, private_stdout, attempt, private_stderr=None):
+    """Bound one owned child; timeout never asserts that native mutations did not happen."""
+    protected, pipes, pid = [], [], None
+    floor = max([2, *(entry["fd"] for entry in plan["files"])]) + 1
+    def protect(fd):
+        copy = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, floor)
+        protected.append(copy)
+        return copy
+    try:
+        image = protect(executable)
+        mapped = [(entry["fd"], protect(fd)) for entry, fd in zip(plan["files"], inputs)]
+        null = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+        try:
+            child_stdin = protect(null)
+        finally:
+            os.close(null)
+        if private_stdout is None:
+            outgoing, incoming = os.pipe()
+            pipes.append(("stdout", outgoing))
+            try:
+                child_stdout = protect(incoming)
+            finally:
+                os.close(incoming)
+        else:
+            child_stdout = protect(private_stdout)
+        if private_stderr is None:
+            outgoing, incoming = os.pipe()
+            pipes.append(("stderr", outgoing))
+            try:
+                child_stderr = protect(incoming)
+            finally:
+                os.close(incoming)
+        else:
+            child_stderr = protect(private_stderr)
+        write_new(attempt / "started.json", canonical({"schema": NATIVE_SCHEMA,
+                  "invocation_id": plan["invocation_id"], "operation_may_have_started": True}))
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.setsid()
+                os.dup2(child_stdin, 0)
+                os.dup2(child_stdout, 1)
+                os.dup2(child_stderr, 2)
+                for target, source in mapped:
+                    os.dup2(source, target, inheritable=True)
+                keep = {0, 1, 2, image, *(target for target, _ in mapped)}
+                for name in os.listdir("/proc/self/fd"):
+                    fd = int(name)
+                    if fd not in keep:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass  # The descriptor used by listdir itself is already closed.
+                os.chdir(NATIVE_RUNTIME)
+                exec_native_fd(image, [str(program), *plan["argv"]],
+                    {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                     "HOME": NATIVE_RUNTIME, "LC_ALL": "C"})
+            except BaseException:
+                os.write(2, b"native executable launch failed\n")
+            os._exit(126)
+        for fd in protected:
+            os.close(fd)
+        protected.clear()
+        buffers = {name: bytearray() for name, _ in pipes}
+        truncated = {name: False for name, _ in pipes}
+        active = {fd: name for name, fd in pipes}
+        for fd in active:
+            os.set_blocking(fd, False)
+        deadline, status, timed_out = time.monotonic() + plan["timeout_seconds"], None, False
+        while status is None:
+            if time.monotonic() >= deadline:
+                # Only this invocation's direct child is stopped, never a process
+                # group, validator, service, or work started by the native owner.
+                os.kill(pid, signal.SIGKILL)
+                _, status = os.waitpid(pid, 0)
+                timed_out = True
+                break
+            ready, _, _ = select.select(list(active), [], [], min(0.1, max(0, deadline - time.monotonic())))
+            for fd in ready:
+                data = os.read(fd, CHUNK)
+                if not data:
+                    del active[fd]
+                    continue
+                name = active[fd]
+                room = NATIVE_OUTPUT_LIMIT - len(buffers[name])
+                buffers[name].extend(data[:room])
+                truncated[name] |= len(data) > room
+            child, observed = os.waitpid(pid, os.WNOHANG)
+            if child:
+                status = observed
+        # Drain only immediately available bytes; descendants may retain pipes.
+        for fd, name in list(active.items()):
+            for _ in range(2):
+                try:
+                    data = os.read(fd, CHUNK)
+                except BlockingIOError:
+                    break
+                if not data:
+                    break
+                room = NATIVE_OUTPUT_LIMIT - len(buffers[name])
+                buffers[name].extend(data[:room])
+                truncated[name] |= len(data) > room
+            else:
+                truncated[name] = True
+        for name, data in buffers.items():
+            write_new(attempt / name, bytes(data), mode=0o600)
+        return {"state": "indeterminate" if timed_out else "process-exited",
+                "exit_code": os.waitstatus_to_exitcode(status), "timed_out": timed_out,
+                "stdout_base64": base64.b64encode(buffers.get("stdout", b"")).decode(),
+                "stderr_base64": base64.b64encode(buffers.get("stderr", b"")).decode(),
+                "output_truncated": truncated, "private_stdout": plan["stdout_file"]}
+    finally:
+        for fd in protected:
+            os.close(fd)
+        for _, fd in pipes:
+            os.close(fd)
+
+
+def native_guest(value):
+    need(isinstance(value, dict) and set(value) == {"plan", "tree", "build", "import_request", "completed"},
+         "native request shape differs")
+    plan = validate_native_plan(value["plan"])
+    request, completed = value["import_request"], value["completed"]
+    destination = admit_native_records(plan, value["tree"], value["build"], request, completed)
+    private_directory(destination)
+    need(read(destination / "request.json", mode=0o400) == canonical(request), "guest import request differs")
+    for row in request["rows"][6:]:
+        read(payload_path(destination, row["name"]), row["sha256"], maximum=MAX_PROOF, mode=0o400)
+    for name in ("binary", "source"):
+        receipt = completed[name + "_transfer"]
+        need(read(receipt["path"], receipt["sha256"], maximum=64 * 1024**2, mode=0o400)
+             == canonical(completed[name]), "guest import receipt differs")
+    need(read(destination / "completed.json", mode=0o400)
+         == canonical({key: completed[key] for key in completed if key not in ("binary", "source")}),
+         "guest import completion differs")
+    attempts = Path(NATIVE_RUNTIME) / "native-invocations"
+    private_directory(Path(NATIVE_RUNTIME))
+    if not attempts.exists():
+        attempts.mkdir(mode=0o700)
+        sync_directory(attempts.parent)
+    private_directory(attempts)
+    attempt = fresh_directory(attempts / plan["invocation_id"])
+    write_new(attempt / "request.json", canonical(value))
+    row = next(row for row in request["rows"][:4] if row["name"] == plan["program"])
+    program = destination / "artifacts/bin" / row["name"]
+    private_directory(program.parent)
+    with pinned(program, expected=row["sha256"], maximum=row["size"], mode=0o755) as (image, size, _), \
+         contextlib.ExitStack() as stack:
+        header = os.pread(image, 20, 0)
+        need(size == row["size"] and len(header) == 20 and header[:7] == b"\x7fELF\x02\x01\x01"
+             and header[18:20] == b"\xb7\x00", "selected native executable is not AArch64 ELF")
+        need(os.execve in os.supports_fd, "native execution requires descriptor exec support")
+        inputs = [stack.enter_context(native_file(entry["path"])) for entry in plan["files"]]
+        stdout = None if plan["stdout_file"] is None else stack.enter_context(native_file(plan["stdout_file"], output=True))
+        stderr = None if stdout is None else stack.enter_context(native_file(attempt / "stderr", output=True))
+        result = {"schema": NATIVE_RESULT_SCHEMA, "invocation_id": plan["invocation_id"],
+                  "plan_sha256": sha(canonical(plan)), "program": plan["program"],
+                  "executable_sha256": row["sha256"], "guest_attempt": str(attempt),
+                  **native_child(image, program, plan, inputs, stdout, attempt, stderr)}
+        if stdout is not None:
+            os.fsync(stdout)
+            os.fsync(stderr)
+        write_new(attempt / "result.json", canonical(result))
+    return result
+
+
+def invoke_native(plan, root, output):
+    plan = validate_native_plan(plan)
+    tree, modules, loaded = authenticated_modules(root, plan["expected_commit"], plan["expected_signer"])
+    return loaded["taira_release_transfer"].invoke_native_admitted(plan, output, tree, modules, loaded)
+
+
+def invoke_native_admitted(plan, output, tree, modules, loaded):
+    def record(key, mode=0o400):
+        reference = plan[key]
+        return decode(read(reference["path"], reference["sha256"], maximum=MAX_PROOF, mode=mode))
+    descriptor = record("descriptor", mode=0o600)
+    need(descriptor.get("schema") == "taira.runtime-deployment.v1"
+         and descriptor.get("runtime_root") == NATIVE_RUNTIME
+         and descriptor.get("public_origin") == "https://taira.sora.org", "approved descriptor identity differs")
+    retry = loaded["taira_retry"]
+    need(not any(word in json.dumps(descriptor["guest_ssh"]).lower()
+                 for word in ("vultr", "amazonaws", "aws.amazon")),
+         "banned infrastructure is not an operational input")
+    retry.validate_ssh(descriptor["guest_ssh"])
+    build, request, completed = record("preparation"), record("import_request"), record("import_completed")
+    admit_native_records(plan, tree, build, request, completed)
+    proofs = preparation_payloads(plan, build)
+    need([row for row, _ in proofs] == request["rows"][6:], "native qualification proof pins differ")
+    value = {"plan": plan, "tree": tree, "build": build, "import_request": request, "completed": completed}
+    output = fresh_directory(direct(output))
+    write_new(output / "plan.json", canonical(plan))
+    write_new(output / "started.json", canonical({"schema": NATIVE_SCHEMA,
+              "invocation_id": plan["invocation_id"], "plan_sha256": sha(canonical(plan)),
+              "state": "dispatching", "operation_may_have_started": True}))
+    try:
+        result = remote_call(descriptor["guest_ssh"], {"operation": "native-exec", "request": value},
+                             modules, output / "native", retry)
+        row = next(row for row in request["rows"][:4] if row["name"] == plan["program"])
+        need(isinstance(result, dict) and result.get("schema") == NATIVE_RESULT_SCHEMA
+             and result.get("invocation_id") == plan["invocation_id"]
+             and result.get("plan_sha256") == sha(canonical(plan))
+             and result.get("program") == plan["program"] and result.get("executable_sha256") == row["sha256"]
+             and result.get("state") in ("process-exited", "indeterminate")
+             and type(result.get("exit_code")) is int, "native result identity differs")
+    except BaseException:
+        write_new(output / "result.json", canonical({"schema": NATIVE_RESULT_SCHEMA,
+                  "invocation_id": plan["invocation_id"], "plan_sha256": sha(canonical(plan)),
+                  "state": "indeterminate", "exit_code": None,
+                  "guest_attempt": str(Path(NATIVE_RUNTIME) / "native-invocations" / plan["invocation_id"])}))
+        raise TransferError("native transport/observation failed; inspect retained evidence; do not replay") from None
+    write_new(output / "result.json", canonical(result))
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", required=True, type=Path, help="closed owner-private public transfer plan")
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--plan", type=Path, help="closed owner-private public transfer plan; import only")
+    operation.add_argument("--native-plan", type=Path, help="explicit one-shot invocation of imported iroha/kagami")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output-dir", required=True, type=Path, help="fresh evidence directory under an existing private parent")
     args = parser.parse_args()
     os.umask(0o077)
-    result = transfer(decode(read(args.plan, mode=0o600)), args.repo_root, args.output_dir)
+    selected = args.native_plan if args.native_plan is not None else args.plan
+    run = invoke_native if args.native_plan is not None else transfer
+    result = run(decode(read(selected, mode=0o600)), args.repo_root, args.output_dir)
     print(json.dumps(result, sort_keys=True))
+    if args.native_plan is not None and (result["state"] != "process-exited" or result["exit_code"] != 0):
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

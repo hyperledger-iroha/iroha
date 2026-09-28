@@ -1,7 +1,6 @@
 //! Structured genesis instruction codecs and validation fixtures.
 
 use super::*;
-#[allow(unused_imports)]
 use iroha_data_model::{
     alias_setup::{
         AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
@@ -28,8 +27,7 @@ use iroha_data_model::{
     parameter::{Parameter, TransactionParameter},
     permission::Permission,
     prelude::{
-        AccountId, AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register, Transfer,
-        Unregister,
+        AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register, Transfer, Unregister,
     },
     role::Role,
 };
@@ -37,9 +35,7 @@ use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
     parameter::CanSetParameters,
 };
-#[allow(unused_imports)]
 use iroha_model_base::metadata::Metadata;
-#[allow(unused_imports)]
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;

@@ -713,6 +713,18 @@ fn retained_carrier_shells_are_charged_before_execution_and_refunded_once() {
 #[cfg(feature = "bls")]
 #[test]
 fn current_carrier_accepts_signed_direct_ordinary_route_without_local_queue() {
+    let handle =
+        crate::sumeragi::threads::sumeragi_thread_builder("current-carrier-ordinary-route")
+            .spawn(current_carrier_ordinary_route_on_consensus_stack)
+            .expect("spawn current carrier test on the production consensus stack");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[inline(never)]
+fn current_carrier_ordinary_route_on_consensus_stack() {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let mut store = fixture.reopen_body_store();
     fixture

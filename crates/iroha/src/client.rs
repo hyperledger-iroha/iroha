@@ -24,6 +24,8 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
+/// Public SCCP v1 read API.
+pub mod sccp;
 mod staking_preparation;
 pub mod status;
 #[cfg(test)]
@@ -107,7 +109,8 @@ pub use iroha_torii_shared::governance_proposal_api::{
 pub use iroha_torii_shared::parliament_api::{
     PARLIAMENT_API_VERSION_V1, PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
-    ParliamentAttemptDraftResponseV1, ParliamentAttemptReadResponseV1,
+    ParliamentAttemptDraftResponseV1, ParliamentAttemptPlanResponseV1,
+    ParliamentAttemptReadResponseV1,
     ParliamentDecisionModeProjectionV1, ParliamentInstructionDraftV1,
     ParliamentTimedOvnCastingContextResponseV1, ParliamentTimedOvnCastingPhaseProjectionV1,
     ParliamentTimedOvnCastingProofRequestV1, ParliamentTimedOvnCastingProofResponseV1,
@@ -19752,6 +19755,49 @@ impl Client {
             ));
         }
         validate_parliament_attempt_state_frame(&result.state_payload_hex)?;
+        Ok(result)
+    }
+
+    /// Read the driver plan of one Parliament attempt (`specs/sccp.md` §4.14.5 item 4).
+    ///
+    /// # Errors
+    /// Returns an error for a zero identifier, transport or HTTP failure, malformed JSON, or a
+    /// response for another attempt or with an execution height before its committed height.
+    pub fn get_parliament_attempt_plan(
+        &self,
+        governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId,
+    ) -> Result<ParliamentAttemptPlanResponseV1> {
+        if governance_attempt_id
+            .as_bytes()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err(eyre!("Parliament governance attempt id must be non-zero"));
+        }
+        let path = torii_uri::GOV_PARLIAMENT_ATTEMPT_PLAN
+            .replace("{governance_attempt_id}", &governance_attempt_id.to_hex());
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PARLIAMENT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to read Parliament attempt plan",
+            " ",
+        )?;
+        let result: ParliamentAttemptPlanResponseV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode Parliament attempt plan response")?;
+        if result.version != PARLIAMENT_API_VERSION_V1
+            || result.governance_attempt_id != governance_attempt_id
+            || result.execution_height <= result.current_height
+        {
+            return Err(eyre!(
+                "Parliament attempt plan response differs from the requested attempt"
+            ));
+        }
         Ok(result)
     }
 

@@ -8,11 +8,7 @@ from typing import Optional
 _HEADER_BYTES = 40
 _MAX_HEADER_PADDING_BYTES = 64
 _COMPACT_LEN_FLAG = 0x02
-_PACKED_STRUCT_FLAG = 0x04
-_FIELD_BITSET_FLAG = 0x20
-_SUPPORTED_FLAGS_MASK = (
-    0x01 | _COMPACT_LEN_FLAG | _PACKED_STRUCT_FLAG | _FIELD_BITSET_FLAG
-)
+_SUPPORTED_FLAGS_MASK = _COMPACT_LEN_FLAG
 _CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
 _CRC64_REFLECTED_POLY = 0xC96C_5795_D787_0F42
 
@@ -62,9 +58,6 @@ def encode_norito_frame(
         raise TypeError("Norito flags must be one unsigned byte")
     if flags & ~_SUPPORTED_FLAGS_MASK:
         raise ValueError(f"unsupported Norito header flags 0x{flags:02x}")
-    required_bitset_flags = _PACKED_STRUCT_FLAG | _COMPACT_LEN_FLAG
-    if flags & _FIELD_BITSET_FLAG and flags & required_bitset_flags != required_bitset_flags:
-        raise ValueError("invalid Norito header flag combination")
     if (
         type(payload_alignment) is not int
         or payload_alignment < 1
@@ -123,9 +116,6 @@ def _validate_norito_frame(
     flags = body[39]
     if flags & ~_SUPPORTED_FLAGS_MASK:
         raise ValueError(f"{context} uses unsupported Norito header flags 0x{flags:02x}")
-    required_bitset_flags = _PACKED_STRUCT_FLAG | _COMPACT_LEN_FLAG
-    if flags & _FIELD_BITSET_FLAG and flags & required_bitset_flags != required_bitset_flags:
-        raise ValueError(f"{context} uses an invalid Norito header flag combination")
     if expected_flags is not None and flags != expected_flags:
         raise ValueError(
             f"{context} uses Norito layout flags 0x{flags:02x}; "

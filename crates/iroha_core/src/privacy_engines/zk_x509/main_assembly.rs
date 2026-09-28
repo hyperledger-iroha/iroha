@@ -9,6 +9,9 @@
 //! Assembly is not proof verification. Native reference validation here is a
 //! prover-side differential invariant; the independent aggregate verifier
 //! enforces the committed numeric constraints.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::private_table::{PrivateTableV1, zeroize_fields_v1, zeroize_words_v1};
+
 use super::{
     accumulator_air::{
         ZkX509AccumulatorAirErrorV1, ZkX509CaAccumulatorStatementV1, ZkX509CaAccumulatorTraceV1,
@@ -86,6 +89,44 @@ pub(crate) struct ZkX509MainIoBaseMaterialV1 {
     /// Exact address-sorted byte events.
     pub(crate) sorted: Vec<IoAccessV1>,
 }
+impl ZkX509MainIoBaseMaterialV1 {
+    fn zeroize_private_v1(&mut self) {
+        for witness in &mut self.witnesses {
+            zeroize_words_v1(&mut witness.producer_value);
+            witness.producer_value.clear();
+            for value in &mut witness.consumer_values {
+                zeroize_words_v1(value);
+                value.clear();
+            }
+            witness.consumer_values.clear();
+            if let Some(public_value) = &mut witness.declaration.public_value {
+                zeroize_words_v1(public_value);
+                public_value.clear();
+            }
+        }
+        self.witnesses.clear();
+        for declaration in &mut self.declarations {
+            if let Some(public_value) = &mut declaration.public_value {
+                zeroize_words_v1(public_value);
+                public_value.clear();
+            }
+        }
+        self.declarations.clear();
+        for access in self.execution.iter_mut().chain(&mut self.sorted) {
+            zeroize_fields_v1(core::slice::from_mut(&mut access.channel));
+            zeroize_fields_v1(core::slice::from_mut(&mut access.offset));
+            zeroize_fields_v1(core::slice::from_mut(&mut access.value));
+            zeroize_fields_v1(core::slice::from_mut(&mut access.is_write));
+        }
+        self.execution.clear();
+        self.sorted.clear();
+    }
+}
+impl Drop for ZkX509MainIoBaseMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
 /// Complete challenge-independent native material for one MAIN proof.
 pub(crate) struct ZkX509MainTraceAssemblyV1 {
     /// Successful native differential projection.
@@ -121,7 +162,7 @@ impl ZkX509MainTraceAssemblyV1 {
     /// This is deliberately idempotent so error paths and `Drop` can share
     /// the same scrub routine without relying on allocator deallocation.
     pub(crate) fn zeroize_private_v1(&mut self) {
-        self.relation_output.ownership_challenge_digest.fill(0);
+        zeroize_words_v1(&mut self.relation_output.ownership_challenge_digest);
         self.rfc_trace.zeroize_private_v1();
         self.der_base.zeroize_private_v1();
         self.rfc_base.zeroize_private_v1();
@@ -142,36 +183,10 @@ impl ZkX509MainTraceAssemblyV1 {
         self.optional_certificate_selection
             .selected
             .zeroize_private_v1();
-        self.optional_certificate_selection.active = F::ZERO;
-        for witness in &mut self.io.witnesses {
-            witness.producer_value.fill(0);
-            witness.producer_value.clear();
-            for value in &mut witness.consumer_values {
-                value.fill(0);
-                value.clear();
-            }
-            witness.consumer_values.clear();
-            if let Some(public_value) = &mut witness.declaration.public_value {
-                public_value.fill(0);
-                public_value.clear();
-            }
-        }
-        self.io.witnesses.clear();
-        for declaration in &mut self.io.declarations {
-            if let Some(public_value) = &mut declaration.public_value {
-                public_value.fill(0);
-                public_value.clear();
-            }
-        }
-        self.io.declarations.clear();
-        for access in self.io.execution.iter_mut().chain(&mut self.io.sorted) {
-            access.channel = F::ZERO;
-            access.offset = F::ZERO;
-            access.value = F::ZERO;
-            access.is_write = F::ZERO;
-        }
-        self.io.execution.clear();
-        self.io.sorted.clear();
+        zeroize_fields_v1(core::slice::from_mut(
+            &mut self.optional_certificate_selection.active,
+        ));
+        self.io.zeroize_private_v1();
     }
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
@@ -279,12 +294,24 @@ fn projection_witness_v1(
     if statement.disclosed_attributes.len() != witness.attribute_openings.len() {
         return Err(ZkX509MainAssemblyErrorV1::Source);
     }
-    let mut disclosed_attribute_values = Vec::new();
-    let mut attribute_salts = Vec::new();
-    disclosed_attribute_values
+    // Establish the recursive clearing owner before copying any private field:
+    // a later disclosure mismatch must also erase earlier values and salts.
+    let mut projection = ZkX509ProjectionWitnessV1 {
+        chain_spki_der: Vec::new(),
+        leaf_serial: Vec::new(),
+        disclosed_attribute_values: Vec::new(),
+        attribute_salts: Vec::new(),
+    };
+    projection
+        .chain_spki_der
+        .try_reserve_exact(trace.certificates.len())
+        .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
+    projection
+        .disclosed_attribute_values
         .try_reserve_exact(statement.disclosed_attributes.len())
         .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
-    attribute_salts
+    projection
+        .attribute_salts
         .try_reserve_exact(statement.disclosed_attributes.len())
         .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
     for (attribute, opening) in statement
@@ -295,41 +322,45 @@ fn projection_witness_v1(
         if attribute.index != opening.index {
             return Err(ZkX509MainAssemblyErrorV1::Source);
         }
-        disclosed_attribute_values.push(
-            leaf.subject.attributes[usize::from(attribute.index)]
-                .clone()
-                .ok_or(ZkX509MainAssemblyErrorV1::Source)?,
+        projection.disclosed_attribute_values.push(
+            leaf.subject
+                .attributes
+                .get(usize::from(attribute.index))
+                .and_then(Option::as_ref)
+                .ok_or(ZkX509MainAssemblyErrorV1::Source)?
+                .clone(),
         );
-        attribute_salts.push(opening.salt);
+        projection.attribute_salts.push(opening.salt);
     }
-    Ok(ZkX509ProjectionWitnessV1 {
-        chain_spki_der: trace
-            .certificates
-            .iter()
-            .map(|certificate| certificate.spki_der.clone())
-            .collect(),
-        leaf_serial: leaf.serial.clone(),
-        disclosed_attribute_values,
-        attribute_salts,
-    })
+    for certificate in &trace.certificates {
+        projection.chain_spki_der.push(certificate.spki_der.clone());
+    }
+    projection.leaf_serial = leaf.serial.clone();
+    Ok(projection)
+}
+fn erase_assembly_byte_rows_v1(rows: &mut [Vec<u8>]) {
+    for row in rows {
+        zeroize_words_v1(row);
+    }
 }
 fn sha_witness_v1(
     schedule: &ZkX509ShaCallScheduleV1,
     call: usize,
     message: Vec<u8>,
 ) -> Result<ZkX509ShaCallWitnessV1, ZkX509MainAssemblyErrorV1> {
+    let message = PrivateTableV1::new(message, zeroize_words_v1);
     let manifest = schedule.call(call)?;
-    let digest = Sha256::digest(&message).into();
+    let digest = Sha256::digest(message.as_slice()).into();
     Ok(ZkX509ShaCallWitnessV1 {
         role: manifest.role,
-        message,
+        message: message.into_vec(),
         digest,
     })
 }
 fn projection_sha_messages_v1(
     disclosed_attributes: usize,
     trace: &ZkX509ProjectionTraceV1,
-) -> Result<[Vec<u8>; PROJECTION_SHA_CALLS_V1], ZkX509MainAssemblyErrorV1> {
+) -> Result<PrivateTableV1<Vec<u8>>, ZkX509MainAssemblyErrorV1> {
     let prefix = PROJECTION_SHARED_PREFIX_BASE_CHANNELS_V1
         .checked_add(
             disclosed_attributes
@@ -352,7 +383,10 @@ fn projection_sha_messages_v1(
     if trace.io_channels.len() != expected_channels {
         return Err(ZkX509MainAssemblyErrorV1::Source);
     }
-    let mut messages: [Vec<u8>; PROJECTION_SHA_CALLS_V1] = core::array::from_fn(|_| Vec::new());
+    let mut messages = PrivateTableV1::new(
+        vec![Vec::new(); PROJECTION_SHA_CALLS_V1],
+        erase_assembly_byte_rows_v1,
+    );
     for (ordinal, slot) in active_slots.into_iter().enumerate() {
         let first = prefix
             .checked_add(
@@ -400,11 +434,11 @@ fn projection_sha_messages_v1(
         {
             return Err(ZkX509MainAssemblyErrorV1::Source);
         }
-        let message = padded.value[..message_len].to_vec();
-        if digest.value.as_slice() != Sha256::digest(&message).as_slice() {
+        let message = PrivateTableV1::new(padded.value[..message_len].to_vec(), zeroize_words_v1);
+        if digest.value.as_slice() != Sha256::digest(message.as_slice()).as_slice() {
             return Err(ZkX509MainAssemblyErrorV1::Source);
         }
-        messages[slot] = message;
+        messages[slot] = message.into_vec();
     }
     Ok(messages)
 }
@@ -437,10 +471,14 @@ fn build_sha_witnesses_v1(
         4,
         crl_commitment_preimage_v1(&witness.crl_der)?,
     )?);
-    let projection_messages =
+    let mut projection_messages =
         projection_sha_messages_v1(statement.disclosed_attributes.len(), projection_trace)?;
-    for (slot, message) in projection_messages.into_iter().enumerate() {
-        calls.push(sha_witness_v1(schedule, 5 + slot, message)?);
+    for (slot, message) in projection_messages.iter_mut().enumerate() {
+        calls.push(sha_witness_v1(
+            schedule,
+            5 + slot,
+            core::mem::take(message),
+        )?);
     }
     let issuer = rfc_trace
         .certificates
@@ -527,19 +565,46 @@ fn p256_witness_rs_v1(
         digest_be,
     })
 }
+fn erase_p256_witnesses_v1(witnesses: &mut [P256EcdsaWitnessV1]) {
+    for witness in witnesses {
+        witness.zeroize_private_v1();
+    }
+}
+
+struct MainOptionalP256SelectionV1(P256OptionalCertificateSelectionV1);
+
+impl Drop for MainOptionalP256SelectionV1 {
+    fn drop(&mut self) {
+        self.0.real.zeroize_private_v1();
+        self.0.selected.zeroize_private_v1();
+        zeroize_fields_v1(core::slice::from_mut(&mut self.0.active));
+    }
+}
+
+/// Hold all copyable P-256 inputs across later fallible assembly construction.
+struct MainP256WitnessesV1 {
+    selected: [P256EcdsaWitnessV1; P256_SIGNATURES_V1],
+    optional: MainOptionalP256SelectionV1,
+}
+
+impl Drop for MainP256WitnessesV1 {
+    fn drop(&mut self) {
+        erase_p256_witnesses_v1(&mut self.selected);
+    }
+}
+
 fn build_p256_material_v1(
     witness: &ZkX509WitnessV1,
     trace: &ZkX509Rfc5280TraceV1,
     sha_witnesses: &[ZkX509ShaCallWitnessV1; ZK_X509_SHA_CALL_COUNT_V1],
 ) -> Result<
     (
-        [P256EcdsaWitnessV1; P256_SIGNATURES_V1],
+        MainP256WitnessesV1,
         [P256EcdsaTraceMaterialV1; P256_SIGNATURES_V1],
-        P256OptionalCertificateSelectionV1,
     ),
     ZkX509MainAssemblyErrorV1,
 > {
-    let mut selected = Vec::new();
+    let mut selected = PrivateTableV1::new(Vec::new(), erase_p256_witnesses_v1);
     selected
         .try_reserve_exact(P256_SIGNATURES_V1)
         .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
@@ -578,9 +643,10 @@ fn build_p256_material_v1(
             digest_be: sha_witnesses[2].digest,
         }
     };
-    let optional_certificate_selection =
-        select_zk_x509_optional_certificate_p256_witness_v1(slot_2_active, slot_2_real)?;
-    selected.push(optional_certificate_selection.selected);
+    let optional_certificate_selection = MainOptionalP256SelectionV1(
+        select_zk_x509_optional_certificate_p256_witness_v1(slot_2_active, slot_2_real)?,
+    );
+    selected.push(optional_certificate_selection.0.selected);
     let issuer = trace
         .certificates
         .get(1)
@@ -599,9 +665,9 @@ fn build_p256_material_v1(
         &witness.wallet_ownership_signature_rs,
         sha_witnesses[11].digest,
     )?);
-    let selected: [P256EcdsaWitnessV1; P256_SIGNATURES_V1] = selected
-        .try_into()
-        .map_err(|_| ZkX509MainAssemblyErrorV1::Source)?;
+    if selected.len() != P256_SIGNATURES_V1 {
+        return Err(ZkX509MainAssemblyErrorV1::Source);
+    }
     let mut materials = Vec::new();
     materials
         .try_reserve_exact(P256_SIGNATURES_V1)
@@ -617,7 +683,16 @@ fn build_p256_material_v1(
     let materials: [P256EcdsaTraceMaterialV1; P256_SIGNATURES_V1] = materials
         .try_into()
         .map_err(|_| ZkX509MainAssemblyErrorV1::Source)?;
-    Ok((selected, materials, optional_certificate_selection))
+    Ok((
+        MainP256WitnessesV1 {
+            selected: selected
+                .as_slice()
+                .try_into()
+                .map_err(|_| ZkX509MainAssemblyErrorV1::Source)?,
+            optional: optional_certificate_selection,
+        },
+        materials,
+    ))
 }
 fn build_io_material_v1(
     plan: &ZkX509MainIoDeclarationsV1,
@@ -647,19 +722,20 @@ fn build_io_material_v1(
     }
     plan.validate_witness_declarations_v1(&rfc)?;
     let (declarations, execution, sorted) = build_zk_x509_io_base_tables_v1(&rfc)?;
-    if declarations != plan.declarations
-        || execution.len() != plan.logical_active_rows
-        || sorted.len() != plan.logical_active_rows
-    {
-        return Err(ZkX509MainIoPlanErrorV1::Topology.into());
-    }
-    Ok(ZkX509MainIoBaseMaterialV1 {
+    let material = ZkX509MainIoBaseMaterialV1 {
         witnesses: rfc,
         declarations,
         logical_active_rows: plan.logical_active_rows,
-        execution,
-        sorted,
-    })
+        execution: execution.into_vec(),
+        sorted: sorted.into_vec(),
+    };
+    if material.declarations != plan.declarations
+        || material.execution.len() != plan.logical_active_rows
+        || material.sorted.len() != plan.logical_active_rows
+    {
+        return Err(ZkX509MainIoPlanErrorV1::Topology.into());
+    }
+    Ok(material)
 }
 /// Build the sole canonical challenge-independent MAIN trace assembly.
 pub(crate) fn build_zk_x509_main_trace_assembly_v1(
@@ -723,7 +799,7 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
         &ca_accumulator_trace,
         &sha_schedule,
     )?;
-    let (p256_witnesses, p256_materials, optional_certificate_selection) =
+    let (p256_witnesses, p256_materials) =
         build_p256_material_v1(witness, &rfc_trace, &sha_witnesses)?;
     let io = build_io_material_v1(
         &io_plan,
@@ -740,9 +816,9 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
         ca_accumulator_trace,
         sha_schedule,
         sha_witnesses,
-        p256_witnesses,
+        p256_witnesses: p256_witnesses.selected,
         p256_materials,
-        optional_certificate_selection,
+        optional_certificate_selection: p256_witnesses.optional.0,
         io,
         verifier_profile,
     })
@@ -999,3 +1075,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "main_assembly_owned_erasure_tests.rs"]
+mod owned_erasure_tests;

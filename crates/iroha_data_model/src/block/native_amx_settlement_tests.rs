@@ -1613,17 +1613,7 @@ fn native_amx_v2_leg_rejects_removed_recursive_settlement_layout() {
         commit_qc: leg.commit_qc.clone(),
     };
 
-    for requested in [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT
-            | header_flags::PACKED_SEQ
-            | header_flags::COMPACT_LEN
-            | header_flags::FIELD_BITSET,
-    ] {
+    for requested in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(requested);
         let canonical = norito::to_bytes(&leg).expect("encode the current finite leg");
         assert_eq!(

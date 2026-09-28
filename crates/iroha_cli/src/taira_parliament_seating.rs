@@ -29,12 +29,14 @@ use std::{
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     data_model::{
+        NetworkId,
         account::{Account, AccountId, address::ChainDiscriminantGuard},
         asset::{AssetDefinitionId, AssetId},
         isi::{
             Grant, GrantBox, InstructionBox, Mint, Register, governance::RegisterCitizen,
-            register::RegisterBox,
+            register::RegisterBox, sccp::InitializeSccpV1,
         },
+        sccp::params::SccpParametersV1,
     },
     executor_data_model::permission::{
         governance::CanManageParliament, sccp::CanProposeSccpRouteGovernance,
@@ -75,10 +77,21 @@ const TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 /// Network identity file that every generated config reads and re-signing replaces.
 const GENESIS_EXPECTED_HASH_FILE: &str = "genesis.expected_hash";
-/// How to re-sign a seated network. Kagami never replaces a different published identity, and
-/// `peer0.toml` still reads the pre-seating one while signing, so the seated identity is
-/// published beside it and renamed over it afterwards.
-const RESIGN_INSTRUCTIONS: &str = "re-sign genesis in the network directory with `kagami genesis sign genesis.json --private-key-file genesis.private_key --config peer0.toml --out-file genesis.signed.nrt --bound-manifest-out genesis.json --expected-hash-out genesis.expected_hash.next`, then `mv genesis.expected_hash.next genesis.expected_hash`";
+/// Kagami owns checked replacement of the pre-seating identity, publishing it last.
+fn resign_instructions(prior: NetworkId) -> String {
+    format!(
+        "re-sign genesis in the network directory with `kagami genesis sign genesis.json --private-key-file genesis.private_key --config peer0.toml --out-file genesis.signed.nrt --bound-manifest-out genesis.json --expected-hash-out genesis.expected_hash --replace-expected-hash '{prior}'`; if interrupted, retry with this same prior identity; a stale-prior refusal requires verifying the signed block, bound manifest, and published identity before proceeding"
+    )
+}
+
+fn read_prior_network_identity(path: &Path) -> Result<NetworkId> {
+    let bytes = read_bounded(path, "pre-seating genesis network identity")?;
+    let text = std::str::from_utf8(&bytes).wrap_err("pre-seating network identity is not UTF-8")?;
+    text.strip_suffix('\n')
+        .ok_or_else(|| eyre!("pre-seating network identity must be one canonical line"))?
+        .parse()
+        .wrap_err("pre-seating network identity must be one canonical NetworkId")
+}
 /// Upper bound for one configuration or manifest read.
 const MAX_INPUT_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -996,6 +1009,36 @@ pub(crate) fn citizen_genesis_instructions(
     Ok(instructions)
 }
 
+/// The genesis instruction that creates SCCP with the Taira defaults under `reset_nonce`
+/// (`specs/sccp.md` §4.1, §4.18): its parameters, reset nonce, four route escrows and an empty
+/// registry. Genesis carries no bridge keys; validators register their own after start.
+///
+/// # Errors
+/// Returns an error for a zero reset nonce.
+pub(crate) fn sccp_genesis_instruction(reset_nonce: [u8; 32]) -> Result<InstructionBox> {
+    if reset_nonce == [0; 32] {
+        return Err(eyre!("the SCCP reset nonce must be nonzero"));
+    }
+    Ok(InitializeSccpV1 {
+        parameters: SccpParametersV1::taira_default(),
+        reset_nonce,
+    }
+    .into())
+}
+
+/// Draw a fresh SCCP reset nonce from the OS CSPRNG, so every reset has a new identity (§4.18).
+///
+/// # Errors
+/// Returns an error when the OS CSPRNG fails.
+pub(crate) fn fresh_sccp_reset_nonce() -> Result<[u8; 32]> {
+    use rand::rand_core::TryRngCore as _;
+    let mut nonce = [0_u8; 32];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| eyre!("OS CSPRNG failed: {error}"))?;
+    Ok(nonce)
+}
+
 /// Append one instruction-only transaction to a raw genesis manifest JSON document.
 ///
 /// # Errors
@@ -1336,6 +1379,15 @@ impl SeatParliament {
         )?;
         let mut document: Value = json::from_slice(&genesis_bytes)?;
         append_genesis_transaction(&mut document, &instructions)?;
+        if !manifest
+            .instructions()
+            .any(|instruction| instruction.as_any().is::<InitializeSccpV1>())
+        {
+            append_genesis_transaction(
+                &mut document,
+                &[sccp_genesis_instruction(fresh_sccp_reset_nonce()?)?],
+            )?;
+        }
         let mut genesis_json = json::to_json_pretty(&document)?;
         genesis_json.push('\n');
         let reparsed: iroha_genesis::RawGenesisTransaction = json::from_str(&genesis_json)
@@ -1360,6 +1412,9 @@ impl SeatParliament {
         let network_id_file = fs::canonicalize(&self.localnet_dir)
             .wrap_err("cannot resolve the generated network directory")?
             .join(GENESIS_EXPECTED_HASH_FILE);
+        // Capture the exact prior trust root before the first seating output write. The signer
+        // subsequently checks its file custody, held inode, and bytes before any publication.
+        let prior_network_id = read_prior_network_identity(&network_id_file)?;
         if let Some(parent) = citizen_dir.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1437,7 +1492,14 @@ impl SeatParliament {
             "sccp_proposer".into(),
             sccp_proposer.map_or(Value::Null, |proposer| Value::from(proposer.to_string())),
         );
-        report.insert("next".into(), Value::from(RESIGN_INSTRUCTIONS));
+        report.insert(
+            "previous_network_id".into(),
+            Value::from(prior_network_id.to_string()),
+        );
+        report.insert(
+            "next".into(),
+            Value::from(resign_instructions(prior_network_id)),
+        );
         writeln!(writer, "{}", json::to_json(&Value::Object(report))?)?;
         Ok(())
     }

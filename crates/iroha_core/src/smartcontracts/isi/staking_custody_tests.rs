@@ -121,8 +121,7 @@ fn staking_custody_and_rewards_share_one_additive_reserve_floor() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xC0);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC0; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     let key = (lane, validator.clone());

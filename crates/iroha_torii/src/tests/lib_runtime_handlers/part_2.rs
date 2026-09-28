@@ -1315,6 +1315,26 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
     configure_private_ingress_routes_for_test(&mut app);
+    {
+        let inner = Arc::get_mut(&mut app).expect("unique asset-query fixture");
+        let state = Arc::get_mut(&mut inner.state).expect("unique asset-query state");
+        for seed in [0xc0, 0xc2, 0xc4] {
+            let authority_key =
+                checked_torii_test_ed25519_keypair(seed, "derive asset-query validator authority");
+            let peer_key =
+                checked_torii_test_bls_keypair(seed + 1, "derive asset-query consensus peer");
+            let authority = AccountId::new(authority_key.public_key().clone());
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authority,
+                &peer_key,
+                &format!("asset-query-{seed}"),
+            );
+            let mut topology = state.commit_topology.block();
+            topology.push(PeerId::from(peer_key.public_key().clone()));
+            topology.commit();
+        }
+    }
     let definition: iroha_data_model::asset::AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         .parse()
         .expect("canonical XOR id");
@@ -1328,6 +1348,52 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
         .expect("fund exact native holding");
     tx.apply();
     block.commit_world_overlay_for_testing().unwrap();
+    // The registered validator keys become active at height one. Retain the
+    // funded transaction in that committed fixture block rather than testing
+    // routing against an uncommitted, pre-genesis world overlay.
+    let funded = checked_torii_test_transaction(
+        TransactionBuilder::new(
+            *app.state.network_id_ref(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::Mint::asset_quantity(
+            77_u32,
+            asset.clone(),
+        )]),
+        &iroha_test_samples::ALICE_KEYPAIR,
+        "sign funded asset-query fixture transaction",
+    );
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    builder.push_transaction(funded);
+    let mut committed =
+        builder.build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key());
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut committed,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
+    );
+    assert_eq!(committed.external_transactions().count(), 1);
+    let committed_header = committed.header();
+    let committed_hash = store_block(&app, committed);
+    record_committed_block_hash_for_test(&app, committed_header, committed_hash);
+    let global_route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let committee = app
+        .state
+        .resolve_route_authority(super::lane_authority_route(global_route))
+        .expect("funded fixture has active global authority");
+    assert_eq!(committee.validators().len(), 4);
+    assert!(super::should_execute_route_locally(
+        app.as_ref(),
+        global_route
+    ));
     assert!(super::torii_all_dataspace_routes(app.as_ref()).len() > 1);
     for query in [
         iroha_data_model::query::SingularQueryBox::from(
@@ -1336,7 +1402,7 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
             ),
         ),
         iroha_data_model::query::SingularQueryBox::from(
-            iroha_data_model::query::asset::prelude::FindAssetById::new(asset),
+            iroha_data_model::query::asset::prelude::FindAssetById::new(asset.clone()),
         ),
     ] {
         let request = request_for_test(
@@ -1369,6 +1435,148 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
+    let caller_key =
+        checked_torii_test_ed25519_keypair(0xc0, "derive existing asset-query validator authority");
+    let caller = AccountId::new(caller_key.public_key().clone());
+    for granted in [false, true] {
+        if granted {
+            grant_account_permission_for_test(
+                &app,
+                &caller,
+                iroha_executor_data_model::permission::query::CanReadAccountData {
+                    account: ALICE_ID.clone(),
+                }
+                .into(),
+            );
+        }
+        let signed = authorize_query_for_test(
+            iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::asset::prelude::FindAssetById::new(asset.clone()).into(),
+            ),
+            caller.clone(),
+        )
+        .sign(&caller_key);
+        let response = super::handler_signed_query(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(QueryOptions::default()),
+            versioned_query_for_test(signed),
+        )
+        .await
+        .unwrap_or_else(IntoResponse::into_response);
+        assert_eq!(
+            response.status(),
+            if granted {
+                StatusCode::OK
+            } else {
+                StatusCode::FORBIDDEN
+            },
+            "universal routing must preserve the native exact-holder permission gate"
+        );
+        if granted {
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("exact balance response");
+            let decoded: iroha_data_model::query::QueryResponse =
+                norito::decode_from_bytes(&body).expect("decode native balance response");
+            let iroha_data_model::query::QueryResponse::Singular(
+                iroha_data_model::query::SingularQueryOutputBox::Asset(actual),
+            ) = decoded
+            else {
+                panic!("exact balance query must return one asset");
+            };
+            assert_eq!(actual.id, asset);
+            assert_eq!(actual.value, Quantity::from(77_u32));
+        }
+    }
+}
+
+#[tokio::test]
+async fn global_asset_balance_route_requires_exact_holder_scope_and_known_policy() {
+    use iroha_data_model::{
+        asset::{AssetBalanceScope, AssetDefinition, AssetDefinitionId, AssetId},
+        query::{QueryRequest, asset::prelude::FindAssetById},
+    };
+    let private_home = DomainId::try_new("cash", "restricted").expect("private owning domain");
+    let definition = |name: &str| {
+        AssetDefinitionId::derive_from_components(private_home.clone(), name.parse().unwrap())
+    };
+    let global = definition("global");
+    let private_global = definition("private-global");
+    let restricted = definition("restricted");
+    let world = World::with(
+        [Domain::new(private_home.clone()).build(&ALICE_ID)],
+        [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+        [
+            AssetDefinition::numeric(global.clone(), "global", AssetBalancePolicy::Global, None)
+                .build(&ALICE_ID),
+            AssetDefinition::numeric(
+                private_global.clone(),
+                "private-global",
+                AssetBalancePolicy::Global,
+                Some(private_home.clone()),
+            )
+            .build(&ALICE_ID),
+            AssetDefinition::numeric(
+                restricted.clone(),
+                "restricted",
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(private_home.clone()),
+            )
+            .build(&ALICE_ID),
+        ],
+    );
+    let app = mk_app_state_for_tests_with_world_and_nexus(world, private_ingress_nexus_for_test());
+    let request = |id, scope| {
+        request_for_test(
+            &ALICE_ID,
+            QueryRequest::Singular(
+                FindAssetById::new(AssetId::with_scope(id, ALICE_ID.clone(), scope)).into(),
+            ),
+        )
+    };
+    let known = request(global.clone(), AssetBalanceScope::Global);
+    assert!(super::is_known_global_asset_balance_query(
+        &app, &known, &ALICE_ID
+    ));
+    assert!(!super::is_known_global_asset_balance_query(
+        &app,
+        &known,
+        &checked_torii_test_account_id(0xd9, "different balance holder"),
+    ));
+    assert!(
+        super::is_known_global_asset_balance_query(
+            &app,
+            &request(private_global, AssetBalanceScope::Global),
+            &ALICE_ID,
+        ),
+        "a global balance does not inherit its definition's private owning-domain route"
+    );
+    for (id, scope) in [
+        (definition("unknown"), AssetBalanceScope::Global),
+        (global, AssetBalanceScope::Dataspace(DataSpaceId::new(10))),
+        (restricted, AssetBalanceScope::Global),
+    ] {
+        assert!(!super::is_known_global_asset_balance_query(
+            &app,
+            &request(id, scope),
+            &ALICE_ID
+        ));
+    }
+    let account_query = request_for_test(
+        &ALICE_ID,
+        QueryRequest::Singular(
+            iroha_data_model::query::account::prelude::FindAccountById::new(ALICE_ID.clone())
+                .into(),
+        ),
+    );
+    assert!(!super::is_known_global_asset_balance_query(
+        &app,
+        &account_query,
+        &ALICE_ID
+    ));
 }
 
 #[test]

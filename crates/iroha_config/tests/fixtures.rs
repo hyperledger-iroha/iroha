@@ -4,17 +4,10 @@ use assertables::assert_contains;
 use error_stack::{Report, ResultExt};
 use expect_test::expect_file;
 use iroha_config::parameters::user::ParseError;
-#[allow(unused_imports)]
 use iroha_config::parameters::{
-    actual::{
-        BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
-        LaneProfile, NexusFeeSettlementMode, NexusStorage, NoritoRpcStage, OperatorAuthLockout,
-        OracleChangeThresholds, OracleEconomics, OracleGovernance, OracleTwitterBinding, Queue,
-        Root as Config, SoranetVpn, Streaming, StreamingSync, ToriiMcpProfile, ToriiOperatorAuth,
-        TransactionGossiper,
-    },
+    actual::{FraudRiskBand, LaneProfile, NoritoRpcStage, Root as Config, ToriiMcpProfile},
     defaults,
-    user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
+    user::Root as UserConfig,
 };
 use iroha_config_base::{
     env::MockEnv,
@@ -119,16 +112,6 @@ fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureCo
         .parse()
         .change_context(FixtureConfigLoadError)?;
     Ok(config)
-}
-#[allow(dead_code)]
-fn load_user_config_from_fixtures(
-    path: impl AsRef<Path>,
-) -> Result<UserConfig, FixtureConfigLoadError> {
-    ConfigReader::new()
-        .read_toml_with_extends(fixtures_dir().join(path))
-        .change_context(FixtureConfigLoadError)?
-        .read_and_complete::<UserConfig>()
-        .change_context(FixtureConfigLoadError)
 }
 #[test]
 fn quic_datagram_buffers_default_to_one_mib() {

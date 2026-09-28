@@ -77,12 +77,7 @@ fn receiver_capacity_accepts_payload_only_records_and_restores_flags() {
             let mut payload = Vec::new();
             norito::core::serialize_to_writer(&value, &mut payload).unwrap();
             let mut prefix = Vec::new();
-            if norito::core::packed_seq_enabled_for_flags(flags) {
-                prefix.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-            } else {
-                norito::core::write_len_with_flags(&mut prefix, payload.len() as u64, flags)
-                    .unwrap();
-            }
+            norito::core::write_len_with_flags(&mut prefix, payload.len() as u64, flags).unwrap();
             (prefix.len() + payload.len()) as u64
         };
         assert_eq!(

@@ -62,18 +62,9 @@ impl ClassifyTopic for AdmissionFixture {
                 .map_err(|_| ncore::Error::LengthMismatch)?,
         );
         let remaining = &payload[4..];
-        // Derive-generated tuple variants omit the length of a fixed scalar
-        // when PACKED_STRUCT is declared. Unlike a packed struct, this enum
-        // field has neither an offset table nor a FIELD_BITSET byte.
-        if flags & ncore::header_flags::PACKED_STRUCT != 0 {
-            if remaining.len() != 1 {
-                return Err(ncore::Error::LengthMismatch);
-            }
-        } else {
-            let (len, prefix) = ncore::read_len_from_slice_with_flags(remaining, flags)?;
-            if len != 1 || prefix.checked_add(len) != Some(remaining.len()) {
-                return Err(ncore::Error::LengthMismatch);
-            }
+        let (len, prefix) = ncore::read_len_from_slice_with_flags(remaining, flags)?;
+        if len != 1 || prefix.checked_add(len) != Some(remaining.len()) {
+            return Err(ncore::Error::LengthMismatch);
         }
         A::ALL
             .get(tag as usize)
@@ -85,23 +76,12 @@ impl ClassifyTopic for AdmissionFixture {
 #[test]
 fn raw_admission_fixture_honors_declared_fixed_scalar_layout() {
     for fixture in AdmissionFixture::all() {
-        for requested in [
-            0,
-            ncore::header_flags::COMPACT_LEN,
-            ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
-            ncore::header_flags::PACKED_STRUCT
-                | ncore::header_flags::COMPACT_LEN
-                | ncore::header_flags::FIELD_BITSET,
-        ] {
+        for requested in [0, ncore::header_flags::COMPACT_LEN] {
             let (bare, flags) = {
                 let _guard = ncore::DecodeFlagsGuard::enter(requested);
                 norito::codec::encode_with_header_flags(&fixture)
             };
-            let field_len = if flags & ncore::header_flags::PACKED_STRUCT != 0 {
-                1
-            } else {
-                ncore::len_prefix_len_with_flags(1, flags) + 1
-            };
+            let field_len = ncore::len_prefix_len_with_flags(1, flags) + 1;
             assert_eq!(bare.len(), 4 + field_len);
             assert_eq!(
                 AdmissionFixture::inbound_admission_class(&bare, flags).unwrap(),
@@ -192,14 +172,7 @@ fn relay_envelope_preserves_admission_classes_and_rejects_malformed_fields() {
                 .verify_origin_signature()
                 .expect("real signed relay fixture");
             assert_eq!(relay.admission_class(), expected);
-            for requested in [
-                0,
-                ncore::header_flags::COMPACT_LEN,
-                ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
-                ncore::header_flags::PACKED_STRUCT
-                    | ncore::header_flags::COMPACT_LEN
-                    | ncore::header_flags::FIELD_BITSET,
-            ] {
+            for requested in [0, ncore::header_flags::COMPACT_LEN] {
                 let (bare, flags) = {
                     let _encode_guard = ncore::DecodeFlagsGuard::enter(requested);
                     norito::codec::encode_with_header_flags(&relay)
@@ -235,44 +208,6 @@ fn relay_envelope_preserves_admission_classes_and_rejects_malformed_fields() {
                         }),
                     expected
                 );
-                if flags & ncore::header_flags::FIELD_BITSET != 0 {
-                    assert_eq!(bare[0], 0b0001_0011);
-                    let mut bad_bitset = bare.clone();
-                    bad_bitset[0] |= 1 << 3;
-                    assert!(
-                        RelayMessage::<AdmissionFixture>::inbound_admission_class(
-                            &bad_bitset,
-                            flags
-                        )
-                        .is_err(),
-                        "a signature-size bit is not part of the declared relay type"
-                    );
-                    let mut sizes = [0; 3];
-                    let mut data_offset = 1;
-                    for size in &mut sizes {
-                        let (len, used) =
-                            ncore::read_len_from_slice_with_flags(&bare[data_offset..], flags)
-                                .unwrap();
-                        *size = len;
-                        data_offset += used;
-                    }
-                    let signature_offset = data_offset + sizes[0] + sizes[1] + 1;
-                    let (signature_len, prefix) =
-                        ncore::inspect_seq_len_slice(&bare[signature_offset..]).unwrap();
-                    assert_eq!(signature_len, relay.origin_signature.len());
-                    assert_eq!(prefix, 8);
-                    let mut bad_signature_size = bare.clone();
-                    bad_signature_size[signature_offset..signature_offset + prefix]
-                        .copy_from_slice(&u64::MAX.to_le_bytes());
-                    assert!(
-                        RelayMessage::<AdmissionFixture>::inbound_admission_class(
-                            &bad_signature_size,
-                            flags
-                        )
-                        .is_err(),
-                        "an unbounded self-delimiting signature cannot hide the payload"
-                    );
-                }
                 let mut trailing = bare.clone();
                 trailing.push(0);
                 assert!(

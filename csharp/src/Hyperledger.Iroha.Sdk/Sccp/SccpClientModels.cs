@@ -1039,7 +1039,7 @@ internal static class SccpSubmitValidation
             || archive[4] != 0 || archive[5] != 0
             || archive.Slice(6, 16).IndexOfAnyExcept((byte)0) < 0
             || archive[22] != (byte)NoritoCompression.None
-            || !SupportedNoritoFlags(archive[39]))
+            || !NoritoCodec.AreFlagsSupported(archive[39]))
         {
             throw new ArgumentException($"{field} must contain one canonical uncompressed Norito envelope.");
         }
@@ -1118,9 +1118,6 @@ internal static class SccpSubmitValidation
 
         return decoded;
     }
-
-    private static bool SupportedNoritoFlags(byte flags) =>
-        (flags & ~0x27) == 0 && ((flags & 0x20) == 0 || (flags & 0x06) == 0x06);
 
     private static byte[] DetachedTransactionHash(ReadOnlySpan<byte> payload)
     {

@@ -87,7 +87,6 @@ struct CachedProofEntry {
     manifest_root: Option<[u8; 32]>,
     valid: bool,
 }
-#[allow(dead_code)]
 impl CachedProofEntry {
     fn is_applicable_for_slot(&self, slot: Option<u64>, manifest_root: Option<[u8; 32]>) -> bool {
         if manifest_root.is_some() && manifest_root != self.manifest_root {

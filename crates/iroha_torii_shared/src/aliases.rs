@@ -131,6 +131,10 @@ mod tests {
                 norito::json::from_str::<AccountAliasesByAccountNotFoundV1>(malformed).is_err()
             );
         }
+    }
+
+    #[test]
+    fn alias_setup_report_details_reject_unknown_fields_at_every_level() {
         // The embedded native report is recursively closed, including tagged enums.
         use iroha_data_model::alias_setup::*;
         let report = AliasSetupReportV1::new(

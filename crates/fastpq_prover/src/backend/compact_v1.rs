@@ -358,6 +358,11 @@ impl PreparedHashFrame {
 }
 
 impl Context {
+    /// Identity of one immutable attempt owner, preserved only by explicit clones.
+    pub(super) fn same_attempt(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.prefix, &other.prefix)
+    }
+
     /// Canonically frame and absorb one bounded immutable complete context.
     #[cfg(test)]
     pub(super) fn new(bytes: &[u8]) -> Result<Self> {

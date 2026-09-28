@@ -401,25 +401,18 @@ pub fn varint_len_prefix_len(value: usize) -> usize {
 }
 #[inline]
 /// Return the set of Norito header layout flags supported by this build.
+///
+/// Only [`header_flags::COMPACT_LEN`] may be set in a v1 header. A flag byte of
+/// `0x00` selects fixed-width (8-byte) per-value length prefixes; every other
+/// bit is reserved, rejected by decoders and never emitted.
 pub const fn supported_header_flags() -> u8 {
-    // Mask of known header flag bits allowed in v1 headers.
-    header_flags::PACKED_SEQ
-        | header_flags::COMPACT_LEN
-        | header_flags::PACKED_STRUCT
-        | header_flags::FIELD_BITSET
+    header_flags::COMPACT_LEN
 }
 #[inline]
-/// Validate that a Norito header flag byte uses only supported v1 layout combinations.
+/// Validate that a Norito header flag byte uses only supported v1 layout bits.
 pub fn validate_header_flags(flags: u8) -> Result<(), Error> {
-    let unsupported_layout = flags & !supported_header_flags();
-    if unsupported_layout != 0 {
+    if flags & !supported_header_flags() != 0 {
         return Err(Error::UnsupportedFeature("layout flag"));
-    }
-    if (flags & header_flags::FIELD_BITSET) != 0 {
-        let required = header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN;
-        if (flags & required) != required {
-            return Err(Error::UnsupportedFeature("layout flag combination"));
-        }
     }
     Ok(())
 }
@@ -2094,33 +2087,16 @@ mod sequence_gpu {
         None
     }
     fn sequence_plan_helper_self_test(func: SequencePlanHelperFn) -> bool {
-        let cases = [
-            (
-                make_unpacked_case(super::header_flags::COMPACT_LEN),
-                super::header_flags::COMPACT_LEN,
-                BinarySequenceLayout::LengthPrefixed,
-            ),
-            (
-                make_packed_case(),
-                super::header_flags::PACKED_SEQ,
-                BinarySequenceLayout::FixedOffsets,
-            ),
-        ];
-        for (bytes, flags, layout) in cases {
-            let accel = match unsafe { call_helper(func, &bytes, flags, layout) } {
-                HelperOutcome::Planned(plan) => plan,
-                HelperOutcome::InvalidInput
-                | HelperOutcome::BackendUnavailable
-                | HelperOutcome::BackendFailure => return false,
-            };
-            let Ok(scalar) = plan_binary_sequence_scalar(&bytes, flags, layout) else {
-                return false;
-            };
-            if accel != scalar {
-                return false;
-            }
-        }
-        true
+        let flags = super::header_flags::COMPACT_LEN;
+        let layout = BinarySequenceLayout::LengthPrefixed;
+        let bytes = make_unpacked_case(flags);
+        let accel = match unsafe { call_helper(func, &bytes, flags, layout) } {
+            HelperOutcome::Planned(plan) => plan,
+            HelperOutcome::InvalidInput
+            | HelperOutcome::BackendUnavailable
+            | HelperOutcome::BackendFailure => return false,
+        };
+        plan_binary_sequence_scalar(&bytes, flags, layout).is_ok_and(|scalar| accel == scalar)
     }
     fn make_unpacked_case(flags: u8) -> Vec<u8> {
         let _guard = super::DecodeFlagsGuard::enter(flags);
@@ -2130,15 +2106,6 @@ mod sequence_gpu {
             super::write_len(&mut out, payload.len() as u64).expect("write element length");
             out.extend_from_slice(payload);
         }
-        out
-    }
-    fn make_packed_case() -> Vec<u8> {
-        let mut out = Vec::new();
-        super::write_seq_len(&mut out, 3).expect("write sequence length");
-        for offset in [0u64, 1, 3, 6] {
-            out.extend_from_slice(&offset.to_le_bytes());
-        }
-        out.extend_from_slice(b"abcdef");
         out
     }
     fn candidate_paths() -> Vec<PathBuf> {
@@ -2636,55 +2603,42 @@ where
 mod encode_seq_payloads_tests {
     use super::{
         DecodeFlagsGuard, Encoder, encode_seq_payloads, encode_slice_payloads, header_flags,
-        serialize_to_buffer,
+        serialize_to_buffer, write_len_to_vec_with_flags,
     };
     #[test]
-    fn encode_seq_payloads_packed_counts_and_keeps_layout() {
-        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+    fn encode_seq_payloads_counts_and_keeps_layout() {
         let items: Vec<Vec<u8>> = vec![vec![1, 2], vec![3], vec![4, 5, 6]];
-        let mut out = Vec::new();
-        let mut encoder = Encoder::for_buffer(&mut out);
-        encode_seq_payloads::<Vec<u8>, _>(&mut encoder, items.iter(), None)
-            .expect("encode packed seq");
-        let encoded_items: Vec<Vec<u8>> = items
-            .iter()
-            .map(|item| {
+        for flags in [0, header_flags::COMPACT_LEN] {
+            let _guard = DecodeFlagsGuard::enter(flags);
+            let mut out = Vec::new();
+            let mut encoder = Encoder::for_buffer(&mut out);
+            encode_seq_payloads::<Vec<u8>, _>(&mut encoder, items.iter(), None)
+                .expect("encode length-prefixed seq");
+            let mut expected = (items.len() as u64).to_le_bytes().to_vec();
+            for item in &items {
                 let mut bytes = Vec::new();
                 serialize_to_buffer(item, &mut bytes).expect("encode expected item");
-                bytes
-            })
-            .collect();
-        let mut cursor = 0usize;
-        let len_bytes: [u8; 8] = out[cursor..cursor + 8].try_into().expect("len bytes");
-        let len = u64::from_le_bytes(len_bytes) as usize;
-        cursor += 8;
-        assert_eq!(len, items.len());
-        let mut offsets = Vec::with_capacity(len + 1);
-        for _ in 0..=len {
-            let off_bytes: [u8; 8] = out[cursor..cursor + 8].try_into().expect("off bytes");
-            offsets.push(u64::from_le_bytes(off_bytes) as usize);
-            cursor += 8;
+                write_len_to_vec_with_flags(&mut expected, bytes.len() as u64, flags);
+                expected.extend_from_slice(&bytes);
+            }
+            assert_eq!(out, expected, "flags {flags:#04x}");
         }
-        assert_eq!(offsets.first().copied(), Some(0));
-        let expected_total: usize = encoded_items.iter().map(Vec::len).sum();
-        assert_eq!(offsets.last().copied(), Some(expected_total));
-        let data = &out[cursor..];
-        let expected: Vec<u8> = encoded_items.into_iter().flatten().collect();
-        assert_eq!(data, expected.as_slice());
     }
     #[test]
-    fn encode_slice_payloads_matches_packed_layout() {
-        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+    fn encode_slice_payloads_matches_length_prefixed_layout() {
         let items = [0x0102_u16, 0x0304_u16, 0x0506_u16];
-        let mut out = Vec::new();
-        let mut encoder = Encoder::for_buffer(&mut out);
-        encode_slice_payloads(&mut encoder, &items).expect("encode packed slice");
-        assert_eq!(&out[..8], &(3u64).to_le_bytes());
-        assert_eq!(&out[8..16], &(0u64).to_le_bytes());
-        assert_eq!(&out[16..24], &(2u64).to_le_bytes());
-        assert_eq!(&out[24..32], &(4u64).to_le_bytes());
-        assert_eq!(&out[32..40], &(6u64).to_le_bytes());
-        assert_eq!(&out[40..], &[0x02, 0x01, 0x04, 0x03, 0x06, 0x05]);
+        for flags in [0, header_flags::COMPACT_LEN] {
+            let _guard = DecodeFlagsGuard::enter(flags);
+            let mut out = Vec::new();
+            let mut encoder = Encoder::for_buffer(&mut out);
+            encode_slice_payloads(&mut encoder, &items).expect("encode length-prefixed slice");
+            let mut expected = 3_u64.to_le_bytes().to_vec();
+            for item in items {
+                write_len_to_vec_with_flags(&mut expected, 2, flags);
+                expected.extend_from_slice(&item.to_le_bytes());
+            }
+            assert_eq!(out, expected, "flags {flags:#04x}");
+        }
     }
 }
 /// Emit a length prefix honoring the `COMPACT_LEN` layout flag.
@@ -6198,14 +6152,7 @@ pub mod stream {
             flags: u8,
             payload_len: usize,
         ) -> Result<Self, Error> {
-            let supported = header_flags::PACKED_SEQ
-                | header_flags::COMPACT_LEN
-                | header_flags::PACKED_STRUCT
-                | header_flags::FIELD_BITSET;
-            let unsupported = flags & !supported;
-            if unsupported != 0 {
-                return Err(Error::UnsupportedFeature("sequence layout flag"));
-            }
+            super::validate_header_flags(flags)?;
             let packed = (flags & header_flags::PACKED_SEQ) != 0;
             let len = Self::read_u64_len(reader)?;
             super::enforce_decode_sequence_length(len)?;

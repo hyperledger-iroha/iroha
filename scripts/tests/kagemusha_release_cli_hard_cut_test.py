@@ -46,7 +46,11 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
             self.assertIn(maximum, source)
         self.assertIn("read_bounded_immutable_file", source)
         self.assertIn("O_NOFOLLOW", source)
-        self.assertIn("same_input_metadata", source)
+        self.assertEqual(
+            source.count("crate::secure_fs::same_single_link_input_snapshot("),
+            4,
+        )
+        self.assertNotIn("fn same_input_metadata", source)
         self.assertIn("immutable snapshot was not read in full", source)
         self.assertIn("#[cfg(not(unix))]", source)
         self.assertIn("authentication is unavailable on this platform", source)

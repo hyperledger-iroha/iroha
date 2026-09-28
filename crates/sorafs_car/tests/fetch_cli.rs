@@ -40,15 +40,6 @@ fn write_payload(path: &PathBuf, size: usize) -> Vec<u8> {
     fs::write(path, &buf).expect("write payload");
     buf
 }
-fn to_hex(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
 const PROVIDER_ADMISSION_FIXTURES: &str = "fixtures/sorafs_manifest/provider_admission";
 const PROVIDER_SIGNING_KEY_BYTES: [u8; 32] = [0x21; 32];
 const TEST_NETWORK_ID_ARG: &str =
@@ -610,7 +601,10 @@ fn fetch_cli_reads_manifest_report_from_stdin() {
             obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
             obj.insert("offset".into(), Value::from(spec.offset));
             obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
+            obj.insert(
+                "digest_blake3".into(),
+                Value::from(hex::encode(&spec.digest)),
+            );
             Value::Object(obj)
         })
         .collect();
@@ -658,7 +652,10 @@ fn fetch_cli_reads_manifest_report_when_plan_omitted() {
             obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
             obj.insert("offset".into(), Value::from(spec.offset));
             obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
+            obj.insert(
+                "digest_blake3".into(),
+                Value::from(hex::encode(&spec.digest)),
+            );
             Value::Object(obj)
         })
         .collect();
@@ -978,7 +975,7 @@ fn fetch_cli_accepts_fixture_advert_with_admission() {
         .arg(format!("--admission-dir={}", admission_dir.display()))
         .arg(format!(
             "--admission-trusted-council-key={}",
-            to_hex(&council_public_key)
+            hex::encode(&council_public_key)
         ))
         .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")
@@ -1057,7 +1054,7 @@ fn fetch_cli_requires_network_id_for_advert_and_admission() {
                 .arg(format!("--admission-dir={}", admission_dir.display()))
                 .arg(format!(
                     "--admission-trusted-council-key={}",
-                    to_hex(&council_public_key)
+                    hex::encode(&council_public_key)
                 ))
                 .arg("--admission-signature-threshold=1");
         }
@@ -1095,7 +1092,7 @@ fn fetch_cli_rejects_validly_signed_foreign_admission_and_advert() {
         .arg(format!("--admission-dir={}", admission_dir.display()))
         .arg(format!(
             "--admission-trusted-council-key={}",
-            to_hex(&council_public_key)
+            hex::encode(&council_public_key)
         ))
         .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")
@@ -1172,7 +1169,7 @@ fn fetch_cli_rejects_fixture_advert_without_admission() {
         .arg(format!("--admission-dir={}", admission_dir.display()))
         .arg(format!(
             "--admission-trusted-council-key={}",
-            to_hex(council_key.verifying_key().as_bytes())
+            hex::encode(council_key.verifying_key().as_bytes())
         ))
         .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")

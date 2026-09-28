@@ -347,15 +347,22 @@ impl AccountProfileValidationFixture {
         if let Some(scope) = pool_scope.as_ref() {
             scope.assert_profile(worker_discriminant.expect("parallel profile"));
         }
-        let mut state_block = state.block(block.header());
+        let (mut state_block, recorder) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &block,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .expect("signed profile inputs retain prepaid membership custody before effects");
         assert_eq!(
             chain_discriminant(),
             369,
             "worker setup must not alter the caller"
         );
-        // Preserve the same canonical execution/witness path as the original
-        // fixture, now preceded by actual signed-input static validation.
-        let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
+        // Consume the original recorder and signed source allocation after
+        // actual signed-input static validation, without resetting either owner.
+        let valid = ValidBlock::validate_recorded_unchecked(block, &mut state_block, recorder)
+            .unpack(|_| {});
         let block = valid.as_ref();
         state_block
             .verify_execution_output_seal(block)

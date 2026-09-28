@@ -1779,11 +1779,7 @@ mod tests {
         let decoded = norito::core::from_bytes::<CompactProof>(&expected).unwrap();
         let decoded = CompactProof::try_deserialize(decoded).unwrap();
         assert_eq!(decoded, fixture.compact);
-        for flags in [
-            0,
-            norito::core::header_flags::PACKED_SEQ,
-            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
-        ] {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
             let before = norito::core::to_bytes(&vec![1_u64, 2, 3]).unwrap();
             let work = verify(&relation, &decoded, diagnostic_limits()).unwrap();

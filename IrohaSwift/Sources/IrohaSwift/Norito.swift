@@ -9,13 +9,10 @@ public struct NoritoHeader {
     public static let versionMinor: UInt8 = 0
     public static let encodedLength = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1
     public static let maxHeaderPadding = 64
-    public static let packedSeq: UInt8 = 0x01
     public static let compactLen: UInt8 = 0x02
-    public static let packedStruct: UInt8 = 0x04
-    public static let varintOffsets: UInt8 = 0x08
-    public static let compactSeqLen: UInt8 = 0x10
-    public static let fieldBitset: UInt8 = 0x20
-    public static let supportedFlags: UInt8 = packedSeq | compactLen | packedStruct | fieldBitset
+    /// Norito v1 accepts only fixed-width (0x00) or compact (COMPACT_LEN, 0x02)
+    /// per-value length prefixes; every other bit is rejected.
+    public static let supportedFlags: UInt8 = compactLen
 
     public let schema: [UInt8] // 16 bytes
     public let compression: NoritoCompression
@@ -37,14 +34,7 @@ public struct NoritoHeader {
     }
 
     public static func isSupported(flags: UInt8) -> Bool {
-        if (flags & ~supportedFlags) != 0 {
-            return false
-        }
-        if (flags & fieldBitset) != 0 {
-            let required = packedStruct | compactLen
-            return (flags & required) == required
-        }
-        return true
+        (flags & ~supportedFlags) == 0
     }
 }
 

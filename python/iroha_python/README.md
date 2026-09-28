@@ -521,6 +521,26 @@ Asset registration binds the optional confidential unshield verifier role.
 KAGEMUSHA V1 uses its own reserve-backed mint-fold and redemption-voucher
 protocol rather than those confidential-asset instructions.
 
+For local confidential proofs, `ConfidentialProver` chooses the canonical key
+and transfer/full-redemption/change relation internally. `ConfidentialInput`,
+`ConfidentialOutput`, `ConfidentialChange` and `ConfidentialTree` provide the
+typed inputs; supply one membership path per actual note or complete leaves.
+No dummy note or unused empty-leaf path is needed, including at full capacity.
+Securely retain each change opening before proving. Once its new leaf index and
+root are authenticated, use `change.to_input(leaf_index)` to spend it; this uses
+the native default change owner, independently of the consumed note's diversifier.
+Use the prover as a context manager to close its clearing native key owner.
+Methods release the GIL while proving; asynchronous applications can call them
+with `asyncio.to_thread`. `ConfidentialProverError.code` separates closed-wallet,
+input, key-preparation and proving failures. Python-owned bytes cannot promise
+erasure. Returned `ConfidentialProof` material has been locally verified; it
+does not submit a transaction or authorize a ledger change. See the runnable
+[`examples/confidential_redemption.py`](examples/confidential_redemption.py).
+After installing both SDK and native wheels, run
+`python -I /absolute/path/to/tests/confidential_wallet_native_test.py -v` to check
+the actual packaged proof, GIL progress, typed native preflight and owner closure.
+This integration check requires the native extension and never substitutes a mock.
+
 ## Dataspace lifecycle helpers
 
 SDK users can plan and check their own Nexus dataspaces without copying helper

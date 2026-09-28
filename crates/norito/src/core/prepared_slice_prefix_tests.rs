@@ -53,7 +53,7 @@ fn prepared_prefix_preserves_used_flags_errors_and_caller_boundary() {
     let caller = [0xaa, 0xbb];
     let valid = prepare::<BytePrefix>(&[7, 0xff]);
     let invalid = prepare::<BytePrefix>(&[0, 0xff]);
-    for flags in [0, header_flags::COMPACT_LEN, header_flags::PACKED_STRUCT] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(flags);
         let _caller = PayloadCtxGuard::enter(&caller);
         for boundary in [FieldDecodeBoundary::Canonical, FieldDecodeBoundary::Prefix] {

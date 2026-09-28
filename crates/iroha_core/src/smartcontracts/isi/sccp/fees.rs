@@ -43,14 +43,28 @@ pub fn exempt_on_success(
                 })
                 .is_some_and(|set| bridge_keys::binding_exempt(world, set, &payload.authority))
         }
-        // TODO(ws31): faults (§4.11); TODO(ws41): keeper advances and self-claims (§4.12.4,
-        // §4.13.4). Until then these shapes pay the ordinary fee.
-        Some(
-            SccpExemptClassV1::Fault
-            | SccpExemptClassV1::KeeperAdvance { .. }
-            | SccpExemptClassV1::SelfClaim,
-        )
-        | None => false,
+        // Fault evidence succeeds only when it records a new fault (§4.11): a duplicate or a
+        // canonical statement fails, and admission pre-verified it against committed state.
+        Some(SccpExemptClassV1::Fault) => true,
+        // A keeper advance is exempt from a live, unfaulted bridge key's account; admission
+        // checked that it moves the head against committed state (§4.13.4).
+        Some(SccpExemptClassV1::KeeperAdvance { .. }) => {
+            bridge_keys::bridge_key_address_of(&payload.authority).is_some_and(|address| {
+                store::bridge_key_owners::get(world, &address)
+                    .and_then(|peer| store::bridge_keys::get(world, peer))
+                    .is_some_and(|state| {
+                        state
+                            .active
+                            .iter()
+                            .chain(state.pending.iter())
+                            .any(|key| key.address == address && !key.faulted)
+                    })
+            })
+        }
+        // A self-claim pays `inbound_self_claim_fee` from the proceeds at release; admission
+        // pre-verified the recipient, the amount and the proof or pending record (§4.12.4).
+        Some(SccpExemptClassV1::SelfClaim) => true,
+        None => false,
     }
 }
 
@@ -125,6 +139,27 @@ mod tests {
             crate::smartcontracts::isi::sccp::test_support::peer(1),
         )
         .expect("owner");
+        assert!(exempt_on_success(&*stx.world, &payload));
+    }
+
+    #[test]
+    fn fault_evidence_is_exempt_with_sccp_only() {
+        use crate::smartcontracts::isi::sccp::{
+            store,
+            test_support::{SampleInstructions, header},
+        };
+        let state = blank_state();
+        let mut block = state.block(header(2));
+        let mut stx = block.transaction();
+        let mut payload = sample_signed_transaction().payload().clone();
+        payload.instructions = iroha_data_model::transaction::Executable::Instructions(
+            vec![SampleInstructions::fault().into()].into(),
+        );
+        assert!(!exempt_on_success(&*stx.world, &payload), "no SCCP");
+        store::parameters::set(
+            &mut stx,
+            Some(iroha_data_model::sccp::params::SccpParametersV1::taira_default()),
+        );
         assert!(exempt_on_success(&*stx.world, &payload));
     }
 }

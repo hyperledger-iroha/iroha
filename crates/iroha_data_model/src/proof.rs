@@ -2925,15 +2925,10 @@ mod tests {
         assert_eq!(dec.bytes, bytes);
     }
     #[test]
-    fn bounded_byte_boxes_decode_every_packed_struct_layout() {
+    fn bounded_byte_boxes_decode_every_v1_layout() {
         let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3, 5, 8]);
         let verifying_key = VerifyingKeyBox::new("halo2/ipa".into(), vec![13, 21, 34]);
-        for flags in [
-            ncore::default_encode_flags() | ncore::header_flags::PACKED_STRUCT,
-            ncore::default_encode_flags()
-                | ncore::header_flags::PACKED_STRUCT
-                | ncore::header_flags::FIELD_BITSET,
-        ] {
+        for flags in [0, ncore::header_flags::COMPACT_LEN] {
             let proof_payload = encode_payload_with_flags(&proof, flags);
             let key_payload = encode_payload_with_flags(&verifying_key, flags);
             let _flags = ncore::DecodeFlagsGuard::enter(flags);
@@ -2980,13 +2975,7 @@ mod tests {
             Some(PROOF_BOX_MAX_ENCODED_BYTES_V1)
         );
 
-        for flags in [
-            ncore::default_encode_flags(),
-            ncore::default_encode_flags() | ncore::header_flags::PACKED_STRUCT,
-            ncore::default_encode_flags()
-                | ncore::header_flags::PACKED_STRUCT
-                | ncore::header_flags::FIELD_BITSET,
-        ] {
+        for flags in [ncore::default_encode_flags(), 0] {
             let mut payload = encode_payload_with_flags(&proof, flags);
             let _flags = ncore::DecodeFlagsGuard::enter(flags);
             let (decoded, used) = <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&payload)
@@ -3006,12 +2995,6 @@ mod tests {
                     .expect("proof limit fits u64")
                     .to_le_bytes(),
             );
-            if flags & ncore::header_flags::FIELD_BITSET != 0 {
-                // Hybrid layout derives the raw-byte span from the inner sequence length.
-                // Supply the claimed final byte so rejection reaches the canonical-total
-                // preflight rather than stopping at truncation.
-                payload.push(0xA5);
-            }
             assert!(matches!(
                 <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&payload),
                 Err(ncore::Error::LengthMismatch)
@@ -3027,29 +3010,6 @@ mod tests {
         let dec: VerifyingKeyBox = norito::core::DeserializePayload::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.bytes, vec![7, 7, 7]);
-    }
-    #[test]
-    fn verifying_key_box_decodes_explicit_packed_struct_layouts() {
-        let expected = VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 5, 8, 13]);
-        for flags in [
-            ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
-            ncore::header_flags::PACKED_STRUCT
-                | ncore::header_flags::COMPACT_LEN
-                | ncore::header_flags::FIELD_BITSET,
-        ] {
-            let (payload, encoded_flags) = {
-                let _guard = ncore::DecodeFlagsGuard::enter(flags);
-                norito::codec::encode_with_header_flags(&expected)
-            };
-            assert_eq!(encoded_flags & flags, flags);
-            let (decoded, used) = {
-                let _guard = ncore::DecodeFlagsGuard::enter(encoded_flags);
-                <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&payload)
-                    .expect("decode packed verifying-key box")
-            };
-            assert_eq!(used, payload.len());
-            assert_eq!(decoded, expected);
-        }
     }
     #[test]
     fn verifying_key_id_decode_from_slice_roundtrip() {

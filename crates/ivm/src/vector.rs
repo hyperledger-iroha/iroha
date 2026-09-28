@@ -218,15 +218,6 @@ pub fn set_thread_forced_simd(choice: Option<SimdChoice>) -> Option<SimdChoice> 
 pub fn clear_thread_forced_simd() {
     set_thread_forced_simd(None);
 }
-/// Return the globally configured SIMD override, if any.
-///
-/// When `None`, the runtime auto-detects the best SIMD backend. A concrete
-/// `SimdChoice` here means the override is currently forcing a specific backend
-/// (typically scalar) regardless of hardware support.
-#[allow(dead_code)]
-pub fn simd_override() -> Option<SimdChoice> {
-    decode_override(SIMD_OVERRIDE.load(Ordering::Relaxed))
-}
 #[cfg(all(target_os = "macos", feature = "metal"))]
 static METAL_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -307,33 +298,15 @@ pub fn metal_disabled() -> bool {
 pub fn metal_disabled() -> bool {
     false
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub(crate) fn metal_policy_enabled() -> bool {
-    false
-}
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub(crate) fn metal_runtime_allowed() -> bool {
-    false
-}
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_parity_ok() -> bool {
     !METAL_DISABLED.load(Ordering::SeqCst)
-}
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub(crate) fn metal_parity_ok() -> bool {
-    false
 }
 /// Ensure Metal pipelines are compiled ahead of time to avoid first-use latency.
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub fn warm_up_metal() {
     let _ = with_metal_state(|_| ());
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn warm_up_metal() {}
 /// Detect the best available SIMD option for the current platform.
 pub fn simd_choice() -> SimdChoice {
     if !simd_policy_enabled() {
@@ -1660,21 +1633,6 @@ fn metal_vxor(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
 fn metal_vor(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
     metal_vbit_cached(a, b, |ctx| &ctx.vor)
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-fn metal_vand(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
-    None
-}
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-fn metal_vxor(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
-    None
-}
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-fn metal_vor(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
-    None
-}
 #[cfg(target_os = "macos")]
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn metal_sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
@@ -2177,11 +2135,6 @@ pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         })
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn metal_aesenc_round(_state: [u8; 16], _rk: [u8; 16]) -> Option<[u8; 16]> {
-    None
-}
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[allow(dead_code)]
 pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
@@ -2211,11 +2164,6 @@ pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         })
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn metal_aesdec_round(_state: [u8; 16], _rk: [u8; 16]) -> Option<[u8; 16]> {
-    None
-}
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[allow(dead_code)]
 pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
@@ -2235,11 +2183,6 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
         })
     })
     .is_some()
-}
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn metal_keccak_f1600(_state: &mut [u64; 25]) -> bool {
-    false
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[allow(dead_code)]
@@ -2280,11 +2223,6 @@ pub fn metal_aesenc_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
         })
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn metal_aesenc_batch(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-    None
-}
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[allow(dead_code)]
 pub fn metal_aesdec_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
@@ -2323,11 +2261,6 @@ pub fn metal_aesdec_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
             Some(vec_out)
         })
     })
-}
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn metal_aesdec_batch(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
-    None
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[allow(dead_code)]
@@ -2376,14 +2309,6 @@ pub fn metal_aesenc_rounds_batch(
         })
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn metal_aesenc_rounds_batch(
-    _states: &[[u8; 16]],
-    _round_keys: &[[u8; 16]],
-) -> Option<Vec<[u8; 16]>> {
-    None
-}
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[allow(dead_code)]
 pub fn metal_aesdec_rounds_batch(
@@ -2430,14 +2355,6 @@ pub fn metal_aesdec_rounds_batch(
             Some(vec_out)
         })
     })
-}
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-#[allow(dead_code)]
-pub fn metal_aesdec_rounds_batch(
-    _states: &[[u8; 16]],
-    _round_keys: &[[u8; 16]],
-) -> Option<Vec<[u8; 16]>> {
-    None
 }
 /// Perform one SHA-256 compression round on a 64 byte block.
 pub fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
@@ -3969,12 +3886,6 @@ mod tests {
         assert_eq!(select_device_index(&traits), Some(0));
         let empty: [DeviceTraits; 0] = [];
         assert_eq!(select_device_index(&empty), None);
-    }
-    #[cfg(not(all(target_os = "macos", feature = "metal")))]
-    #[test]
-    fn warm_up_metal_is_noop_on_non_metal_targets() {
-        warm_up_metal();
-        warm_up_metal();
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]

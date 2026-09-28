@@ -899,13 +899,8 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
         ]
     };
     let (state, program_id, vault_key) = staged_fee_sponsor_activation_fixture();
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(146).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(NonZeroU64::new(146).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     assert!(!crate::executor::is_initial_genesis_context(&stx));
@@ -960,6 +955,16 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
     let mut nexus = stx.nexus.clone();
     nexus.dataspace_fee_sponsor_program_ids.clear();
     nexus.fees.fee_asset_id = vault_key.asset_definition_id.to_string();
+    assert_eq!(
+        crate::block::resolve_network_xor_asset_definition(&stx.world, &nexus.fees.fee_asset_id, 0),
+        Some(vault_key.asset_definition_id.clone()),
+        "sponsor funding must use the network's exact XOR asset"
+    );
+    assert!(
+        stx.world
+            .asset_definition(&vault_key.asset_definition_id)
+            .is_ok()
+    );
     nexus.fees.base_fee = Quantity::zero();
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = "0.001".parse().unwrap();
@@ -1109,9 +1114,12 @@ fn staged_fee_sponsor_activation_fixture() -> (
         ALICE_ID.clone(),
         "activation_lower_bound".parse().expect("program name"),
     );
-    let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-        .parse()
-        .expect("canonical fee asset");
+    // Fee admission pins XOR to the signed network identity, or the canonical
+    // default when this fixture has no NPoS parameter. Fund that exact asset.
+    let asset_definition_id: AssetDefinitionId =
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("canonical network XOR asset");
     let revision = fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1);
     revision.validate().expect("valid staged revision");
     let mut world = World::default();

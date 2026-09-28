@@ -152,6 +152,10 @@ impl KagemushaMobileBootstrapCheckpointV1 {
     ///
     /// # Errors
     /// Rejects invalid policy, substituted pins, invalid scope, expiry, or replay.
+    #[expect(
+        clippy::suspicious_operation_groupings,
+        reason = "freshness intentionally compares trusted time with checkpoint bounds"
+    )]
     pub fn validate_pins(
         &self,
         pins: &KagemushaMobileBootstrapPinsV1<'_>,

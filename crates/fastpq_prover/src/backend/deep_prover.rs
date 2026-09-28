@@ -25,13 +25,14 @@ use super::{
     deep_masked_replay::{
         MaskedReplayPlan, MaskedTraceReplay, ReplayLimits, TRACE_MASK_COEFFICIENTS,
     },
+    deep_node_cache::{CommittedNodes, NodeCachePlan, PendingNodes, opening_payload_bytes},
     deep_polynomial::{DeepPolynomialSource, WORKSPACE_BYTES},
     deep_proof::{
         self, DeepProof, FriGroup, FriRound, FriValues, OodAnswers, OpeningPlans,
         QuotientMaskOpening,
     },
     deep_relation::DeepRelation,
-    deep_striped_merkle::{RowCommitmentPlan, StreamLimits},
+    deep_striped_merkle::{RowCommitmentPlan, StreamLimits, open_cached_rows},
     masked_quotient::{checked_add as add, checked_mul as mul},
     secret_polynomial::SecretPolynomial,
 };
@@ -126,7 +127,38 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             stream,
         )?;
         let mut coefficient_peak = paired.payload_bytes;
-        let mut tree_hashes = mul(4, 2 * LDE_ROWS - 1)?;
+        let mut tree_hashes = mul(2, 2 * LDE_ROWS - 1)?;
+        let mut cache_payload = 0;
+        let mut cache_work = 0;
+        let mut opening_payload = 0;
+        for oracle in [
+            Oracle::Row,
+            Oracle::QuotientAndMask,
+            Oracle::Fri(0),
+            Oracle::Fri(1),
+            Oracle::Fri(2),
+            Oracle::Fri(3),
+            Oracle::Fri(4),
+        ] {
+            let plan = NodeCachePlan::new(oracle)?;
+            cache_payload = add(cache_payload, plan.payload_bytes)?;
+            cache_work = add(cache_work, plan.work_units)?;
+            opening_payload = opening_payload.max(opening_payload_bytes(oracle)?);
+        }
+
+        // The five-slot retained FRI cache Vec and the two scalar cache
+        // owners are included explicitly. Also sum every pending owner even
+        // though pending/completed phases cannot all coexist. Context clones
+        // share the pre-existing immutable Arc prefix rather than its payload.
+        let cache_owners = mul(
+            7,
+            add(
+                size_of::<CommittedNodes<'static>>(),
+                size_of::<PendingNodes>(),
+            )?,
+        )?;
+        cache_payload = add(cache_payload, cache_owners)?;
+        cache_work = add(cache_work, mul(cache_owners, 8)?)?;
         let mut coefficient_work = mul(2, coefficient.work_units)?;
         for (round, &layer) in fri.iter().enumerate() {
             let commitment = CoefficientCommitmentPlan::new(
@@ -139,7 +171,7 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             coefficient_peak = coefficient_peak.max(commitment.payload_bytes);
             tree_hashes = add(
                 tree_hashes,
-                mul(2, add(commitment.leaf_hashes, commitment.parent_hashes)?)?,
+                add(commitment.leaf_hashes, commitment.parent_hashes)?,
             )?;
             coefficient_work = add(coefficient_work, mul(2, layer.work_units)?)?;
         }
@@ -172,7 +204,7 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             mul(3, deep_proof::MAX_ALLOCATION_CHARGES)?,
         )?;
         let payload_bytes = add(
-            active,
+            add(active, add(cache_payload, opening_payload)?)?,
             add(
                 retained_coefficients,
                 add(WORKSPACE_BYTES, public_and_codec)?,
@@ -192,7 +224,10 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         // A second complete quotient work allowance safely covers the bounded
         // independent verifier/AIR check; it performs no quotient FFT or replay.
         let work_units = add(
-            mul(2, quotient.work_units)?,
+            add(
+                mul(2, quotient.work_units)?,
+                add(cache_work, mul(opening_payload, 8)?)?,
+            )?,
             add(coefficient_work, add(polynomial_work, packing_work)?)?,
         )?;
         let verifier_tree_hashes = add(
@@ -206,10 +241,33 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
                 2,
             )?,
         )?;
+        // Cached openings regenerate queried leaves and leaf-level siblings,
+        // then reconstruct each original root once before DTO publication.
+        let opening_hashes = |plan: &super::merkle_multiproof::MultiproofPlan| -> Result<usize> {
+            add(
+                plan.work().queried_leaves
+                    + plan
+                        .sibling_positions()
+                        .iter()
+                        .filter(|p| p.level == 0)
+                        .count(),
+                plan.work().parent_hashes,
+            )
+        };
+        let mut cached_opening_hashes = mul(2, opening_hashes(&openings.initial)?)?;
+        for plan in &openings.rounds {
+            cached_opening_hashes = add(cached_opening_hashes, opening_hashes(plan)?)?;
+        }
         // 637 whole-tape blocks, nine chain commits and one OOD hash per side.
         let hash_calls = add(
             crate::digest384_batch::MAX_PREFLIGHT_HASH_CALLS,
-            add(tree_hashes, add(verifier_tree_hashes, 2 * (637 + 9 + 1))?)?,
+            add(
+                tree_hashes,
+                add(
+                    cached_opening_hashes,
+                    add(verifier_tree_hashes, 2 * (637 + 9 + 1))?,
+                )?,
+            )?,
         )?;
         limit(
             "max_deep_producer_payload_bytes",
@@ -277,24 +335,34 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         if replay.plan() != replay_plan {
             return Err(invalid("DEEP producer replay plan drift"));
         }
-        let row_root = RowCommitmentPlan::new(replay_plan, &binding, &[], stream)?
-            .build(&mut replay, &binding)?
-            .root;
+        let mut row_commitment = RowCommitmentPlan::new(replay_plan, &binding, &[], stream)?
+            .commit(&mut replay, &binding)?;
+        let row_root = row_commitment.root;
+        let row_cache = row_commitment
+            .cache
+            .take()
+            .ok_or_else(|| invalid("row root has no complete node cache"))?
+            .bind(&binding, Oracle::Row, row_root)?;
         transcript
             .commit_root(Oracle::Row, row_root)
             .map_err(binding_error)?;
         let alphas = fields(&mut transcript, CONSTRAINTS)?;
         let quotient = quotient_plan.build(&mut replay, &alphas)?;
         let chunks = quotient.chunks();
-        let quotient_root = commit(
+        let mut quotient_commitment = commit(
             coefficient,
             &binding,
             Oracle::QuotientAndMask,
             &[],
             &[chunks[0], chunks[1], replay.composition_mask()],
             stream,
-        )?
-        .root;
+        )?;
+        let quotient_root = quotient_commitment.root;
+        let quotient_cache = quotient_commitment
+            .cache
+            .take()
+            .ok_or_else(|| invalid("quotient root has no complete node cache"))?
+            .bind(&binding, Oracle::QuotientAndMask, quotient_root)?;
         transcript
             .commit_root(Oracle::QuotientAndMask, quotient_root)
             .map_err(binding_error)?;
@@ -322,6 +390,7 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         let composition = prepared.compose(lambda, WORKSPACE_BYTES)?;
         drop(prepared);
         let mut roots = Vec::with_capacity(6);
+        let mut fri_caches = Vec::with_capacity(5);
         let mut folded: Vec<SecretPolynomial<F>> = Vec::with_capacity(5);
         for (round, &plan) in fri.iter().enumerate() {
             let source = if round == 0 {
@@ -330,7 +399,15 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
                 &folded[round - 1]
             };
             let oracle = Oracle::Fri(round as u8);
-            let root = commit(plan, &binding, oracle, &[], &[source], stream)?.root;
+            let mut committed = commit(plan, &binding, oracle, &[], &[source], stream)?;
+            let root = committed.root;
+            fri_caches.push(
+                committed
+                    .cache
+                    .take()
+                    .ok_or_else(|| invalid("FRI root has no complete node cache"))?
+                    .bind(&binding, oracle, root)?,
+            );
             roots.push(root);
             transcript
                 .commit_root(oracle, root)
@@ -362,16 +439,14 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         };
         let queries: Vec<usize> = queries.into_iter().map(|v| v as usize).collect();
         let plans = OpeningPlans::new(&queries)?;
-        let row = RowCommitmentPlan::new(replay_plan, &binding, &queries, stream)?
-            .build(&mut replay, &binding)?;
+        let row = open_cached_rows(row_cache, &mut replay, &queries, limits.digest_execution)?;
         same_root(row_root, row.root)?;
-        let paired = commit(
+        let paired = open(
+            quotient_cache,
             coefficient,
-            &binding,
-            Oracle::QuotientAndMask,
             &queries,
             &[chunks[0], chunks[1], replay.composition_mask()],
-            stream,
+            limits.digest_execution,
         )?;
         same_root(quotient_root, paired.root)?;
         let quotients = queries
@@ -385,19 +460,18 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             })
             .collect();
         let mut rounds = Vec::with_capacity(5);
-        for (round, &plan) in fri.iter().enumerate() {
+        for ((round, &plan), cache) in fri.iter().enumerate().zip(fri_caches) {
             let source = if round == 0 {
                 composition.coefficients()
             } else {
                 &folded[round - 1]
             };
-            let opened = commit(
+            let opened = open(
+                cache,
                 plan,
-                &binding,
-                Oracle::Fri(round as u8),
                 &plans.round_indices[round],
                 &[source],
-                stream,
+                limits.digest_execution,
             )?;
             same_root(roots[round], opened.root)?;
             let groups = plans.round_indices[round]
@@ -459,13 +533,23 @@ fn commit(
 ) -> Result<CoefficientCommitment> {
     let commitment = CoefficientCommitmentPlan::new(plan, binding, oracle, queries, limits)?;
     let mut replay = CoefficientReplay::new(plan, sources)?;
-    commitment.build(&mut replay, binding)
+    commitment.commit(&mut replay, binding)
 }
 fn fields(transcript: &mut Transcript, count: usize) -> Result<Vec<F>> {
     match transcript.challenge().map_err(binding_error)? {
         Message::Fields(values) if values.len() == count => Ok(values),
         _ => Err(invalid("DEEP producer transcript field count differs")),
     }
+}
+fn open(
+    cache: CommittedNodes<'_>,
+    plan: CoefficientReplayPlan,
+    queries: &[usize],
+    sources: &[&[F]],
+    execution: DigestExecutionV1,
+) -> Result<CoefficientCommitment> {
+    let mut replay = CoefficientReplay::new(plan, sources)?;
+    super::deep_coefficient_commitment::open_cached(cache, &mut replay, queries, execution)
 }
 fn same_root(expected: Digest, actual: Digest) -> Result<()> {
     if actual != expected {

@@ -443,24 +443,10 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     let proof = build_zk_x509_der_segmented_stark_proof_v1_with_rng(&shape, &[&document], &mut rng)
         .expect("native log19 DER proof");
     let prove_elapsed = prove_started.elapsed();
-    assert!(
-        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
-        "reference-host DER proof exceeded the release prover target: {prove_elapsed:?}"
-    );
     let digest: [u8; 32] = Sha256::digest(&proof).into();
     assert!(
         proof.len() <= 1_800_000,
         "reference log19 DER proof exceeded its 1.8 MB release ceiling"
-    );
-    assert_eq!(
-        proof.len(),
-        1_752_584,
-        "update only when the canonical log19 DER proof wire intentionally changes"
-    );
-    assert_eq!(
-        hex::encode(digest),
-        "954900070c22680460d07bc35969e1e71c8cf9f7e089d7b3abf97406b3e3df15",
-        "update only when the canonical log19 DER proof protocol intentionally changes"
     );
     let first_verify_started = std::time::Instant::now();
     verify_zk_x509_der_segmented_stark_v1(&shape, &proof)
@@ -470,16 +456,6 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     verify_zk_x509_der_segmented_stark_v1(&shape.clone(), &proof)
         .expect("native log19 DER repeat verification");
     let repeat_verify_elapsed = repeat_verify_started.elapsed();
-    assert!(
-        first_verify_elapsed <= std::time::Duration::from_secs(15),
-        "reference-host first verification exceeded the 15-second release ceiling: \
-             {first_verify_elapsed:?}"
-    );
-    assert!(
-        repeat_verify_elapsed <= std::time::Duration::from_secs(15),
-        "reference-host repeat verification exceeded the 15-second release ceiling: \
-             {repeat_verify_elapsed:?}"
-    );
     let fixed_evaluations_after_valid =
         DER_FIXED_OPENING_EVALUATIONS_V1.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(fixed_evaluations_after_valid, 2);
@@ -577,6 +553,32 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
         DER_FIXED_OPENING_EVALUATIONS_V1.load(std::sync::atomic::Ordering::SeqCst),
         fixed_evaluations_after_valid,
         "all malformed/transcript/Merkle mutations must reject before sampled fixed evaluation"
+    );
+    // Complete independent replay and adversarial controls before comparing
+    // deliberately rotated protocol pins or the unchanged performance limits.
+    assert_eq!(
+        proof.len(),
+        1_752_584,
+        "update only when the canonical log19 DER proof wire intentionally changes"
+    );
+    assert_eq!(
+        hex::encode(digest),
+        "954900070c22680460d07bc35969e1e71c8cf9f7e089d7b3abf97406b3e3df15",
+        "update only when the canonical log19 DER proof protocol intentionally changes"
+    );
+    assert!(
+        prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1),
+        "reference-host DER proof exceeded the release prover target: {prove_elapsed:?}"
+    );
+    assert!(
+        first_verify_elapsed <= std::time::Duration::from_secs(15),
+        "reference-host first verification exceeded the 15-second release ceiling: \
+             {first_verify_elapsed:?}"
+    );
+    assert!(
+        repeat_verify_elapsed <= std::time::Duration::from_secs(15),
+        "reference-host repeat verification exceeded the 15-second release ceiling: \
+             {repeat_verify_elapsed:?}"
     );
 }
 #[test]

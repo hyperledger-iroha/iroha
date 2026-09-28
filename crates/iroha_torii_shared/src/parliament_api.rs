@@ -333,6 +333,50 @@ pub struct ParliamentAttemptReadResponseV1 {
     pub state_payload_hex: String,
 }
 
+/// One Parliament transition valid at exactly one height.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentExactTransitionProjectionV1")]
+pub struct ParliamentExactTransitionProjectionV1 {
+    /// The only height at which the transition executes.
+    pub height: u64,
+    /// The transition.
+    pub transition: ParliamentLifecycleTransitionV1,
+}
+
+/// Driver plan of one Parliament attempt (`specs/sccp.md` §4.14.5 item 4).
+///
+/// Core derives it from one committed query view by trial-applying every permissionless
+/// transition to the reducer, so it is advice for a driver, never authority: consensus rechecks
+/// every submitted transition.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentAttemptPlanResponseV1")]
+pub struct ParliamentAttemptPlanResponseV1 {
+    /// Response layout version.
+    pub version: u16,
+    /// Planned attempt.
+    pub governance_attempt_id: GovernanceAttemptId,
+    /// Committed height the plan was derived from.
+    pub current_height: u64,
+    /// Height at which a transaction submitted now executes.
+    pub execution_height: u64,
+    /// Transitions the reducer accepts at `execution_height`, in submission order.
+    pub due: Vec<ParliamentLifecycleTransitionV1>,
+    /// Transitions valid at exactly one future height, ascending by height.
+    pub exact: Vec<ParliamentExactTransitionProjectionV1>,
+    /// Ballots whose masked-ballot corpus a relayer freezes.
+    pub relay_ballots: Vec<BallotAttemptId>,
+    /// Ballots waiting for the combined TLE final release.
+    pub finalize_ballots: Vec<BallotAttemptId>,
+}
+
 /// Maximum exact adaptive TLE committee size admitted by the first-release profile.
 pub const PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1: usize = 31;
 
@@ -865,6 +909,10 @@ impl ParliamentTimedOvnCastingContextResponseV1 {
     /// # Errors
     /// Returns a stable message for unsupported, oversized, noncanonical,
     /// cross-bound, or phase-inconsistent public state.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "ordered fail-closed casting-context checks preserve stable error precedence"
+    )]
     pub fn validate_for_ballot(
         &self,
         expected_ballot_attempt_id: BallotAttemptId,
@@ -1932,10 +1980,12 @@ mod tests {
 
     #[test]
     fn full_state_payload_bound_is_not_smaller_than_private_corpus_bound() {
-        assert!(
-            iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1
-                >= 1_000 * (3_624 + 2_858)
-        );
+        const {
+            assert!(
+                iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1
+                    >= 1_000 * (3_624 + 2_858)
+            );
+        }
     }
 
     #[test]

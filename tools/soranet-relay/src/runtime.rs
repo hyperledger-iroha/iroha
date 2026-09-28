@@ -618,7 +618,7 @@ fn abort_constant_rate_task(task: Option<JoinHandle<()>>) {
     }
 }
 
-const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x534e_01;
+const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x53_4e_01;
 const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
 const QUIC_DEPENDENCY_BLOCK_REASON: &str = "SoraNet relay QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
 
@@ -4285,18 +4285,17 @@ impl RelayRuntime {
                 // authenticated application handshake succeeds, before success accounting,
                 // circuit registration, child tasks, or any local backend connection. A
                 // disconnect after this point deliberately leaves the ticket spent.
-                if let Some(replay_reservation) = vpn_helper_ticket_replay {
-                    if let Err(error) = commit_vpn_helper_ticket_reservation(
+                if let Some(replay_reservation) = vpn_helper_ticket_replay
+                    && let Err(error) = commit_vpn_helper_ticket_reservation(
                         replay_reservation,
                         unix_time_ms(SystemTime::now()),
                     )
                     .await
-                    {
-                        metrics.record_failure();
-                        warn!(%error, "failed to durably consume VPN helper ticket");
-                        connection.close(0u32.into(), b"vpn durable admission failed");
-                        return;
-                    }
+                {
+                    metrics.record_failure();
+                    warn!(%error, "failed to durably consume VPN helper ticket");
+                    connection.close(0u32.into(), b"vpn durable admission failed");
+                    return;
                 }
                 let record_key_len = session.session_key.payload().len();
                 let record_layer =
@@ -5383,6 +5382,10 @@ impl RelayRuntime {
             }
         }
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is distinct connection or VPN admission state moved into the tunnel task"
+    )]
     async fn serve_vpn_backend_tunnel(
         connection: Connection,
         remote: SocketAddr,
@@ -5588,21 +5591,19 @@ impl RelayRuntime {
                 false
             }
         };
-        if finish_queued {
-            if let Some(send) = protected_send.quic_send() {
-                match timeout(
-                    HANDSHAKE_STREAM_TIMEOUT,
-                    wait_for_finished_quic_send_stream(send),
-                )
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        debug!(%error, "peer did not acknowledge the finished vpn tunnel stream")
-                    }
-                    Err(error) => {
-                        debug!(%error, "timed out awaiting vpn tunnel stream acknowledgement")
-                    }
+        if finish_queued && let Some(send) = protected_send.quic_send() {
+            match timeout(
+                HANDSHAKE_STREAM_TIMEOUT,
+                wait_for_finished_quic_send_stream(send),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    debug!(%error, "peer did not acknowledge the finished vpn tunnel stream")
+                }
+                Err(error) => {
+                    debug!(%error, "timed out awaiting vpn tunnel stream acknowledgement")
                 }
             }
         }

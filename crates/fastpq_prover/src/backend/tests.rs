@@ -64,11 +64,7 @@ fn transcript_encoding_ignores_and_restores_ambient_norito_layout() {
     let expected_challenge = expected.challenge_extension(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX);
     let probe = ("layout restoration", vec![1_u64, 2, 3]);
     let canonical_probe = norito::core::to_bytes(&probe).unwrap();
-    for flags in [
-        0,
-        norito::core::header_flags::PACKED_SEQ,
-        norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
-    ] {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         let before = norito::core::to_bytes(&probe).unwrap();
         let actual =

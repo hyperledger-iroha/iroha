@@ -9,7 +9,7 @@ fn header_flags(bytes: &[u8]) -> u8 {
 }
 #[test]
 fn adaptive_small_keeps_default_compact_flags() {
-    // Small-ish packed sequence payload
+    // Small-ish sequence payload
     let v: Vec<u32> = (0..256u32).collect();
     let bytes = to_bytes_auto(&v).expect("encode");
     let flags = header_flags(&bytes);
@@ -19,9 +19,9 @@ fn adaptive_small_keeps_default_compact_flags() {
         "adaptive layout should preserve compact length prefixes"
     );
     assert_eq!(
-        flags & (header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT),
+        flags & !header_flags::COMPACT_LEN,
         0,
-        "adaptive layout must remain sequential"
+        "adaptive layout advertises no other layout bits"
     );
 }
 #[test]
@@ -36,8 +36,8 @@ fn adaptive_large_keeps_default_compact_flags() {
         "adaptive layout should preserve compact length prefixes"
     );
     assert_eq!(
-        flags & (header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT),
+        flags & !header_flags::COMPACT_LEN,
         0,
-        "adaptive layout must remain sequential"
+        "adaptive layout advertises no other layout bits"
     );
 }

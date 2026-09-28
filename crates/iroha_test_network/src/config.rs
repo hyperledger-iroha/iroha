@@ -284,6 +284,7 @@ pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
     .0
 }
 
+#[cfg(test)]
 pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,

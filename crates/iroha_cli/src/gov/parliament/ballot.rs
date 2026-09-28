@@ -1306,39 +1306,63 @@ pub struct RelayArgs {
 impl RelayArgs {
     /// Verify the records against `source` and submit the next chunk.
     fn execute<C: RunContext, S: BallotSource>(self, context: &mut C, source: &S) -> Result<()> {
-        if self.records.len() > MAX_RELAY_RECORD_FILES {
-            bail!("relay accepts at most {MAX_RELAY_RECORD_FILES} record files");
-        }
-        let records = self
-            .records
-            .iter()
-            .map(|path| files::read_public_record(path, TIMED_OVN_BALLOT_RECORD_BYTES_V1))
-            .collect::<Result<Vec<_>>>()?;
-        let archive = source.public_casting_context(self.ballot_attempt_id)?;
-        let indexed = index_relay_records(&archive, records)?;
-        let governance_attempt_id = archive_governance_attempt_id(&archive);
-        let progress = read_ballot_progress(source, governance_attempt_id, self.ballot_attempt_id)?;
-        if progress.status != BallotAttemptStatusV1::TimedCommitment {
-            bail!(
-                "the ballot no longer accepts ballots (status {:?})",
-                progress.status
-            );
-        }
-        let accepted_prefix = progress
-            .accepted_prefix
-            .ok_or_else(|| eyre!("the ballot progress omits its accepted prefix"))?;
-        let chunk = relay_chunk(accepted_prefix, &indexed)?;
+        let (count, accepted_prefix, instruction) =
+            relay_instruction_from(source, self.ballot_attempt_id, &self.records)?;
         note(
             context,
             format!(
-                "relaying {} ballot record(s) from survivor seat {accepted_prefix} for ballot {}",
-                chunk.len(),
+                "relaying {count} ballot record(s) from survivor seat {accepted_prefix} for ballot {}",
                 self.ballot_attempt_id.to_hex()
             ),
         )?;
-        let instruction = corpus_instruction(governance_attempt_id, self.ballot_attempt_id, chunk)?;
         context.finish(vec![instruction])
     }
+}
+
+/// Verify the published record files against `source` and return the chunk size, the accepted
+/// prefix it continues and the `FreezeTimedOvnCorpus` instruction of the next chunk.
+///
+/// # Errors
+///
+/// Fails for unreadable or foreign records, a ballot that no longer accepts ballots, or records
+/// that do not continue the accepted prefix.
+pub(crate) fn relay_instruction(
+    source: &Client,
+    ballot_attempt_id: BallotAttemptId,
+    record_paths: &[PathBuf],
+) -> Result<(usize, u32, InstructionBox)> {
+    relay_instruction_from(source, ballot_attempt_id, record_paths)
+}
+
+fn relay_instruction_from<S: BallotSource>(
+    source: &S,
+    ballot_attempt_id: BallotAttemptId,
+    record_paths: &[PathBuf],
+) -> Result<(usize, u32, InstructionBox)> {
+    if record_paths.len() > MAX_RELAY_RECORD_FILES {
+        bail!("relay accepts at most {MAX_RELAY_RECORD_FILES} record files");
+    }
+    let records = record_paths
+        .iter()
+        .map(|path| files::read_public_record(path, TIMED_OVN_BALLOT_RECORD_BYTES_V1))
+        .collect::<Result<Vec<_>>>()?;
+    let archive = source.public_casting_context(ballot_attempt_id)?;
+    let indexed = index_relay_records(&archive, records)?;
+    let governance_attempt_id = archive_governance_attempt_id(&archive);
+    let progress = read_ballot_progress(source, governance_attempt_id, ballot_attempt_id)?;
+    if progress.status != BallotAttemptStatusV1::TimedCommitment {
+        bail!(
+            "the ballot no longer accepts ballots (status {:?})",
+            progress.status
+        );
+    }
+    let accepted_prefix = progress
+        .accepted_prefix
+        .ok_or_else(|| eyre!("the ballot progress omits its accepted prefix"))?;
+    let chunk = relay_chunk(accepted_prefix, &indexed)?;
+    let count = chunk.len();
+    let instruction = corpus_instruction(governance_attempt_id, ballot_attempt_id, chunk)?;
+    Ok((count, accepted_prefix, instruction))
 }
 
 impl Run for RelayArgs {

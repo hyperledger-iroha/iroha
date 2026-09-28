@@ -398,6 +398,7 @@ pub(super) fn verify_unit_fragment(path: &Path, expected_sha256: &str) -> Result
 
 /// Bind the loaded unit during stopped-owner cleanup to its exact admitted publication phase.
 /// The prior fragment is valid before Install; a successor requires its retained native intent.
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(super) fn stopped_unit_hash(
     admitted: &HostAdmission,
     validator: &ValidatorV1,
@@ -428,6 +429,7 @@ pub(super) fn stopped_unit_hash(
     Ok(actual)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn admit_stopped_unit_hash(
     actual: &str,
     prior: Option<&str>,

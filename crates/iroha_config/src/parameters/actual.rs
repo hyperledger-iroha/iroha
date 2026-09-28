@@ -23,7 +23,6 @@ use iroha_crypto::{
     },
     streaming::StreamingKeyMaterial,
 };
-#[allow(unused_imports)]
 use iroha_data_model::{
     account::AccountId,
     asset::prelude::AssetDefinitionId,
@@ -48,7 +47,6 @@ use iroha_data_model::{
         LaneConfig as LaneConfigMetadata, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
         LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
-    oracle::KeyedHash,
     peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     soracloud::SoraPublishedInrouGuestImageArtifactV1,
@@ -62,15 +60,10 @@ use iroha_data_model::{
     taikai::TaikaiAvailabilityClass,
     transaction::FeePaymentIntent,
 };
-#[allow(unused_imports)]
 use iroha_model_base::chain::ChainId;
-#[allow(unused_imports)]
 use iroha_model_base::domain::DomainId;
-#[allow(unused_imports)]
 use iroha_model_base::name::Name;
-#[allow(unused_imports)]
 use iroha_model_base::peer::PeerId;
-#[allow(unused_imports)]
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 use iroha_primitives::{
     addr::SocketAddr,
@@ -11941,10 +11934,12 @@ pub struct Sccp {
     pub max_ed25519_signature_checks_per_transaction: NonZeroU32,
     /// Maximum Ed25519 signature checks committed in one block.
     pub max_ed25519_signature_checks_per_block: NonZeroU32,
-    /// Maximum TON Ed25519 validator-key checks in one transaction.
-    pub max_ed25519_validator_key_checks_per_transaction: NonZeroU32,
-    /// Maximum TON Ed25519 validator-key checks committed in one block.
-    pub max_ed25519_validator_key_checks_per_block: NonZeroU32,
+    /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) in one
+    /// transaction.
+    pub max_bls_vote_attestations_per_transaction: NonZeroU32,
+    /// Maximum BSC fast-finality vote attestations (fast-aggregate BLS checks) committed in one
+    /// block.
+    pub max_bls_vote_attestations_per_block: NonZeroU32,
 }
 impl_default!(Sccp => {
         Self {
@@ -11972,10 +11967,10 @@ impl_default!(Sccp => {
                 defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_TRANSACTION,
             max_ed25519_signature_checks_per_block:
                 defaults::zk::sccp::MAX_ED25519_SIGNATURE_CHECKS_PER_BLOCK,
-            max_ed25519_validator_key_checks_per_transaction:
-                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_TRANSACTION,
-            max_ed25519_validator_key_checks_per_block:
-                defaults::zk::sccp::MAX_ED25519_VALIDATOR_KEY_CHECKS_PER_BLOCK,
+            max_bls_vote_attestations_per_transaction:
+                defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_TRANSACTION,
+            max_bls_vote_attestations_per_block:
+                defaults::zk::sccp::MAX_BLS_VOTE_ATTESTATIONS_PER_BLOCK,
         }
 });
 /// CABAC runtime mode compiled into the host.

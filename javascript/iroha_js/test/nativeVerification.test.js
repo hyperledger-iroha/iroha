@@ -657,6 +657,75 @@ variantTest("verified snapshots retain the authenticated bytes across path subst
   });
 });
 
+variantTest("normal exit cleans owned snapshots without touching authenticated originals", async () => {
+  await withTempDir(async (dir) => {
+    const bindingPath = path.join(dir, "iroha_js_host.node");
+    const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
+    const contents = Buffer.from("verified-snapshot-lifecycle-fixture");
+    await fs.writeFile(bindingPath, contents);
+    await fs.writeFile(manifestPath, JSON.stringify({ entries: {
+      [`${process.platform}-${process.arch}`]: checksumEntry(sha256(contents)),
+    } }));
+    const moduleUrl = new URL(
+      implementationName === "source" ? "../src/native.js" : "../dist/native.js",
+      import.meta.url,
+    ).href;
+    // Both natural event-loop completion and explicit nonzero exit must run
+    // synchronous cleanup; neither test loads an unauthenticated native module.
+    for (const exitCode of [0, 7]) {
+      const temporaryDirectory = path.join(dir, `snapshots-${exitCode}`);
+      await fs.mkdir(temporaryDirectory);
+      const child = childProcess.spawnSync(process.execPath, [
+        "--input-type=module", "--eval", `
+          import assert from "node:assert/strict";
+          import { existsSync, readFileSync, readdirSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { __snapshotNativeBindingForTests, getNativeBinding }
+            from ${JSON.stringify(moduleUrl)};
+          const initialListeners = process.listenerCount("exit");
+          assert.throws(() => getNativeBinding(), error => error.nativeStatus === "load_error");
+          assert.equal(process.listenerCount("exit"), initialListeners);
+          assert.deepEqual(readdirSync(tmpdir()), []);
+          const snapshots = Array.from({ length: 12 }, () =>
+            __snapshotNativeBindingForTests(${JSON.stringify(bindingPath)}, {
+              manifestPath: ${JSON.stringify(manifestPath)},
+            }));
+          assert.equal(process.listenerCount("exit"), initialListeners + 1);
+          for (const snapshot of snapshots) {
+            assert.equal(snapshot.ok, true);
+            assert.equal(existsSync(snapshot.path), true);
+            assert.equal(readFileSync(snapshot.path, "utf8"), ${JSON.stringify(contents.toString())});
+          }
+          // A verified file that cannot be loaded must clean its own snapshot
+          // immediately, without removing the other live snapshots.
+          const beforeFailure = readdirSync(tmpdir()).filter(name => name.startsWith("iroha-js-host-"));
+          assert.throws(() => getNativeBinding(), error => error.nativeStatus === "load_error");
+          assert.deepEqual(readdirSync(tmpdir()).filter(name => name.startsWith("iroha-js-host-")), beforeFailure);
+          assert.equal(process.listenerCount("exit"), initialListeners + 1);
+          console.log(JSON.stringify(snapshots));
+          ${exitCode === 0 ? "" : `process.exit(${exitCode});`}
+        `,
+      ], { encoding: "utf8", env: {
+        ...process.env,
+        IROHA_JS_NATIVE_DIR: dir,
+        TMPDIR: temporaryDirectory,
+        TMP: temporaryDirectory,
+        TEMP: temporaryDirectory,
+      } });
+      assert.equal(child.error, undefined);
+      assert.equal(child.status, exitCode, child.stderr);
+      assert.equal(child.stderr, "");
+      const snapshots = JSON.parse(child.stdout.trim());
+      assert.equal(snapshots.length, 12);
+      for (const snapshot of snapshots) {
+        await assert.rejects(fs.stat(snapshot.directory), { code: "ENOENT" });
+      }
+      assert.deepEqual(await fs.readFile(bindingPath), contents);
+      assert.equal(verifyNativeBinding(bindingPath, { manifestPath }).ok, true);
+    }
+  });
+});
+
 variantTest("verification rejects malformed checksum manifests and entries", async () => {
   __resetNativeStateForTests();
   await withTempDir(async (dir) => {

@@ -355,6 +355,10 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
     /// both writers. Every refusal returns the same payload and allocation owners.
     /// An aggregate caller must join all components and external authorization
     /// before invoking any component's publish.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns original custody by value; boxing would allocate on the allocation-free path"
+    )]
     pub fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target Cell<V, Charge>,

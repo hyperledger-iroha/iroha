@@ -17,32 +17,31 @@ fn serialize_sets_only_compact_len_by_default() {
         "default payloads should advertise compact length prefixes"
     );
     assert_eq!(
-        flags
-            & (header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT | header_flags::FIELD_BITSET),
+        flags & !header_flags::COMPACT_LEN,
         0,
-        "default payloads should remain sequential"
+        "default payloads advertise no other layout bits"
     );
 }
 #[test]
 fn decode_flags_guard_sanitizes_reserved_bits() {
     core::reset_decode_state();
     assert!(core::use_compact_len());
-    assert!(!core::use_packed_seq());
-    assert!(!core::use_packed_struct());
     {
-        let _guard = DecodeFlagsGuard::enter(
-            header_flags::COMPACT_LEN
-                | header_flags::COMPACT_SEQ_LEN
-                | header_flags::VARINT_OFFSETS
-                | header_flags::PACKED_SEQ
-                | header_flags::PACKED_STRUCT,
-        );
+        // 0x01, 0x04, 0x08, 0x10 and 0x20 are reserved layout bits.
+        let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN | 0x05 | 0x08 | 0x10 | 0x20);
         assert!(core::use_compact_len());
-        assert!(core::use_packed_seq());
-        assert!(core::use_packed_struct());
         assert_eq!(
             core::get_decode_flags(),
-            header_flags::COMPACT_LEN | header_flags::PACKED_SEQ | header_flags::PACKED_STRUCT,
+            header_flags::COMPACT_LEN,
+            "reserved flags should be masked out"
+        );
+    }
+    {
+        let _guard = DecodeFlagsGuard::enter(0x05);
+        assert!(!core::use_compact_len());
+        assert_eq!(
+            core::get_decode_flags(),
+            0,
             "reserved flags should be masked out"
         );
     }

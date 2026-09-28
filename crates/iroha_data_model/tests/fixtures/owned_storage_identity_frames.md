@@ -1,12 +1,12 @@
 # Storage wrapper identities
 
-`owned_storage_identity_frames.json` preserves 432 complete frames across nine
-values, 40 nominal identities and six declared layout combinations. It covers
-account details, asset quantities, NFT and RWA storage values, and a boxed
-string whose root identity already projects to `String`.
+`owned_storage_identity_frames.json` preserves 144 complete frames across nine
+values, 40 nominal identities and two declared layouts (0x00 and COMPACT_LEN).
+It covers account details, asset quantities, NFT and RWA storage values, and a
+boxed string whose root identity already projects to `String`.
 
-Fixture bytes: 1,167,413. SHA-256:
-`93a70352e47926baf33b0e64b016d20fa17c1a94885095394acb526ea964b156`.
+Fixture bytes: 360,896. SHA-256:
+`3d291812d99e26e8e85860f0521a2790d201af1dfc3e2e04d10b7d6f92204f53`.
 
 The capture ran before the `Owned<T>`, `AccountDetails`, `NftData` and `RwaData`
 identity declarations were added. Compiler-observed names, both directional
@@ -36,7 +36,9 @@ capture above follows the correction: inherited field layouts, checked packed
 offsets and streamed entry payloads. The prior failing logs remain under
 untracked `target/architecture-redesign/owned-storage-identity/`. They are not
 accepted frame fixtures. Default tuple/metadata bytes remain covered by the
-existing parity tests; no alternate decoding path was added.
+existing parity tests; no alternate decoding path was added. Records for the
+retired packed layouts were dropped when Norito v1 was pinned to the non-packed
+layouts; surviving bytes are unchanged.
 
 The JSON map uses string keys. The separately discovered numeric JSON map-key
 writer mismatch remains a distinct correction; this fixture does not qualify

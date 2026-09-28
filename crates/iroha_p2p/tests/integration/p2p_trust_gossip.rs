@@ -35,15 +35,9 @@ impl ClassifyTopic for TrustTestMessage {
                 .map_err(|_| core::Error::LengthMismatch)?,
         );
         let field = &payload[4..];
-        if flags & core::header_flags::PACKED_STRUCT != 0 {
-            if field.len() != 4 {
-                return Err(core::Error::LengthMismatch);
-            }
-        } else {
-            let (length, prefix) = core::read_len_from_slice_with_flags(field, flags)?;
-            if length != 4 || prefix.checked_add(length) != Some(field.len()) {
-                return Err(core::Error::LengthMismatch);
-            }
+        let (length, prefix) = core::read_len_from_slice_with_flags(field, flags)?;
+        if length != 4 || prefix.checked_add(length) != Some(field.len()) {
+            return Err(core::Error::LengthMismatch);
         }
         match tag {
             0 => Ok(Some(Topic::TrustGossip)),
@@ -331,14 +325,7 @@ async fn trust_gossip_enabled_reaches_both_peers() {
 fn trust_fixture_raw_discriminator_matches_both_fixed_native_variants() {
     use norito::core;
     for value in [TrustTestMessage::Trust(u32::MAX), TrustTestMessage::Peer(0)] {
-        for requested in [
-            0,
-            core::header_flags::COMPACT_LEN,
-            core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
-            core::header_flags::PACKED_STRUCT
-                | core::header_flags::COMPACT_LEN
-                | core::header_flags::FIELD_BITSET,
-        ] {
+        for requested in [0, core::header_flags::COMPACT_LEN] {
             let (bytes, flags) = {
                 let _flags = core::DecodeFlagsGuard::enter(requested);
                 norito::codec::encode_with_header_flags(&value)

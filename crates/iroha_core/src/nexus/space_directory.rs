@@ -532,7 +532,7 @@ mod tests {
         assert!(record.lifecycle.activated_epoch.is_none());
         let ambient_record = {
             let alternate_flags =
-                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             SpaceDirectoryManifestRecord::new(manifest)
         };
@@ -602,7 +602,7 @@ mod tests {
             "UAID membership frame must not be accepted as account scope"
         );
         let alternate_flags =
-            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient_encoded = {
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             json::to_json(&bindings).expect("bindings use ambient-independent JSON")
@@ -642,7 +642,7 @@ mod tests {
             "account scope frame must not be accepted as UAID membership"
         );
         let alternate_flags =
-            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient_encoded = {
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             json::to_json(&entry).expect("scope entry uses ambient-independent JSON")

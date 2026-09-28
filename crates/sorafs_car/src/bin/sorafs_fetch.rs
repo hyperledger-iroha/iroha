@@ -44,6 +44,10 @@ use sorafs_car::{
     policy::{PolicyLabelSummary, anonymity_policy_labels, transport_policy_labels},
     scoreboard::{self, ProviderTelemetry, TelemetrySnapshot},
 };
+#[path = "common/output_fs.rs"]
+mod output_fs;
+use output_fs::{ensure_parent_dir, open_output_file, validate_output_path};
+use sorafs_car::set_no_follow_flag;
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AvailabilityTier, CapabilityType, ManifestV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
@@ -62,8 +66,6 @@ const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
     CapabilityType::SoraNetHybridPq,
     CapabilityType::PotrMlDsa,
 ];
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::{HashMap, HashSet},
     env,
@@ -969,8 +971,8 @@ fn run() -> Result<(), String> {
     {
         return Err(format!(
             "assembled payload digest {} does not match expected {}",
-            to_hex(&payload_digest_bytes),
-            to_hex(&expected_digest)
+            hex::encode(&payload_digest_bytes),
+            hex::encode(&expected_digest)
         ));
     }
     if let (Some(writer), Some(path)) = (streaming_writer, output_path.as_ref()) {
@@ -1488,114 +1490,6 @@ fn publish_output_spool(spool: tempfile::NamedTempFile, path: &Path) -> Result<(
         .map_err(|error| format!("failed to publish verified output: {}", error.error))?;
     Ok(())
 }
-fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
-    validate_output_path(path)?;
-    ensure_parent_dir(path)?;
-    validate_output_path(path)?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    set_no_follow_flag(&mut options);
-    let file = options
-        .open(path)
-        .map_err(|err| format!("failed to open {label} {path:?}: {err}"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|err| format!("failed to inspect {label} {path:?} after open: {err}"))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "failed to write {label} {path:?}: output must be a regular file"
-        ));
-    }
-    Ok(file)
-}
-fn ensure_parent_dir(path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    Ok(())
-}
-fn validate_output_path(path: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(format!("output {path:?} must not be a symlink"));
-            }
-            if metadata.is_dir() {
-                return Err(format!("output {path:?} must not be a directory"));
-            }
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
-    }
-    if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
-            }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(format!("output parent {ancestor:?} must not be a symlink"));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(format!("output parent {ancestor:?} must be a directory"));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(format!(
-                        "failed to inspect output parent {ancestor:?}: {err}"
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
-}
 struct StreamingWriter {
     writer: BufWriter<tempfile::NamedTempFile>,
     hasher: Hasher,
@@ -1704,9 +1598,9 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
         .ok_or_else(|| "provider advert advertised max_concurrent_streams=0".to_string())?;
     let mut concurrency = qos_concurrency;
     let mut supports_chunk_range = false;
-    let provider_hex = to_hex(&advert.body.provider_id);
+    let provider_hex = hex::encode(&advert.body.provider_id);
     let mut provider_metadata = ProviderMetadata::new();
-    provider_metadata.provider_id = Some(to_hex(&advert.body.provider_id));
+    provider_metadata.provider_id = Some(hex::encode(&advert.body.provider_id));
     provider_metadata.profile_id = Some(advert.body.profile_id.clone());
     let mut aliases = advert.body.profile_aliases.clone().unwrap_or_default();
     if !aliases.iter().any(|alias| alias == &advert.body.profile_id) {
@@ -2255,7 +2149,10 @@ fn build_report(context: ReportContext<'_>) -> Value {
             .unwrap_or(Value::Null),
     );
     root.insert("payload_len".into(), Value::from(payload_len));
-    root.insert("payload_digest_hex".into(), Value::from(to_hex(digest)));
+    root.insert(
+        "payload_digest_hex".into(),
+        Value::from(hex::encode(digest)),
+    );
     root.insert("chunk_attempt_total".into(), Value::from(total_attempts));
     root.insert("chunk_retry_total".into(), Value::from(retry_count));
     let chunk_retry_rate = if chunk_count > 0 {
@@ -2328,20 +2225,20 @@ fn build_report(context: ReportContext<'_>) -> Value {
         car_obj.insert("size".into(), Value::from(stats.car_size));
         car_obj.insert(
             "payload_digest_hex".into(),
-            Value::from(to_hex(stats.car_payload_digest.as_bytes())),
+            Value::from(hex::encode(stats.car_payload_digest.as_bytes())),
         );
         car_obj.insert(
             "archive_digest_hex".into(),
-            Value::from(to_hex(stats.car_archive_digest.as_bytes())),
+            Value::from(hex::encode(stats.car_archive_digest.as_bytes())),
         );
-        car_obj.insert("cid_hex".into(), Value::from(to_hex(&stats.car_cid)));
+        car_obj.insert("cid_hex".into(), Value::from(hex::encode(&stats.car_cid)));
         car_obj.insert(
             "root_cids_hex".into(),
             Value::Array(
                 stats
                     .root_cids
                     .iter()
-                    .map(|cid| Value::from(to_hex(cid)))
+                    .map(|cid| Value::from(hex::encode(cid)))
                     .collect(),
             ),
         );
@@ -2499,15 +2396,6 @@ fn transport_hint_metadata_to_value(hint: &TransportHint) -> Value {
     obj.insert("protocol_id".into(), Value::from(hint.protocol_id as u64));
     obj.insert("priority".into(), Value::from(hint.priority as u64));
     Value::Object(obj)
-}
-fn to_hex(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 fn format_multi_source_error(error: MultiSourceError) -> Result<String, String> {
     use MultiSourceError::*;

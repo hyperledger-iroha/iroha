@@ -4,6 +4,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `validateNoritoFrame` and every Norito decoder built on it accept only the
+  Norito v1 header flags `0x00` (fixed-width length prefixes) and `0x02`
+  (`COMPACT_LEN`). The retired packed-sequence (`0x01`), packed-struct (`0x04`)
+  and field-bitset (`0x20`) bits are rejected in every combination; previously
+  `0x04` frames passed validation and were mis-decoded as ordinary structs.
+
 - Canonical request signing hashes the exact byte range of every ArrayBuffer
   view, including DataView and wide typed arrays. Strict lossless JSON request
   serialization rejects array accessors without invoking them and rejects

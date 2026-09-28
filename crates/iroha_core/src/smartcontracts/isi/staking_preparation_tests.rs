@@ -6,8 +6,7 @@ fn prepared_reward_claim_uses_exact_epoch_zero_hash_cursor_dust_and_execution() 
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xDA);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xDA; Hash::LENGTH]));
     let lane = LaneId::SINGLE;
     let (sink, recipient, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::from(50_u64);
@@ -99,7 +98,9 @@ fn prepared_reward_claim_bounds_work_and_requires_exact_existing_accrual_sources
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+        b"prepared_reward_claim_bounds_work_and_requires_exact_existing_accrual_sources",
+    ));
     let lane = LaneId::SINGLE;
     let (_, recipient, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     let mut intent = PublicLanePrepareClaimV1 {
@@ -283,7 +284,9 @@ fn global_staking_preparation_rejects_a_zero_validity_window() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
+        b"global_staking_preparation_rejects_a_zero_validity_window",
+    ));
     let (_, recipient, _, _) = configure_reward_fixture(&mut stx, LaneId::SINGLE, 100);
     let request = PublicLanePreparationRequestV1 {
         lane_id: LaneId::SINGLE,

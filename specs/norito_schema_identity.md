@@ -1408,8 +1408,8 @@ hashes; no decoder is added to signing or negative-fixture carriers.
 Seventeen borrowed Wire records now implement only `SerializePayload`. Twelve
 private field helpers lose independent frame markers and accept payload-only
 fields. The outer signing-frame adapters, field ordering and canonical signatures
-are preserved. Six new tests compare bytes and exact/counting lengths across all
-eight supported layouts, including fields with no typed-frame capability.
+are preserved. Six new tests compare bytes and exact/counting lengths across
+both supported layouts, including fields with no typed-frame capability.
 
 Governance's field codecs and tests have their own files without changing logical
 type or test-module paths. Production is 4,965 lines, tests 2,413, and the borrowed
@@ -1450,14 +1450,17 @@ fixture helpers gain sibling visibility so the new suite reuses the actual value
 
 The immutable
 [`orderbook_signing_identity_frames.json`](../crates/sorafs_manifest/tests/fixtures/orderbook_signing_identity_frames.json)
-is 152,336 bytes, SHA-256
-`61bb1412c39eb7bbb7a299e46025ff8eba05c0897e67f526a7e81e33a3ef736b`.
+is 51,868 bytes, SHA-256
+`14e3c912214c6c92bf42273ba12f353d226a192f86ef9b72731ddaf9bc9338fc`.
 Its pre-declaration compiler capture passes on 19,745 unchanged isolated inputs.
-It records 15 canonical frames and 120 explicit-layout frames across the three
-roots, None/Some and empty/two-element vectors. Permanent tests compare declared
-names against those observations, preserving complete bytes, advertised flags,
-exact sizes, owned payload decoding and malformed-frame rejection. The temporary
-capture writer and its environment/file APIs are removed.
+It records 15 canonical frames and 30 explicit-layout frames across the three
+roots, None/Some and empty/two-element vectors. Records for the retired packed
+layouts were dropped when Norito v1 was pinned to `0x00`/`COMPACT_LEN`; the
+surviving records are byte-identical to the original capture. Permanent tests
+compare declared names against those observations, preserving complete bytes,
+advertised flags, exact sizes, owned payload decoding and malformed-frame
+rejection. The temporary capture writer and its environment/file APIs are
+removed.
 
 The three-path source patch is
 `1aa3b0fa781c42152a7dfa3ca726360dd975823e09160a7562b0331d8e387e6c`.
@@ -1492,10 +1495,12 @@ exposes only payload serialization. No decoder or alternate signing API is added
 
 The immutable
 [`sorafs_signing_identity_frames.json`](../crates/sorafs_manifest/tests/fixtures/sorafs_signing_identity_frames.json)
-contains the exact 2,551,080 captured bytes, SHA-256
-`e1b310b6db9a51b84de89f0af7fd5e2cd11556ea4e00c5c94ee1303728917191`.
-Its 26 populated case groups cover 130 canonical frames and 1,040 explicit-layout
-frames. The separate
+is 844,772 bytes, SHA-256
+`dda0bc3becb7882a6efea86c2db2ca46007024e82e0d949069e84d88fa8521c0`.
+Its 26 populated case groups cover 130 canonical frames and 260 explicit-layout
+frames. Records for the retired packed layouts were dropped when Norito v1 was
+pinned to `0x00`/`COMPACT_LEN`; the surviving records are byte-identical to the
+original capture. The separate
 [`sentinel fixture`](../crates/sorafs_manifest/tests/fixtures/sorafs_signing_identity_sentinels.jsonl)
 preserves the three actual observation lines without reserialization, SHA-256
 `0a4b18c8fb394f60905c4e625b899050cbd87598abad6ffec9249ea19cc46fd8`.

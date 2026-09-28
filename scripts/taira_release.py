@@ -56,6 +56,10 @@ The active repository must remain on optimizations, and the executing
 bootstrap sources must match the selected signed commit. Native qualification
 loads its gate only from the authenticated source capture; it does not import
 the mutable checkout gate.
+`prepare-client` builds only ordinary host-native Musubi on macOS from the same
+signed capture owner, in a separate fixed target/taira-macos-client lane. It
+uses Apple's linker and Cargo's native jobserver, and retains a source/tool/
+artifact receipt. It does not run qualification or add a validator artifact.
 """
 
 from __future__ import annotations
@@ -939,7 +943,7 @@ def first_build_error(log: Path) -> str | None:
 
 def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
               *, lock_fd: int | None = None, lane_lock_fd: int | None = None,
-              mode_lock_fd: int | None = None) -> None:
+              mode_lock_fd: int | None = None, label: str = "Linux build") -> None:
     failure = None
     code = None
     started = time.monotonic()
@@ -958,10 +962,10 @@ def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
                         code = child.wait(timeout=PROGRESS_SECONDS)
                         break
                     except subprocess.TimeoutExpired:
-                        print(f"[taira-release] Linux build running {time.monotonic() - started:.0f}s; "
+                        print(f"[taira-release] {label} running {time.monotonic() - started:.0f}s; "
                               f"compiler output {os.fstat(output).st_size} bytes; log {log}", flush=True)
-                require(code == 0, "Linux build failed; inspect " + str(log)
-                        + "; rerun the same prepare command to reuse the warm Cargo lane")
+                require(code == 0, label + " failed; inspect " + str(log)
+                        + "; retain the log and reuse the warm Cargo lane for the next attempt")
             except BaseException:
                 # The inherited preparation lock remains held by any active child.
                 # A launcher interruption does not authorize killing Cargo.
@@ -1675,6 +1679,160 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         return result
 
 
+def client_build_command(source: Path, target: Path, cargo: str, host: str) -> list[str]:
+    """Build exactly the ordinary client with explicit captured configuration."""
+    require(host in {"aarch64-apple-darwin", "x86_64-apple-darwin"},
+            "ordinary client preparation requires a native macOS Rust toolchain")
+    return [cargo, "--config", str(source / ".cargo/config.toml"), "build",
+            "--manifest-path", str(source / "Cargo.toml"), "--target-dir", str(target),
+            "--locked", "--offline", "--profile", "dev", "--target", host,
+            "--message-format=json-render-diagnostics", "-p", "musubi", "--bin", "musubi"]
+
+
+def client_artifact_emission(log: Path, source: Path, target: Path, host: str) -> dict[str, object]:
+    """Require the successful Cargo run to emit the exact normal client artifact."""
+    selected, finished = [], []
+    with log.open("rb") as stream:
+        for raw in stream:
+            if not raw.startswith(b"{"):
+                continue
+            try:
+                value = json.loads(raw)
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(value, dict):
+                continue
+            if value.get("reason") == "build-finished":
+                finished.append(value.get("success"))
+            elif (value.get("reason") == "compiler-artifact"
+                  and value.get("target", {}).get("name") == "musubi"
+                  and value.get("target", {}).get("kind") == ["bin"]):
+                selected.append(value)
+    require(finished == [True] and len(selected) == 1,
+            "Cargo did not emit one successful normal Musubi build")
+    value = selected[0]
+    executable = str(target / host / "debug/musubi")
+    require(value.get("manifest_path") == str(source / "crates/musubi/Cargo.toml")
+            and value.get("target", {}).get("src_path") == str(source / "crates/musubi/src/main.rs")
+            and value.get("profile", {}).get("test") is False
+            and value.get("executable") == executable
+            and executable in value.get("filenames", []),
+            "Cargo client artifact differs from the captured normal binary")
+    return {key: value[key] for key in ("package_id", "manifest_path", "target", "profile",
+                                      "features", "filenames", "executable", "fresh")}
+
+
+def capture_client_artifact(target: Path, output: Path, host: str) -> dict[str, object]:
+    """Copy a pinned native Cargo executable, retaining its cache aliases untouched."""
+    relative = host + "/debug/musubi"
+    original = target / relative
+    expected = cargo_hash_path(original, max_size=MAX_BINARY_BYTES)
+    require(expected.size >= 32 and bool(expected.mode & stat.S_IXUSR)
+            and original.stat().st_uid == os.geteuid(), "client artifact is not an owner-held executable")
+    capacity_preflight([(output, expected.size + CAPTURE_HEADROOM_BYTES, "ordinary client capture")])
+    destination = output / "musubi"
+    with cargo_open_relative(target, relative, expected=expected) as source:
+        header = os.read(source, 16)
+        cpu = {"aarch64-apple-darwin": 0x100000c, "x86_64-apple-darwin": 0x1000007}[host]
+        require(len(header) == 16 and struct.unpack("<IIII", header)[0:2] == (0xfeedfacf, cpu)
+                and struct.unpack("<IIII", header)[3] == 2,
+                "client artifact is not a native macOS executable")
+        os.lseek(source, 0, os.SEEK_SET)
+        with exclusive_output_fd(destination, mode=0o755) as result:
+            digest, size = hashlib.sha256(), 0
+            while block := os.read(source, 1024 * 1024):
+                size += len(block)
+                require(size <= expected.size, "client artifact grew during capture")
+                digest.update(block)
+                view = memoryview(block)
+                while view:
+                    written = os.write(result, view)
+                    require(written > 0, "client capture made no write progress")
+                    view = view[written:]
+            require(size == expected.size and digest.hexdigest() == expected.sha256,
+                    "client artifact changed during capture")
+    freeze(destination)
+    actual = stable_hash_path(destination, max_size=MAX_BINARY_BYTES)
+    require(actual.sha256 == expected.sha256 and actual.mode == 0o500,
+            "retained client differs from the build")
+    return {"name": "musubi", "package": "musubi", "path": str(destination),
+            "sha256": actual.sha256, "size": actual.size}
+
+
+def prepare_client(args: argparse.Namespace) -> dict[str, object]:
+    """Build an ordinary public client from signed source, without release authority."""
+    require(sys.platform == "darwin", "prepare-client currently supports macOS only")
+    root = real_path(args.repo_root)
+    require(Path(__file__).resolve() == root / "scripts/taira_release.py",
+            "prepare-client must use the maintained script from the selected checkout")
+    target = real_path(root / "target/taira-macos-client")
+    require(target.is_dir(), "create the fixed owner-private target/taira-macos-client lane once, then reuse it")
+    output = real_path(args.output_dir, exists=False)
+    require(output.is_relative_to(root / "target") and not output.is_relative_to(target)
+            and not target.is_relative_to(output) and not os.path.lexists(output),
+            "client output must be a fresh directory under target/ outside the client Cargo lane")
+    preflight_preparation_tmpdir(dict(os.environ))
+    tree = verify_signed_source(root, args.expected_commit, args.expected_signer)
+    entries = commit_entries(root, args.expected_commit)
+    with cargo_lane(root, target, "release") as mode_fd, source_lane(root, target) as (source, source_fd):
+        capacity_preflight([(target, signed_source_size(root, args.expected_commit, entries)
+                             + BUILD_FREE_FLOOR_BYTES, "signed client source and Cargo working space")])
+        capture_source(root, source, target, args.expected_commit, entries)
+        before = frozen_snapshot(source, entries, target)
+        env = child_environment(dict(os.environ), target)
+        env.update(IROHA_GIT_COMMIT_HASH=args.expected_commit, VERGEN_GIT_SHA=args.expected_commit)
+        env, tools = isolated_cargo_environment(root, source, env)
+        # The shared release helper selects six jobs. This ordinary client uses
+        # Cargo's native jobserver; ambient job/flags overrides were sanitized.
+        env.pop("CARGO_BUILD_JOBS", None)
+        env.pop("CARGO_ZIGBUILD_ZIG_PATH", None)
+        env.pop("CARGO_ZIGBUILD_PYTHON_PATH", None)
+        linker = preparation_native_linker("system")
+        env = preparation_native_environment(native_check_environment(env, {"CARGO_INCREMENTAL": "0"}), linker)
+        version = subprocess.check_output([env["RUSTC"], "-vV"], cwd="/", env=env,
+                                          stdin=subprocess.DEVNULL, text=True, timeout=30)
+        hosts = re.findall(r"^host: (\S+)$", version, re.MULTILINE)
+        require(len(hosts) == 1, "Rust toolchain did not report one native host")
+        host = hosts[0]
+        command = client_build_command(source, target, env["CARGO"], host)
+        packages = local_package_names(source, env)
+        output = create_fresh_directory(output, mode=0o700)
+        request = {"schema": "taira.local-client-build.v1", "commit": args.expected_commit,
+                   "tree": tree, "signer_fingerprint": args.expected_signer, "source_root": str(source),
+                   "target_dir": str(target), "host": host, "profile": "dev", "jobs": "cargo-default",
+                   "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
+                   "compiler_tools": tools, "native_linker": linker, "command": command,
+                   "environment_sha256": hashlib.sha256(canonical_json_bytes(env)).hexdigest(),
+                   "release_qualified": False, "deployed": False}
+        write_record(output / "request.json", request)
+
+        def revalidate():
+            require(frozen_snapshot(source, entries, target) == before,
+                    "captured source changed during client build")
+            require(preparation_native_linker("system") == linker,
+                    "native linker changed during client build")
+            require([{"name": row["name"], **verify_tool(Path(row["path"]), row["sha256"])}
+                     for row in tools] == tools, "Rust toolchain changed during client build")
+
+        with preparation_lock(output) as output_fd:
+            admit_source_fingerprints(source, target, host, packages)
+            revalidate()
+            log = output / "cargo.jsonl"
+            run_build(source, command, env, log, lock_fd=output_fd, lane_lock_fd=source_fd,
+                      mode_lock_fd=mode_fd, label="native Musubi build")
+            with source_fingerprints(source, target, host, packages, repair=False):
+                revalidate()
+                emission = client_artifact_emission(log, source, target, host)
+                artifact = capture_client_artifact(target, output, host)
+                revalidate()
+            result = {**request, "source_unchanged": True, "toolchain_unchanged": True,
+                      "cargo_emission": emission, "artifact": artifact}
+            freeze(log)
+            write_record(output / "result.json", result)
+            freeze(output, directory=True)
+            return result
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
@@ -1701,6 +1859,12 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--zig-sha256", required=True)
             command.add_argument("--cargo-zigbuild", type=Path, required=True, help="absolute real cargo-zigbuild executable")
             command.add_argument("--cargo-zigbuild-sha256", required=True)
+    client = commands.add_parser("prepare-client", help="build ordinary macOS Musubi from a signed source capture")
+    client.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    client.add_argument("--expected-commit", required=True)
+    client.add_argument("--expected-signer", required=True)
+    client.add_argument("--output-dir", type=Path, required=True,
+                        help="fresh retained observation directory; retries reuse the fixed client Cargo lane")
     status = commands.add_parser("check-status", help="read a background diagnostic without starting work")
     status.add_argument("--session-dir", type=Path, required=True)
     worker = commands.add_parser("_check-runner", help=argparse.SUPPRESS)
@@ -1719,6 +1883,10 @@ def main() -> int:
             status = development_check_status(args.session_dir)
             print(canonical_json_bytes(status).decode("utf-8"), flush=True)
             return {"passed": 0, "running": 2, "failed": 1, "incomplete": 1}[status["state"]]
+        if args.command == "prepare-client":
+            result = prepare_client(args)
+            print(f"[taira-client] built {result['commit']}: {args.output_dir / 'result.json'}", flush=True)
+            return 0
         if args.command == "check" and args.session_dir is not None:
             session = start_development_check(args, dict(os.environ))
             print(f"[taira-check] started diagnostic: {session}; inspect with check-status; not release-qualified", flush=True)

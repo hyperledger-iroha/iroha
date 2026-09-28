@@ -4490,9 +4490,9 @@ impl<'a> CstAstLowerer<'a> {
         &mut self,
         statement_start: u32,
     ) -> ParseResult<Option<ForEachMapBinding>> {
-        if !self.struct_pattern_starts_here()
-            && !self.peek(TokenKind::LParen)
-            && !(matches!(
+        if !(self.struct_pattern_starts_here()
+            || self.peek(TokenKind::LParen)
+            || matches!(
                 self.tokens.get(self.pos).map(|token| &token.kind),
                 Some(TokenKind::Ident(_))
             ) && self.peek_n(1, TokenKind::In))
@@ -5601,13 +5601,12 @@ mod tests {
     }
     #[test]
     fn accepts_unit_values_and_types_but_rejects_singleton_tuple_types() {
-        for (body, expected) in [(
-            "fn invalid((int) value) {}",
-            "tuple types require at least two elements",
-        )] {
-            let error = parse_module(body).expect_err("singleton tuple types must fail");
-            assert!(error.contains(expected), "unexpected error: {error}");
-        }
+        let error = parse_module("fn invalid((int) value) {}")
+            .expect_err("singleton tuple types must fail");
+        assert!(
+            error.contains("tuple types require at least two elements"),
+            "unexpected error: {error}"
+        );
         parse_module("fn unit(() value) -> () { let () item = (); value }")
             .expect("Unit literals, annotations, parameters and returns must parse");
         let grouped = parse_module(

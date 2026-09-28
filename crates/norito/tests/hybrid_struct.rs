@@ -1,5 +1,5 @@
-//! Ensure hybrid packed-struct layout (FIELD_BITSET) decodes without panics
-//! for self-delimiting container fields like `Vec` and `String`.
+//! Ensure derived records decode without panics for self-delimiting container
+//! fields like `Vec` and `String`.
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};

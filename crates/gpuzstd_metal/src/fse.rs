@@ -17,7 +17,6 @@ const MAX_TABLE_LOG: u8 = 12;
 #[derive(Clone)]
 pub(crate) struct FseCTable {
     pub(crate) table_log: u8,
-    pub(crate) table_size: u32,
     pub(crate) state_table: Vec<u16>,
     pub(crate) symbol_tt: Vec<SymbolTransform>,
 }
@@ -217,7 +216,6 @@ pub(crate) fn build_tables(
     Ok((
         FseCTable {
             table_log,
-            table_size,
             state_table,
             symbol_tt,
         },
@@ -231,7 +229,7 @@ pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>,
     }
     let mut writer = BitWriter::with_capacity(symbols.len().saturating_mul(4).saturating_add(8));
     let mut total_bits: u32 = 0;
-    let mut state = ct.table_size;
+    let mut state = 1u32 << ct.table_log;
     for &symbol in symbols.iter().rev() {
         let sym = symbol as usize;
         if sym >= ct.symbol_tt.len() {
@@ -270,6 +268,8 @@ pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>,
     out.extend_from_slice(&payload);
     Ok(out)
 }
+/// Decode an `encode_symbols` payload; test oracle for the FSE encoder.
+#[cfg(test)]
 pub(crate) fn decode_symbols(
     encoded: &[u8],
     out_len: usize,
@@ -301,10 +301,12 @@ pub(crate) fn decode_symbols(
     }
     Ok(output)
 }
+#[cfg(test)]
 struct BitReaderRev<'a> {
     data: &'a [u8],
     bit_pos: u32,
 }
+#[cfg(test)]
 impl<'a> BitReaderRev<'a> {
     fn new(data: &'a [u8], bit_len: u32) -> Self {
         Self {

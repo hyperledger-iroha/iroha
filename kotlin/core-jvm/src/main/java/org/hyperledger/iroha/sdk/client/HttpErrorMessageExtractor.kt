@@ -6,7 +6,6 @@ import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
-import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Helpers for extracting stable HTTP error details from Torii responses. */
@@ -109,39 +108,8 @@ internal object HttpErrorMessageExtractor {
             body[2] == 'T'.code.toByte() &&
             body[3] == '0'.code.toByte()
 
-    private fun decodeRejectCodeField(decoder: NoritoDecoder): String? {
-        val optionalString = NoritoAdapters.option(STRING_ADAPTER)
-        if ((decoder.flags and NoritoHeader.PACKED_STRUCT) != 0 &&
-            (decoder.flags and NoritoHeader.FIELD_BITSET) != 0
-        ) {
-            val fieldCount = 5
-            val bitsetData = decoder.readBytes((fieldCount + 7) / 8)
-            var bitset = 0
-            for (i in bitsetData.indices) {
-                bitset = bitset or ((bitsetData[i].toInt() and 0xFF) shl (i * 8))
-            }
-            val encodedSizes = ArrayList<Int?>(fieldCount)
-            for (i in 0 until fieldCount) {
-                if ((bitset and (1 shl i)) != 0) {
-                    val size = decoder.readVarint()
-                    require(size <= Int.MAX_VALUE) { "Packed field too large" }
-                    encodedSizes.add(size.toInt())
-                } else {
-                    encodedSizes.add(null)
-                }
-            }
-            val firstSize = encodedSizes[0]
-            return if (firstSize != null) {
-                val child = NoritoDecoder(decoder.readBytes(firstSize), decoder.flags)
-                val value = optionalString.decode(child)
-                require(child.remaining() == 0) { "Packed reject_code field did not consume all bytes" }
-                value.orElse(null)
-            } else {
-                optionalString.decode(decoder).orElse(null)
-            }
-        }
-        return optionalString.decode(decoder).orElse(null)
-    }
+    private fun decodeRejectCodeField(decoder: NoritoDecoder): String? =
+        NoritoAdapters.option(STRING_ADAPTER).decode(decoder).orElse(null)
 
     private fun extractStructuredMessage(value: Any?): String? {
         if (value is String) {

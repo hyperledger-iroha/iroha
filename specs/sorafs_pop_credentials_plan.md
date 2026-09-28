@@ -232,10 +232,9 @@ registry, juror client, or deployed verifier service.
   bytes, with the signature bytes cleared before hashing. Signing always uses
   the canonical V1 layout, including bounded preimage sizing; an enclosing
   decoder's layout flags cannot change the digest. Borrowed issuer strings use
-  Norito's native `Cow<str>` encoding so owned and borrowed signing views agree
-  even when wire-layout tests exercise packed field bitsets. The committed
-  credential-attribute bytes also use the canonical layout, so the credential
-  leaf cannot change with an enclosing decoder's flags.
+  Norito's native `Cow<str>` encoding so owned and borrowed signing views agree.
+  The committed credential-attribute bytes also use the canonical layout, so the
+  credential leaf cannot change with an enclosing decoder's flags.
 - `issue_pop_credential_bundle_ed25519_v1` signs a credential, commitment-root
   publication, and revocation-list snapshot together, then verifies issuer id,
   issuer public key, commitment root, tree version, revocation-list version,

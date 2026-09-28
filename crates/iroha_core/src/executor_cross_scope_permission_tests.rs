@@ -2,6 +2,7 @@
 mod cross_scope_permission_tests {
     use super::*;
     use iroha_data_model::nexus::UniversalAccountId;
+    use iroha_executor_data_model::permission::account::AccountAliasPermissionScope;
 
     #[test]
     fn scoped_delegation_never_widens_to_a_sibling_scope() {
@@ -94,5 +95,95 @@ mod cross_scope_permission_tests {
         .into();
         assert!(!allowed(&holder, read.clone()));
         assert!(allowed(&subject, read));
+    }
+
+    #[test]
+    fn alias_selector_and_manifest_delegation_stay_exact() {
+        let owner = checked_account_id();
+        let holder = checked_account_id();
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
+        let dataspace = DataSpaceId::new(10);
+        let delegated_scope = AccountAliasPermissionScope::Domain(hbl.clone());
+        let resolve = |scope: AccountAliasPermissionScope| -> Permission {
+            executor_permission::account::CanResolveAccountAlias { scope }.into()
+        };
+        let delegation: Permission =
+            executor_permission::account::CanDelegateAccountAliasResolution {
+                scope: delegated_scope.clone(),
+            }
+            .into();
+        let contract = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &owner,
+            88,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let noncanonical_selectors: Vec<Permission> = [" main", ""]
+            .into_iter()
+            .map(|entrypoint| {
+                executor_permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract: contract.clone(),
+                    entrypoint: entrypoint.to_owned(),
+                }
+                .into()
+            })
+            .collect();
+        let unscoped_manifest_root = Permission::new(
+            "CanPublishSpaceDirectoryManifest".to_owned(),
+            Json::from_raw_json("null".to_owned()).expect("valid JSON fixture"),
+        );
+        let mut world = World::with(
+            [
+                Domain::new(hbl).build(&owner),
+                Domain::new(ubl.clone()).build(&owner),
+            ],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(holder.clone()).build(&holder),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            holder.clone(),
+            noncanonical_selectors
+                .iter()
+                .cloned()
+                .chain([delegation.clone(), unscoped_manifest_root])
+                .collect(),
+        );
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let state_transaction = block.transaction();
+        let allowed = |permission: Permission| {
+            initial_permission_delegation_allowed(&state_transaction, &holder, &permission, None)
+        };
+
+        // A domain-scoped alias-resolution delegate grants resolution for exactly that domain
+        // and may pass the delegation on, but never a sibling domain or a dataspace scope.
+        assert!(allowed(resolve(delegated_scope)).expect("exact resolution delegation"));
+        assert!(allowed(delegation).expect("delegation token propagation"));
+        assert!(!allowed(resolve(AccountAliasPermissionScope::Domain(ubl))).expect("sibling"));
+        assert!(
+            !allowed(resolve(AccountAliasPermissionScope::Dataspace(dataspace)))
+                .expect("dataspace scope")
+        );
+        // Holding a malformed selector never lets its holder copy it.
+        for selector in noncanonical_selectors {
+            assert!(matches!(
+                allowed(selector),
+                Err(ValidationFail::NotPermitted(_))
+            ));
+        }
+        // An unscoped manifest root does not authorize the scoped dataspace root.
+        assert!(
+            !allowed(
+                executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into()
+            )
+            .expect("scoped manifest root")
+        );
     }
 }

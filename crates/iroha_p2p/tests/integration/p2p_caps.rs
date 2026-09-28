@@ -45,49 +45,21 @@ impl ClassifyTopic for BigMsg {
         core::validate_header_flags(flags)?;
         let _flags = core::DecodeFlagsGuard::enter(flags);
         // Inspect the declared two-field layout without allocating the blob.
-        let (topic, vector) = if flags & core::header_flags::PACKED_STRUCT == 0 {
-            let (first, prefix) = core::read_len_from_slice_with_flags(payload, flags)?;
-            if first != 1 {
-                return Err(core::Error::LengthMismatch);
-            }
-            let topic = *payload.get(prefix).ok_or(core::Error::LengthMismatch)?;
-            let rest = payload
-                .get(prefix.checked_add(1).ok_or(core::Error::LengthMismatch)?..)
-                .ok_or(core::Error::LengthMismatch)?;
-            let (second, prefix) = core::read_len_from_slice_with_flags(rest, flags)?;
-            if prefix.checked_add(second) != Some(rest.len()) {
-                return Err(core::Error::LengthMismatch);
-            }
-            (topic, &rest[prefix..])
-        } else if flags & core::header_flags::FIELD_BITSET == 0 {
-            let (offsets, data) = payload
-                .split_at_checked(24)
-                .ok_or(core::Error::LengthMismatch)?;
-            let offset = |n: usize| -> Result<usize, core::Error> {
-                usize::try_from(u64::from_le_bytes(
-                    offsets[n * 8..(n + 1) * 8]
-                        .try_into()
-                        .map_err(|_| core::Error::LengthMismatch)?,
-                ))
-                .map_err(|_| core::Error::LengthMismatch)
-            };
-            if offset(0)? != 0 || offset(1)? != 1 || offset(2)? != data.len() {
-                return Err(core::Error::LengthMismatch);
-            }
-            let (&topic, vector) = data.split_first().ok_or(core::Error::LengthMismatch)?;
-            (topic, vector)
-        } else {
-            let (&bitset, data) = payload.split_first().ok_or(core::Error::LengthMismatch)?;
-            // u8 is fixed-width and Vec<u8> owns its sequence count. Neither
-            // field has a hybrid size header in the canonical derive layout.
-            if bitset != 0 {
-                return Err(core::Error::LengthMismatch);
-            }
-            let (&topic, vector) = data.split_first().ok_or(core::Error::LengthMismatch)?;
-            (topic, vector)
-        };
+        let (first, prefix) = core::read_len_from_slice_with_flags(payload, flags)?;
+        if first != 1 {
+            return Err(core::Error::LengthMismatch);
+        }
+        let topic = *payload.get(prefix).ok_or(core::Error::LengthMismatch)?;
+        let rest = payload
+            .get(prefix.checked_add(1).ok_or(core::Error::LengthMismatch)?..)
+            .ok_or(core::Error::LengthMismatch)?;
+        let (second, prefix) = core::read_len_from_slice_with_flags(rest, flags)?;
+        if prefix.checked_add(second) != Some(rest.len()) {
+            return Err(core::Error::LengthMismatch);
+        }
+        let vector = &rest[prefix..];
         // Vec<u8> always encodes a fixed-u64 count followed by raw bytes.
-        // Check that inner extent as well as the enclosing field/table extent.
+        // Check that inner extent as well as the enclosing field extent.
         let (count, prefix) = core::inspect_seq_len_slice(vector)?;
         if prefix.checked_add(count) != Some(vector.len()) {
             return Err(core::Error::LengthMismatch);
@@ -739,14 +711,7 @@ fn cap_fixture_raw_topic_matches_canonical_layout_without_decoding_the_blob() {
                 format!("{value:?}").len() < 80,
                 "fixture diagnostics must remain bounded"
             );
-            for requested in [
-                0,
-                core::header_flags::COMPACT_LEN,
-                core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
-                core::header_flags::PACKED_STRUCT
-                    | core::header_flags::COMPACT_LEN
-                    | core::header_flags::FIELD_BITSET,
-            ] {
+            for requested in [0, core::header_flags::COMPACT_LEN] {
                 let (bytes, flags) = {
                     let _flags = core::DecodeFlagsGuard::enter(requested);
                     norito::codec::encode_with_header_flags(&value)
@@ -769,17 +734,12 @@ fn cap_fixture_raw_topic_matches_canonical_layout_without_decoding_the_blob() {
                 assert!(BigMsg::inbound_topic(&trailing, flags).is_err());
                 assert!(BigMsg::inbound_topic(&bytes[..bytes.len() - 1], flags).is_err());
                 assert!(BigMsg::inbound_topic(&bytes, flags | 0x80).is_err());
-                // Keep the outer field/table untouched, corrupt only Vec's own count.
+                // Keep the outer field untouched, corrupt only Vec's own count.
                 let count_at = bytes.len() - length - 8;
                 for count in [u64::try_from(length).unwrap() + 1, u64::MAX] {
                     let mut wrong_count = bytes.clone();
                     wrong_count[count_at..count_at + 8].copy_from_slice(&count.to_le_bytes());
                     assert!(BigMsg::inbound_topic(&wrong_count, flags).is_err());
-                }
-                if flags & core::header_flags::FIELD_BITSET != 0 {
-                    let mut wrong_bitset = bytes.clone();
-                    wrong_bitset[0] = 0b10;
-                    assert!(BigMsg::inbound_topic(&wrong_bitset, flags).is_err());
                 }
             }
         }

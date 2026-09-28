@@ -3,11 +3,11 @@
 //! The library declares this file as `taikai::output_fs`; `src/bin/taikai_car.rs` includes the
 //! same file with `#[path]`, so the binary reuses it without widening the library API.
 
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::{fs, io, path::Path};
 
 use eyre::{Result, WrapErr, eyre};
+
+use super::set_no_follow_flag;
 
 /// Create the missing parent directories of `path`.
 pub(super) fn ensure_parent_dir(path: &Path) -> Result<()> {
@@ -94,50 +94,4 @@ pub(super) fn validate_output_writable(path: &Path) -> Result<()> {
         .open(path)
         .wrap_err_with(|| format!("output `{}` must be writable", path.display()))?;
     Ok(())
-}
-/// Refuse to follow a final-component symlink when opening an output.
-#[cfg(unix)]
-pub(super) fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-/// Refuse to follow a final-component symlink when opening an output.
-#[cfg(not(unix))]
-pub(super) fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-/// Platform `O_NOFOLLOW` bit (zero where no such flag exists).
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-/// Platform `O_NOFOLLOW` bit (zero where no such flag exists).
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-/// Platform `O_NOFOLLOW` bit (zero where no such flag exists).
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }

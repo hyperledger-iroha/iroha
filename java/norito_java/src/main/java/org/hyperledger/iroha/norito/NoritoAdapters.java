@@ -6,7 +6,6 @@ package org.hyperledger.iroha.norito;
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -199,14 +198,10 @@ public final class NoritoAdapters {
     @Override
     public void encode(NoritoEncoder encoder, byte[] value) {
       encoder.writeLength(value.length, false);
-      if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-        encodePacked(encoder, value);
-      } else {
-        boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-        for (byte b : value) {
-          encoder.writeLength(1, compactLen);
-          encoder.writeByte(b);
-        }
+      boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      for (byte b : value) {
+        encoder.writeLength(1, compactLen);
+        encoder.writeByte(b);
       }
     }
 
@@ -217,9 +212,6 @@ public final class NoritoAdapters {
         throw new IllegalArgumentException("Byte vector too large");
       }
       int count = (int) length;
-      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-        return decodePacked(decoder, count);
-      }
       byte[] out = new byte[count];
       boolean compactLen = decoder.compactLenActive();
       for (int i = 0; i < count; i++) {
@@ -246,65 +238,6 @@ public final class NoritoAdapters {
     @Override
     public boolean isSelfDelimiting() {
       return true;
-    }
-
-    private void encodePacked(NoritoEncoder encoder, byte[] value) {
-      long offset = 0;
-      encoder.writeUInt(offset, 64);
-      for (int i = 0; i < value.length; i++) {
-        offset += 1;
-        encoder.writeUInt(offset, 64);
-      }
-      encoder.writeBytes(value);
-    }
-
-    private byte[] decodePacked(NoritoDecoder decoder, int count) {
-      if (count == 0) {
-        int tailLen = decoder.remaining();
-        if (tailLen == 0) {
-          return new byte[0];
-        }
-        if (tailLen >= Long.BYTES) {
-          byte[] prefix = decoder.readBytes(Long.BYTES);
-          for (byte b : prefix) {
-            if (b != 0) {
-              throw new IllegalArgumentException(
-                  "Packed byte vector declared zero length but carried trailing data");
-            }
-          }
-          return new byte[0];
-        }
-        throw new IllegalArgumentException(
-            "Packed byte vector declared zero length but carried trailing data");
-      }
-
-      List<Integer> sizes = new ArrayList<>(count);
-      long previous = decoder.readUInt(64);
-      if (previous != 0) {
-        throw new IllegalArgumentException("Packed offsets must start at 0");
-      }
-      for (int i = 0; i < count; i++) {
-        long current = decoder.readUInt(64);
-        long delta = current - previous;
-        if (delta < 0 || delta > Integer.MAX_VALUE) {
-          throw new IllegalArgumentException("Invalid packed offsets");
-        }
-        sizes.add((int) delta);
-        previous = current;
-      }
-
-      byte[] out = new byte[count];
-      for (int i = 0; i < count; i++) {
-        int size = sizes.get(i);
-        byte[] payload = decoder.readBytes(size);
-        NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
-        int value = child.readByte();
-        if (child.remaining() != 0) {
-          throw new IllegalArgumentException("Packed byte element did not consume all bytes");
-        }
-        out[i] = (byte) value;
-      }
-      return out;
     }
   }
 
@@ -487,35 +420,13 @@ public final class NoritoAdapters {
     @Override
     public void encode(NoritoEncoder encoder, List<T> values) {
       encoder.writeLength(values.size(), false);
-      if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-        encodePacked(encoder, values);
-      } else {
-        boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-        for (T value : values) {
-          NoritoEncoder child = encoder.childEncoder();
-          element.encode(child, value);
-          byte[] payload = child.toByteArray();
-          encoder.writeLength(payload.length, compact);
-          encoder.writeBytes(payload);
-        }
-      }
-    }
-
-    private void encodePacked(NoritoEncoder encoder, List<T> values) {
-      List<byte[]> encodedElements = new ArrayList<>(values.size());
+      boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
       for (T value : values) {
         NoritoEncoder child = encoder.childEncoder();
         element.encode(child, value);
-        encodedElements.add(child.toByteArray());
-      }
-      long offset = 0;
-      encoder.writeUInt(offset, 64);
-      for (byte[] chunk : encodedElements) {
-        offset += chunk.length;
-        encoder.writeUInt(offset, 64);
-      }
-      for (byte[] chunk : encodedElements) {
-        encoder.append(chunk);
+        byte[] payload = child.toByteArray();
+        encoder.writeLength(payload.length, compact);
+        encoder.writeBytes(payload);
       }
     }
 
@@ -526,9 +437,6 @@ public final class NoritoAdapters {
         throw new IllegalArgumentException("Sequence too large");
       }
       int count = (int) length;
-      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-        return decodePacked(decoder, count);
-      }
       List<T> values = new ArrayList<>(count);
       boolean compact = decoder.compactLenActive();
       for (int i = 0; i < count; i++) {
@@ -551,54 +459,6 @@ public final class NoritoAdapters {
     public boolean isSelfDelimiting() {
       return true;
     }
-
-    private List<T> decodePacked(NoritoDecoder decoder, int count) {
-      if (count == 0) {
-        int tailLen = decoder.remaining();
-        if (tailLen == 0) {
-          return Collections.emptyList();
-        }
-        if (tailLen >= Long.BYTES) {
-          byte[] prefix = decoder.readBytes(Long.BYTES);
-          for (byte b : prefix) {
-            if (b != 0) {
-              throw new IllegalArgumentException(
-                  "Packed sequence declared zero length but carried trailing data");
-            }
-          }
-          return Collections.emptyList();
-        }
-        throw new IllegalArgumentException(
-            "Packed sequence declared zero length but carried trailing data");
-      }
-
-      List<Integer> sizes = new ArrayList<>(count);
-      long previous = decoder.readUInt(64);
-      if (previous != 0) {
-        throw new IllegalArgumentException("Packed offsets must start at 0");
-      }
-      for (int i = 0; i < count; i++) {
-        long current = decoder.readUInt(64);
-        long delta = current - previous;
-        if (delta < 0 || delta > Integer.MAX_VALUE) {
-          throw new IllegalArgumentException("Invalid packed offsets");
-        }
-        sizes.add((int) delta);
-        previous = current;
-      }
-
-      List<T> values = new ArrayList<>(count);
-      for (int size : sizes) {
-        byte[] chunk = decoder.readBytes(size);
-        NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags());
-        T value = element.decode(child);
-        if (child.remaining() != 0) {
-          throw new IllegalArgumentException("Packed element did not consume all bytes");
-        }
-        values.add(value);
-      }
-      return values;
-    }
   }
 
   private static final class MapAdapter<K, V> implements TypeAdapter<Map<K, V>> {
@@ -614,11 +474,7 @@ public final class NoritoAdapters {
     public void encode(NoritoEncoder encoder, Map<K, V> map) {
       List<Map.Entry<K, V>> entries = sortedEntries(map);
       encoder.writeLength(entries.size(), false);
-      if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-        encodePacked(encoder, entries);
-      } else {
-        encodeDelimited(encoder, entries);
-      }
+      encodeDelimited(encoder, entries);
     }
 
     @Override
@@ -627,11 +483,7 @@ public final class NoritoAdapters {
       if (length > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("Map too large");
       }
-      int count = (int) length;
-      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
-        return decodePacked(decoder, count);
-      }
-      return decodeDelimited(decoder, count);
+      return decodeDelimited(decoder, (int) length);
     }
 
     @Override
@@ -656,27 +508,6 @@ public final class NoritoAdapters {
           throw new IllegalArgumentException("Map value too large");
         }
         V decodedValue = decodeSizedField(value, decoder, (int) valueLen);
-        map.put(decodedKey, decodedValue);
-      }
-      return map;
-    }
-
-    private Map<K, V> decodePacked(final NoritoDecoder decoder, final int count) {
-      List<Integer> keySizes = readFixedOffsets(decoder, count, "Map key");
-      List<Integer> valueSizes = readFixedOffsets(decoder, count, "Map value");
-
-      List<K> keys = new ArrayList<>(count);
-      for (int size : keySizes) {
-        keys.add(decodeSizedField(key, decoder, size));
-      }
-
-      Map<K, V> map = new LinkedHashMap<>(count);
-      for (int i = 0; i < count; i++) {
-        V decodedValue = decodeSizedField(value, decoder, valueSizes.get(i));
-        K decodedKey = keys.get(i);
-        if (map.containsKey(decodedKey)) {
-          throw new IllegalArgumentException("Duplicate map key");
-        }
         map.put(decodedKey, decodedValue);
       }
       return map;
@@ -723,34 +554,6 @@ public final class NoritoAdapters {
       }
     }
 
-    private void encodePacked(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
-      if (entries.isEmpty()) {
-        writeFixedOffsets(encoder, List.of());
-        writeFixedOffsets(encoder, List.of());
-        return;
-      }
-      List<Integer> keySizes = new ArrayList<>(entries.size());
-      List<Integer> valueSizes = new ArrayList<>(entries.size());
-      List<byte[]> keyPayloads = new ArrayList<>(entries.size());
-      List<byte[]> valuePayloads = new ArrayList<>(entries.size());
-      for (Map.Entry<K, V> entry : entries) {
-        byte[] keyBytes = encodeField(encoder, key, entry.getKey());
-        byte[] valueBytes = encodeField(encoder, value, entry.getValue());
-        keySizes.add(keyBytes.length);
-        valueSizes.add(valueBytes.length);
-        keyPayloads.add(keyBytes);
-        valuePayloads.add(valueBytes);
-      }
-      writeFixedOffsets(encoder, keySizes);
-      writeFixedOffsets(encoder, valueSizes);
-      for (byte[] keyBytes : keyPayloads) {
-        encoder.append(keyBytes);
-      }
-      for (byte[] valueBytes : valuePayloads) {
-        encoder.append(valueBytes);
-      }
-    }
-
     private byte[] encodeField(
         final NoritoEncoder encoder, final TypeAdapter<?> adapter, final Object value) {
       NoritoEncoder child = encoder.childEncoder();
@@ -767,34 +570,6 @@ public final class NoritoAdapters {
         throw new IllegalArgumentException("Map entry did not consume all bytes");
       }
       return value;
-    }
-
-    private List<Integer> readFixedOffsets(
-        final NoritoDecoder decoder, final int count, final String label) {
-      List<Integer> sizes = new ArrayList<>(count);
-      long previous = decoder.readUInt(64);
-      if (previous != 0) {
-        throw new IllegalArgumentException(label + " offsets must start at 0");
-      }
-      for (int i = 0; i < count; i++) {
-        long current = decoder.readUInt(64);
-        long delta = current - previous;
-        if (delta < 0 || delta > Integer.MAX_VALUE) {
-          throw new IllegalArgumentException("Invalid " + label + " offsets");
-        }
-        sizes.add((int) delta);
-        previous = current;
-      }
-      return sizes;
-    }
-
-    private void writeFixedOffsets(final NoritoEncoder encoder, final List<Integer> sizes) {
-      long offset = 0;
-      encoder.writeUInt(offset, 64);
-      for (int size : sizes) {
-        offset += size;
-        encoder.writeUInt(offset, 64);
-      }
     }
   }
 
@@ -870,106 +645,23 @@ public final class NoritoAdapters {
 
     @Override
     public void encode(NoritoEncoder encoder, Object value) {
-      if ((encoder.flags() & NoritoHeader.PACKED_STRUCT) != 0
-          && (encoder.flags() & NoritoHeader.FIELD_BITSET) != 0) {
-        encodePacked(encoder, value);
-        return;
-      }
       for (StructField<?> field : fields) {
         Object fieldValue = extractField(value, field.name());
         encodeAdapter(field.adapter(), encoder, fieldValue);
       }
     }
 
-    private void encodePacked(NoritoEncoder encoder, Object value) {
-      List<byte[]> payloads = new ArrayList<>(fields.size());
-      int bitset = 0;
-      for (int i = 0; i < fields.size(); i++) {
-        StructField<?> field = fields.get(i);
-        Object fieldValue = extractField(value, field.name());
-        NoritoEncoder child = encoder.childEncoder();
-        encodeAdapter(field.adapter(), child, fieldValue);
-        byte[] bytes = child.toByteArray();
-        payloads.add(bytes);
-        if (needsExplicitSize(field.adapter())) {
-          bitset |= (1 << i);
-        }
-      }
-      int bitsetBytes = (fields.size() + 7) / 8;
-      for (int i = 0; i < bitsetBytes; i++) {
-        encoder.writeByte((bitset >> (i * 8)) & 0xFF);
-      }
-      for (int i = 0; i < fields.size(); i++) {
-        if ((bitset & (1 << i)) != 0) {
-          encoder.append(Varint.encode(payloads.get(i).length));
-        }
-      }
-      for (byte[] bytes : payloads) {
-        encoder.append(bytes);
-      }
-    }
-
     @Override
     public Object decode(NoritoDecoder decoder) {
       Map<String, Object> values = new LinkedHashMap<>();
-      if ((decoder.flags() & NoritoHeader.PACKED_STRUCT) != 0
-          && (decoder.flags() & NoritoHeader.FIELD_BITSET) != 0) {
-        decodePacked(decoder, values);
-      } else {
-        for (StructField<?> field : fields) {
-          Object value = decodeAdapter(field.adapter(), decoder);
-          values.put(field.name(), value);
-        }
+      for (StructField<?> field : fields) {
+        Object value = decodeAdapter(field.adapter(), decoder);
+        values.put(field.name(), value);
       }
       if (factory != null) {
         return factory.create(values);
       }
       return values;
-    }
-
-    private void decodePacked(NoritoDecoder decoder, Map<String, Object> values) {
-      int bitsetBytes = (fields.size() + 7) / 8;
-      byte[] bitsetData = decoder.readBytes(bitsetBytes);
-      int bitset = 0;
-      for (int i = 0; i < bitsetBytes; i++) {
-        bitset |= (bitsetData[i] & 0xFF) << (i * 8);
-      }
-      List<Integer> encodedSizes = new ArrayList<>();
-      for (int i = 0; i < fields.size(); i++) {
-        if ((bitset & (1 << i)) != 0) {
-          long size = decoder.readVarint();
-          if (size > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Packed field too large");
-          }
-          encodedSizes.add((int) size);
-        } else {
-          encodedSizes.add(null);
-        }
-      }
-      for (int i = 0; i < fields.size(); i++) {
-        StructField<?> field = fields.get(i);
-        TypeAdapter<?> adapter = field.adapter();
-        Integer size = encodedSizes.get(i);
-        Object value;
-        if (size != null) {
-          byte[] chunk = decoder.readBytes(size);
-          NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags());
-          value = decodeAdapter(adapter, child);
-          if (child.remaining() != 0) {
-            throw new IllegalArgumentException("Packed field did not consume all bytes");
-          }
-        } else {
-          value = decodeAdapter(adapter, decoder);
-        }
-        values.put(field.name(), value);
-      }
-    }
-
-    private static boolean needsExplicitSize(TypeAdapter<?> adapter) {
-      if (adapter.fixedSize() >= 0) {
-        return false;
-      }
-      return !adapter.isSelfDelimiting();
     }
 
     private static Object extractField(Object value, String name) {

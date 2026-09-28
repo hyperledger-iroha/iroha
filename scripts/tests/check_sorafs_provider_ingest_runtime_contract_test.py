@@ -5,14 +5,149 @@ import re
 
 import pytest
 
-from scripts.tests.executor_visitor_delegation_source_test import (
-    mask_rust,
-    matching_delimiter,
-    preceding_attributes,
-)
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def mask_rust(source: str) -> str:
+    """Blank Rust comments and literals while retaining delimiters and newlines."""
+    masked = list(source)
+    index = 0
+    state = "code"
+    block_depth = 0
+    raw_hashes = 0
+    while index < len(source):
+        char = source[index]
+        if state == "code":
+            if source.startswith("//", index):
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                state = "line_comment"
+            elif source.startswith("/*", index):
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                block_depth = 1
+                state = "block_comment"
+            elif char == '"':
+                masked[index] = " "
+                index += 1
+                state = "string"
+            elif char == "'":
+                lifetime = (
+                    index + 1 < len(source)
+                    and (source[index + 1].isalpha() or source[index + 1] == "_")
+                    and not (index + 2 < len(source) and source[index + 2] == "'")
+                )
+                if lifetime:
+                    index += 1
+                else:
+                    masked[index] = " "
+                    index += 1
+                    state = "character"
+            elif char == "r":
+                match = re.match(r'r(#+)?"', source[index:])
+                if match:
+                    opener = match.group(0)
+                    raw_hashes = len(match.group(1) or "")
+                    for offset in range(index, index + len(opener)):
+                        masked[offset] = " "
+                    index += len(opener)
+                    state = "raw_string"
+                else:
+                    index += 1
+            else:
+                index += 1
+        elif state == "line_comment":
+            if char == "\n":
+                state = "code"
+            else:
+                masked[index] = " "
+            index += 1
+        elif state == "block_comment":
+            if source.startswith("/*", index):
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                block_depth += 1
+            elif source.startswith("*/", index):
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                block_depth -= 1
+                if block_depth == 0:
+                    state = "code"
+            else:
+                if char != "\n":
+                    masked[index] = " "
+                index += 1
+        elif state in {"string", "character"}:
+            if char == "\\":
+                masked[index] = " "
+                if index + 1 < len(source):
+                    masked[index + 1] = " "
+                index += 2
+            elif (state == "string" and char == '"') or (
+                state == "character" and char == "'"
+            ):
+                masked[index] = " "
+                index += 1
+                state = "code"
+            else:
+                if char != "\n":
+                    masked[index] = " "
+                index += 1
+        else:
+            terminator = '"' + "#" * raw_hashes
+            if source.startswith(terminator, index):
+                for offset in range(index, index + len(terminator)):
+                    masked[offset] = " "
+                index += len(terminator)
+                state = "code"
+            else:
+                if char != "\n":
+                    masked[index] = " "
+                index += 1
+    if state not in {"code", "line_comment"}:
+        raise AssertionError(f"unterminated Rust lexical state: {state}")
+    return "".join(masked)
+
+
+def matching_delimiter(
+    masked: str, opening: int, left: str = "{", right: str = "}"
+) -> int:
+    depth = 0
+    for index in range(opening, len(masked)):
+        depth += (masked[index] == left) - (masked[index] == right)
+        if depth == 0:
+            return index
+    raise AssertionError(f"unclosed {left!r} delimiter at byte {opening}")
+
+
+def preceding_attributes(source: str, position: int) -> list[str]:
+    line_start = source.rfind("\n", 0, position) + 1
+    cursor = line_start
+    reversed_lines: list[str] = []
+    while cursor:
+        end = cursor - 1
+        start = source.rfind("\n", 0, end) + 1
+        line = source[start:end].strip()
+        if line.startswith("///"):
+            reversed_lines.append(line)
+            cursor = start
+            continue
+        if line.endswith("]"):
+            block = [line]
+            block_cursor = start
+            while not block[-1].startswith("#["):
+                block_end = block_cursor - 1
+                block_start = source.rfind("\n", 0, block_end) + 1
+                block.append(source[block_start:block_end].strip())
+                block_cursor = block_start
+            reversed_lines.extend(block)
+            cursor = block_cursor
+            continue
+        break
+    return list(reversed(reversed_lines))
+
+
 NODE_RUNTIME = (
     REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_runtime.rs"
 )

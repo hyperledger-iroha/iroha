@@ -5,9 +5,6 @@ use norito::{
     core::{NoritoDeserialize, NoritoSerialize},
     json::{self, JsonDeserialize, JsonSerialize, Parser},
 };
-#[allow(unused_imports)]
-use std::eprintln;
-use std::string::String;
 /// Arguments to mint rose with args trigger
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MintRoseArgs {
@@ -78,7 +75,6 @@ impl TryFrom<&Json> for MintRoseArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    extern crate std;
     #[test]
     fn mint_rose_args_roundtrip() {
         let args = MintRoseArgs { val: 42 };

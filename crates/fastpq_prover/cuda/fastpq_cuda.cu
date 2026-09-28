@@ -285,6 +285,15 @@ static std::unordered_map<int, PoseidonWorkspace>& poseidon_workspaces() {
     return *workspaces;
 }
 
+// Call only after completion proves exclusive host ownership of this region.
+// Volatile writes keep the erase observable even immediately before release.
+static void wipe_private_host_region(void* memory, size_t bytes) {
+    volatile unsigned char* cursor = static_cast<volatile unsigned char*>(memory);
+    for (size_t index = 0; index < bytes; ++index) cursor[index] = 0;
+}
+
+static cudaError_t clear_idle_device_region(void* memory, size_t bytes);
+
 template <typename T>
 static cudaError_t ensure_workspace_buffer(
     T** buffer,
@@ -298,8 +307,13 @@ static cudaError_t ensure_workspace_buffer(
         return cudaSuccess;
     }
     if (*buffer != nullptr) {
+        // Every caller grows an idle workspace, never an in-flight allocation.
+        // Require completion of the erase before releasing the old capacity.
+        cudaError_t clear_status = clear_idle_device_region(*buffer, *capacity_bytes);
+        if (clear_status != cudaSuccess) return clear_status;
         cudaError_t free_status = cudaFree(*buffer);
         if (free_status != cudaSuccess) {
+            quarantine_cuda_backend();
             return free_status;
         }
         *buffer = nullptr;
@@ -325,8 +339,10 @@ static cudaError_t ensure_pinned_workspace_buffer(
         return cudaSuccess;
     }
     if (*buffer != nullptr) {
+        wipe_private_host_region(*buffer, *capacity_bytes);
         cudaError_t free_status = cudaFreeHost(*buffer);
         if (free_status != cudaSuccess) {
+            quarantine_cuda_backend();
             return free_status;
         }
         *buffer = nullptr;
@@ -460,6 +476,86 @@ static cudaError_t wait_for_stream(cudaStream_t stream) {
         quarantine_cuda_backend();
     }
     return status;
+}
+
+static cudaError_t clear_idle_device_region(void* memory, size_t bytes) {
+    if (memory == nullptr || bytes == 0) return cudaSuccess;
+    cudaStream_t stream = nullptr;
+    cudaError_t status = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    if (status == cudaSuccess) status = cudaMemsetAsync(memory, 0, bytes, stream);
+    if (status == cudaSuccess) status = wait_for_stream(stream);
+    if (status != cudaSuccess) {
+        // A failed erase may still own the allocation. Do not free it or its
+        // stream, and prevent the caller from reusing the retained workspace.
+        quarantine_cuda_backend();
+        return status;
+    }
+    status = cudaStreamDestroy(stream);
+    if (status != cudaSuccess) quarantine_cuda_backend();
+    return status;
+}
+
+// TransformWorkspace and AsyncDispatchBuffers share these private regions.
+// Precondition: the dispatch never started, or its completion was observed.
+// The stream exists and belongs exclusively to this workspace. On error the
+// caller abandons all resources; no erase failure can return a buffer to a pool.
+template <typename Workspace>
+static cudaError_t scrub_completed_transform(Workspace* workspace) {
+    struct Region { void* memory; size_t bytes; };
+    const Region host[] = {
+        {workspace->host_dense, workspace->host_dense_capacity_bytes},
+        {workspace->host_coeffs, workspace->host_coeff_capacity_bytes},
+        {workspace->host_evals, workspace->host_eval_capacity_bytes},
+    };
+    const Region device[] = {
+        {workspace->dense, workspace->dense_capacity_bytes},
+        {workspace->coeffs, workspace->coeff_capacity_bytes},
+        {workspace->evals, workspace->eval_capacity_bytes},
+    };
+    for (const Region& region : host) {
+        if (region.memory != nullptr) wipe_private_host_region(region.memory, region.bytes);
+    }
+    bool queued = false;
+    for (const Region& region : device) {
+        if (region.memory == nullptr || region.bytes == 0) continue;
+        cudaError_t status = cudaMemsetAsync(region.memory, 0, region.bytes, workspace->stream);
+        if (status != cudaSuccess) {
+            quarantine_cuda_backend();
+            return status;
+        }
+        queued = true;
+    }
+    return queued ? wait_for_stream(workspace->stream) : cudaSuccess;
+}
+
+// The older permutation/hash endpoints also receive private prover words. Their
+// public constants can stay cached, but payloads, slices and sponge states cannot.
+static cudaError_t scrub_completed_poseidon(PoseidonWorkspace* workspace) {
+    struct Region { void* device; size_t device_bytes; void* host; size_t host_bytes; };
+    const Region regions[] = {
+        {workspace->payloads, workspace->payload_capacity_bytes,
+         workspace->host_payloads, workspace->host_payload_capacity_bytes},
+        {workspace->slices, workspace->slice_capacity_bytes,
+         workspace->host_slices, workspace->host_slice_capacity_bytes},
+        {workspace->states, workspace->state_capacity_bytes,
+         workspace->host_states, workspace->host_state_capacity_bytes},
+        {workspace->hashes, workspace->hash_capacity_bytes,
+         workspace->host_hashes, workspace->host_hash_capacity_bytes},
+    };
+    for (const Region& region : regions) {
+        if (region.host != nullptr) wipe_private_host_region(region.host, region.host_bytes);
+    }
+    bool queued = false;
+    for (const Region& region : regions) {
+        if (region.device == nullptr || region.device_bytes == 0) continue;
+        cudaError_t status = cudaMemsetAsync(region.device, 0, region.device_bytes, workspace->stream);
+        if (status != cudaSuccess) {
+            quarantine_cuda_backend();
+            return status;
+        }
+        queued = true;
+    }
+    return queued ? wait_for_stream(workspace->stream) : cudaSuccess;
 }
 
 static void abandon_transform_workspace(TransformWorkspace* workspace) {
@@ -787,12 +883,30 @@ static AsyncDispatchBuffers* acquire_async_dispatch_buffers(int device) {
     return new (std::nothrow) AsyncDispatchBuffers(device);
 }
 
-static void release_async_dispatch_buffers(AsyncDispatchBuffers* buffers) {
+static cudaError_t release_async_dispatch_buffers(AsyncDispatchBuffers* buffers) {
     if (buffers == nullptr) {
-        return;
+        return cudaSuccess;
+    }
+    if (cuda_backend_is_quarantined()) {
+        // No destructor owns these raw resources. Preserve uncertain device
+        // ownership by dropping only the small host descriptor.
+        delete buffers;
+        return cudaErrorUnknown;
+    }
+    cudaError_t status = ensure_async_dispatch_stream(buffers);
+    if (status == cudaSuccess) status = scrub_completed_transform(buffers);
+    if (status != cudaSuccess) {
+        quarantine_cuda_backend();
+        delete buffers;
+        return status;
     }
     std::lock_guard<std::mutex> guard(async_dispatch_pool_mutex());
+    if (cuda_backend_is_quarantined()) {
+        delete buffers;
+        return cudaErrorUnknown;
+    }
     async_dispatch_pools()[buffers->device].push_back(buffers);
+    return cudaSuccess;
 }
 
 static void abandon_pending_transform(PendingTransform* pending) {
@@ -834,9 +948,9 @@ static cudaError_t destroy_pending_transform(PendingTransform* pending) {
             return status;
         }
     }
-    release_async_dispatch_buffers(pending->buffers);
+    status = release_async_dispatch_buffers(pending->buffers);
     delete pending;
-    return cudaSuccess;
+    return status;
 }
 
 static cudaError_t create_pending_transform(
@@ -2385,7 +2499,8 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
         return status;
     }
     memcpy(elements, workspace->host_dense, dense_byte_len);
-    return cudaSuccess;
+    status = scrub_completed_transform(workspace);
+    return fail_transform_dispatch(workspace, status);
 }
 
 extern "C" cudaError_t fastpq_bn254_lde_cuda(
@@ -2591,7 +2706,8 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
         return status;
     }
     memcpy(out, workspace->host_evals, eval_byte_len);
-    return cudaSuccess;
+    status = scrub_completed_transform(workspace);
+    return fail_transform_dispatch(workspace, status);
 }
 
 extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t state_count) {
@@ -2676,7 +2792,8 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
         return status;
     }
     memcpy(states, workspace->host_states, byte_len);
-    return cudaSuccess;
+    status = scrub_completed_poseidon(workspace);
+    return fail_poseidon_dispatch(workspace, status);
 }
 
 extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
@@ -2825,7 +2942,8 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         return status;
     }
     memcpy(out_states, workspace->host_states, state_bytes);
-    return cudaSuccess;
+    status = scrub_completed_poseidon(workspace);
+    return fail_poseidon_dispatch(workspace, status);
 }
 
 extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
@@ -3039,7 +3157,8 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         return status;
     }
     memcpy(out_hashes, workspace->host_hashes, output_bytes);
-    return cudaSuccess;
+    status = scrub_completed_poseidon(workspace);
+    return fail_poseidon_dispatch(workspace, status);
 }
 
 // This path retains the exact failed workspace rather than discarding its

@@ -47,10 +47,7 @@ where
         &expected[6..22],
         norito::schema::identity::frame_hash::<T>().as_slice()
     );
-    for ambient in [
-        0,
-        norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
-    ] {
+    for ambient in [0, norito::core::header_flags::COMPACT_LEN] {
         let _flags = norito::core::DecodeFlagsGuard::enter(ambient);
         let actual = norito::encode_canonical(value).expect("canonical writer");
         assert_eq!(actual, expected, "{owner}/{shape}");

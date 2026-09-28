@@ -66,17 +66,7 @@ fn bare_bytes(value: &dyn SerializePayload, flags: u8) -> Vec<u8> {
 }
 #[test]
 fn borrowed_block_signature_codec_preserves_tuple_wire_bytes() {
-    const FLAGS: [u8; 6] = [
-        0,
-        header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ,
-        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
-        header_flags::PACKED_SEQ
-            | header_flags::PACKED_STRUCT
-            | header_flags::FIELD_BITSET
-            | header_flags::COMPACT_LEN,
-    ];
+    const FLAGS: [u8; 2] = [0, header_flags::COMPACT_LEN];
     let cases = [
         ("empty", Vec::new()),
         ("small", vec![0x11, 0xA5, 0x7F]),

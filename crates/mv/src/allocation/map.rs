@@ -78,6 +78,9 @@ impl<K: Key, V: Value, P: CopyPolicy<K, V>> ClonePlanning<K, V> for Provider<K, 
 
 type Mode<K, V, P> = Prepaid<Provider<K, V, P>>;
 
+/// A refused reacquisition: the unchanged owner and why it was refused.
+type RefusedOwner<K, V, P> = (BudgetOwned<K, V, P>, OwnerRefusal);
+
 /// A physical map retaining the original pool selected before construction.
 ///
 /// No existing unbound map can be imported, and the raw mutable map cannot
@@ -131,7 +134,7 @@ impl<K: Key, V: Value, P: CopyPolicy<K, V>> BudgetMap<K, V, P> {
     pub fn try_write_owned(
         &self,
         owned: BudgetOwned<K, V, P>,
-    ) -> Result<BudgetWriter<'_, K, V, P>, (BudgetOwned<K, V, P>, OwnerRefusal)> {
+    ) -> Result<BudgetWriter<'_, K, V, P>, RefusedOwner<K, V, P>> {
         if !self.budget.same_pool(&owned.budget) {
             return Err((owned, OwnerRefusal::ForeignPool));
         }

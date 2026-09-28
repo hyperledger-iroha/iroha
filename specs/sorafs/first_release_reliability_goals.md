@@ -219,3 +219,18 @@ goals have implementation and regression evidence.
   corrected regressions are underway. The codec guard and 79 capacity, provider
   ingestion and TLS contract tests pass again. Four-validator qualification and
   current compact-checkpoint schema regeneration remain outstanding.
+- Kagami builds successfully and regenerates both canonical schema artifacts;
+  a second generation confirms both are current, including compact checkpoint
+  decision closure. The next native compile includes the schema library tests.
+  A stray brace left by a shared SDK merge is removed without restoring its
+  retired V2 test. The publication Parliament corridor now shares current
+  certificate verification and funds citizens through signed transfers; unrelated
+  mandatory-beacon epoch/KAGEMUSHA test migration remains a broader-suite debt.
+  Signed test adverts now cover the bounded repair window, and the corruption
+  workflow rejects a valid duplicate local chunk before requiring remote repair.
+- Strict focused Clippy passes for `sorafs_car`, `sorafs_node` and
+  `sorafs_orchestrator` (`--lib --no-deps -- -D warnings`). Two native rebuilds
+  stop in concurrently changing SCCP imports and P256 trace types, before fresh
+  SoraFS test executables are produced. The other work has corrected those
+  sources; the native retry is active. These compile failures are retained in
+  the validation record and do not replace the outstanding runtime acceptance.

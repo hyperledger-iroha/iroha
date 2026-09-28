@@ -218,7 +218,7 @@ pub fn try_chunk_fetch_plan_to_json(plan: &CarBuildPlan) -> Result<Value, FetchP
     obj.insert("schema".into(), Value::from(CHUNK_FETCH_PLAN_SCHEMA_V1));
     obj.insert(
         "payload_digest_blake3_hex".into(),
-        Value::from(digest_to_hex(plan.payload_digest.as_bytes())),
+        Value::from(hex::encode(plan.payload_digest.as_bytes())),
     );
     obj.insert(
         "chunk_fetch_specs".into(),
@@ -246,7 +246,7 @@ fn chunk_fetch_specs_to_array(specs: &[ChunkFetchSpec]) -> Vec<Value> {
             obj.insert("length".into(), Value::from(spec.length as u64));
             obj.insert(
                 "digest_blake3".into(),
-                Value::from(digest_to_hex(&spec.digest)),
+                Value::from(hex::encode(&spec.digest)),
             );
             Value::Object(obj)
         })
@@ -348,15 +348,6 @@ fn decode_hex_nibble(byte: u8) -> Result<u8, ()> {
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         _ => Err(()),
     }
-}
-fn digest_to_hex(digest: &[u8; 32]) -> String {
-    const TABLE: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(digest.len() * 2);
-    for &byte in digest {
-        out.push(TABLE[(byte >> 4) as usize] as char);
-        out.push(TABLE[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 #[cfg(test)]
 mod tests {

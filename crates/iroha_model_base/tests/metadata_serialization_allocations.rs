@@ -153,24 +153,19 @@ fn metadata_streaming_allocations_do_not_scale_with_json_payload() {
     assert_eq!(small_fixed, AllocationStats::default());
     assert_eq!(large_fixed, small_fixed);
 
-    let (_, small_packed) = serialize_preallocated(&small, header_flags::PACKED_SEQ);
-    let (_, large_packed) = serialize_preallocated(&large, header_flags::PACKED_SEQ);
-    let offset_lengths_bytes = ENTRY_COUNT * core::mem::size_of::<usize>();
-    assert_eq!(
-        small_packed,
-        AllocationStats {
-            count: 1,
-            requested_bytes: offset_lengths_bytes,
-            largest_request: offset_lengths_bytes,
-        }
-    );
-    assert_eq!(large_packed, small_packed);
+    let (small_compact_bytes, small_compact) =
+        serialize_preallocated(&small, header_flags::COMPACT_LEN);
+    let (large_compact_bytes, large_compact) =
+        serialize_preallocated(&large, header_flags::COMPACT_LEN);
+    assert!(large_compact_bytes.len() > small_compact_bytes.len());
+    assert_eq!(small_compact, AllocationStats::default());
+    assert_eq!(large_compact, small_compact);
 }
 
 #[test]
 fn empty_metadata_serialization_needs_no_heap_scratch() {
     let empty = Metadata::default();
-    for flags in [0, header_flags::PACKED_SEQ] {
+    for flags in [0, header_flags::COMPACT_LEN] {
         let (_, stats) = serialize_preallocated(&empty, flags);
         assert_eq!(stats, AllocationStats::default());
     }
@@ -187,12 +182,7 @@ fn allocation_fixtures_preserve_sequence_wire_and_roundtrip() {
             .iter()
             .map(|(name, json)| (name.clone(), json.clone()))
             .collect();
-        for requested in [
-            0,
-            header_flags::COMPACT_LEN,
-            header_flags::PACKED_SEQ,
-            header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
-        ] {
+        for requested in [0, header_flags::COMPACT_LEN] {
             let _flags = DecodeFlagsGuard::enter(requested);
             let (payload, flags) = norito::codec::encode_with_header_flags(&metadata);
             assert_eq!(

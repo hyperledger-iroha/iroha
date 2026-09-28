@@ -48,13 +48,11 @@ fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
             "#,
         )
     };
-    for value in [r#"Json::parse("{}")"#] {
-        let source = trigger_source(value);
-        let program = parse(&source).expect("canonical Json::parse metadata should parse");
-        analyze(&program).unwrap_or_else(|error| {
-            panic!("canonical trigger metadata `{value}` failed: {error:?}")
-        });
-    }
+    let value = r#"Json::parse("{}")"#;
+    let program =
+        parse(&trigger_source(value)).expect("canonical Json::parse metadata should parse");
+    analyze(&program)
+        .unwrap_or_else(|error| panic!("canonical trigger metadata `{value}` failed: {error:?}"));
     for (value, code, message) in [
         (
             r#"Json::parse(value: "{}")"#,

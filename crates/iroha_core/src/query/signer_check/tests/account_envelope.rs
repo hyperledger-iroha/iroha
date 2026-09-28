@@ -83,8 +83,7 @@ fn account_envelope_preflight_matches_real_signed_external_exact_byte_ceiling() 
             original.len() < FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1,
             "the envelope, not just its payload, reaches the ceiling"
         );
-        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-        for flags in [0, COMPACT_LEN | FIELD_BITSET | PACKED_SEQ | PACKED_STRUCT] {
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
             let _layout = norito::core::DecodeFlagsGuard::enter(flags);
             let result = validate_final_promotion_account_transaction_envelope_v1(&payload);
             assert_eq!(
