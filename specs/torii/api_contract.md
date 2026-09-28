@@ -404,6 +404,30 @@ intended exposure boundary, while the current single-listener implementation
 continues to enforce operator and diagnostic restrictions through
 authentication and ingress policy.
 
+## Asset read visibility
+
+Asset lists require the definition's immutable `owning_domain` to resolve to
+a dataspace visible to the reader. Holdings additionally require access to the
+holder account and, for a dataspace-scoped balance, its balance dataspace.
+`AssetBalancePolicy::Global` describes balance partitioning; it does not grant
+read access or imply that a definition has no owning domain. An alias does not
+replace the definition's authoritative ownership.
+
+Public genesis currency definitions, including XOR and Digital Shekel, have an
+owning domain in the universal dataspace while retaining global balances. Genuinely unscoped
+definitions remain visible only with `CanReadAllLedgerData`; ordinary readers
+do not gain access merely because every configured dataspace is public.
+
+Signed account-assets reads retain the caller's current global-read permission
+while restricting holdings to the exact requested account. A full-ledger grant
+does not expand this selector to other accounts. Revocation
+is checked on subsequent reads. Each routed producer emits only its concrete
+balance buckets: global balances belong to the universal route, while an
+explicitly scoped balance belongs to that dataspace, independently of the
+definition's owning domain. These rules apply to account asset GET/query
+routes and the same definition visibility governs asset-definition and explorer
+lists.
+
 ## Transaction status privacy
 
 `GET /v1/pipeline/transactions/status` is intentionally a public, status-only

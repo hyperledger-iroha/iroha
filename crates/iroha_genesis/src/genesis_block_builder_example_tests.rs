@@ -1,4 +1,60 @@
 #[test]
+fn genesis_domain_builder_assets_retain_registered_owning_domains() -> Result<()> {
+    use iroha_data_model::isi::register::RegisterBox;
+
+    init_instruction_registry();
+    let domains = [
+        DomainId::try_new("wonderland", "universal")?,
+        DomainId::try_new("garden", "universal")?,
+    ];
+    let mut builder =
+        GenesisBuilder::new_without_executor(ChainId::from("genesis-domain-asset-ownership"), ".");
+    for domain in &domains {
+        builder = builder
+            .domain(domain.clone())
+            .asset("coin".parse()?, NumericSpec::fractional(2))
+            .finish_domain();
+    }
+    let manifest = builder.build_raw_for_test();
+    let json = norito::json::to_json(&manifest)?;
+    let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
+    let mut registered_domains = std::collections::BTreeSet::new();
+    let mut registered_assets = std::collections::BTreeSet::new();
+    for instruction in decoded.instructions() {
+        match instruction.as_any().downcast_ref::<RegisterBox>() {
+            Some(RegisterBox::Domain(register)) => {
+                registered_domains.insert(register.object.id.clone());
+            }
+            Some(RegisterBox::AssetDefinition(register)) => {
+                let definition = &register.object;
+                let domain = definition
+                    .owning_domain
+                    .as_ref()
+                    .expect("domain-builder assets require explicit ownership");
+                assert!(
+                    registered_domains.contains(domain),
+                    "owning domain must be registered first"
+                );
+                assert_eq!(
+                    definition.id,
+                    AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse()?),
+                );
+                assert_eq!(definition.spec, NumericSpec::fractional(2));
+                assert_eq!(
+                    definition.balance_scope_policy,
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                );
+                registered_assets.insert(definition.id.clone());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(registered_domains, domains.into_iter().collect());
+    assert_eq!(registered_assets.len(), 2);
+    Ok(())
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn genesis_block_builder_example() -> Result<()> {
     let public_key: std::collections::HashMap<&'static str, PublicKey> = [
@@ -127,7 +183,7 @@ fn genesis_block_builder_example() -> Result<()> {
                 ),
                 "hats".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(domain_id),
             ))
             .into()
         );

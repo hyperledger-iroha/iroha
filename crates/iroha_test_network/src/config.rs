@@ -951,17 +951,19 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let soracloud_bootstrap_accounts =
         BTreeSet::from([alice_id.clone(), bob_id.clone(), carpenter_id.clone()]);
     builder = builder.next_transaction();
+    // The fixture domain is already registered and remains genesis-owned;
+    // public asset visibility must not depend on the later optional fee bootstrap.
     builder = builder.append_instruction(Register::asset_definition(AssetDefinition::numeric(
         agent_wallet_asset_definition.clone(),
         "soracloud_agent_wallet".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(test_domain_id.clone()),
     )));
     builder = builder.append_instruction(Register::asset_definition(AssetDefinition::numeric(
         hf_shared_lease_asset_definition.clone(),
         "soracloud_hf_lease".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(test_domain_id),
     )));
     for account_id in soracloud_bootstrap_accounts {
         builder = builder.append_instruction(Mint::asset_quantity(
@@ -1760,6 +1762,65 @@ mod tests {
             "genesis transactions should execute successfully"
         );
     }
+    #[test]
+    fn minimal_genesis_assets_have_registered_owning_domains() {
+        use iroha_data_model::isi::RegisterBox;
+
+        init_instruction_registry();
+        let (topology, entries) = genesis_committee();
+        let (block, _, _, _) = build_minimal_genesis_unexecuted(
+            Vec::new(),
+            topology,
+            entries,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        );
+        let expected_domains = BTreeMap::from([
+            ("rose", "wonderland.universal"),
+            ("camomile", "wonderland.universal"),
+            ("cabbage", "garden_of_live_flowers.universal"),
+            ("xor", "domain.universal"),
+            ("MAY", "and.universal"),
+            ("soracloud_agent_wallet", "domain.universal"),
+            ("soracloud_hf_lease", "domain.universal"),
+        ]);
+        let mut domains = BTreeSet::new();
+        let mut assets = BTreeSet::new();
+        for transaction in block.0.external_transactions() {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                continue;
+            };
+            for instruction in instructions {
+                match instruction.as_any().downcast_ref::<RegisterBox>() {
+                    Some(RegisterBox::Domain(register)) => {
+                        assert!(domains.insert(register.object.id.clone()));
+                    }
+                    Some(RegisterBox::AssetDefinition(register)) => {
+                        let definition = &register.object;
+                        let owner = definition
+                            .owning_domain
+                            .as_ref()
+                            .expect("fixture assets require an explicit public domain");
+                        assert!(
+                            domains.contains(owner),
+                            "owning domain must be registered first"
+                        );
+                        assert_eq!(
+                            expected_domains.get(definition.name.as_str()).copied(),
+                            Some(owner.to_string().as_str()),
+                        );
+                        assert_eq!(
+                            definition.balance_scope_policy,
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                        );
+                        assets.insert(definition.name.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(assets.len(), expected_domains.len());
+    }
+
     #[test]
     fn minimal_genesis_seeds_neutral_first_release_hijiri_parameters() {
         init_instruction_registry();

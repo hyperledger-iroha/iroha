@@ -865,19 +865,25 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
     super::super::init_instruction_registry();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../defaults/kagami/iroha3-dev/genesis.template.json");
-    let template: Value = norito::json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let template: Value = norito::json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let fields = template.as_object().unwrap();
     let discriminant: u16 =
         norito::json::value::from_value(fields["chain_discriminant"].clone()).unwrap();
     let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
     let definition: AssetDefinitionId = staking::stake_asset_id().parse().unwrap();
     assert_eq!(definition.to_string(), fees::fee_asset_id());
+    let manifest = super::super::GenesisSourceTemplate::from_path(&path)
+        .expect("development source template")
+        .materialize(
+            super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            Some(definition.clone()),
+        )
+        .expect("materialize the development template's explicit staking XOR selection");
     let escrow = parse_account_id(&staking::stake_escrow_account_id(), "staking escrow").unwrap();
     let mut registered = false;
     let mut prefunded = std::collections::BTreeMap::new();
     let mut registrations = 0;
-    for value in fields["transactions"].as_array().unwrap() {
-        let transaction: RawGenesisTx = norito::json::value::from_value(value.clone()).unwrap();
+    for transaction in manifest.transactions() {
         if let Some(parameters) = &transaction.parameters {
             let custom = parameters
                 .custom()
@@ -886,7 +892,7 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
             let npos = super::super::SumeragiNposParameters::from_custom_parameter(custom).unwrap();
             assert_eq!(npos.xor_asset_definition_id, definition);
         }
-        for instruction in transaction.instructions {
+        for instruction in &transaction.instructions {
             if let Some(RegisterBox::AssetDefinition(register)) =
                 instruction.as_any().downcast_ref::<RegisterBox>()
             {
@@ -997,19 +1003,28 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         ("../../configs/soranexus/nexus/genesis.template.json", 5),
         ("../../configs/soranexus/taira/genesis.template.json", 5),
     ] {
-        // Public Nexus forbids the Taira XOR definition; its operator provisions a mainnet one.
-        let xor = if path.contains("nexus/") {
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+        let template = super::super::GenesisSourceTemplate::from_path(root.join(path))
+            .unwrap_or_else(|error| panic!("{path}: {error:?}"));
+        // Public network identity determines the XOR contract, independently of its source path.
+        let xor = match template.value["chain"]
+            .as_str()
+            .expect("source template chain")
+        {
+            "fc56984b-2be7-431d-840e-21514d1883f0" => {
+                AssetDefinitionId::parse_address_literal("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
+                    .expect("canonical Taira XOR")
+            }
+            "00000000-0000-0000-0000-000000000753" => AssetDefinitionId::derive_from_components(
                 DomainId::parse_fully_qualified("mainnet-fixture.universal")
                     .expect("fixture domain"),
                 "xor".parse().expect("fixture asset"),
-            )
-        } else {
-            iroha_data_model::parameter::system::SumeragiNposParameters::default()
-                .xor_asset_definition_id
+            ),
+            _ => {
+                iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                    .xor_asset_definition_id
+            }
         };
-        let manifest = super::super::GenesisSourceTemplate::from_path(root.join(path))
-            .unwrap_or_else(|error| panic!("{path}: {error:?}"))
+        let manifest = template
             .materialize(
                 super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
                 Some(xor),

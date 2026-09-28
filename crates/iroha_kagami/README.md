@@ -102,6 +102,11 @@ into the output directory.
   belong to the supplied genesis authority; localnet operator grants and optional
   sample assets belong to the generated runtime operator. Gas custody uses a
   protocol-derived non-signing account.
+- Localnet asset definitions always name an owning domain, registered before
+  the definition. USD, sample and requested assets use `wonderland.universal`;
+  public XOR and Digital Shekel use `universal.universal`. Their balances remain
+  `Global`. Owning domains determine Torii read visibility independently of
+  balance scope, asset aliases and the definition's owner account.
 - The generated `client.toml` operator is funded and receives
   `CanManageSmartContractCode` and `CanGrantSmartContractCodeManagement` for
   privileged artifact administration. Registered, funded developers can create

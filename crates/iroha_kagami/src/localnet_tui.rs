@@ -170,7 +170,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                     id,
                     name,
                     alias: None,
-                    owning_domain: Some(localnet_user_asset_domain()),
+                    owning_domain: localnet_user_asset_domain(),
                     owned_by: ALICE_ID.clone(),
                     mint_to: ALICE_ID.clone(),
                     quantity: qty,

@@ -122,6 +122,19 @@ fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
         1,
         "one canonical Digital Shekel definition"
     );
+    let universal_domain =
+        DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN).expect("universal domain");
+    for id in [&digital_shekel_id, &localnet_xor_asset_definition_id()] {
+        let definition = definitions
+            .iter()
+            .find(|definition| &definition.id == id)
+            .expect("public currency definition");
+        assert_eq!(definition.owning_domain.as_ref(), Some(&universal_domain));
+        assert_eq!(
+            definition.balance_scope_policy,
+            iroha_data_model::asset::AssetBalancePolicy::Global
+        );
+    }
     let template: json::Value = json::from_str(include_str!(
         "../../../../../configs/soranexus/taira/genesis.template.json"
     ))
@@ -973,7 +986,7 @@ fn generated_configs_for_user_localnet_parse() {
             id: localnet_sample_asset_literal(),
             name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
             alias: None,
-            owning_domain: Some(localnet_user_asset_domain()),
+            owning_domain: localnet_user_asset_domain(),
             owned_by: ALICE_ID.clone(),
             mint_to: ALICE_ID.clone(),
             quantity: 100,
@@ -998,7 +1011,10 @@ fn localnet_asset_defaults_are_selected_by_exact_taira_chain_context() {
     );
     assert_eq!(taira[0].name, "ds");
     assert_eq!(taira[0].quantity, 1_000_000_000);
-    assert_eq!(taira[0].owning_domain, None);
+    assert_eq!(
+        taira[0].owning_domain,
+        DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN).expect("universal domain")
+    );
     assert_eq!(taira[0].owned_by, client);
     assert_eq!(taira[0].mint_to, client);
     let generic = effective_localnet_assets_for_client(&[], &client, false);
@@ -1010,7 +1026,7 @@ fn localnet_asset_defaults_are_selected_by_exact_taira_chain_context() {
     );
     assert_eq!(generic[0].name, LOCALNET_KAGEMUSHA_ASSET_NAME);
     assert_eq!(generic[0].quantity, 100);
-    assert_eq!(generic[0].owning_domain, Some(localnet_user_asset_domain()));
+    assert_eq!(generic[0].owning_domain, localnet_user_asset_domain());
     assert_eq!(generic[0].owned_by, client);
     assert_eq!(generic[0].mint_to, client);
 }
@@ -1140,7 +1156,7 @@ fn generated_localnet_user_assets_are_owned_by_a_registered_domain() {
                 id: sample_asset_literal.clone(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
                 alias: None,
-                owning_domain: Some(localnet_user_asset_domain()),
+                owning_domain: localnet_user_asset_domain(),
                 owned_by: localnet_client_account_id(),
                 mint_to: localnet_client_account_id(),
                 quantity: 100,
@@ -1190,15 +1206,14 @@ fn generated_localnet_user_assets_are_owned_by_a_registered_domain() {
     }
     assert_eq!(
         owners.get(&localnet_xor_asset_definition_id()),
-        Some(&None),
-        "XOR must be registered and stay domainless"
+        Some(&Some(
+            DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN).expect("universal domain"),
+        )),
+        "public fee and staking XOR must have an owning domain"
     );
     assert!(
-        owners
-            .iter()
-            .filter(|(asset, _)| !user_assets.contains(asset))
-            .all(|(_, owner)| owner.is_none()),
-        "protocol asset definitions must stay domainless"
+        owners.values().all(Option::is_some),
+        "every generated asset must have an explicit visibility scope"
     );
 }
 #[test]
@@ -2427,7 +2442,7 @@ fn generated_genesis_handshake_meta_decodes() {
             id: localnet_sample_asset_literal(),
             name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
             alias: None,
-            owning_domain: Some(localnet_user_asset_domain()),
+            owning_domain: localnet_user_asset_domain(),
             owned_by: ALICE_ID.clone(),
             mint_to: ALICE_ID.clone(),
             quantity: 100,
@@ -2568,6 +2583,26 @@ fn localnet_npos_bootstraps_public_lane_stake() {
     };
     generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
     let manifest = localnet_genesis_for_opts(&opts);
+    let xor_id = localnet_xor_asset_definition_id();
+    let xor = manifest
+        .instructions()
+        .find_map(
+            |instruction| match instruction.as_any().downcast_ref::<RegisterBox>() {
+                Some(RegisterBox::AssetDefinition(register)) if register.object.id == xor_id => {
+                    Some(&register.object)
+                }
+                _ => None,
+            },
+        )
+        .expect("standalone NPoS bootstrap registers XOR");
+    assert_eq!(
+        xor.owning_domain,
+        Some(DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN).expect("universal domain"))
+    );
+    assert_eq!(
+        xor.balance_scope_policy,
+        iroha_data_model::asset::AssetBalancePolicy::Global
+    );
     let mut validators = Vec::new();
     let mut activations = Vec::new();
     for instruction in manifest.instructions() {

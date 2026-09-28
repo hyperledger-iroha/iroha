@@ -259,7 +259,10 @@ fn enforce_public_xor_binding(
             profile
         ));
     }
-    Ok(())
+    crate::genesis::profile::ensure_public_xor_manifest_contract(
+        manifest,
+        &public_xor_asset_definition_id,
+    )
 }
 fn ensure_chain_id(manifest: &RawGenesisTransaction, defaults: &ProfileDefaults) -> Result<()> {
     if manifest.chain_id() != &defaults.chain_id {
@@ -355,7 +358,7 @@ mod tests {
         asset::{AssetDefinitionAlias, AssetDefinitionId},
         isi::asset_alias::SetAssetDefinitionAlias,
         parameter::system::SumeragiConsensusMode,
-        prelude::{AssetDefinition, NumericSpec, PublicKey, Register},
+        prelude::{AssetDefinition, PublicKey, Register},
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
     use iroha_model_base::chain::ChainId;
@@ -401,9 +404,12 @@ mod tests {
                 AssetDefinition::new(
                     asset_definition_id.clone(),
                     "xor".to_owned(),
-                    NumericSpec::default(),
+                    crate::genesis::profile::public_xor_numeric_spec(&asset_definition_id),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(
+                        DomainId::parse_fully_qualified(crate::genesis::profile::PUBLIC_XOR_DOMAIN)
+                            .expect("public XOR owning domain"),
+                    ),
                 )
                 .with_metadata(Metadata::default()),
             ))
@@ -458,6 +464,59 @@ mod tests {
             )
             .build_raw()
             .expect("preserve complete profile fixture authority")
+    }
+    fn replace_public_xor_binding_for_test(
+        manifest: &RawGenesisTransaction,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> RawGenesisTransaction {
+        let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            manifest.chain_discriminant(),
+        );
+        let mut json = norito::json::to_value(manifest).expect("manifest JSON");
+        let mut definitions_changed = 0;
+        let mut aliases_changed = 0;
+        for transaction in json
+            .get_mut("transactions")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+        {
+            for instruction in transaction
+                .get_mut("instructions")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()
+            {
+                if let Some(definition) = instruction
+                    .get_mut("Register")
+                    .and_then(|register| register.get_mut("AssetDefinition"))
+                    && definition.get("name").and_then(norito::json::Value::as_str) == Some("xor")
+                {
+                    definition.as_object_mut().unwrap().insert(
+                        "id".to_owned(),
+                        norito::json::Value::from(asset_definition_id.to_string()),
+                    );
+                    definitions_changed += 1;
+                }
+                if let Some(binding) = instruction.get_mut("SetAssetDefinitionAlias")
+                    && binding.get("alias").and_then(norito::json::Value::as_str)
+                        == Some(PUBLIC_XOR_ALIAS)
+                {
+                    binding.as_object_mut().unwrap().insert(
+                        "asset_definition_id".to_owned(),
+                        norito::json::Value::from(asset_definition_id.to_string()),
+                    );
+                    aliases_changed += 1;
+                }
+            }
+        }
+        assert_eq!(definitions_changed, 1);
+        assert_eq!(aliases_changed, 1);
+        // Keep the signed NPoS parameters valid so the alias-specific check is exercised.
+        RawGenesisTransaction::from_json_slice(
+            &norito::json::to_vec(&json).expect("mutated manifest JSON"),
+        )
+        .expect("invalid public binding is structurally valid")
     }
     fn complete_builder_for_test_peers(
         builder: GenesisBuilder,
@@ -522,13 +581,28 @@ mod tests {
     fn verify_rejects_non_committee_profile_topologies() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
         let peers = (0..32).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+        let valid = build_manifest_with_profile(
+            GenesisProfile::Iroha3Dev,
+            SumeragiConsensusMode::Npos,
+            seed,
+            &peers[..4],
+        );
+        verify_manifest(&valid, GenesisProfile::Iroha3Dev, None)
+            .expect("complete four-validator fixture verifies");
         for count in [1_usize, 2, 3, 5, 32] {
-            let manifest = build_manifest_with_profile(
-                GenesisProfile::Iroha3Dev,
-                SumeragiConsensusMode::Npos,
-                seed,
-                &peers[..count],
-            );
+            let manifest = valid
+                .clone()
+                .into_builder()
+                .set_topology(
+                    peers[..count]
+                        .iter()
+                        .map(|(pk, pop)| {
+                            GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone())
+                        })
+                        .collect(),
+                )
+                .build_raw()
+                .expect("retain valid authority while mutating only topology");
             let error = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None)
                 .expect_err("non-committee topology must fail profile verification");
             assert!(
@@ -560,6 +634,77 @@ mod tests {
             "explicit seed should satisfy verification: {ok:?}"
         );
     }
+    #[test]
+    fn verify_rejects_public_xor_without_its_explicit_contract() {
+        let seed = [7_u8; 32];
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+        let manifest = build_manifest_with_profile(
+            GenesisProfile::Iroha3Taira,
+            SumeragiConsensusMode::Npos,
+            seed,
+            &peers,
+        );
+        verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
+            .expect("explicit public XOR contract verifies");
+        let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            manifest.chain_discriminant(),
+        );
+        for (field, value, expected_error) in [
+            ("owning_domain", norito::json::Value::Null, "owning domain"),
+            (
+                "owning_domain",
+                norito::json::Value::from("other.universal"),
+                "owning domain",
+            ),
+            (
+                "balance_scope_policy",
+                norito::json::Value::from("DataspaceRestricted"),
+                "requires Global balances",
+            ),
+            ("spec", norito::json!({"scale": null}), "uses numeric spec"),
+        ] {
+            let mut json = norito::json::to_value(&manifest).expect("manifest JSON");
+            let mut changed = 0;
+            for transaction in json
+                .get_mut("transactions")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()
+            {
+                for instruction in transaction
+                    .get_mut("instructions")
+                    .unwrap()
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    if let Some(definition) = instruction
+                        .get_mut("Register")
+                        .and_then(|register| register.get_mut("AssetDefinition"))
+                        && definition.get("id").and_then(norito::json::Value::as_str)
+                            == Some(TAIRA_XOR_ASSET_DEFINITION_ID)
+                    {
+                        definition
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(field.to_owned(), value.clone());
+                        changed += 1;
+                    }
+                }
+            }
+            assert_eq!(changed, 1);
+            let invalid = RawGenesisTransaction::from_json_slice(
+                &norito::json::to_vec(&json).expect("mutated manifest JSON"),
+            )
+            .expect("malformed public policy is structurally valid");
+            let error = verify_manifest(&invalid, GenesisProfile::Iroha3Taira, Some(seed))
+                .expect_err("public policy must fail verification");
+            assert!(
+                error.to_string().contains(expected_error),
+                "{field}: {error}"
+            );
+        }
+    }
+
     #[test]
     fn verify_accepts_nexus_profile_with_explicit_public_xor_binding() {
         let seed = [8u8; 32];
@@ -657,39 +802,19 @@ mod tests {
     fn verify_rejects_public_profile_synthetic_xor_binding() {
         let seed = [11u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
-        let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
-        let builder = complete_builder_for_test_peers(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+        let valid = build_manifest_with_profile(
+            GenesisProfile::Iroha3Taira,
+            SumeragiConsensusMode::Npos,
+            seed,
             &peers,
         );
-        let manifest = crate::genesis::generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            Some(&defaults),
-            Some(seed),
-        )
-        .expect("generate profile manifest");
+        verify_manifest(&valid, GenesisProfile::Iroha3Taira, Some(seed))
+            .expect("canonical public XOR fixture verifies");
         let synthetic_xor = AssetDefinitionId::derive_from_components(
             DomainId::parse_fully_qualified("nexus.universal").expect("valid domain"),
             "xor".parse().expect("valid asset name"),
         );
-        let manifest = append_public_xor_binding_for_test(manifest, synthetic_xor)
-            .into_builder()
-            .next_transaction()
-            .set_topology_for_test(
-                peers
-                    .iter()
-                    .map(|(pk, pop)| {
-                        GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone())
-                    })
-                    .collect(),
-            )
-            .build_raw()
-            .expect("preserve complete Taira profile authority")
-            .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+        let manifest = replace_public_xor_binding_for_test(&valid, &synthetic_xor);
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
             .expect_err("synthetic public XOR binding should fail");
         assert!(
@@ -698,46 +823,31 @@ mod tests {
         );
     }
     #[test]
-    fn verify_rejects_public_profile_domain_derived_xor_binding() {
+    fn verify_rejects_nexus_profile_taira_xor_binding() {
         let seed = [12u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
-        let defaults = profile_defaults(GenesisProfile::Iroha3Nexus);
-        let builder = complete_builder_for_test_peers(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+        let valid = build_manifest_with_profile(
+            GenesisProfile::Iroha3Nexus,
+            SumeragiConsensusMode::Npos,
+            seed,
             &peers,
         );
-        let manifest = crate::genesis::generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            Some(&defaults),
-            Some(seed),
-        )
-        .expect("generate profile manifest");
+        verify_manifest(&valid, GenesisProfile::Iroha3Nexus, Some(seed))
+            .expect("operator-provisioned Nexus XOR fixture verifies");
         let domain_derived_xor = AssetDefinitionId::derive_from_components(
             DomainId::parse_fully_qualified("universal.universal").expect("valid domain"),
             "xor".parse().expect("valid asset name"),
         );
-        let manifest = append_public_xor_binding_for_test(manifest, domain_derived_xor)
-            .into_builder()
-            .next_transaction()
-            .set_topology_for_test(
-                peers
-                    .iter()
-                    .map(|(pk, pop)| {
-                        GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone())
-                    })
-                    .collect(),
-            )
-            .build_raw()
-            .expect("preserve complete Nexus profile authority")
-            .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT);
+        assert_eq!(
+            domain_derived_xor.to_string(),
+            TAIRA_XOR_ASSET_DEFINITION_ID
+        );
+        let manifest = replace_public_xor_binding_for_test(&valid, &domain_derived_xor);
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
-            .expect_err("domain-derived public XOR binding should fail");
+            .expect_err("Taira XOR binding must not be accepted for Nexus");
         assert!(
-            err.to_string().contains("canonical Base58"),
+            err.to_string()
+                .contains("operator-provisioned mainnet XOR definition"),
             "unexpected error: {err}"
         );
     }

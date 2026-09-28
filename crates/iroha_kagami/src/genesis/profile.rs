@@ -3,8 +3,14 @@ use clap::ValueEnum;
 use color_eyre::eyre::{Result, eyre};
 use core::num::NonZeroU64;
 use iroha_crypto::Hash;
-use iroha_data_model::asset::AssetDefinitionId;
+use iroha_data_model::{
+    asset::{AssetDefinitionId, NewAssetDefinition},
+    isi::{Register, register::RegisterBox},
+    prelude::{AssetDefinition, NumericSpec},
+};
+use iroha_genesis::RawGenesisTransaction;
 use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 /// Canonical I105 discriminant for the public Taira testnet.
 pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 /// Canonical I105 discriminant for the public Nexus mainnet.
@@ -107,6 +113,69 @@ pub fn public_xor_profile_for_chain_id(chain_id: &str) -> Option<GenesisProfile>
         _ => None,
     }
 }
+/// Return the canonical numeric specification for a public XOR definition.
+pub(crate) fn public_xor_numeric_spec(asset_definition_id: &AssetDefinitionId) -> NumericSpec {
+    if asset_definition_id.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID {
+        NumericSpec::fractional(TAIRA_XOR_SCALE)
+    } else {
+        NumericSpec::default()
+    }
+}
+/// Enforce the public XOR definition's numeric precision, ownership, and balance scope.
+pub(crate) fn ensure_public_xor_contract(
+    definition: &NewAssetDefinition,
+    asset_definition_id: &AssetDefinitionId,
+) -> color_eyre::Result<()> {
+    let expected = public_xor_numeric_spec(asset_definition_id);
+    if definition.spec != expected {
+        return Err(color_eyre::eyre::eyre!(
+            "public XOR asset `{asset_definition_id}` uses numeric spec {:?}, expected {:?}",
+            definition.spec,
+            expected
+        ));
+    }
+    let owning_domain = DomainId::parse_fully_qualified(PUBLIC_XOR_DOMAIN)?;
+    if definition.owning_domain.as_ref() != Some(&owning_domain)
+        || definition.balance_scope_policy != iroha_data_model::asset::AssetBalancePolicy::Global
+    {
+        return Err(color_eyre::eyre::eyre!(
+            "public XOR asset `{asset_definition_id}` requires Global balances and owning domain `{PUBLIC_XOR_DOMAIN}`"
+        ));
+    }
+    Ok(())
+}
+/// Check the registered definition selected by the caller's public XOR alias and pin validation.
+pub(crate) fn ensure_public_xor_manifest_contract(
+    manifest: &RawGenesisTransaction,
+    asset_definition_id: &AssetDefinitionId,
+) -> Result<()> {
+    let mut found = false;
+    for instruction in manifest.instructions() {
+        let definition = instruction
+            .as_any()
+            .downcast_ref::<Register<AssetDefinition>>()
+            .map(|register| &register.object)
+            .or_else(
+                || match instruction.as_any().downcast_ref::<RegisterBox>() {
+                    Some(RegisterBox::AssetDefinition(register)) => Some(&register.object),
+                    _ => None,
+                },
+            );
+        if let Some(definition) = definition
+            && definition.id == *asset_definition_id
+        {
+            ensure_public_xor_contract(definition, asset_definition_id)?;
+            found = true;
+        }
+    }
+    if !found {
+        return Err(eyre!(
+            "public XOR definition `{asset_definition_id}` must be registered in genesis"
+        ));
+    }
+    Ok(())
+}
+
 /// Reject pre-release aliases for public network chain identities.
 ///
 /// # Errors

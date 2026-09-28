@@ -2434,6 +2434,8 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
     let sibling = checked_torii_test_account_id(0xa2, "delegated assets sibling");
     let caller = checked_torii_test_account_id(0xa3, "delegated assets caller");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"delegated-account-assets-subject"));
+    let sibling_uaid =
+        UniversalAccountId::from_hash(Hash::new(b"delegated-account-assets-sibling"));
     let restricted_dataspace = DataSpaceId::new(10);
     let domain =
         Domain::new(DomainId::try_new("wonderland", "universal").expect("domain")).build(&target);
@@ -2444,13 +2446,14 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
                 .with_uaid(Some(uaid))
                 .build(&target),
             Account::new(sibling.clone())
-                .with_uaid(Some(uaid))
+                .with_uaid(Some(sibling_uaid))
                 .build(&sibling),
             Account::new(caller.clone()).build(&caller),
         ],
         [],
     );
     bind_uaid_to_dataspace_manifest_for_test(&mut world, uaid, restricted_dataspace);
+    bind_uaid_to_dataspace_manifest_for_test(&mut world, sibling_uaid, restricted_dataspace);
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         world,
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
@@ -2474,7 +2477,7 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
         .expect("target has private route");
     assert_eq!(
         super::torii_account_assets_read_routes(app.as_ref(), &sibling, Some(&caller))
-            .expect_err("same-subject sibling requires its own grant")
+            .expect_err("another account requires its own grant")
             .status(),
         StatusCode::FORBIDDEN,
     );
@@ -2716,9 +2719,7 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         world_with_account_bound_to_dataspace(&authority, uaid, restricted_dataspace),
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    let (_restricted_lane, configured_restricted_dataspace) =
-        configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+    configure_account_asset_routes_for_test(&mut app);
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
         .parse()
         .expect("valid account assets uri");
@@ -3016,6 +3017,7 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
     configure_multiple_dataspace_routes_for_test(&mut app);
+    configure_account_asset_routes_for_test(&mut app);
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
         .parse()
         .expect("valid account assets uri");
@@ -3096,7 +3098,7 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn public_dataspace_upstream_serves_routed_account_assets() {
+async fn public_dataspace_upstream_cannot_serve_protected_account_assets() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
     let captured_for_route = Arc::clone(&captured);
     let upstream = Router::new().route(
@@ -3145,24 +3147,23 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
             .to_string();
     let request = torii_read_request(
         ToriiReadEndpointV1::AccountAssetsGet,
-        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: None,
+        },
         route,
         vec![account_id.clone()],
         Some("limit=500".to_owned()),
         Vec::new(),
     );
     let response = execute_torii_read_for_route(&app, route, request, None).await;
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
-        torii_response_header(&response, "x-iroha-routed-by"),
-        Some("external"),
+        torii_response_header(&response, "x-iroha-reject-code"),
+        Some("route_unavailable"),
     );
-    let body = torii_body_bytes(response, "body").await;
-    let json: Value = norito::json::from_slice(&body).expect("json response");
-    assert_eq!(json["items"][0]["quantity"].as_str(), Some("74.7664"));
-    assert_eq!(
-        captured.lock().expect("capture lock").as_slice(),
-        &[(account_id, "limit=500".to_owned())],
+    assert!(
+        captured.lock().expect("capture lock").is_empty(),
+        "protected account balances must not be read from an unsigned public upstream",
     );
     upstream_task.abort();
 }
